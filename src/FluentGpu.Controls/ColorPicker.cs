@@ -63,7 +63,10 @@ public sealed class ColorPicker : Component
     }
 
     public static Style? StyleOverride;
-    public static Style DefaultStyle => StyleOverride ?? new Style
+    public static Style DefaultStyle => StyleOverride ?? ControlStyles.Resolve(ControlStyles.ColorPickerStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a ColorPicker entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style
     {
         SwatchBorder = Tok.StrokeControlDefault,
         AlphaRailFill = Tok.FillControlDefault,

@@ -302,7 +302,7 @@ public sealed class TabStrip : Component
             main.Add(new TextEl(icon)
             {
                 Size = 16f,
-                FontFamily = Theme.IconFont,
+                FontFamily = Tok.Definition.Fonts.Icon,
                 Margin = new Edges4(0f, 0f, 10f, 0f),
                 Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
                 PressedColor = selected ? Tok.TextPrimary : Tok.TextTertiary,
@@ -354,7 +354,7 @@ public sealed class TabStrip : Component
                     new TextEl(Icons.Cancel)
                     {
                         Size = 12f,
-                        FontFamily = Theme.IconFont,
+                        FontFamily = Tok.Definition.Fonts.Icon,
                         Color = Tok.TextPrimary,
                         PressedColor = Tok.TextSecondary,
                     },
@@ -683,7 +683,7 @@ public sealed class TabStrip : Component
                 [
                     new TextEl(back ? Icons.ChevronLeft : Icons.ChevronRight)
                     {
-                        Size = 10f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary,
+                        Size = 10f, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextSecondary,
                     },
                 ],
             };
@@ -729,7 +729,7 @@ public sealed class TabStrip : Component
             main.Add(new TextEl(icon)
             {
                 Size = 16f,
-                FontFamily = Theme.IconFont,
+                FontFamily = Tok.Definition.Fonts.Icon,
                 Margin = item.IsPinned ? default : new Edges4(0f, 0f, 8f, 0f),
                 Color = selected ? (item.IsPinned ? Tok.AccentTextPrimary : Tok.TextPrimary) : Tok.TextSecondary,
                 // A==0 on the selected tab ⇒ "no state color" (the recorder leaves Color alone), so a selected glyph
@@ -795,7 +795,7 @@ public sealed class TabStrip : Component
                     new TextEl(Icons.Cancel)
                     {
                         Size = 10f,
-                        FontFamily = Theme.IconFont,
+                        FontFamily = Tok.Definition.Fonts.Icon,
                         Color = Tok.TextPrimary,
                         PressedColor = Tok.TextSecondary,
                     },
@@ -895,7 +895,7 @@ public sealed class TabStrip : Component
             new TextEl(Icons.Add)
             {
                 Size = 12f,
-                FontFamily = Theme.IconFont,
+                FontFamily = Tok.Definition.Fonts.Icon,
                 Color = glyphInk,
                 PressedColor = Tok.TextSecondary,
             },

@@ -528,6 +528,26 @@ public sealed class ImageCache
 
     /// <summary>Entries still decoding (State==Pending) — O(1) maintained counter (was a per-call scan, wake-04).</summary>
     public int PendingCount => _pendingCount;
+
+    /// <summary>E17c (the settle's image wait): the PINNED full images (a realized node holds them) that have no texture yet —
+    /// decoding, or a canceled leftover waiting for its retry. A failed decode with a reason is settled (it shows its failure
+    /// placeholder). One scan of the cache; a settle calls it at most once per pass, never a steady frame. Up to
+    /// <paramref name="max"/> of their sources are appended to <paramref name="sources"/> when given.</summary>
+    internal int CountPinnedUndecoded(System.Collections.Generic.List<string>? sources = null, int max = 8)
+    {
+        if (_pendingCount == 0 && _leftoverCount == 0 && !_leftoverOverflow) return 0;
+        int n = 0;
+        foreach (var e in _byId.Values)
+        {
+            if (e.Refs <= 0 || e.Derived || e.Parked) continue;
+            bool undecoded = e.State == ImageState.Pending
+                || (e.Failure == ImageFailureKind.Canceled && e.State is ImageState.None or ImageState.Failed);
+            if (!undecoded) continue;
+            if (sources is not null && n < max) sources.Add(e.Key.Source);
+            n++;
+        }
+        return n;
+    }
     /// <summary>True when decoded results are ready to apply on the UI thread. In-flight network/decode work does not
     /// require frame polling because its completion wakes the host.</summary>
     public bool HasReadyCompletions => _decoder.HasReadyCompletions || (_bakedBlurs?.HasResults ?? false);
@@ -890,6 +910,15 @@ public sealed class ImageCache
         else _revealingOverflow = true;
     }
 
+    /// <summary>True while the host's <see cref="FluentGpu.Hosting.SnapScope"/> is active (E17a): a decode that lands now
+    /// reveals instantly (the disabled-transition arm of <see cref="BeginReveal"/>: no fade, nothing for the fade clock to
+    /// run) and a reconciler image swap becomes a hard cut. Reveals begun before the scope keep their fade. Set by
+    /// <c>AppHost</c> on the scope's depth edges.</summary>
+    public bool SnapReveals => _snapDepth > 0;
+    private int _snapDepth;   // depth-counted: hosts that share one cache (a pop-out) nest instead of clobbering each other
+    internal void PushSnap() => _snapDepth++;
+    internal void PopSnap() { if (_snapDepth > 0) _snapDepth--; }
+
     // `id` + `cause` are carried for the trace only (a reveal is exactly the "flashed back in" the user sees, so which
     // texture started it — the blurhash LQIP, the full decode, a baked derivative — is the whole question).
     void BeginReveal(Entry e, int id, string cause)
@@ -900,7 +929,7 @@ public sealed class ImageCache
                 $"sinceRequestMs={(float.IsInfinity(e.RequestedMs) ? -1f : _clockMs - e.RequestedMs):0.#} " +
                 $"size={e.W}x{e.H} derived={(e.Derived ? 1 : 0)}");
         if (e.RequestedTicks != 0) { Latency.NoteFetched(e.RequestedTicks); e.RequestedTicks = 0; }
-        if (!e.Transition.Enabled)
+        if (!e.Transition.Enabled || SnapReveals)   // SnapReveals: a SnapScope lands the picture instantly
         {
             e.TextureMs = float.NaN;
             e.RevealMs = 0f;

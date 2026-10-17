@@ -149,7 +149,7 @@ public sealed class ToggleSplitButton : Component
             if (Glyph is { Length: > 0 } g)
                 list.Add(new TextEl(g)
                 {
-                    Size = 14f, Color = primRestFg, FontFamily = Theme.IconFont,
+                    Size = 14f, Color = primRestFg, FontFamily = Tok.Definition.Fonts.Icon,
                     HoverColor = primHoverFg, PressedColor = primPressFg, DisabledColor = Tok.TextDisabled,
                 });
             list.Add(new TextEl(Label)
@@ -190,7 +190,7 @@ public sealed class ToggleSplitButton : Component
                     [
                         new TextEl(Icons.ChevronDownSmall)
                         {
-                            Size = ChevronGlyphSize, Color = secRestFg, FontFamily = Theme.IconFont,
+                            Size = ChevronGlyphSize, Color = secRestFg, FontFamily = Tok.Definition.Fonts.Icon,
                             HoverColor = secHoverFg, PressedColor = secPressFg, DisabledColor = Tok.TextDisabled,
                         },
                     ],

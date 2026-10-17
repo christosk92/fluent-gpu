@@ -198,7 +198,7 @@ public static class InfoBar
                     Justify = FlexJustify.Center,
                     Children =
                     [
-                        new TextEl(iconGlyph) { Size = IconFontSize, FontFamily = Theme.IconFont, Color = Tok.TextPrimary },
+                        new TextEl(iconGlyph) { Size = IconFontSize, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextPrimary },
                     ],
                 })
                 : parts.Apply(PartIcon, new BoxEl
@@ -210,8 +210,8 @@ public static class InfoBar
                     AlignSelf = FlexAlign.Start,   // VerticalAlignment="Top"
                     Children =
                     [
-                        new TextEl(IconBackgroundGlyph) { Size = IconFontSize, FontFamily = Theme.IconFont, Color = ts.IconBackground },
-                        new TextEl(ts.Glyph)            { Size = IconFontSize, FontFamily = Theme.IconFont, Color = ts.IconForeground },
+                        new TextEl(IconBackgroundGlyph) { Size = IconFontSize, FontFamily = Tok.Definition.Fonts.Icon, Color = ts.IconBackground },
+                        new TextEl(ts.Glyph)            { Size = IconFontSize, FontFamily = Tok.Definition.Fonts.Icon, Color = ts.IconForeground },
                     ],
                 });
 
@@ -297,7 +297,7 @@ public static class InfoBar
                 [
                     new TextEl(Icons.Cancel)
                     {
-                        Size = CloseGlyphSize, FontFamily = Theme.IconFont, Color = Tok.TextPrimary,
+                        Size = CloseGlyphSize, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextPrimary,
                         HoverColor = Tok.TextPrimary, PressedColor = Tok.TextSecondary,  // AppBarButtonForegroundPressed
                     },
                 ],

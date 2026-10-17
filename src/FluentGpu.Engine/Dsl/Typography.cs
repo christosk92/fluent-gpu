@@ -36,14 +36,14 @@ public static partial class Ui
             || ReferenceEquals(th, AccentTextBrush.Thunk) || ReferenceEquals(th, OnAccentTextBrush.Thunk));
     }
 
-    public static TextEl Caption(string t) => new(t) { Size = 12f, LineHeight = 16f, Color = SecondaryTextBrush };
-    public static TextEl Body(string t) => new(t) { Size = 14f, LineHeight = 20f, Color = PrimaryTextBrush, Wrap = TextWrap.Wrap };
-    public static TextEl BodyStrong(string t) => new(t) { Size = 14f, LineHeight = 20f, Weight = 600, Color = PrimaryTextBrush };
-    public static TextEl BodyLarge(string t) => new(t) { Size = 18f, LineHeight = 24f, Color = PrimaryTextBrush, Wrap = TextWrap.Wrap };
-    public static TextEl Subtitle(string t) => new(t) { Size = 20f, LineHeight = 28f, Weight = 600, Color = PrimaryTextBrush };
-    public static TextEl Title(string t) => new(t) { Size = 28f, LineHeight = 36f, Weight = 600, Color = PrimaryTextBrush };
-    public static TextEl TitleLarge(string t) => new(t) { Size = 40f, LineHeight = 52f, Weight = 600, Color = PrimaryTextBrush };
-    public static TextEl Display(string t) => new(t) { Size = 68f, LineHeight = 92f, Weight = 600, Color = PrimaryTextBrush };
+    public static TextEl Caption(string t) { var s = Tok.Definition.Type.Caption; return new(t) { Size = s.Size, LineHeight = s.LineHeight, Weight = s.Weight, Color = SecondaryTextBrush }; }
+    public static TextEl Body(string t) { var s = Tok.Definition.Type.Body; return new(t) { Size = s.Size, LineHeight = s.LineHeight, Weight = s.Weight, Color = PrimaryTextBrush, Wrap = TextWrap.Wrap }; }
+    public static TextEl BodyStrong(string t) { var s = Tok.Definition.Type.BodyStrong; return new(t) { Size = s.Size, LineHeight = s.LineHeight, Weight = s.Weight, Color = PrimaryTextBrush }; }
+    public static TextEl BodyLarge(string t) { var s = Tok.Definition.Type.BodyLarge; return new(t) { Size = s.Size, LineHeight = s.LineHeight, Weight = s.Weight, Color = PrimaryTextBrush, Wrap = TextWrap.Wrap }; }
+    public static TextEl Subtitle(string t) { var s = Tok.Definition.Type.Subtitle; return new(t) { Size = s.Size, LineHeight = s.LineHeight, Weight = s.Weight, Color = PrimaryTextBrush }; }
+    public static TextEl Title(string t) { var s = Tok.Definition.Type.Title; return new(t) { Size = s.Size, LineHeight = s.LineHeight, Weight = s.Weight, Color = PrimaryTextBrush }; }
+    public static TextEl TitleLarge(string t) { var s = Tok.Definition.Type.TitleLarge; return new(t) { Size = s.Size, LineHeight = s.LineHeight, Weight = s.Weight, Color = PrimaryTextBrush }; }
+    public static TextEl Display(string t) { var s = Tok.Definition.Type.Display; return new(t) { Size = s.Size, LineHeight = s.LineHeight, Weight = s.Weight, Color = PrimaryTextBrush }; }
 }
 
 /// <summary>Color-tier modifiers for any TextEl: <c>Ui.Body("x").Secondary()</c>.</summary>

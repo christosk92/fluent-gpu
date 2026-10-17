@@ -2,32 +2,39 @@ using FluentGpu.Foundation;
 
 namespace FluentGpu.Dsl;
 
-/// <summary>The Fluent spacing rhythm on the native 4px grid — the raw scale (XXS…XXXL + Gutter) plus the semantic
-/// names (page gutters, card spacing, internal padding, stack gaps) re-pointed onto it. A superset of any app's
-/// own spacing-constants layer so an app can drop its duplicate and read these const-for-const.</summary>
+/// <summary>The spacing rhythm of the ACTIVE theme definition (<c>Tok.Definition.Spacing</c>): the raw scale (XXS…XXXL +
+/// Gutter) plus the semantic names (page gutters, card spacing, internal padding, stack gaps). Every member is a static
+/// PROPERTY that resolves against <see cref="Tok.Definition"/> at the moment it is read, so a definition swap
+/// (<c>Tok.Use(definition, kind)</c>) re-lays-out everything built from it. They are therefore not constants: do not
+/// read one into a <c>const</c>, a <c>static readonly</c> field, an attribute argument, a <c>case</c> label or an
+/// optional-parameter default (the FGTH004 analyzer fences the field forms) — read it where the element is built.
+/// The Fluent default values live in <see cref="FluentGpu.Theming.SpacingScale"/>.</summary>
 public static class Spacing
 {
-    // ── The 4px-grid scale (DIPs). Use for gaps, padding, gutters. Every value is a multiple of 4 (XXS the sole 2px step).
-    public const float XXS = 2f;
-    public const float XS = 4f;
-    public const float S = 8f;
-    public const float M = 12f;
-    public const float L = 16f;
-    public const float XL = 20f;
-    public const float XXL = 24f;
-    public const float XXXL = 32f;
-    public const float Gutter = 24f;     // section / content gutter (== XXL)
+    // ── The 4px-grid scale (DIPs). Use for gaps, padding, gutters.
+    public static float XXS => Tok.Definition.Spacing.XXS;
+    public static float XS => Tok.Definition.Spacing.XS;
+    public static float S => Tok.Definition.Spacing.S;
+    public static float M => Tok.Definition.Spacing.M;
+    public static float L => Tok.Definition.Spacing.L;
+    public static float XL => Tok.Definition.Spacing.XL;
+    public static float XXL => Tok.Definition.Spacing.XXL;
+    public static float XXXL => Tok.Definition.Spacing.XXXL;
+    public static float Gutter => Tok.Definition.Spacing.Gutter;     // section / content gutter
 
-    // ── Semantic names (retained), re-pointed onto the scale above.
-    public const float PageWide = 36f;   // desktop page gutter (NavigationView content margin) — off-grid by WinUI design
-    public const float PageNarrow = L;   // narrow layout (16)
-    public const float Card = M;         // between cards in a grid (12)
-    public const float Inner = L;        // card / panel internal padding (16)
-    public const float StackS = XS;      // 4
-    public const float StackM = S;       // 8
-    public const float StackL = M;       // 12
+    // ── Semantic names.
+    public static float PageWide => Tok.Definition.Spacing.PageWide;       // desktop page gutter (NavigationView content margin)
+    public static float PageNarrow => Tok.Definition.Spacing.PageNarrow;   // narrow layout
+    public static float Card => Tok.Definition.Spacing.Card;               // between cards in a grid
+    public static float Inner => Tok.Definition.Spacing.Inner;             // card / panel internal padding
+    public static float StackS => Tok.Definition.Spacing.StackS;
+    public static float StackM => Tok.Definition.Spacing.StackM;
+    public static float StackL => Tok.Definition.Spacing.StackL;
 
-    public static readonly Edges4 PagePadWide = new(PageWide, XXL, PageWide, PageWide);
-    public static readonly Edges4 PagePadNarrow = Edges4.All(PageNarrow);
-    public static readonly Edges4 CardPad = Edges4.All(Inner);
+    public static Edges4 PagePadWide
+    {
+        get { var s = Tok.Definition.Spacing; return new Edges4(s.PageWide, s.XXL, s.PageWide, s.PageWide); }
+    }
+    public static Edges4 PagePadNarrow => Edges4.All(Tok.Definition.Spacing.PageNarrow);
+    public static Edges4 CardPad => Edges4.All(Tok.Definition.Spacing.Inner);
 }

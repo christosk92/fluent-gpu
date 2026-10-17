@@ -105,7 +105,7 @@ public sealed unsafe class DWriteTextShaper : IDisposable
     public static void SelfTest()
     {
         using var shaper = new DWriteTextShaper();
-        IDWriteFontFace* face = shaper.ResolveSystemFace("Segoe UI", false);
+        IDWriteFontFace* face = shaper.ResolveSystemFace(FluentGpu.Dsl.Tok.Definition.Fonts.BodyPrimary, false);
         void ShapeAndPrint(string s, ushort script)
         {
             fixed (char* p = s)

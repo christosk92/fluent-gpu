@@ -136,6 +136,15 @@ public static class LazyGridMath
 /// every open (<see cref="LazyGridMath.AlignRowTarget"/>) — the artist page's album drawer.</summary>
 public enum ExpandedReveal { Minimal, AlignTop }
 
+/// <summary>A <see cref="LazyGrid"/>'s column geometry as LIVE props: mount the grid with
+/// <c>Embed.Comp(new LazyGridFit(…), () =&gt; new LazyGrid(…))</c> and a later render's fit (a window-tier crossing changes the column
+/// floor or the gap) re-fits the SAME grid — its realized cells, its expanded drawer and the page's scroll survive — instead of the
+/// caller keying a remount on the fit. Without these props the constructor's values stand (frozen at mount, as before).</summary>
+/// <param name="MinColWidth">The narrowest column.</param>
+/// <param name="Gap">The gap between columns and rows.</param>
+/// <param name="RowExtra">The row height over the cell width (the cover square + its text).</param>
+public sealed record LazyGridFit(float MinColWidth, float Gap, float RowExtra);
+
 /// <summary>
 /// An IN-PAGE, data-virtualized responsive grid: it lives as a normal section inside a page <c>ScrollView</c> (NOT its own
 /// scroller), reserves the full extent for a KNOWN total, and realizes only the rows intersecting the live scroll window —
@@ -163,7 +172,7 @@ public sealed class LazyGrid : Component
     readonly IReadSignal<int>? _countSignal;         // churn-free: total item count, gated by value at the caller
     readonly Func<int, float, Element> _cell;        // (index, cellWidth) → card or placeholder
     readonly Action<int, int> _ensureRange;          // (firstIndex, lastIndexExclusive) → page the data in
-    readonly float _minColW, _gap, _rowExtra;        // rowH = cellWidth + _rowExtra (cover square + text/padding)
+    float _minColW, _gap, _rowExtra;                 // rowH = cellWidth + _rowExtra (cover square + text/padding); live via LazyGridFit
     readonly int _overscanRows;
     readonly Signal<int>? _expanded;                 // expanded ITEM index (-1/none); null ⇒ no inline drawer
     readonly Func<int, GridDrawerInfo, Element>? _drawer;  // (index, column geometry) → the inline drawer subtree
@@ -273,6 +282,8 @@ public sealed class LazyGrid : Component
 
     public override Element Render()
     {
+        // The live fit (LazyGridFit props), when the caller mounts the grid with one: a re-fit lands on the fields every render reads.
+        if (UsePropsOrDefault<LazyGridFit>() is { } fit) { _minColW = fit.MinColWidth; _gap = fit.Gap; _rowExtra = fit.RowExtra; }
         int count = ReadCount();
         float w = _w.Value;
         var scrollSig = UseContext(LazyScroll.Slot);

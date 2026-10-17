@@ -50,6 +50,13 @@ internal sealed unsafe class TargetFrameState
     // buffer. LastPresentHeld is the result, deliberately separate from LastPresentStoodDown (a held present must not read as the
     // window being covered). Render-thread-only.
     internal bool HoldPresentOnce, LastPresentHeld;
+    // The frame-freeze dissolve (ISwapchain.DissolveNextPresent, D3D12Device.FrameDissolve.cs): the snapshot and t the next Present
+    // lerps the back buffer with (one-shot, consumed by that Present), whether the last present was one, and the submit the lerp was
+    // applied over (a refused present re-presented without a new submit must not lerp the lerped buffer twice). Render-thread-only.
+    internal D3D12FrameSnapshot? DissolveFrom;
+    internal float DissolveT;
+    internal bool LastPresentDissolved;
+    internal ulong DissolvedSubmit;
     // F070 Stage B: the next Present of this target waits (bounded) for its own submit's fence first. Armed by the host for a turn that
     // moves video geometry, consumed by Present, render-thread-only.
     internal bool HintMotionFenceWait;

@@ -48,6 +48,7 @@ public static class SuiteRegistry
         new("reveal", "anim", FluentGpu.VerticalSlice.Suites.RevealSuite.Run),   // SizeMode.FlowReveal: layout once, motion at paint time (smooth-reveal plan §9)
         new("scroll", "scroll", ScrollSuite.Run),
         new("scroll-motion", "scroll", FluentGpu.VerticalSlice.Suites.ScrollMotionSuite.Run),   // scroll rework: closed-form plans, coverage, zero-alloc flat lists
+        new("scroll-first-layout", "scroll", FluentGpu.VerticalSlice.Suites.ScrollFirstLayoutSuite.Run),   // E8/EP12: a ScrollKey restore lands in the FIRST layout of the remount (plain + 2,000-row virtual list, clamp, unknown key, zero-alloc)
         new("scroll-effects", "scroll", FluentGpu.VerticalSlice.Suites.ScrollEffectsSuite.Run),   // scroll-GPU plan §F: engaged edge, collapse, stretch, UseScroll, MeasureAll
         new("engaged-feather", "scroll", FluentGpu.VerticalSlice.Suites.EngagedFeatherSuite.Run),   // F(ii) 2026-09-25: a WhileStuck edge fade engages on the sticky clip's own pose
         new("item-band-deep", "scroll", FluentGpu.VerticalSlice.Suites.ItemBandDeepSuite.Run),   // G 2026-09-25: a deep jump in an item-band list keeps every row above the arrange origin
@@ -55,12 +56,14 @@ public static class SuiteRegistry
         new("touch", "touch", TouchSuite.Run),
         new("image", "image", ImageSuite.Run),
         new("budgets", "budgets", BudgetsSuite.Run),
+        new("tiers", "tiers", FluentGpu.VerticalSlice.Suites.TiersSuite.Run),   // E22 window tiers: TierLadder hysteresis, Resolve/commit zero-alloc, first-frame tier, tier-gated Responsive.Of, resize at the end of a virtual list
         new("hidden", "hidden", FluentGpu.VerticalSlice.Suites.HiddenSuite.Run),   // hidden-window Shallow stage: tiles + unpinned images released after the park delay, rebuilt on restore
         new("tiles", "tiles", FluentGpu.VerticalSlice.Suites.TileSuite.Run),   // scroll-GPU plan P0: retained-tile needed set, slice table, budget, feather, composite seam
         new("slices", "tiles", FluentGpu.VerticalSlice.Suites.SliceSuite.Run),   // scroll-GPU plan P1: the recorder partition — paint order, zero-byte scroll tick, tile invalidation reasons
         new("evidence", "tiles", FluentGpu.VerticalSlice.Suites.EvidenceSuite.Run),   // evidence ledgers: #1 failing-first (open), ledger alloc-zero, capture alignment, item record == model
         new("tile-lifetime", "tiles", FluentGpu.VerticalSlice.Suites.TileLifetimeChecks.Run),   // tile texture lifetime at idle: retained group / leaf-blur tiles keep their textures (Wavee idle blanking)
         new("controls", "controls", ControlsSuite.Run),
+        new("control-style-table", "controls", FluentGpu.VerticalSlice.Suites.ControlStyleTableSuite.Run),   // E14/EP15: ThemeDefinition.Controls (replaced Button.StyleHook): empty == explicit built-in table, restyle a mounted control, no stale style
         new("zone-list-spikes", "controls", FluentGpu.VerticalSlice.Suites.ZoneListSpikeChecks.Run),   // Wave-0 spikes for Wavee's Home zone list: E17 sticky-in-realized-row, E18 controller rebind, KeepAlive same-key view, nested-shelf alloc
         new("component-anchor", "controls", FluentGpu.VerticalSlice.Suites.ComponentAnchorChecks.Run),   // E14: WriteAnchorColumns applies a ComponentEl's base-Element props to its own anchor (sticky/visible/exit/alloc)
         new("titlebar", "titlebar", TitleBarSuite.Run),
@@ -74,12 +77,19 @@ public static class SuiteRegistry
         new("text", "text", TextSuite.Run),
         new("span-links", "text", SpanLinkDispatchChecks.Run),   // inline-hyperlink dispatch ownership; runs with --suite text
         new("bound", "bound", BoundTemplateSuite.Run),
+        new("bound-rows", "bound", FluentGpu.VerticalSlice.Suites.BoundRowsSuite.Run),   // EP6 (E13): BoundRowTemplate + stamp-driven rebuild of every slot and pool, recycle hit rate, 0 hot-phase alloc
         new("listrow", "listrow", ListRowSuite.Run),   // scroll-rework Wave 0.E: ListRowEl one-node-per-row / zero-alloc-text-change / placeholder-geometry gates
         new("diagnostics", "diagnostics", DiagnosticsSuite.Run),
         new("media-seam", "media-seam", MediaSeamSuite.Run),
         new("continuity", "continuity", VisualContinuityChecks.Run),
         new("detached-render", "detached-render", FluentGpu.VerticalSlice.Suites.DetachedRenderResilienceSuite.Run),
         new("detached-pacing", "detached-pacing", FluentGpu.VerticalSlice.Suites.DetachedPacingSuite.Run),   // F094/F097: a pop-out's motion is not the parent's present; per-target pacing evidence and queue depth
+        new("font-registry", "font-registry", FluentGpu.VerticalSlice.Suites.FontRegistryChecks.Run),   // EP7 E9: one face cache, chains + #Family selection, off-chain error, preload (0 UI-thread face creations), body-font change evicts measure caches
+        new("frame-freeze", "frame-freeze", FluentGpu.VerticalSlice.Suites.FrameFreezeChecks.Run),   // EP10 E2: Freeze captures the outgoing frame (alpha), holds every present, swallows input, Thaw dissolves snapshot -> new frame; resize/DPI/watchdog cut
+        new("persist-subtrees", "persist", FluentGpu.VerticalSlice.Suites.PersistSubtreeSuite.Run),   // EP13 E7: Flow.Persist re-parents a live subtree across a root swap (one render against the new providers), parks it with no adopter, expires it after 10 s, 0 hot-phase alloc while parked
+        new("snap-scope", "snap-scope", FluentGpu.VerticalSlice.Suites.SnapScopeChecks.Run),   // EP17 E17a/b: SnapScope lands brush/FLIP/Enter/Exit at end values in one publication, holds FrameClock.Tick + timers without a burst, instant image reveal, 0-alloc enter/exit
+        new("settle", "settle", FluentGpu.VerticalSlice.Suites.SettleChecks.Run),   // EP11 E17c: keyed Responsive.Of / UseMeasured* remount at the remembered size; freeze -> apply -> Settle quiet in its first pass (unkeyed: one corrective pass), no present while settling; a waiting pass allocates nothing
+        new("theme-transaction", "theme-tx", FluentGpu.VerticalSlice.Suites.ThemeTransactionSuite.Run),   // EP14 E5: 100 transactions (other geometry, other root type, a ticker running) commit with 0 settle-timeout; glass = S, held, (1-t)S+tN, N; no motion at thaw start; a throwing template rolls back showing only S
         new("detached-video", "detached-video", FluentGpu.VerticalSlice.Suites.DetachedVideoSuite.Run),   // F208/F080: the early video drain runs before the slot wait with no UI publish; one deferred commit per turn
     ];
 

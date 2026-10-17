@@ -64,8 +64,32 @@ public sealed class HostTimerQueue
     /// <summary>Live timer count. Zero ⇒ the frame drain is skipped entirely (no per-frame cost when nothing is armed).</summary>
     public int Count => _count;
 
+    // ── Hold (SnapScope, E17b) ────────────────────────────────────────────────────────────────────────────────────────
+    // A held queue fires nothing and reports nothing due, so UseTimeout / UseInterval / UseDebouncedValue sources schedule
+    // no work while a transaction snaps the UI. Time spent held is NOT counted against the timers: Release slides every
+    // armed entry's due time by the held span (one uniform shift keeps the heap order), so an interval resumes a full
+    // period after the exit instead of firing once for every period it missed. Depth-counted (nests); no allocation.
+    private int _holdDepth;
+    private double _holdStartMs;
+
+    /// <summary>True while the queue is held by a <c>SnapScope</c>.</summary>
+    public bool IsHeld => _holdDepth > 0;
+
+    internal void Hold()
+    {
+        if (_holdDepth++ == 0) _holdStartMs = _nowMs();
+    }
+
+    internal void Release()
+    {
+        if (_holdDepth == 0 || --_holdDepth != 0) return;
+        double held = _nowMs() - _holdStartMs;
+        if (held <= 0d) return;
+        for (int i = 0; i < _count; i++) _heap[i].DueMs += held;
+    }
+
     /// <summary>Whether the earliest timer is due at <paramref name="now"/> — a SINGLE comparison (one on an empty heap).</summary>
-    public bool HasDue(double now) => _count > 0 && _heap[0].DueMs <= now;
+    public bool HasDue(double now) => _count > 0 && _holdDepth == 0 && _heap[0].DueMs <= now;
 
     /// <summary>Whether the earliest timer is due at the current clock. Drives the <c>WakeReasons.Timer</c> bit.</summary>
     public bool HasDueNow() => HasDue(_nowMs());
@@ -73,7 +97,7 @@ public sealed class HostTimerQueue
     /// <summary>The earliest due time (ms) if any timer is armed — the loop's wait is shortened to reach it.</summary>
     public bool TryPeekEarliest(out double dueMs)
     {
-        if (_count > 0) { dueMs = _heap[0].DueMs; return true; }
+        if (_count > 0 && _holdDepth == 0) { dueMs = _heap[0].DueMs; return true; }
         dueMs = 0.0;
         return false;
     }
@@ -210,7 +234,7 @@ public sealed class HostTimerQueue
     /// period can never spin the drain. An empty heap returns after one comparison.</summary>
     public void Drain()
     {
-        if (_count == 0) return;
+        if (_count == 0 || _holdDepth > 0) return;
         double now = _nowMs();
         long limit = _seq;   // entries (re)scheduled during this drain get Seq >= limit → not fired this pass
         while (_count > 0 && _heap[0].DueMs <= now && _heap[0].Seq < limit)

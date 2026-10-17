@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Signals;
 
@@ -56,6 +57,78 @@ public static class Responsive
                    with { DeriveRenderedOutput = true }
            };
     }
+
+    /// <summary>E17c — the <b>keyed</b> size-reactive box: <see cref="Of(Func{float,Element},float,float)"/> whose measured width is
+    /// remembered under <paramref name="key"/> (<see cref="MeasureMemory"/>, composed onto the ambient
+    /// <see cref="MeasureMemory.Scope"/>, which the application sets to the route instance). A box that mounts with the same key
+    /// builds its FIRST frame at the remembered width instead of <paramref name="fallback"/>, so a remounted page (a theme
+    /// transaction's new root, a revisit) is at its final width in one pass. <paramref name="key"/> is a semantic region role
+    /// (<c>"top-band"</c>); it is also the element's <c>Key</c>. <paramref name="fallback"/> is used only when nothing is
+    /// remembered.</summary>
+    public static Element Of(string key, Func<float, Element> build, float fallback = 0f, float grow = 0f)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        var props = new ResponsiveBox.Props(build, fallback, grow) { MemoryKey = key };
+        return Embed.Comp(props, static () => new ResponsiveBox())
+           with
+           {
+               Key = key,
+               SkeletonProxy = () => Embed.Comp(props, static () => new ResponsiveBox()) with { DeriveRenderedOutput = true },
+           };
+    }
+
+    /// <summary>E17c — the keyed <b>state-gated</b> size-reactive box: <see cref="Of{TState}(TState,Func{TState,float,Element},float,float)"/>
+    /// with the remembered width of <see cref="Of(string,Func{float,Element},float,float)"/>.</summary>
+    public static Element Of<TState>(string key, TState state, Func<TState, float, Element> build, float fallback = 0f, float grow = 0f)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        Func<float, Element> bound = w => build(state, w);
+        var props = new ResponsiveBox.Props(bound, fallback, grow, state) { MemoryKey = key };
+        return Embed.Comp(props, static () => new ResponsiveBox())
+           with
+           {
+               Key = key,
+               SkeletonProxy = () => Embed.Comp(props, static () => new ResponsiveBox()) with { DeriveRenderedOutput = true },
+           };
+    }
+
+    /// <summary>The <b>tier-gated, estimate-seeded</b> size-reactive box (E22): <paramref name="build"/> receives the TIER
+    /// index of <paramref name="ladder"/> (the caller's own enum value) and is re-invoked only when the tier CROSSES, never for
+    /// a width that stays inside its tier. There is no fixed fallback width: the first frame resolves the tier from
+    /// <paramref name="estimate"/> (a same-frame width such as the viewport minus the shell's chrome), so the first frame is
+    /// already in its final tier. Once the box has been measured the measured width drives the ladder, with its hysteresis.
+    /// <para>A crossing after mount rides <c>UseTier</c>'s pending-tier commit: on a live resize the tier lands on the first
+    /// non-resized frame, right before FLIP capture, so the rebuild animates (moved nodes FLIP, swapped subtrees cross-fade)
+    /// instead of snapping. <paramref name="key"/> is the box's identity (a stable Key keeps the measurement and the tier across
+    /// parent re-renders and reorders). <paramref name="build"/> is a live closure here exactly like the ungated
+    /// <see cref="Of(Func{float,Element},float,float)"/>: a parent re-render pushes a new delegate and rebuilds the child; use
+    /// the state-gated overload below to rebuild on a state change only.</para></summary>
+    public static Element Of(string key, TierLadder ladder, Func<float> estimate, Func<int, Element> build, float grow = 0f)
+    {
+        var props = new TierBox.Props(ladder, estimate, build, grow);
+        return Embed.Comp(props, static () => new TierBox())
+           with
+           {
+               Key = key,
+               SkeletonProxy = () => Embed.Comp(props, static () => new TierBox()) with { DeriveRenderedOutput = true },
+           };
+    }
+
+    /// <summary>The tier-gated overload with a <b>state gate</b>: the child is rebuilt when the tier crosses or when
+    /// <paramref name="state"/> changes by VALUE; <paramref name="build"/> must be a function of <c>(state, tier)</c> and the
+    /// delegate itself is ignored by the gate (see <see cref="Of{TState}(TState,Func{TState,float,Element},float,float)"/>).</summary>
+    public static Element Of<TState>(string key, TState state, TierLadder ladder, Func<float> estimate, Func<TState, int, Element> build, float grow = 0f)
+    {
+        Func<int, Element> bound = tier => build(state, tier);
+        object? gate = state;
+        var props = new TierBox.Props(ladder, estimate, bound, grow, gate);
+        return Embed.Comp(props, static () => new TierBox())
+           with
+           {
+               Key = key,
+               SkeletonProxy = () => Embed.Comp(props, static () => new TierBox()) with { DeriveRenderedOutput = true },
+           };
+    }
 }
 
 /// <summary>The <see cref="Responsive.Of"/> component (see that summary). Reading <c>_w.Value</c> in <c>Render</c>
@@ -76,10 +149,13 @@ public sealed class ResponsiveBox : Component
     /// </list></summary>
     public sealed record Props(Func<float, Element> Build, float Fallback, float Grow, object? Gate = null)
     {
+        /// <summary>E17c: the <see cref="MeasureMemory"/> role of a keyed box (null = unkeyed). Compared by value.</summary>
+        public string? MemoryKey { get; init; }
+
         public bool Equals(Props? other)
         {
             if (ReferenceEquals(this, other)) return true;
-            if (other is null || Fallback != other.Fallback || Grow != other.Grow) return false;
+            if (other is null || Fallback != other.Fallback || Grow != other.Grow || !string.Equals(MemoryKey, other.MemoryKey, StringComparison.Ordinal)) return false;
             if (Gate is null || other.Gate is null)
                 return Gate is null && other.Gate is null && EqualityComparer<Func<float, Element>>.Default.Equals(Build, other.Build);
             return Gate.Equals(other.Gate);
@@ -88,21 +164,91 @@ public sealed class ResponsiveBox : Component
         public override int GetHashCode() => HashCode.Combine(Fallback, Grow, Gate);
     }
 
-    readonly Signal<float> _w = new(0f);
+    // The measured width. Created at the first render: a KEYED box (E17c) starts it at the remembered width, so the box builds
+    // at that width at once and its first measurement changes nothing.
+    Signal<float>? _w;
+    string? _memKey;   // the full MeasureMemory key of a keyed box (scope + role), composed once
 
     public override Element Render()
     {
         var props = UseProps<Props>();
-        float w = _w.Value;                                  // subscribe → rebuild on width change
+        if (_w is null)
+        {
+            float seed = 0f;
+            if (props.MemoryKey is { } role)
+            {
+                _memKey = MeasureMemory.Compose(UseContext(MeasureMemory.Scope), role);
+                if (MeasureMemory.TryGetSize(_memKey, out var remembered)) seed = remembered.Width;
+            }
+            _w = new Signal<float>(seed);
+        }
+        var wSig = _w;
+        float w = wSig.Value;                                // subscribe → rebuild on width change
         float effective = w > 0.5f ? w : props.Fallback;
+        string? memKey = _memKey;
         return new BoxEl
         {
             // Direction=1 so the built child CROSS-STRETCHES to our measured width (else a row wrapper would let the
             // child keep its natural width — the "spotlight doesn't stretch full-width" bug).
             Direction = 1, Grow = props.Grow,                     // grow 0 ⇒ column cross-stretch; >0 ⇒ fill a row parent
             // No explicit Width: the parent sizes us, so OnBoundsChanged reports the real available slot.
-            OnBoundsChanged = r => { if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f) _w.Value = r.W; },
+            OnBoundsChanged = r =>
+            {
+                if (memKey is not null && r.W > 0f) MeasureMemory.Capture(memKey, new Size2(r.W, r.H));
+                if (r.W > 0f && MathF.Abs(r.W - wSig.Peek()) > 0.5f) wSig.Value = r.W;
+            },
             Children = [ props.Build(effective) ],
+        };
+    }
+}
+
+/// <summary>The tier-gated <see cref="Responsive.Of(string,TierLadder,Func{float},Func{int,Element},float)"/> component. It
+/// measures its own slot width (a private signal written from <c>OnBoundsChanged</c>) but never reads it in render: the
+/// width feeds <c>UseTier</c> through <see cref="TierSource.Measured"/> (seeded by the estimate until the first measure), so
+/// the box re-renders ONLY when the tier crosses. The estimate thunk is re-pointed each render, so the newest closure seeds
+/// a late first measure.</summary>
+public sealed class TierBox : Component
+{
+    /// <summary>The re-pushed props; equality is the reconciler's re-render gate, exactly as <see cref="ResponsiveBox.Props"/>:
+    /// the ladder (by reference) and <see cref="Grow"/> always; <see cref="Gate"/> non-null ⇒ the state value decides and
+    /// <see cref="Build"/> is IGNORED, null ⇒ <see cref="Build"/> is compared as a delegate (a fresh closure rebuilds).
+    /// <see cref="Estimate"/> is never compared (the newest is used from the next evaluation on).</summary>
+    public sealed record Props(TierLadder Ladder, Func<float> Estimate, Func<int, Element> Build, float Grow, object? Gate = null)
+    {
+        public bool Equals(Props? other)
+        {
+            if (ReferenceEquals(this, other)) return true;
+            if (other is null || !ReferenceEquals(Ladder, other.Ladder) || Grow != other.Grow) return false;
+            if (Gate is null || other.Gate is null)
+                return Gate is null && other.Gate is null && EqualityComparer<Func<int, Element>>.Default.Equals(Build, other.Build);
+            return Gate.Equals(other.Gate);
+        }
+
+        public override int GetHashCode() => HashCode.Combine(Ladder, Grow, Gate);
+    }
+
+    readonly Signal<float> _w = new(0f);
+    Func<float> _estimate = static () => 0f;
+    readonly Func<float> _estimateProxy;
+    readonly Action<RectF> _onBounds;
+
+    public TierBox()
+    {
+        _estimateProxy = () => _estimate();
+        _onBounds = r => { if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f) _w.Value = r.W; };
+    }
+
+    public override Element Render()
+    {
+        var props = UseProps<Props>();
+        _estimate = props.Estimate;
+        var tier = UseTier(props.Ladder, TierSource.Measured(_w, _estimateProxy));
+        return new BoxEl
+        {
+            // Direction=1 so the built child CROSS-STRETCHES to the measured slot (as ResponsiveBox); no explicit Width.
+            Direction = 1, Grow = props.Grow,
+            OnBoundsChanged = _onBounds,
+            Children = [ props.Build(tier.Value) ],   // tier.Value subscribes: a rebuild happens on a crossing only
         };
     }
 }

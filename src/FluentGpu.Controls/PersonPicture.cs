@@ -123,8 +123,8 @@ public static class PersonPicture
                         Weight = 600,                              // InitialsTextBlock FontWeight=SemiBold in EVERY state (PersonPicture.xaml:66)
                         LineBounds = TextLineBounds.Tight,         // TextLineBounds="Tight" — optical (cap-height) centering (PersonPicture.xaml:66)
                         Color = Tok.TextPrimary,                   // PersonPictureForegroundThemeBrush = TextFillColorPrimary
-                        FontFamily = useSymbolFont ? Theme.IconFont // SymbolThemeFontFamily for Group / NoPhotoOrInitials
-                                                   : Theme.BodyFont, // ContentControlThemeFontFamily for initials
+                        FontFamily = useSymbolFont ? Tok.Definition.Fonts.Icon // SymbolThemeFontFamily for Group / NoPhotoOrInitials
+                                                   : Tok.Definition.Fonts.BodyPrimary, // ContentControlThemeFontFamily for initials
                     },
                 ],
             };
@@ -214,7 +214,7 @@ public static class PersonPicture
                             Weight = 600,
                             LineBounds = TextLineBounds.Tight,
                             Color = Tok.TextPrimary,
-                            FontFamily = Theme.BodyFont,
+                            FontFamily = Tok.Definition.Fonts.BodyPrimary,
                         },
                     ],
                 },
@@ -242,7 +242,7 @@ public static class PersonPicture
         {
             Size = ts.BadgeFontSize,                               // BadgePlateSize * 0.60, min 1
             Color = Tok.TextOnAccentPrimary,                       // PersonPictureEllipseBadgeForegroundThemeBrush
-            FontFamily = isGlyph ? Theme.IconFont : Theme.BodyFont, // BadgeGlyphIcon uses SymbolThemeFontFamily
+            FontFamily = isGlyph ? Tok.Definition.Fonts.Icon : Tok.Definition.Fonts.BodyPrimary, // BadgeGlyphIcon uses SymbolThemeFontFamily
             Weight = 600,                                          // SemiBold on the badge label in every state (PersonPicture.xaml:71)
             LineBounds = TextLineBounds.Tight,                     // TextLineBounds="Tight" on BadgeNumberTextBlock (PersonPicture.xaml:71)
         };

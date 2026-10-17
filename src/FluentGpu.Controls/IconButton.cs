@@ -35,7 +35,8 @@ public static partial class IconButton
         public float? Height { get; init; }
         public float GlyphSize { get; init; } = 16f;                 // WinUI NavigationViewItem / AppBar icon box height
         public float CornerRadius { get; init; } = Radii.Control;    // ControlCornerRadius (AppBarButton_themeresources.xaml:137) — rounded-square, NOT a circle
-        public string IconFont { get; init; } = Theme.IconFont;
+        /// <summary>Icon-font family override; null = the active definition's <c>Fonts.Icon</c>, read when the glyph is built (never captured with the style).</summary>
+        public string? IconFont { get; init; }
         public ColorF Foreground { get; init; }
         public ColorF Fill { get; init; }                           // rest (AppBarButtonBackground = SubtleFillColorTransparent, line 5/75)
         public ColorF HoverFill { get; init; }
@@ -52,7 +53,10 @@ public static partial class IconButton
     }
 
     public static Style? StyleOverride;
-    public static Style DefaultStyle => StyleOverride ?? new Style
+    public static Style DefaultStyle => StyleOverride ?? ControlStyles.Resolve(ControlStyles.IconButtonStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a IconButton entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style
     {
         Foreground = Tok.TextPrimary,            // AppBarButtonForeground = TextFillColorPrimary (line 9/79)
         Fill = Tok.FillSubtleTransparent,        // EXPLICIT rest (AppBarButtonBackground = SubtleFillColorTransparent, line 5/75)
@@ -92,7 +96,7 @@ public static partial class IconButton
             [
                 parts.Apply(PartGlyph, new TextEl(glyph)
                 {
-                    Size = s.GlyphSize, FontFamily = s.IconFont,
+                    Size = s.GlyphSize, FontFamily = s.IconFont ?? Tok.Definition.Fonts.Icon,
                     Color = s.Foreground,                // P2 foreground ramp: rest → hover → pressed; disabled via the gate
                     HoverColor = s.HoverForeground,
                     PressedColor = s.PressedForeground,

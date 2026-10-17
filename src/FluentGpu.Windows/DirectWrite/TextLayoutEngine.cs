@@ -66,12 +66,12 @@ public struct LaidLine
 /// </summary>
 public sealed unsafe class TextLayoutEngine : IDisposable
 {
-    private const string DefaultFamily = "Segoe UI";
+    // Faces come from the one shared registry (E9), never from a private cache.
+    private readonly FontRegistry _registry;
+    private readonly TextCaseScratch _case = new();
     private IDWriteFactory* _dw;
     private readonly DWriteItemizer _itemizer;
     private readonly DWriteTextShaper _shaper;
-    private readonly Dictionary<(string fam, int weight), nint> _faces = new();
-    private readonly Dictionary<(string fam, int weight), FaceMetrics> _metrics = new();
 
     /// <summary>Cached per-face design metrics (design units; positive-up from the baseline as DWrite reports them).
     /// <c>Cap</c> is the OS/2 cap height (TextLineBounds.Tight trims the line box to cap..baseline); fonts that report
@@ -81,11 +81,6 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     private IDWriteFontFallback* _fallback;
     private IDWriteFontCollection* _sysColl;
     private TextAnalysisSourceCcw* _fsrc;
-    // Keyed by (family, RESOLVED weight) — NOT family alone: a CJK family (Malgun Gothic) has separate Regular/Bold
-    // faces, so caching by family only would pin every weight to whichever was resolved FIRST (almost always Regular),
-    // rendering a bold (900) CJK run at regular weight while its Latin neighbour is bold. The resolved weight dedups
-    // requests that map to the same face (900 and 800 both → Bold 700).
-    private readonly Dictionary<(string Family, int Weight), nint> _fallbackFaces = new();
 
     private readonly List<ItemRun> _runs = new();
     private readonly List<BreakOpp> _breaks = new();
@@ -247,14 +242,16 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         return oldest ?? new ShapeEntry();
     }
 
-    public TextLayoutEngine()
+    public TextLayoutEngine(FontRegistry? registry = null)
     {
+        if (registry is null) DWriteFontFaceSource.EnsureInstalled();
+        _registry = registry ?? FontRegistry.Shared;
         IDWriteFactory* f;
         Check(DWriteCreateFactory(DWRITE_FACTORY_TYPE.DWRITE_FACTORY_TYPE_SHARED, __uuidof<IDWriteFactory>(), (IUnknown**)&f), "DWriteCreateFactory");
         _dw = f;
         _itemizer = new DWriteItemizer();
         _shaper = new DWriteTextShaper(_dw);
-        ResolveFace(DefaultFamily, 400, out _);
+        ResolveFace("", 400, out _);   // warm the body chain's Regular face so metrics exist from the first measure
 
         // Best-effort system font fallback (null ⇒ base-face only, no coverage splitting).
         IDWriteFactory2* f2;
@@ -282,9 +279,16 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     /// lines is future work; uniform-size spans, the overwhelming case, are exact).</para></summary>
     public void Layout(ReadOnlySpan<char> text, string family, int weight, float size, float maxWidth, int wrap, int trim, int maxLines,
         float charSpacing = 0f, float lineHeight = float.NaN, int stacking = 0, int lineBounds = 0,
-        ReadOnlySpan<SpanStyle> spans = default, StringTable? names = null, int overflowSuffixStart = -1)
+        ReadOnlySpan<SpanStyle> spans = default, StringTable? names = null, int overflowSuffixStart = -1, int textCase = 0)
     {
         if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
+        // E9: a run with no family of its own shapes in the theme's body chain. Key every cache on the CHAIN, not on "", so a
+        // body-font change misses the shape cache instead of replaying glyphs of the previous font.
+        _registry.SyncBody();
+        if (string.IsNullOrEmpty(family)) family = _registry.BodyChain;
+        // E19: the case transform is applied HERE, at shaping, into a reused buffer - the written text is never rewritten,
+        // nothing is allocated per render, and (length preserving) every cluster/caret index is the same.
+        if (textCase != 0) text = _case.Get(text, (TextCase)textCase);
         _glyphCount = 0; _laidCount = 0; _clusterCount = 0; _lineRecCount = 0; _spanEllCount = 0;
 
         // Shape cache: a width-only change replays only WrapAndPosition (shaping is width-independent). Plain text only
@@ -997,12 +1001,12 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         }
 
         if (_fallback == null || _sysColl == null) return;
-        string fam = string.IsNullOrEmpty(family) ? DefaultFamily : family;
         // A custom font FILE ("Assets/Fonts/Inter.ttf#Inter") names no system family, but its uncovered characters still
         // need a system face: returning here shaped CJK / emoji / other scripts in the file face as drawn .notdef boxes.
-        // MapCharacters only takes the family as a preference, so hand it the default; the covered-prefix scan above
-        // already kept every character the file can render in the file face.
-        if (fam.IndexOf('#') >= 0 || fam.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || fam.EndsWith(".otf", StringComparison.OrdinalIgnoreCase)) fam = DefaultFamily;
+        // MapCharacters only takes ONE family as a preference, so the registry hands it the first SYSTEM entry of the
+        // style's chain that exists (the body primary when the chain names none); the covered-prefix scan above already
+        // kept every character the file can render in the file face.
+        string fam = _registry.PreferredSystemFamily(family);
         uint mappedLen; IDWriteFont* mappedFont = null; float sc;
         int hr;
         fixed (char* fn = fam)
@@ -1039,74 +1043,26 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         return new string(buf, 0, (int)len);
     }
 
+    // The system font-fallback map's faces live in the SHARED registry (one cache with the glyph renderer), keyed by
+    // (family, the matched face's REAL weight): a CJK family (Malgun Gothic) has separate Regular/Bold faces, so caching by
+    // family alone would pin every weight to whichever resolved first, and 900 and 800 both map to Bold 700.
     private IDWriteFontFace* ResolveFallbackFace(string family, IDWriteFont* font, IDWriteFontFace* baseFace)
     {
-        // The matched face's REAL weight (e.g. 700 when a 900 run maps to a family whose heaviest cut is Bold) — the
-        // cache key, so each weight keeps its own face and a bold CJK run renders bold (not the first-cached Regular).
         int w = (int)font->GetWeight();
-        var key = (family, w);
-        if (_fallbackFaces.TryGetValue(key, out var c)) return (IDWriteFontFace*)c;
+        nint cached = _registry.TryGetFallbackFace(family, w);
+        if (cached != 0) return (IDWriteFontFace*)cached;
         IDWriteFontFace* face;
         if ((int)font->CreateFontFace(&face) < 0) return baseFace;
-        _fallbackFaces[key] = (nint)face;
-        return face;
+        return (IDWriteFontFace*)_registry.AddFallbackFace(family, w, (nint)face, static f => ((IDWriteFontFace*)f)->Release());
     }
 
+    // Every face - chain entry, #Family file selection, creation, caching, the off-chain error - is the registry's; this
+    // engine only converts the registry's metrics to its own layout of them.
     private IDWriteFontFace* ResolveFace(string family, int weight, out FaceMetrics m)
     {
-        if (string.IsNullOrEmpty(family)) family = DefaultFamily;
-        var key = (family, weight);
-        if (_faces.TryGetValue(key, out var cached)) { m = _metrics[key]; return (IDWriteFontFace*)cached; }
-        IDWriteFontFace* face;
-        try { face = CreateFaceFor(family, weight); } catch { face = family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, weight); }
-        if (face == null)
-        {
-            // Faceless fallback: Segoe-ish design ratios (per 2048 em) so metrics-dependent callers stay sane.
-            m = new FaceMetrics { Em = 2048, Asc = 1500, Desc = 500, UnderPos = -200, UnderThk = 140, StrikePos = 600, Cap = 1434 };
-            return null;
-        }
-        DWRITE_FONT_METRICS fm; face->GetMetrics(&fm);
-        m = new FaceMetrics
-        {
-            Em = fm.designUnitsPerEm, Asc = (short)fm.ascent, Desc = (short)fm.descent,
-            UnderPos = fm.underlinePosition, UnderThk = fm.underlineThickness, StrikePos = fm.strikethroughPosition,
-            // OS/2 cap height for TextLineBounds.Tight; a font that reports none gets the ~0.7 em convention
-            // (the headless model's capHeight ≈ 0.7 × size, HeadlessFontSystem.cs:13).
-            Cap = fm.capHeight != 0 ? fm.capHeight : (ushort)(fm.designUnitsPerEm * 7 / 10),
-        };
-        _faces[key] = (nint)face; _metrics[key] = m;
-        return face;
-    }
-
-    private IDWriteFontFace* CreateFaceFor(string family, int weight)
-    {
-        int hash = family.IndexOf('#');
-        string path = hash >= 0 ? family.Substring(0, hash) : family;
-        bool isFile = path.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".otf", StringComparison.OrdinalIgnoreCase);
-        if (isFile)
-        {
-            IDWriteFontFile* file;
-            fixed (char* p = path) Check(_dw->CreateFontFileReference(p, null, &file), "CreateFontFileReference");
-            BOOL sup; DWRITE_FONT_FILE_TYPE ft; DWRITE_FONT_FACE_TYPE fct; uint nf;
-            Check(file->Analyze(&sup, &ft, &fct, &nf), "Analyze");
-            IDWriteFontFile** files = &file;
-            // A raw file face has no weight family to pick from — synthesize bold for the heavy half (≥ 600).
-            var sim = weight >= 600 ? DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_BOLD : DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_NONE;
-            IDWriteFontFace* ff; Check(_dw->CreateFontFace(fct, 1, files, 0, sim, &ff), "CreateFontFace(file)");
-            file->Release(); return ff;
-        }
-        IDWriteFontCollection* coll;
-        Check(_dw->GetSystemFontCollection(&coll, BOOL.FALSE), "GetSystemFontCollection");
-        uint idx; BOOL exists; fixed (char* pn = family) Check(coll->FindFamilyName(pn, &idx, &exists), "FindFamilyName");
-        if (!exists) { coll->Release(); return family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, weight); }
-        IDWriteFontFamily* fam; Check(coll->GetFontFamily(idx, &fam), "GetFontFamily");
-        // The numeric weight IS the DWRITE_FONT_WEIGHT — GetFirstMatchingFont picks the nearest face/named instance
-        // (variable families like "Segoe UI Variable Text" expose their weight axis as named instances here).
-        IDWriteFont* font;
-        Check(fam->GetFirstMatchingFont((DWRITE_FONT_WEIGHT)weight, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, &font), "GetFirstMatchingFont");
-        IDWriteFontFace* face2; Check(font->CreateFontFace(&face2), "CreateFontFace");
-        font->Release(); fam->Release(); coll->Release();
-        return face2;
+        nint face = _registry.ResolveFace(family, weight, out FontFaceMetrics rm);
+        m = new FaceMetrics { Em = rm.Em, Asc = rm.Asc, Desc = rm.Desc, UnderPos = rm.UnderPos, UnderThk = rm.UnderThk, StrikePos = rm.StrikePos, Cap = rm.Cap };
+        return (IDWriteFontFace*)face;
     }
 
     public static void SelfTest()
@@ -1162,9 +1118,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
 
     public void Dispose()
     {
-        foreach (var kv in _faces) ((IDWriteFontFace*)kv.Value)->Release();
-        foreach (var kv in _fallbackFaces) ((IDWriteFontFace*)kv.Value)->Release();
-        _faces.Clear(); _fallbackFaces.Clear();
+        // Faces belong to the shared FontRegistry (one cache for every consumer); an engine never releases them.
         if (_fsrc != null) { TextAnalysisSourceCcw.Destroy(_fsrc); _fsrc = null; }
         if (_fallback != null) { _fallback->Release(); _fallback = null; }
         if (_sysColl != null) { _sysColl->Release(); _sysColl = null; }

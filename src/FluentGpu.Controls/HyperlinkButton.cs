@@ -56,7 +56,10 @@ public static partial class HyperlinkButton
     }
 
     public static Style? StyleOverride;
-    public static Style DefaultStyle => StyleOverride ?? new Style
+    public static Style DefaultStyle => StyleOverride ?? ControlStyles.Resolve(ControlStyles.HyperlinkButtonStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a HyperlinkButton entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style
     {
         // WinUI HyperlinkButtonForeground = AccentTextFillColor{Primary,Secondary,Tertiary} — the accent TEXT palette
         // (solid, readability-adjusted), NOT the accent FILL: dark = SystemAccentColorLight3/Light3/Light2, light =

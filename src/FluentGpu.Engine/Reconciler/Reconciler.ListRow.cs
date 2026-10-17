@@ -112,6 +112,7 @@ public sealed partial class TreeReconciler
                 ColorF next = fx.Read();
                 ref var paint = ref _scene.Paint(node);
                 if (paint.Fill == next) return;
+                BoundColorFade(fx, node, BrushAnim.FillBit);   // E20: inside the live theme fade a bound colour cross-fades
                 paint.Fill = next;
                 NodeBindingWriteCount++;
                 _scene.Mark(node, NodeFlags.PaintDirty);

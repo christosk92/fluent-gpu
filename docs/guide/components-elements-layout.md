@@ -319,7 +319,7 @@ silhouette edge is hard. Preview it with `dotnet run --project src/FluentGpu.Win
 
 Most controls are **element-returning factories** (call them in render); `NavigationView`/`PageHost` are `Component`s.
 Every control has a `Style` record and reads theme tokens by default; most expose a global `…StyleOverride`, while
-`Button` exposes the axis-aware `Button.StyleHook` (below).
+`Button` reads the axis-aware Button entry of the theme's control style table (`ControlStyles.ButtonStyle`, below).
 
 **One creation idiom.** Every public control exposes exactly ONE canonical `X.Create(…)`; named variants are one-line
 forwarders onto it — `Button.Accent/Standard/Subtle/Outline`, `InfoBadge.Dot/Count/Icon` (→ `InfoBadge.Create(kind, …)`),
@@ -359,12 +359,20 @@ through one 4-arm `ButtonPalette` switch (the token ramp: fill/foreground/border
 them into the same 24-member `Style` record, which survives as the **full-override escape hatch** (pass `style:` to win
 outright). Standard/Accent are pixel-identical to before; Subtle uses the WinUI SubtleFillColor* ramp; Outline is a
 documented Fluent-2 extension (solid stroke all states). `glyph:` adds a leading icon-font run. To restyle globally,
-set `Button.StyleHook = (appearance, size) => …` (return a `Style`, or `null` to fall through to the composed default)
+put a Button entry in the theme's control style table (`ThemeDefinition.Controls.With(ControlStyles.ButtonStyle, (appearance, size) => …)`, return a `Style`, or `null` to fall through to the composed default)
 — it replaces the old per-appearance `AccentStyleOverride`/`StandardStyleOverride`. Sibling button-family controls
 (`IconButton`/`ToggleButton`/`RepeatButton`/`HyperlinkButton`) adopt `ControlSize` too; a control may **clamp** an axis
 value it can't honor (a small per-control table, Radix precedent): `IconButton` clamps `Large`→`Medium` to keep its
 square glyph box sane, and `HyperlinkButton` doesn't expose the appearance axis at all (it is link text with no fill
 chrome, so Subtle/Outline are meaningless).
+
+**Compact (touch) sizes.** `ControlSize.Large` is the 40-DIP hit target a compact window asks for, and the non-button controls
+take it too: `ContentDialog.CommandSize` (with `CommandMinWidth` and `UniformCommandWidths` so two 40-tall buttons share a narrow
+card), `ComboBox.Create(…, size: ControlSize.Large)` (pass `width: float.NaN` to fill a column), `MenuFlyout.Create(…, size:)`
+(40-DIP rows), `BreadcrumbBar.Create(…, size:)` and the toast lane's `ToastLaneStyle.ActionSize`. A NumberBox takes
+`NumberBoxOptions.Style = NumberBox.DefaultStyle with { FieldHeight = 40 }`, a TextBox `TextBoxOptions.Height`; the title bar
+narrows its lead pad and drag strip through `TitleBarOptions.RowSpacing`; the toast lane's margins and card widths come from the
+`Toast.Lane` context (`Ctx.Provide(Toast.Lane, () => style, OverlayHost.Create(…))`). Every default is unchanged.
 
 **`AccentSet` — a palette from any color.** `Tok.AccentDefault`/`AccentSecondary`/`AccentTertiary` shade the LIVE
 system/override accent; `FluentGpu.Dsl.AccentSet.From(ColorF)` (`Dsl/Tokens.cs`) derives the SAME tiers (fill @
@@ -589,6 +597,8 @@ Repeater.ItemsRepeater(int count, Func<int,Element> template, in RepeatLayout la
 //     .LinedFlow(lineHeight,…) / .SpanGrid(cols,rowH,gap,spanOf) / .HorizontalGrid(rows,w,gap)
 //     .Measured(IMeasuredVirtualLayout) / .VariableList(estimate) / .GroupedList(headerIdx,headerH,itemEstimate)
 //     .Wrap(gap) / .Inline(…)   ← non-virtual, for small collections
+//   A grid's `gap` is the gap between the cells of a row AND between rows; `.WithRowGap(rowGap)` gives the rows their own (GridFit(min, 16).WithRowGap(12)).
+//   A responsive grid (GridFit) re-fits its cell floor and BOTH gaps live on the mounted layout (anchor row kept), no remount.
 ```
 Only the visible window (+overscan) is realized; scrolling recycles row nodes through the slab free-list. Provide a
 stable `keyOf` so row state/identity survives recycling. In-window scroll is transform-only (no realize, no relayout).
@@ -760,7 +770,8 @@ Tok.FillControlStrong /*slider rail*/, Tok.ScrollThumb, Tok.FocusOuter/FocusInne
 Tok.Use(ThemeKind.Dark);          // switch theme — one pointer write, re-themes the whole app
 Tok.SetAccent(osAccentColor);     // inject the OS accent at startup
 Tok.SetWindowBackground(color);   // Mica / window background
-Theme.BodyFont = "Segoe UI"; Theme.IconFont = "Segoe Fluent Icons";   // typefaces
+Tok.Use(myDefinition, ThemeKind.Dark);  // switch the WHOLE theme (colours, spacing, radii, type, motion, fonts) - a ThemeDefinition
+var fonts = Tok.Definition.Fonts;                // typefaces: fonts.BodyPrimary, fonts.Icon (read at use)
 ```
 
 `Theme.*` is a small back-compat facade forwarding to `Tok`. `FluentApp.Run` already wires the real OS accent + Mica.
@@ -786,6 +797,6 @@ the fill's WCAG luminance. `Tok.OnAccent` is **baked at accent-set time** (memoi
 **Non-color tokens**: `Spacing` is the 4px grid (`XXS=2, XS=4, S=8, M=12, L=16, XL=20, XXL=24, XXXL=32, Gutter=24`)
 with the semantic names (`PageWide/PageNarrow/Card/Inner/StackS/StackM/StackL` + `PagePadWide/PagePadNarrow/CardPad`
 presets) re-pointed onto it. `Radii` adds `None=0, Card=8, Full=999` alongside `Control=4/Overlay=8/Pill=16`
-(`ControlAll/CardAll/OverlayAll/PillAll/FullAll` presets). `Elevation`/`Typography` round out the non-color set.
+(`ControlAll/CardAll/OverlayAll/PillAll/FullAll` presets). `Elevation`/`Typography` round out the non-color set. These are static PROPERTIES over `Tok.Definition` (`ThemeDefinition.Spacing`/`Radii`/`Type`/`Elevation`), so a `Tok.Use(definition, kind)` re-lays-out everything built from them: never read one into a `const`, a `static readonly` field or a parameter default (analyzer FGTH004 flags the fields). Start a custom theme from `ThemeDefinition.FluentDefault with { Spacing = ..., Radii = ... }`.
 
 Next: **[rendering-and-performance.md](./rendering-and-performance.md)** — the frame pipeline and how to keep it fast.

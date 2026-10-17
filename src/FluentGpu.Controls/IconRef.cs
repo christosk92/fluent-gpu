@@ -14,7 +14,7 @@ public readonly record struct IconRef
 {
     /// <summary>PUA glyph string (icon-font code point). The fallback when <see cref="ThemedName"/> is unset/unregistered.</summary>
     public string? Glyph { get; init; }
-    /// <summary>Icon-font family override for <see cref="Glyph"/> ("path#family"). Null ⇒ <c>Theme.IconFont</c>. Absorbs
+    /// <summary>Icon-font family override for <see cref="Glyph"/> ("path#family"). Null ⇒ <c>Tok.Definition.Fonts.Icon</c>. Absorbs
     /// the old <c>MenuFlyoutItem.GlyphFont</c> concept so an app can ship glyphs the stock icon font doesn't carry.</summary>
     public string? Font { get; init; }
     /// <summary>Layered-vector icon key (<c>ThemedIconRegistry</c>). Wins over <see cref="Glyph"/> when set AND
@@ -39,7 +39,7 @@ public readonly record struct IconRef
 /// The ONE internal render path for an <see cref="IconRef"/> — every menu/command icon slot routes through it, so the
 /// glyph-vs-themed decision (and the disabled/on-accent handling) lives in a single place. A registered
 /// <see cref="IconRef.ThemedName"/> becomes the layered <c>ThemedIcon</c> stack (theme-live tints, no re-raster); else a
-/// glyph <see cref="TextEl"/> in <c>Font ?? Theme.IconFont</c>; an empty ref renders an empty leaf (keeps the column).
+/// glyph <see cref="TextEl"/> in <c>Font ?? Tok.Definition.Fonts.Icon</c>; an empty ref renders an empty leaf (keeps the column).
 /// </summary>
 internal static class IconView
 {
@@ -51,7 +51,7 @@ internal static class IconView
             return ThemedIcon.Create(tn, size, color: themedColor, enabled: enabled, onAccent: onAccent);
         if (icon.Glyph is { Length: > 0 } g)
         {
-            var t = new TextEl(g) { Size = size, Color = glyphColor, FontFamily = icon.Font ?? Theme.IconFont };
+            var t = new TextEl(g) { Size = size, Color = glyphColor, FontFamily = icon.Font ?? Tok.Definition.Fonts.Icon };
             if (pressedColor is { } pc) t = t with { PressedColor = pc };
             if (disabledColor is { } dc) t = t with { DisabledColor = dc };
             return t;

@@ -92,19 +92,26 @@ public static class MenuFlyout
     /// <summary>A separator row (pure chrome — no owned props).</summary>
     public const string PartSeparator = "Separator";
 
+    /// <summary>The row height of <paramref name="size"/> on the kit's size axis: <see cref="ControlSize.Medium"/> (the default) is
+    /// WinUI's 36-DIP row (the 14px line inside MenuFlyoutItemThemePadding 11,8,11,9); <see cref="ControlSize.Large"/> is the
+    /// 40-DIP touch target a compact window asks for (a documented extension: WinUI has no taller menu row). Small is remapped
+    /// to Medium (the ClampSize idiom: a row shorter than its own 14px line plus padding is not a row).</summary>
+    public static float RowHeightFor(ControlSize size) => size == ControlSize.Large ? ControlMetrics.For(ControlSize.Large).MinHeight : RowHeight;
+
     /// <summary>The one canonical MenuFlyout body factory. <paramref name="focusFirst"/>: put the keyboard cursor +
     /// focus on the first selectable row after mount (WinUI keyboard-invoked menu / context menu opened via Menu key —
-    /// <see cref="MenuFlyoutPresenter.FocusFirstOnMount"/>).</summary>
+    /// <see cref="MenuFlyoutPresenter.FocusFirstOnMount"/>). <paramref name="size"/>: the rows' height on the size axis
+    /// (<see cref="RowHeightFor"/>), inherited by every cascading sub-menu.</summary>
     public static Element Create(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth = ThemeMinWidth,
-        TemplateParts? parts = null, bool focusFirst = false)
-        => Create(items, close, minWidth, onNavigate: null, parts, focusFirst);
+        TemplateParts? parts = null, bool focusFirst = false, ControlSize size = ControlSize.Medium)
+        => Create(items, close, minWidth, onNavigate: null, parts, focusFirst, size);
 
     /// <summary><paramref name="onNavigate"/>: Left(-1)/Right(+1) pressed while the menu is open and the focused row is
     /// not a sub-menu boundary — MenuBar uses it to move between adjacent open menus (MenuBarItem.cpp:205-228
     /// OnPresenterKeyDown → OpenFlyoutFrom). <paramref name="focusFirst"/> focuses the first row on mount (keyboard open).</summary>
     public static Element Create(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth, Action<int>? onNavigate,
-        TemplateParts? parts = null, bool focusFirst = false)
-        => Embed.Comp(() => new MenuFlyoutPresenter { Items = items, Close = close, MinWidth = minWidth, OnNavigate = onNavigate, Parts = parts, FocusFirstOnMount = focusFirst });
+        TemplateParts? parts = null, bool focusFirst = false, ControlSize size = ControlSize.Medium)
+        => Embed.Comp(() => new MenuFlyoutPresenter { Items = items, Close = close, MinWidth = minWidth, OnNavigate = onNavigate, Parts = parts, FocusFirstOnMount = focusFirst, Size = size });
 
     /// <summary>Internal alias retained for in-Controls callers (DropDownButton/SplitButton/ToggleSplitButton/MenuBar/
     /// ContextMenu/CommandBarFlyout sub-menus/MediaPlayerElement) — the public door is <see cref="Create"/>.</summary>
@@ -128,7 +135,7 @@ public static class MenuFlyout
     internal static Element Row(
         MenuFlyoutItem it, int index, Action activate, bool checkColumn, bool iconColumn, bool highlighted,
         Action<int>? onKeyMove, Action<KeyEventArgs>? onRowKey, Action<Point2>? onHover, Action? onExit, Action<NodeHandle>? onRealized,
-        bool subOpen = false, TemplateParts? parts = null)
+        bool subOpen = false, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
     {
         bool enabled = it.Enabled;
         // MenuFlyoutItemForeground = TextPrimary; Disabled = TextDisabled. PointerOver/Pressed foreground stay Primary
@@ -144,7 +151,7 @@ public static class MenuFlyout
         if (checkColumn)
         {
             Element glyph = (it.Kind is MenuItemKind.Toggle or MenuItemKind.Radio) && it.IsChecked
-                ? new TextEl(it.Kind == MenuItemKind.Radio ? RadioGlyph : CheckGlyph) { Size = CheckGlyphSize, Color = checkFg, PressedColor = enabled ? Tok.TextTertiary : checkFg, FontFamily = Theme.IconFont }
+                ? new TextEl(it.Kind == MenuItemKind.Radio ? RadioGlyph : CheckGlyph) { Size = CheckGlyphSize, Color = checkFg, PressedColor = enabled ? Tok.TextTertiary : checkFg, FontFamily = Tok.Definition.Fonts.Icon }
                 : new BoxEl();
             children.Add(new BoxEl { Width = PlaceholderWidth, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [glyph] });
         }
@@ -172,7 +179,7 @@ public static class MenuFlyout
         if (it.Kind == MenuItemKind.SubMenu)
             children.Add(new TextEl(Icons.ChevronRightMed)
             {
-                Size = ChevronGlyphSize, FontFamily = Theme.IconFont, Margin = ChevronMargin,
+                Size = ChevronGlyphSize, FontFamily = Tok.Definition.Fonts.Icon, Margin = ChevronMargin,
                 Color = checkFg, PressedColor = enabled ? Tok.TextTertiary : checkFg, DisabledColor = Tok.TextDisabled,
             });
 
@@ -183,7 +190,7 @@ public static class MenuFlyout
         var row = new BoxEl
         {
             Direction = 0,
-            Height = RowHeight,                                    // 36 (= MinHeight 32 clamped up by the 14px line + 8/9 padding)
+            Height = RowHeightFor(size),                           // 36 (= MinHeight 32 clamped up by the 14px line + 8/9 padding); Large 40
             MinHeight = ThemeMinHeight,                            // MenuFlyoutThemeMinHeight = 32
             AlignItems = FlexAlign.Center,
             Margin = ItemMargin,                                   // 4,2,4,2
@@ -263,6 +270,8 @@ internal sealed class MenuFlyoutPresenter : Component
     /// <summary>Part modifiers keyed by the <see cref="MenuFlyout"/> <c>PartXxx</c> consts — inherited by every
     /// cascading sub-menu level.</summary>
     public TemplateParts? Parts;
+    /// <summary>The rows' height on the size axis (<see cref="MenuFlyout.RowHeightFor"/>) — inherited by every cascading sub-menu level.</summary>
+    public ControlSize Size = ControlSize.Medium;
     /// <summary>Set on a cascade CHILD presenter: reports the child's realized root node so the PARENT can compute the
     /// safe-triangle (hover-intent) geometry for it. Null on a root presenter.</summary>
     public Action<NodeHandle>? OnRootRealized;
@@ -380,6 +389,7 @@ internal sealed class MenuFlyoutPresenter : Component
                     OnChildHover = () => pendingClose.Value = false,   // pointer inside the child cancels delay-close
                     FocusFirstOnMount = focusFirst,      // keyboard open → cursor + focus on the first sub item
                     Parts = Parts,                       // part modifiers cascade into every sub-menu level
+                    Size = Size,                         // so does the row height
                     OnRootRealized = h => subMenuNode.Value = h,   // safe-triangle base edge (the child's rect)
                 }),
                 FlyoutPlacement.RightEdgeAlignedTop,
@@ -526,7 +536,8 @@ internal sealed class MenuFlyoutPresenter : Component
                 onExit: () => OnRowExit(idx),
                 onRealized: h => rowNodes.Value[idx] = h,
                 subOpen: i == subOpen,
-                parts: Parts);
+                parts: Parts,
+                size: Size);
         }
 
         var children = new List<Element>(rows.Length + 2);

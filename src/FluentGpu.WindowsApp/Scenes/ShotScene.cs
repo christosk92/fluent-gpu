@@ -436,7 +436,7 @@ sealed class FlyoutLiveShot : Component
                     Children =
                     [
                         new TextEl("Email") { Size = 14f, Color = Tok.TextPrimary },
-                        new TextEl(Icons.ChevronDown) { Size = 10f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont },
+                        new TextEl(Icons.ChevronDown) { Size = 10f, Color = Tok.TextSecondary, FontFamily = Tok.Definition.Fonts.Icon },
                     ],
                 },
             ],
@@ -909,7 +909,7 @@ sealed class DropZoneShot : Component
             Padding = Edges4.All(16), Corners = Radii.ControlAll, Fill = Tok.FillSolidBase,
             Children =
             [
-                new TextEl(Icons.Download) { Size = 30f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary },
+                new TextEl(Icons.Download) { Size = 30f, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextTertiary },
                 new TextEl("Drop files / folders here") { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
                 new TextEl("0 item(s)") { Size = 12f, Color = Tok.TextSecondary },
             ],
@@ -1126,7 +1126,7 @@ sealed class AtlasStressShot : Component
         var kids = new List<Element>
         {
             new TextEl("Atlas generation reset OK — the quick brown fox 0123456789") { Size = 16f, Color = ColorF.FromRgba(0xFF, 0xFF, 0xFF) },
-            new TextEl("       ") { Size = 20f, Color = ColorF.FromRgba(0x4C, 0xC2, 0xFF), FontFamily = Theme.IconFont },
+            new TextEl("       ") { Size = 20f, Color = ColorF.FromRgba(0x4C, 0xC2, 0xFF), FontFamily = Tok.Definition.Fonts.Icon },
         };
 
         if (storm)
@@ -1140,7 +1140,7 @@ sealed class AtlasStressShot : Component
             {
                 var sb = new System.Text.StringBuilder(PerRow);
                 for (int i = 0; i < PerRow; i++) sb.Append((char)(0xE700 + row * PerRow + i));
-                kids.Add(new TextEl(sb.ToString()) { Size = size, Color = ColorF.FromRgba(0x80, 0x80, 0x80), FontFamily = Theme.IconFont });
+                kids.Add(new TextEl(sb.ToString()) { Size = size, Color = ColorF.FromRgba(0x80, 0x80, 0x80), FontFamily = Tok.Definition.Fonts.Icon });
             }
         }
 

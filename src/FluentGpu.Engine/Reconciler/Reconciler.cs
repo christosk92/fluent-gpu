@@ -39,7 +39,7 @@ public sealed partial class TreeReconciler
     // bindings deliberately stay NODE-owned (_nodeBindings, disposed at node unmount) — a bind created during a render
     // outlives that render and can die with its node WITHOUT the component unmounting (Show/For swaps, KeepAlive
     // eviction), so it must not hang off the component scope. G4c's per-component props signal will hang off Scope too.
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; }
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public int ParkEpoch; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; public bool PersistWaiting; public bool ThemeCatchUp; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
 
@@ -64,6 +64,8 @@ public sealed partial class TreeReconciler
     private sealed class VirtualEntry
     {
         public Element[]? Prev; public int PrevLen; public int PrevFirst; public VirtualListEl? El;
+        // EP6: the VirtualListEl.TemplateStamp the live bound slots were built under; a different stamp on a later pass rebuilds them all.
+        public int BuiltStamp;
         // W2-E3: the viewport's VISIBLE item band [VisibleFirst, VisibleLast) (whole rows for a grid/FillRow layout) as of
         // the latest RealizeWindow — the reference every image request from a realized slot classifies against (inside →
         // Visible lane; realized in the overscan halo, incl. the +1 guard rows → Overscan lane). Written before the
@@ -218,6 +220,18 @@ public sealed partial class TreeReconciler
     /// <summary>Probe seam (VerticalSlice gate.virt.slotPool*): parked spare slots of the bound list at <paramref name="viewport"/>.</summary>
     internal int SpareSlotCount(NodeHandle viewport)
         => _virtuals.TryGetValue(viewport, out var e) && e.Spare is { } sp ? sp.Count : 0;
+
+    /// <summary>Probe seam (EP6 gate.boundrows.*): keep-alive-parked slots of the bound list at <paramref name="viewport"/>.</summary>
+    internal int KeptSlotCount(NodeHandle viewport)
+        => _virtuals.TryGetValue(viewport, out var e) && e.Kept is { } kept ? kept.Count : 0;
+
+    /// <summary>Probe seam: the root node of the keep-alive-parked slot bound to <paramref name="item"/>.</summary>
+    internal bool TryGetKeptSlotRoot(NodeHandle viewport, int item, out NodeHandle root)
+    {
+        if (_virtuals.TryGetValue(viewport, out var e) && e.Kept is { } kept && kept.TryGetValue(item, out var ks)) { root = ks.Root; return true; }
+        root = default;
+        return false;
+    }
 
     /// <summary>Probe seam: the root node of the <paramref name="i"/>-th parked spare slot.</summary>
     internal bool TryGetSpareSlotRoot(NodeHandle viewport, int i, out NodeHandle root)
@@ -432,6 +446,11 @@ public sealed partial class TreeReconciler
 
     /// <summary>Number of component render-effects that ran since the last call (proves granular re-render in tests).</summary>
     public int ConsumeRenderCount() { var c = _renderCount; _renderCount = 0; return c; }
+
+    /// <summary>E5: while set (a theme transaction's apply and settle frames, under a freeze), a component whose render throws is
+    /// contained: the exception goes here and the component renders an empty box, so the reconcile that mounted it completes and
+    /// the tree stays consistent for the rollback. Null (every other time): a throwing render propagates exactly as before.</summary>
+    internal Action<Exception>? RenderFaultSink;
     /// <summary>Current frame's render-effect count without resetting (census dump before <see cref="ConsumeRenderCount"/>).</summary>
     public int PeekRenderCount() => _renderCount;
 
@@ -589,6 +608,12 @@ public sealed partial class TreeReconciler
     /// derives it from where the write physically happens.</summary>
     public int SuppressBoundTransitions { get; private set; }
 
+    /// <summary>True while the host's <see cref="FluentGpu.Hosting.SnapScope"/> is active (E17a): mount Enters are not seeded,
+    /// removals free at once (no Exit orphan, no keep-alive exit), and the seeds that still run (brush fades, bound
+    /// transitions, Transition/While* targets) land at their end value in <see cref="AnimEngine"/>'s seed funnels.
+    /// Outside a scope this is false and nothing here changes.</summary>
+    private bool SnapMotion => Anim is { Snapping: true };
+
     /// <summary>RAII helper for <see cref="SuppressBoundTransitions"/> — <c>using (reconciler.PushSuppressBoundTransitions())</c>.</summary>
     public SuppressBoundTransitionsScope PushSuppressBoundTransitions() { SuppressBoundTransitions++; return new SuppressBoundTransitionsScope(this); }
 
@@ -652,12 +677,17 @@ public sealed partial class TreeReconciler
     // Re-render every mounted component IN PLACE so it re-reads the active token set after a Tok.Use/SetAccent, with the
     // resulting fill/border/text color diffs cross-faded. No remount — node identity + component state survive.
 
-    /// <summary>Arm/disarm the live-re-theme cross-fade window. While &gt; 0, <c>WriteColumns</c> seeds a
-    /// <see cref="FluentGpu.Scene.BrushAnim"/> for EVERY fill/border/text color diff at this duration — overriding the
+    /// <summary>Arm/disarm the live-re-theme cross-fade window. While &gt; 0, <c>WriteColumns</c> and the bound colour channels
+    /// (E20) seed a <see cref="FluentGpu.Scene.BrushAnim"/> for EVERY colour diff at this duration (arming starts the shared
+    /// timeline a page un-parked mid-fade joins) — overriding the
     /// element's own <c>BrushTransitionMs</c> default (<c>NaN</c> = snap) — so a whole-app token swap animates uniformly.
     /// The host sets it around exactly the flush that runs the <see cref="RethemeAll"/>-scheduled re-renders, then clears
     /// it (<c>NaN</c>) so ordinary logical-state flips keep their own per-element timing afterward.</summary>
-    public void SetThemeTransition(float ms) => _themeTransitionMs = ms;
+    public void SetThemeTransition(float ms)
+    {
+        _themeTransitionMs = ms;
+        if (!float.IsNaN(ms) && ms > 0f) BeginThemeFadeClock(ms);   // E20: the shared timeline a page un-parked mid-fade joins
+    }
 
     /// <summary>The live-re-theme cross-fade duration when armed, else the element's own value — the one chokepoint the
     /// BrushAnim seeding blocks below consult so the override is applied identically to fill, border, and text.</summary>
@@ -676,8 +706,8 @@ public sealed partial class TreeReconciler
     /// re-render). Without this, Flow.For lists and bound/frozen surfaces keep the old theme.</item>
     /// </list>
     /// <c>Schedule()</c> only enqueues — the re-runs happen in the host's next flush; wrap that flush in
-    /// <see cref="SetThemeTransition"/> so the resulting color diffs cross-fade (re-rendered nodes cross-fade; bound
-    /// channels snap, as they bypass the BrushAnim path by design).</summary>
+    /// <see cref="SetThemeTransition"/> so the resulting color diffs cross-fade — re-rendered nodes and (E20) bound colour
+    /// channels alike, on one timeline (Reconciler.ThemeFade.cs).</summary>
     public void RethemeAll()
     {
         _rootEffect?.Schedule();
@@ -721,8 +751,11 @@ public sealed partial class TreeReconciler
         if (effect is null && _root is null) return;
         effect?.Dispose();
         if (_root is { } root) { _root = null; root.Unmount(); }
+        _persistTeardown = true;   // E7: nothing parks at teardown; the parked subtrees go too
         var sceneRoot = _scene.Root;
         if (!sceneRoot.IsNull && _scene.IsLive(sceneRoot)) UnmountSubtree(sceneRoot);
+        TearDownPersisted();
+        _persistTeardown = false;
         _oldRoot = null;
     }
 
@@ -943,7 +976,8 @@ public sealed partial class TreeReconciler
             // AND keeps its stale Pending build closure (which closed over the seed), so the section never resolves —
             // the "page only half-resolves" bug. Force a fresh mount so the real build + cleared derive flag take hold.
             if (oldEl is ComponentEl oce && oce.ComponentType == nce.ComponentType && _comps.ContainsKey(node)
-                && oce.DeriveRenderedOutput == nce.DeriveRenderedOutput)
+                && oce.DeriveRenderedOutput == nce.DeriveRenderedOutput
+                && !PersistKeyChanged(oce, nce))   // E7: another Flow.Persist key is another subtree (the old one parks)
             {
                 var entry = _comps[node];
                 // E14: the reuse path never reached WriteColumns for this anchor either — re-apply its base-Element
@@ -1291,12 +1325,15 @@ public sealed partial class TreeReconciler
         // E14: apply the anchor's own base-Element props (Sticky/Visible/Enter/…) BEFORE the first render — mirrors
         // Mount's WriteColumns-then-mount-children order for every other element kind.
         WriteAnchorColumns(node, ce, old: null);
+        // E7: a Flow.Persist slot owns its key here, adopting the parked subtree of that key (or waiting for its live owner).
+        if (IsPersistSlot(ce)) MountPersistSlot(node, entry, ((PersistProps)ce.Props!).Key);
         effect.RunNow();                                  // first render + child mount (deferred if mounted parked)
     }
 
     private void RunComponent(NodeHandle node, CompEntry entry)
     {
         if (!_scene.IsLive(node)) return;
+        if (entry.PersistWaiting) return;   // E7: a Flow.Persist slot waiting for its key's live owner renders nothing yet
         // Parked by Flow.KeepAlive (inactive tab/page), OR exit-frozen while a KeepAlive page is still attached and
         // animating out: skip the render — an exiting page must not rebuild against the incoming route (or any other
         // write) mid-fade. Parked pages are detached; exit-frozen pages stay attached so the exit track can paint.
@@ -1321,13 +1358,33 @@ public sealed partial class TreeReconciler
             fx.StaleCause = null;
             causeTag = entry.Rendered is null ? (byte)1 : cause is not null && ReferenceEquals(cause, entry.PropsSig) ? (byte)2 : (byte)0;
         }
-        Element newRendered = comp.RenderWithHooks();
-        if (entry.DerivedSkeletonStyle is { } skeletonStyle)
-            newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
-        long t1 = census ? Stopwatch.GetTimestamp() : 0;
+        // E20: a page back from a park mid-theme-fade renders as a late joiner of that fade (Reconciler.ThemeFade.cs).
+        float savedThemeMs = 0f, savedThemeFromT = 0f;
+        bool catchUp = entry.ThemeCatchUp && BeginThemeCatchUp(out savedThemeMs, out savedThemeFromT);
+        entry.ThemeCatchUp = false;
+        Element newRendered;
         bool prevShape = _layoutShapeMutated;
-        _layoutShapeMutated = false;
-        ReconcileSingleChild(node, newRendered, entry.Rendered);
+        long t1;
+        try
+        {
+            if (RenderFaultSink is { } faultSink)
+            {
+                try { newRendered = comp.RenderWithHooks(); }
+                catch (Exception ex)
+                {
+                    comp.Context.EndRender();
+                    faultSink(ex);
+                    newRendered = new BoxEl();
+                }
+            }
+            else newRendered = comp.RenderWithHooks();
+            if (entry.DerivedSkeletonStyle is { } skeletonStyle)
+                newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
+            t1 = census ? Stopwatch.GetTimestamp() : 0;
+            _layoutShapeMutated = false;
+            ReconcileSingleChild(node, newRendered, entry.Rendered);
+        }
+        finally { if (catchUp) EndThemeCatchUp(savedThemeMs, savedThemeFromT); }
         // Nested component renders (children mounted/re-rendered inside this reconcile) report their own rows; this
         // row's reconcile time therefore INCLUDES them — read the per-type numbers as inclusive of the subtree.
         if (census) NoteRenderCensus(comp, t1 - t0, Stopwatch.GetTimestamp() - t1, GC.GetAllocatedBytesForCurrentThread() - b0, cause, causeTag);
@@ -1461,6 +1518,8 @@ public sealed partial class TreeReconciler
 
     private void ReplaceComponent(NodeHandle node, ComponentEl ce)
     {
+        // E7: a Flow.Persist slot being replaced parks its subtree BEFORE the children below are torn down.
+        if (_persistKeyByNode.Count != 0 && _persistKeyByNode.Remove((int)node.Raw.Index, out var persistKey)) ReleasePersistSlot(node, persistKey);
         var kids = new List<NodeHandle>();
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) kids.Add(c);
         foreach (var k in kids) Remove(k);
@@ -1822,7 +1881,7 @@ public sealed partial class TreeReconciler
         if (state.ActiveKey is { } oldKey && oldKey != key && state.Entries.TryGetValue(oldKey, out var oldActive))
         {
             transition = options.TransitionFor?.Invoke(oldActive.Token, token);
-            if (transition is { } spec && spec.Exit.Active && Anim is not null && !Motion.ReducedMotion)
+            if (transition is { } spec && spec.Exit.Active && Anim is not null && !Motion.ReducedMotion && !SnapMotion)
                 BeginKeepAliveExit(state, oldActive, options, spec);
             else
             {
@@ -1904,7 +1963,7 @@ public sealed partial class TreeReconciler
         state.ActiveKey = key;
         MirrorParticipation(node, entry.Root);
         RemirrorAncestors(node);   // a component/provider anchor above mirrors THIS anchor and did not re-render
-        if (transition is { } enter && enter.Enter.Active && Anim is { } anim && !Motion.ReducedMotion)
+        if (transition is { } enter && enter.Enter.Active && Anim is { } anim && !Motion.ReducedMotion && !SnapMotion)
         {
             anim.CancelAll(entry.Root);
             anim.SeedEnterOver(entry.Root, enter.Enter, enter, EnterRestOf(entry.El));
@@ -2120,10 +2179,11 @@ public sealed partial class TreeReconciler
         Anim?.SnapAuthoredPose(node);
         if (parked) _scene.Mark(node, NodeFlags.Parked); else _scene.Unmark(node, NodeFlags.Parked);
         OnNodeParkedChanged?.Invoke(node, parked);
+        if (!parked) SyncParkedThemeFade(node);   // E20: a bound fade seeded while parked re-joins the live theme fade's timeline
         if (_comps.TryGetValue(node, out var entry))
         {
             entry.Parked = parked;
-            if (parked) entry.ExitFrozen = false;   // park subsumes freeze; DeferredRender debt carries
+            if (parked) { entry.ExitFrozen = false; entry.ParkEpoch = Tok.Epoch; }   // park subsumes freeze; DeferredRender debt carries
             // P1 presence folds in too: Active is Parked-AND-Hidden-free (SetSubtreeHidden, Reconciler.Presence.cs)
             // so UseIsActive()/UseInterval auto-pause across EITHER edge without duplicating this formula.
             if (entry.ActiveSig is { } sig) sig.Value = !parked && !entry.Hidden;   // value-gated; flips the UseIsActive memo → UseActivation
@@ -2133,7 +2193,11 @@ public sealed partial class TreeReconciler
             if (!parked && entry.DeferredRender)
             {
                 entry.DeferredRender = false;
-                if (!budgetReplays || TakeReplayBudget()) entry.Effect?.Schedule();
+                // E20: the owed render carries a theme change while the live fade still runs: it joins that fade where it is.
+                if (ThemeCatchUpDue(entry.ParkEpoch)) entry.ThemeCatchUp = true;
+                // A theme changed while it was parked: the debt includes the re-theme, so it renders NOW, in this activation
+                // flush, unbudgeted — dripped, the page would show old- and new-theme components side by side for frames.
+                if (!budgetReplays || entry.ParkEpoch != Tok.Epoch || TakeReplayBudget()) entry.Effect?.Schedule();
                 else { entry.QueuedReplay = true; _replayQueue.Enqueue(entry); }   // drips from BeginRenderCensus
             }
         }
@@ -2484,6 +2548,7 @@ public sealed partial class TreeReconciler
     {
         var images = Images!;
         int idx = (int)node.Raw.Index;
+        if (images.SnapReveals) cut = true;   // SnapScope: the incoming draws at once, no dissolve
         // A newer swap supersedes an older one: its outgoing is the older swap's INCOMING, so only the older outgoing
         // is released — unless it is the NEW incoming (re-keyed back mid-dissolve), whose pin the caller keeps.
         if (_imageSwaps.Remove(idx, out var prev) && prev.OutgoingId != outgoingId && prev.OutgoingId != incomingId)
@@ -2737,6 +2802,7 @@ public sealed partial class TreeReconciler
                     ColorF next = fx.Read();
                     ref NodePaint paint = ref _scene.Paint(node);
                     if (paint.Fill == next) return;
+                    BoundColorFade(fx, node, BrushAnim.FillBit);   // E20: inside the live theme fade a bound colour cross-fades
                     paint.Fill = next;
                     NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
@@ -2784,6 +2850,7 @@ public sealed partial class TreeReconciler
                     ColorF next = fx.Read();
                     ref NodePaint paint = ref _scene.Paint(node);
                     if (paint.BorderColor == next) return;
+                    BoundColorFade(fx, node, BrushAnim.BorderBit);   // E20
                     paint.BorderColor = next;
                     NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
@@ -2956,6 +3023,7 @@ public sealed partial class TreeReconciler
                     ColorF next = fx.Read();
                     ref var paint = ref _scene.Paint(node);
                     if (paint.TextColor == next) return;
+                    BoundColorFade(fx, node, BrushAnim.TextBit);   // E20
                     paint.TextColor = next;
                     NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
@@ -3028,6 +3096,7 @@ public sealed partial class TreeReconciler
                     ColorF next = fx.Read();
                     ref var paint = ref _scene.Paint(node);
                     if (paint.Fill == next) return;
+                    BoundColorFade(fx, node, BrushAnim.FillBit);   // E20: inside the live theme fade a bound colour cross-fades
                     paint.Fill = next;
                     NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
@@ -3048,6 +3117,7 @@ public sealed partial class TreeReconciler
                     ColorF next = fx.Read();
                     ref var paint = ref _scene.Paint(node);
                     if (paint.Fill == next) return;
+                    BoundColorFade(fx, node, BrushAnim.FillBit);   // E20: inside the live theme fade a bound colour cross-fades
                     paint.Fill = next;
                     NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
@@ -3269,7 +3339,7 @@ public sealed partial class TreeReconciler
         var content = _scene.CreateNode(1);
         _scene.AppendChild(node, content);
         _scene.ScrollRef(node).ContentNode = content;
-        _virtuals[node] = new VirtualEntry { El = ve };
+        _virtuals[node] = new VirtualEntry { El = ve, BuiltStamp = ve.TemplateStamp };
         RealizeWindow(node, ve, mount: true);   // E4: mount realizes the VISIBLE band only; overscan trickles via the budget
         ve.OnRealized?.Invoke(node);   // E11: viewport-handle escape hatch (ItemsView StartBringItemIntoView / sticky pinning)
     }
@@ -3334,16 +3404,49 @@ public sealed partial class TreeReconciler
                                  : (sc.ContentW > 0f ? sc.ContentW : sc.ViewportW > 0f ? sc.ViewportW : Hint(ve.Width));
         if (ve.ItemLayout is IViewportVirtualLayout vvl) vvl.SetViewport(viewport, cross);
 
+        // EP6: a changed template stamp re-measures everything - drop the extent source (and a reseedable layout's measured
+        // table) BEFORE it is consulted, so this pass plans its window against fresh extents; the slots are rebuilt below.
+        bool rebuildBound = ve.RowBind is not null && entry.BuiltStamp != ve.TemplateStamp;
+        if (rebuildBound) ResetBoundMeasure(node, ve, count);
+
         ref ScrollState scEnsure = ref _scene.ScrollRef(node);
         IExtentSource ext = EnsureExtentSource(ref scEnsure, ve, count, cross);
         // A restore (ScrollKey memory, a ScrollTo posted before mount) still pending resolves HERE against the extent
         // source — before this pass picks its window — so the first realized window is the restored one.
-        if (_scene.ScrollHandleFor(node) is { RestorePending: true } pending)
+        var restoreHandle = _scene.ScrollHandleFor(node);
+        if (restoreHandle is { RestorePending: true } pending)
         {
             pending.SetExtent(ext.Total, viewport);
             if (!pending.RestorePending)
             {
                 offset = pending.OffsetNow;
+                velocity = 0.0;
+                scEnsure.Offset = offset;
+                scEnsure.Velocity = 0.0;
+            }
+            else if (offset <= 0.0 && pending.OffsetNow > 0.5)
+            {
+                double clamped = pending.OffsetNow;
+                // EP12: a remembered offset past a SHORTER extent stays latched (it resolves if the list grows) but SetExtent has
+                // already put the plan at today's clamp. A fresh mount still sits at offset 0 here: take the clamp, so the
+                // first window is the one around the end the user will see, never the top rows followed by a corrective pass.
+                offset = Math.Min(clamped, Math.Max(0.0, ext.Total - viewport));
+                velocity = 0.0;
+                scEnsure.Offset = offset;
+                scEnsure.Velocity = 0.0;
+            }
+        }
+        else if (mount && offset <= 0.0 && restoreHandle is not null)
+        {
+            // EP12: a remembered offset can resolve EARLIER than this pass. ApplyScrollKey arms the restore at mount, and
+            // ScrollHandle.Restore resolves at once when the extent the handle was last given (the node's seeded content size)
+            // already holds the target. That writes the PLAN, but ScrollState.Offset is only stepped by a frame sync, so this first
+            // pass would read offset 0 and build the top rows before the sync moved the window. A fresh mount that already has a
+            // planned offset plans its FIRST window there, bounded by the extent source's own total.
+            double planned = restoreHandle.OffsetNow;
+            if (planned > 0.5)
+            {
+                offset = Math.Min(planned, Math.Max(0.0, ext.Total - viewport));
                 velocity = 0.0;
                 scEnsure.Offset = offset;
                 scEnsure.Velocity = 0.0;
@@ -3422,6 +3525,7 @@ public sealed partial class TreeReconciler
             // P3 (virtualization.md §5.5): every bound realize pass runs under SuppressBoundTransitions so a bound-channel
             // transition seed or the P1 Visible Enter seed snaps instead of animating.
             using var _suppressBoundTx = PushSuppressBoundTransitions();
+            if (rebuildBound) RebuildBoundSlots(node, content, entry, ve);   // EP6: every slot + pool, same index signals
             if (prefix > 0 || entry.PrefixSlots is { Count: > 0 })
                 RealizeBoundWindowWithPersistentPrefix(node, content, entry, ve, prefix, first, last, w, visibleSlots);
             else if (ve.KeepAlive is not null || ve.ContentType is not null)
@@ -4492,7 +4596,7 @@ public sealed partial class TreeReconciler
         bool parked = (_scene.Flags(node) & NodeFlags.Parked) != 0;
         // A recycle (a rebind flush) never replays a FlowReveal: from the app's view it is the same persistent row.
         bool recycledReveal = SuppressBoundTransitions > 0;
-        if (!parked && Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active
+        if (!parked && !SnapMotion && Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active   // SnapMotion: free at once, no orphan
             && !(spec.Size == SizeMode.FlowReveal && recycledReveal))
         {
             // Smooth exit (mirror of the enter-reflow): orphaning DETACHES this node, so its sibling would SNAP into the
@@ -4552,6 +4656,8 @@ public sealed partial class TreeReconciler
 
     private void UnmountSubtree(NodeHandle node)
     {
+        // E7: a Flow.Persist slot detaches and parks its subtree (or hands it to a waiting slot) before its children unmount.
+        if (_persistKeyByNode.Count != 0 && _persistKeyByNode.Remove((int)node.Raw.Index, out var persistKey)) ReleasePersistSlot(node, persistKey);
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) UnmountSubtree(c);
 
         int idx = (int)node.Raw.Index;
@@ -4710,7 +4816,7 @@ public sealed partial class TreeReconciler
         {
             danim.SetTransition(node, dt);
             if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
-            if (isMount && dt.Enter.Active && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
+            if (isMount && dt.Enter.Active && !SnapMotion && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
             {
                 danim.SeedEnter(node, dt.Enter, dt);
                 // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout (host-driven). SizeMode.FlowReveal enter:
@@ -5168,29 +5274,21 @@ public sealed partial class TreeReconciler
                 bool fillOwned = !b.Fill.IsBound;
                 bool borderOwned = !b.BorderColor.IsBound;
                 float fillMs = ThemeTransitionOr(b.BrushTransitionMs);   // live re-theme overrides the element's NaN/own duration
-                if (!isMount && !float.IsNaN(fillMs) && fillMs > 0f
-                    && ((fillOwned && paint.Fill != b.Fill.Value)
-                        || (borderOwned && paint.BorderColor != b.BorderColor.Value)))
+                if (!isMount && !float.IsNaN(fillMs) && fillMs > 0f)
                 {
-                    bool midFlight = _scene.TryGetBrushAnim(node, out var prev);
-                    var ba = new BrushAnim { DurationMs = fillMs };
-                    if (fillOwned && paint.Fill != b.Fill.Value)
+                    byte bits = 0;
+                    if (fillOwned && paint.Fill != b.Fill.Value) bits |= BrushAnim.FillBit;
+                    if (borderOwned && paint.BorderColor != b.BorderColor.Value) bits |= BrushAnim.BorderBit;
+                    // E20: a gradient fill / gradient border (the elevation border) has no BrushTransition of its own; it joins
+                    // the live theme fade, from the spec it shows now.
+                    GradientSpec gradientFrom = default, borderBrushFrom = default;
+                    if (ThemeFadeArmed)
                     {
-                        ba.FillFrom = midFlight && (prev.Channels & BrushAnim.FillBit) != 0
-                            ? ColorF.LerpLinear(prev.FillFrom, paint.Fill, prev.T)   // continue from the displayed color
-                            : paint.Fill;
-                        ba.Channels |= BrushAnim.FillBit;
+                        if (b.Gradient is { } ng && _scene.TryGetGradient(node, out gradientFrom) && !SameGradient(in gradientFrom, in ng)) bits |= BrushAnim.GradientBit;
+                        if (b.BorderBrush is { } nbb && _scene.TryGetBorderBrush(node, out borderBrushFrom) && !SameGradient(in borderBrushFrom, in nbb)) bits |= BrushAnim.BorderBrushBit;
                     }
-                    if (borderOwned && paint.BorderColor != b.BorderColor.Value)
-                    {
-                        ba.BorderFrom = midFlight && (prev.Channels & BrushAnim.BorderBit) != 0
-                            ? ColorF.LerpLinear(prev.BorderFrom, paint.BorderColor, prev.T)
-                            : paint.BorderColor;
-                        ba.Channels |= BrushAnim.BorderBit;
-                    }
-                    _scene.SetBrushAnim(node, ba);
-                    _scene.Mark(node, NodeFlags.PaintDirty);
-                    Anim?.SeedBrushFade(node, ba.DurationMs);   // drive the cross-fade T via the unified engine (no separate ticker)
+                    // From the displayed colours (a mid-flight fade continues), keeping a channel another writer is fading.
+                    if (bits != 0) SeedColorFade(node, bits, fillMs, BrushFadeFromT, in gradientFrom, in borderBrushFrom);
                 }
 
                 // Guarded like Opacity/Width/Height/Text: a bound fill is owned by its effect — the static must never
@@ -5394,7 +5492,7 @@ public sealed partial class TreeReconciler
                     anim.SetRestTransform(node, restTf);
                     anim.SetRestPose(node, EnterRestOf(b));
                     _scene.Mark(node, NodeFlags.BoundsAnimated);
-                    if (isMount && at.Enter.Active && (at.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
+                    if (isMount && at.Enter.Active && !SnapMotion && (at.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         anim.SeedEnterOver(node, at.Enter, at, EnterRestOf(b));
                         // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout so neighbours reflow as it
@@ -5415,7 +5513,7 @@ public sealed partial class TreeReconciler
                     danim.SetRestTransform(node, restTf);
                     danim.SetRestPose(node, EnterRestOf(b));
                     if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
-                    if (isMount && dt.Enter.Active && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
+                    if (isMount && dt.Enter.Active && !SnapMotion && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         danim.SeedEnterOver(node, dt.Enter, dt, EnterRestOf(b));
                         if (dt.Size == SizeMode.Reflow) danim.PendingEnterReflow.Add(node);
@@ -5874,7 +5972,11 @@ public sealed partial class TreeReconciler
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.ListRow;
                 paint.Corners = lr.Corners;
-                if (!lr.Fill.IsBound) paint.Fill = lr.Fill.Value;
+                if (!lr.Fill.IsBound)
+                {
+                    if (paint.Fill != lr.Fill.Value) StaticThemeFade(node, isMount, BrushAnim.FillBit);   // E20
+                    paint.Fill = lr.Fill.Value;
+                }
                 if (!lr.HoverFill.IsBound) paint.HoverFill = lr.HoverFill.Value;
                 if (!lr.SelectedFill.IsBound) paint.PressedFill = lr.SelectedFill.Value;
 
@@ -5900,7 +6002,11 @@ public sealed partial class TreeReconciler
                 // Before any request / pin below: the flag is read when this node pins an id (PinImageNode).
                 if (im.KeepWhileHidden) _keepWhileHiddenNodes.Add((int)node.Raw.Index);
                 else _keepWhileHiddenNodes.Remove((int)node.Raw.Index);
-                if (!im.Placeholder.IsBound) paint.Fill = im.Placeholder.Value;   // bound rows tint via the binding
+                if (!im.Placeholder.IsBound)
+                {
+                    if (paint.Fill != im.Placeholder.Value) StaticThemeFade(node, isMount, BrushAnim.FillBit);   // E20
+                    paint.Fill = im.Placeholder.Value;   // bound rows tint via the binding
+                }
                 paint.Corners = im.Corners;
                 paint.ImageFit = (byte)im.Fit;
                 paint.ImageFocusX = Math.Clamp(im.FocusX, 0f, 1f);
@@ -5966,7 +6072,11 @@ public sealed partial class TreeReconciler
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.IconLayer;
                 paint.ImageId = il.PathId;                       // ImageId column DOUBLES as the geometry PathId
-                if (!il.Tint.IsBound) paint.Fill = il.Tint.Value;   // bound tint recolors via the effect (theme-live)
+                if (!il.Tint.IsBound)
+                {
+                    if (paint.Fill != il.Tint.Value) StaticThemeFade(node, isMount, BrushAnim.FillBit);   // E20
+                    paint.Fill = il.Tint.Value;   // bound tint recolors via the effect (theme-live)
+                }
 
                 ref LayoutInput li = ref _scene.Layout(node);
                 li.Width = il.Size; li.Height = il.Size;
@@ -5983,20 +6093,7 @@ public sealed partial class TreeReconciler
                 bool colorOwned = !t.Color.IsBound;
                 float textMs = ThemeTransitionOr(t.BrushTransitionMs);   // live re-theme overrides the element's NaN/own duration
                 if (!isMount && colorOwned && !float.IsNaN(textMs) && textMs > 0f && paint.TextColor != t.Color.Value)
-                {
-                    bool midFlight = _scene.TryGetBrushAnim(node, out var prev);
-                    var ba = new BrushAnim
-                    {
-                        DurationMs = textMs,
-                        Channels = BrushAnim.TextBit,
-                        TextFrom = midFlight && (prev.Channels & BrushAnim.TextBit) != 0
-                            ? ColorF.LerpLinear(prev.TextFrom, paint.TextColor, prev.T)
-                            : paint.TextColor,
-                    };
-                    _scene.SetBrushAnim(node, ba);
-                    _scene.Mark(node, NodeFlags.PaintDirty);
-                    Anim?.SeedBrushFade(node, ba.DurationMs);   // drive the cross-fade T via the unified engine (no separate ticker)
-                }
+                    SeedColorFade(node, BrushAnim.TextBit, textMs, BrushFadeFromT);   // from the displayed colour (mid-flight continues)
 
                 // Guarded like Text below: a bound color is owned by its effect (EditableText's doc-vs-placeholder
                 // ColorBind was clobbered back to the static by any re-render between signal fires).
@@ -6024,7 +6121,7 @@ public sealed partial class TreeReconciler
                 if (li.TextStyle.FontFamily != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.FontFamily); }
                 li.TextStyle = new TextStyle(famId, t.Size, t.ResolvedWeight, t.Wrap, t.Trim, t.MaxLines,
                     t.CharSpacing, t.LineHeight, t.LineStacking, t.LineBounds,
-                    MinSizeDip: float.IsNaN(t.MinSize) ? 0f : t.MinSize);
+                    MinSizeDip: float.IsNaN(t.MinSize) ? 0f : t.MinSize, Case: t.Case);
                 li.Margin = t.Margin;
                 li.Width = t.Width; li.Height = t.Height;
                 li.MinW = t.MinWidth; li.MinH = t.MinHeight; li.MaxW = t.MaxWidth; li.MaxH = t.MaxHeight;
@@ -6038,6 +6135,7 @@ public sealed partial class TreeReconciler
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Text;
+                if (paint.TextColor != st.Color) StaticThemeFade(node, isMount, BrushAnim.TextBit);   // E20: the base foreground spans tint over
                 paint.TextColor = st.Color;
                 paint.TextDecorations = 0;   // span decorations ride the span-run artifact path, not the single-run bits
 

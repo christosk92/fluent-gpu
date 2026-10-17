@@ -2844,27 +2844,38 @@ static class AnimSuite
             stdIdentity && accentIdentity && subtleHover && outlineBorder && sizes && independent,
             $"stdId={stdIdentity} accId={accentIdentity} subtleHover={subtleHover} outlineBorder={outlineBorder} sizes={sizes} indep={independent}");
 
-        // -- gate.ctl.button.stylehook -- StyleHook wins over DefaultStyle; null falls through to the composed default --
+        // -- gate.ctl.button.styletable -- the theme's ControlStyleTable Button entry (the old StyleHook, now carried by
+        //    ThemeDefinition.Controls) wins over DefaultStyle; null falls through to the composed default; removing it restores --
         var sentinel = new Button.Style { Background = ColorF.FromRgba(1, 2, 3), MinHeight = 99f };
-        Button.StyleHook = (a, sz) => a == ButtonAppearance.Outline && sz == ControlSize.Large ? sentinel : null;
-        var hooked = Button.DefaultStyle(ButtonAppearance.Outline, ControlSize.Large);
-        var fell = Button.DefaultStyle(ButtonAppearance.Outline, ControlSize.Small);   // hook returns null here
-        var builtHooked = Button.Create("x", () => { }, ButtonAppearance.Outline, ControlSize.Large);   // hook flows through Create
-        Button.StyleHook = null;                                                        // reset the global before anything else
+        var savedDef = Tok.Definition; var savedKind = Tok.Theme;
+        Button.Style hooked, fell; BoxEl builtHooked;
+        try
+        {
+            Tok.Use(savedDef with
+            {
+                Id = "button-style-table",
+                Controls = savedDef.Controls.With(ControlStyles.ButtonStyle,
+                    (a, sz) => a == ButtonAppearance.Outline && sz == ControlSize.Large ? sentinel : null),
+            }, savedKind);
+            hooked = Button.DefaultStyle(ButtonAppearance.Outline, ControlSize.Large);
+            fell = Button.DefaultStyle(ButtonAppearance.Outline, ControlSize.Small);   // provider returns null here
+            builtHooked = Button.Create("x", () => { }, ButtonAppearance.Outline, ControlSize.Large);   // flows through Create
+        }
+        finally { Tok.Use(savedDef, savedKind); }                                       // reset the active definition before anything else
         bool hookWins = hooked.MinHeight == 99f && hooked.Background == ColorF.FromRgba(1, 2, 3) && builtHooked.MinHeight == 99f;
         bool nullFallsThrough = fell.MinHeight == 24f
             && fell.BorderBrush is { } fb && fb.Stops[0].Color == Tok.StrokeControlDefault;   // Outline+Small composed normally
-        Check("gate.ctl.button.stylehook StyleHook wins over DefaultStyle; null falls through",
+        Check("gate.ctl.button.styletable the theme's Button table entry wins over DefaultStyle; null falls through",
             hookWins && nullFallsThrough, $"hookWins={hookWins} nullFallsThrough={nullFallsThrough}");
 
         // -- gate.ctl.button.glyph-slot -- Create with glyph renders icon+label; without = label-only --
         var withGlyph = Button.Create("Save", () => { }, glyph: Icons.Play);
         var noGlyph = Button.Create("Save", () => { });
         bool glyphStructure = withGlyph.Children.Length == 2
-            && withGlyph.Children[0] is TextEl g && g.FontFamily == Theme.IconFont && g.Text.Value == Icons.Play
+            && withGlyph.Children[0] is TextEl g && g.FontFamily == Tok.Definition.Fonts.Icon && g.Text.Value == Icons.Play
             && withGlyph.Children[1] is TextEl gl && gl.Text.Value == "Save";
         bool labelOnly = noGlyph.Children.Length == 1
-            && noGlyph.Children[0] is TextEl only && only.Text.Value == "Save" && only.FontFamily != Theme.IconFont;
+            && noGlyph.Children[0] is TextEl only && only.Text.Value == "Save" && only.FontFamily != Tok.Definition.Fonts.Icon;
         Check("gate.ctl.button.glyph-slot Create(glyph) renders icon+label; without = label-only",
             glyphStructure && labelOnly, $"withGlyph={glyphStructure} labelOnly={labelOnly}");
     }

@@ -103,6 +103,10 @@ static partial class ControlsSuite
             int afterRerender = backend.OpenCount;
 
             probe.Path.Value = "b.mp4";   // a real source change: exactly one more open, of the new source
+            // The superseded session is disposed on a pool thread before the new open runs (MediaPlayer.OpenCoreAsync), so
+            // the open lands asynchronously: frames alone finish long before it. Wait for it, bounded, then settle.
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            do { host.RunFrame(); Thread.Sleep(1); } while (backend.OpenCount < 2 && DateTime.UtcNow < deadline);
             for (int i = 0; i < 6; i++) host.RunFrame();
             PumpUntilOpened(2);
             int afterChange = backend.OpenCount;

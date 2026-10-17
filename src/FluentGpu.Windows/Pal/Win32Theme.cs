@@ -14,6 +14,7 @@ public static partial class Win32Theme
     private const uint DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     private const uint DWMWA_SYSTEMBACKDROP_TYPE = 38;
     // DWM_SYSTEMBACKDROP_TYPE
+    private const int DWMSBT_NONE = 1;         // no system backdrop (an opaque window, or the app paints its own ground)
     private const int DWMSBT_MAINWINDOW = 2;   // Mica (WinUI MicaKind.Base)
     private const int DWMSBT_TRANSIENTWINDOW = 3; // Acrylic
     private const int DWMSBT_TABBEDWINDOW = 4; // Mica Alt (WinUI MicaKind.BaseAlt — a STRONGER desktop-wallpaper tint)
@@ -36,6 +37,13 @@ public static partial class Win32Theme
 
     [LibraryImport("dwmapi.dll")]
     private static partial int DwmExtendFrameIntoClientArea(nint hwnd, in MARGINS margins);
+
+    [LibraryImport("dwmapi.dll")]
+    private static partial int DwmFlush();
+
+    /// <summary>Block until DWM's next composition pass (<c>DwmFlush</c>). Called on the presenting thread right before an ordered
+    /// attribute write, so the write and the present that follows it land inside the same DWM cycle.</summary>
+    public static void AlignToDwm() => DwmFlush();
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MARGINS { public int cxLeftWidth, cxRightWidth, cyTopHeight, cyBottomHeight; }
@@ -140,20 +148,36 @@ public static partial class Win32Theme
     /// backdrop. Not a cosmetic pair: on a strongly coloured wallpaper Alt reads as saturated chrome where Base stays
     /// near-neutral. Ignored when mica is false.</param>
     public static void ApplyWindowMaterial(nint hwnd, bool dark, bool mica = true, bool customFrame = false, bool micaAlt = false)
+        // The legacy flags: Mica on = a composited Mica window; off = the old opaque HWND window (no backdrop, no glass).
+        => ApplyWindowMaterial(hwnd, dark, WindowMaterialPolicy.FromLegacy(mica, micaAlt), composited: mica, customFrame);
+
+    /// <summary>The material writer (EP9): the dark attribute, <c>DWMWA_SYSTEMBACKDROP_TYPE</c> for <paramref name="material"/> -
+    /// <see cref="WindowMaterial.None"/> writes <c>DWMSBT_NONE</c> so a previous backdrop is really removed - and the frame
+    /// extension the combination needs (<see cref="WindowMaterialPolicy"/>). Re-callable at any time; the live path calls it on the
+    /// UI thread, <c>FluentApp.SetWindowMaterial</c> from the presenting thread right before a present.</summary>
+    public static void ApplyWindowMaterial(nint hwnd, bool dark, WindowMaterial material, bool composited, bool customFrame)
     {
+        var plan = WindowMaterialPolicy.Resolve(material, composited, customFrame);
         int d = dark ? 1 : 0;
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, in d, sizeof(int));
-        int backdrop = mica ? (micaAlt ? DWMSBT_TABBEDWINDOW : DWMSBT_MAINWINDOW) : DWMSBT_TRANSIENTWINDOW;
+        int backdrop = material switch
+        {
+            WindowMaterial.Mica => DWMSBT_MAINWINDOW,
+            WindowMaterial.MicaAlt => DWMSBT_TABBEDWINDOW,
+            WindowMaterial.Acrylic => DWMSBT_TRANSIENTWINDOW,
+            _ => DWMSBT_NONE,
+        };
         DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, in backdrop, sizeof(int));
 
-        if (customFrame)
+        if (!plan.ExtendGlass)
         {
-            // All-zero margins (Terminal's Mica case): DWM owns no caption visuals; snap flyout anchors purely from
-            // the engine's WM_NCHITTEST regions.
+            // All-zero margins: a custom frame (Terminal's Mica case - DWM owns no caption visuals; the snap flyout anchors purely
+            // from the engine's WM_NCHITTEST regions), and every window without a transparent ground (None, or a non-composited
+            // swapchain). Written unconditionally so switching a Mica window to None really drops the glass.
             MARGINS m = new();
             DwmExtendFrameIntoClientArea(hwnd, in m);
         }
-        else if (mica)
+        else
         {
             // Sheet-of-glass: extend the DWM frame across the ENTIRE client area so the Mica system backdrop composites
             // behind the transparent (DirectComposition) client pixels. Without this, the system-backdrop attribute

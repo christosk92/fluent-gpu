@@ -736,6 +736,8 @@ static class ImageSuite
 
         // gate.icon.retheme — an accent swap re-fires the bound Tint thunk → the accent layer's DrawIconMask tint changes
         // in the stream, WITHOUT any re-raster (masks are colorless: IconGeometryTable.Shared.RasterCount is unchanged).
+        // E20 (EP20): the bound tint joins the live theme cross-fade, so the first frame is mid-fade and the new tint lands
+        // when the 250 ms fade has run.
         {
             using var app = new HeadlessPlatformApp();
             var w = new HeadlessWindow(new WindowDesc("icon-retheme", new Size2(240, 240), 1f)); w.Show();
@@ -749,12 +751,15 @@ static class ImageSuite
                 Tok.SetAccent(ColorF.FromRgba(0xE0, 0x40, 0x40));   // red override
                 host.Reconciler.RethemeAll();
                 host.RunFrame();
+                ColorF tintMid = dev.LastIconMasks.Count > 0 ? dev.LastIconMasks[0].Tint : default;
+                for (int i = 0; i < 24; i++) host.RunFrame();   // past the 250 ms cross-fade
                 ColorF tint1 = dev.LastIconMasks.Count > 0 ? dev.LastIconMasks[0].Tint : default;
                 long rc1 = IconGeometryTable.Shared.RasterCount;
                 bool changed = !SameRgb(tint0, tint1) && tint1.R > tint1.B + 0.1f;   // now reddish
+                bool faded = !SameRgb(tintMid, tint0) && !SameRgb(tintMid, tint1);   // the first frame is between the two
                 bool noReRaster = rc1 == rc0;
-                Check("gate.icon.retheme an accent swap recolors the icon's DrawIconMask tint with NO re-raster (RasterCount unchanged)",
-                    changed && noReRaster, $"tint0=({tint0.R:0.00},{tint0.G:0.00},{tint0.B:0.00}) tint1=({tint1.R:0.00},{tint1.G:0.00},{tint1.B:0.00}) raster {rc0}->{rc1}");
+                Check("gate.icon.retheme an accent swap cross-fades the icon's DrawIconMask tint to the new accent with NO re-raster (RasterCount unchanged)",
+                    changed && faded && noReRaster, $"tint0=({tint0.R:0.00},{tint0.G:0.00},{tint0.B:0.00}) mid=({tintMid.R:0.00},{tintMid.G:0.00},{tintMid.B:0.00}) tint1=({tint1.R:0.00},{tint1.G:0.00},{tint1.B:0.00}) raster {rc0}->{rc1}");
             }
             finally { Tok.SetAccent(null); host.Reconciler.RethemeAll(); }   // restore global accent for later gates
         }

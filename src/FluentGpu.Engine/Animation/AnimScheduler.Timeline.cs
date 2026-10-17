@@ -37,6 +37,8 @@ public sealed partial class AnimEngine
                           bool loop = false, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f,
                           Cadence? cadence = null, bool snapToDevicePixels = false)
     {
+        if (Snapping && !loop && composite == CompositeOp.Replace && keys.Length > 0
+            && TryLandAtEnd(node, channel, keys[^1].Value)) return;   // SnapScope: the last keyframe now, no row
         int s = Get(node, channel, composite != CompositeOp.Replace);
         SetCadence(s, cadence ?? Cadence.Display);
         ref AnimValue r = ref _slab.At(s);

@@ -301,7 +301,7 @@ sealed class RecipeIconSwap : Component
                     BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                     AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                     OnRealized = h => icon.Value = h,
-                    Children = [new TextEl(Glyphs[i % Glyphs.Length]) { Size = 24f, FontFamily = Theme.IconFont, Color = Tok.TextPrimary }],
+                    Children = [new TextEl(Glyphs[i % Glyphs.Length]) { Size = 24f, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextPrimary }],
                 },
                 Button.Standard("Swap icon", () => setI(i + 1)),
             ],

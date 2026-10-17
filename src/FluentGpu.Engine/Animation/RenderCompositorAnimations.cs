@@ -68,6 +68,10 @@ public sealed class RenderCompositorAnimations
     /// host sets it on this thread before each turn. One gate for the whole set, not a per-row period: every row advances
     /// on the SAME turns, so rows adopted on different ticks cannot interleave into a faster combined present rate.</summary>
     public float CeilingPeriodMs { get; set; }
+    /// <summary>E21, the render-thread half of <see cref="AnimEngine.HoldPendingStarts"/>: the frame this turn poses will not be
+    /// shown (the publication's <c>EntranceHeld</c>, or the render side's restore latch). Set by the host on this thread before
+    /// each turn. A pending-start row stays at t = 0 and re-takes its hold on the first turn that is shown.</summary>
+    public bool HoldPendingStarts { get; set; }
     private double _lastCeilingAdvanceMs = double.NaN;
     private bool _ceilingHeld;   // this turn falls inside the ceiling interval: every row holds (CeilingHolds, once per Tick/Adopt)
 
@@ -412,6 +416,12 @@ public sealed class RenderCompositorAnimations
         // itself ran long (a first frame of a new page recording/uploading for 40-60 ms), exactly AnimEngine's PASS1 rule.
         if (state.StartPending)
         {
+            // E21: an unshown turn is not the presentation the start resolves at: stay at t = 0 and take the hold again later.
+            if (HoldPendingStarts)
+            {
+                state.HoldNowMs = double.NaN;
+                return;
+            }
             if (double.IsNaN(state.HoldNowMs))
             {
                 state.HoldNowMs = nowMs;

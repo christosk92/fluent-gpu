@@ -29,9 +29,8 @@ public static class Theme
     public static ColorF WindowBackground { get => Tok.WindowBackground; set => Tok.SetWindowBackground(value); }
     public static ColorF WindowText => Tok.TextPrimary;
 
-    // Fonts. BodyFont is the default text face; IconFont is the symbol face for Icon()/IconButton/NavigationView.
-    public static string BodyFont = "Segoe UI";
-    public static string IconFont = "Segoe Fluent Icons";
+    // Fonts are not statics here any more: the body chain and the icon face are members of the active theme definition
+    // (Tok.Definition.Fonts.BodyPrimary / .Icon), read at use so a definition swap reaches every glyph run.
 }
 
 /// <summary>Segoe Fluent glyph codepoints shared across LAYERS (a control and the engine recorder), so every

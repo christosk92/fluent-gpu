@@ -182,7 +182,7 @@ internal sealed class SelectorBarCore : Component
             Element[] rowKids = glyph is { Length: > 0 }
                 ? [new TextEl(glyph)
                    {
-                       FontFamily = Theme.IconFont,
+                       FontFamily = Tok.Definition.Fonts.Icon,
                        Size = 16f * SelectorBar.IconScale,       // 16px IconElement × SelectorBarItemIconScale 0.8 (SelectorBar.xaml:186-188)
                        Color = restFg,                           // PART_IconVisual recolors with the same states (SelectorBar.xaml:78-79, :92-93)
                        HoverColor = hoverFg,

@@ -78,6 +78,8 @@ public sealed partial class SceneRecordingSnapshot
     private readonly SnapshotColumn<GradientSpec> _PressedGradient = new();
     private readonly SnapshotColumn<GradientSpec> _HoverBorderBrush = new();
     private readonly SnapshotColumn<GradientSpec> _PressedBorderBrush = new();
+    private readonly SnapshotColumn<GradientSpec> _GradientFadeFrom = new();      // E20: theme cross-fade origin (BrushAnim.GradientBit)
+    private readonly SnapshotColumn<GradientSpec> _BorderBrushFadeFrom = new();   // E20: theme cross-fade origin (BrushAnim.BorderBrushBit)
 
     internal FluentGpu.Render.SceneRecordingContext Recording { get; } = new();
     public NodeHandle Root { get; private set; }
@@ -444,6 +446,8 @@ public sealed partial class SceneRecordingSnapshot
         _PressedGradient.Remove(index);
         _HoverBorderBrush.Remove(index);
         _PressedBorderBrush.Remove(index);
+        _GradientFadeFrom.Remove(index);
+        _BorderBrushFadeFrom.Remove(index);
     }
 
     private uint NextCaptureEpoch()
@@ -570,6 +574,8 @@ public sealed partial class SceneRecordingSnapshot
             if (source.TryGetPressedGradient(node, out var capturedPressedGradient)) CopyGradient(ref _PressedGradient.Set(index), in capturedPressedGradient);
             if (source.TryGetHoverBorderBrush(node, out var capturedHoverBorderBrush)) CopyGradient(ref _HoverBorderBrush.Set(index), in capturedHoverBorderBrush);
             if (source.TryGetPressedBorderBrush(node, out var capturedPressedBorderBrush)) CopyGradient(ref _PressedBorderBrush.Set(index), in capturedPressedBorderBrush);
+            if (source.TryGetGradientFadeFrom(node, out var capturedGradientFadeFrom)) CopyGradient(ref _GradientFadeFrom.Set(index), in capturedGradientFadeFrom);
+            if (source.TryGetBorderBrushFadeFrom(node, out var capturedBorderBrushFadeFrom)) CopyGradient(ref _BorderBrushFadeFrom.Set(index), in capturedBorderBrushFadeFrom);
         }
         if (_paint[index].VisualKind == VisualKind.Text)
         {
@@ -943,6 +949,8 @@ public sealed partial class SceneRecordingSnapshot
     public bool TryGetPressedGradient(NodeHandle node, out GradientSpec value) => _PressedGradient.TryGet((int)node.Raw.Index, out value);
     public bool TryGetHoverBorderBrush(NodeHandle node, out GradientSpec value) => _HoverBorderBrush.TryGet((int)node.Raw.Index, out value);
     public bool TryGetPressedBorderBrush(NodeHandle node, out GradientSpec value) => _PressedBorderBrush.TryGet((int)node.Raw.Index, out value);
+    public bool TryGetGradientFadeFrom(NodeHandle node, out GradientSpec value) => _GradientFadeFrom.TryGet((int)node.Raw.Index, out value);
+    public bool TryGetBorderBrushFadeFrom(NodeHandle node, out GradientSpec value) => _BorderBrushFadeFrom.TryGet((int)node.Raw.Index, out value);
 
     public RectF AbsoluteRect(NodeHandle node)
     {
@@ -1066,6 +1074,8 @@ public sealed partial class SceneRecordingSnapshot
         _PressedGradient.BeginCapture();
         _HoverBorderBrush.BeginCapture();
         _PressedBorderBrush.BeginCapture();
+        _GradientFadeFrom.BeginCapture();
+        _BorderBrushFadeFrom.BeginCapture();
     }
 
     private void EndSparseCapture()
@@ -1099,6 +1109,8 @@ public sealed partial class SceneRecordingSnapshot
         _PressedGradient.EndCapture();
         _HoverBorderBrush.EndCapture();
         _PressedBorderBrush.EndCapture();
+        _GradientFadeFrom.EndCapture();
+        _BorderBrushFadeFrom.EndCapture();
     }
 
     private readonly record struct Orphan(NodeHandle Node, NodeHandle Parent, float X, float Y);

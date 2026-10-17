@@ -5,6 +5,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Hosting.Tiers;
 using FluentGpu.Input;
 using FluentGpu.Layout;
 using FluentGpu.Pal;
@@ -485,11 +486,27 @@ public sealed partial class AppHost : IDisposable
     // device-wide tile pool the primary window also uses (F229). Assigned once in the constructor.
     private readonly FluentGpu.Render.Tiles.SliceTable? _renderTiles;
     private readonly SliceRecorder _uiSlices = new();
-    private readonly FluentGpu.Render.Tiles.SliceTable _uiTiles = new(SliceTableCap, SliceTileCap, SliceSurfaceCap);
+    private readonly FluentGpu.Render.Tiles.SliceTable _uiTiles;   // assigned in the constructor: its surface cap derives from the window area (E22)
     // P1 sizes: every slice SEGMENT is a SliceTable row (a static root split around each child slice, a scroll slice
     // around a sticky header…), so the table is sized for the segment count a real page reaches, not the design's
     // composited-slice default of 16 — P2 pins the real budget with the surfaces.
+    // SliceSurfaceCap and SliceTileCap are the FLOORS: the constructor raises both from the window area
+    // (TileBudget.SurfaceCapFor) so a 7680 x 4320 px window (3840 x 2160 DIP at 200 %) keeps every visible tile resident instead of
+    // degrading its slices to direct, untiled drawing. Every window up to 4K at 100 % keeps today's 64.
     private const int SliceTableCap = 256, SliceTileCap = 64, SliceSurfaceCap = 64;
+
+    /// <summary>The surface cap for a window of <paramref name="window"/>'s client size, or its monitor's when that is larger
+    /// (the window may be maximized later; the table is sized once): <see cref="FluentGpu.Render.Tiles.TileBudget.SurfaceCapFor"/>
+    /// floored at <see cref="SliceSurfaceCap"/>.</summary>
+    private static int SliceSurfaceCapFor(IPlatformWindow window) => SliceSurfaceCapFor(window.ClientSizePx, window.MonitorSizePx);
+
+    /// <summary>The pure form of <see cref="SliceSurfaceCapFor(IPlatformWindow)"/> (test seam): the larger of the client size and
+    /// the monitor size, through <see cref="FluentGpu.Render.Tiles.TileBudget.SurfaceCapFor"/>, floored at 64.</summary>
+    internal static int SliceSurfaceCapFor(Size2 clientPx, FluentGpu.Media.SizeI monitorPx)
+    {
+        int w = (int)Math.Max(clientPx.Width, monitorPx.Width), h = (int)Math.Max(clientPx.Height, monitorPx.Height);
+        return FluentGpu.Render.Tiles.TileBudget.SurfaceCapFor(w, h, SliceSurfaceCap);
+    }
 
     /// <summary>The UI-thread (SingleThread / headless) slice recorder and tile table — gates read the partition and the
     /// per-turn invalidation census off these.</summary>
@@ -1118,27 +1135,32 @@ public sealed partial class AppHost : IDisposable
     /// <summary>The device half of a stage change, on the thread that owns the device and between turns. Shallow: every retained
     /// tile goes (visible ones too - nothing is visible, and the first composite after the restore schedules and rasters each in its own
     /// submission before anything samples it), then the device drops scratch / stencil / pools behind their fences and the image
-    /// queue is drained so the evicted textures are freed now, not on the first frame back. Visible lifts the no-pooling latch.</summary>
+    /// queue is drained so the evicted textures are freed now, not on the first frame back. Visible lifts the no-pooling latch.
+    /// The applied stage is published LAST (a release write, also when the work throws: a failed stage counts as applied), so a
+    /// thread that reads it (<see cref="HiddenAppliedForTest"/>) sees the whole change done, not just begun.</summary>
     private void ApplyHiddenStage(HiddenStage stage, FluentGpu.Render.Tiles.SliceTable tiles)
     {
-        Volatile.Write(ref _renderHiddenApplied, (int)stage);
-        if (stage >= HiddenStage.Shallow)
+        try
         {
-            if (stage == HiddenStage.Deep) EnterDeepOnRenderSide();   // FIRST: drops the scene readers that would defer the parked images' evictions
-            _idleTrimDormant = false;   // the idle trim pass must run its hidden branch
-            tiles.EvictAll();
-            for (int guard = 0; guard < 8; guard++)
+            if (stage >= HiddenStage.Shallow)
             {
-                var freed = tiles.TrimFreeSlotsNow();
-                if (freed.IsEmpty) break;
-                _device.TrimTileSurfaces(freed);
+                if (stage == HiddenStage.Deep) EnterDeepOnRenderSide();   // FIRST: drops the scene readers that would defer the parked images' evictions
+                _idleTrimDormant = false;   // the idle trim pass must run its hidden branch
+                tiles.EvictAll();
+                for (int guard = 0; guard < 8; guard++)
+                {
+                    var freed = tiles.TrimFreeSlotsNow();
+                    if (freed.IsEmpty) break;
+                    _device.TrimTileSurfaces(freed);
+                }
+                bool shared = OtherWindowVisibleOnRenderThread();
+                _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);
+                DrainImageJobsOffFrame();
+                _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);   // the drain freed textures: the pools / levels they emptied go too
             }
-            bool shared = OtherWindowVisibleOnRenderThread();
-            _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);
-            DrainImageJobsOffFrame();
-            _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);   // the drain freed textures: the pools / levels they emptied go too
+            else _device.ReleaseHiddenResources(HiddenStage.Visible);
         }
-        else _device.ReleaseHiddenResources(HiddenStage.Visible);
+        finally { Volatile.Write(ref _renderHiddenApplied, (int)stage); }
     }
 
     /// <summary>Render thread (or the UI thread inline), the Deep step. (1) Drop the scene readers: the snapshot of the last published
@@ -1452,6 +1474,13 @@ public sealed partial class AppHost : IDisposable
 
     // Ambient context signals (read via UseContext): published by the host, consumers subscribe granularly.
     private readonly Signal<object?> _viewportSig = new(default(Size2));
+    // E22 window tiers. _tiers is the host-owned table of pending UseTier crossings (CommitPendingTiers writes them on the first
+    // non-resized frame, before FLIP capture). _inModalLoopSig is the Viewport.InModalLoop ambient: the OS modal move/size loop
+    // flag, written (boxed once, cached) only on an edge.
+    private readonly TierRegistry _tiers;
+    private static readonly object s_boxedTrue = true, s_boxedFalse = false;
+    private readonly Signal<object?> _inModalLoopSig = new(s_boxedFalse);
+    private bool _lastInModalLoop;
     private readonly Signal<object?> _viewportScaleSig = new(1f);   // Viewport.Scale ambient (DIP→device px)
     private readonly Signal<object?> _viewportZoomSig = new(1f);    // Viewport.Zoom ambient (app-zoom factor; display-only — Scale already contains it)
     private readonly Signal<object?> _frameStatsSig = new(default(FrameStats));
@@ -1696,6 +1725,12 @@ public sealed partial class AppHost : IDisposable
     // The Mica backdrop override rides its OWN counter (Tok.WindowBackgroundEpoch): a window activation flip changes
     // only the frame's clear color, which is read live at submit, so it repaints WITHOUT a re-render or a cross-fade.
     private int _lastWindowBgEpoch;              // last Tok.WindowBackgroundEpoch the host forced a submit for
+    // The overlay scrollbar's arrow glyphs + their icon family, pinned in the ctor. The family is a member of the active
+    // theme definition (Fonts.Icon) and is re-read when Tok.StyleEpoch moves (RefreshScrollbarArrowFamily), not frozen.
+    private StringId _sbUp, _sbDown, _sbLeft, _sbRight, _sbFam;
+    private string _sbFamName = "";
+    private int _lastBodyFontVersion;             // last FontRegistry.BodyVersion this host re-measured for (E9)
+    private int _lastStyleEpoch;                 // last Tok.StyleEpoch the host re-derived non-colour host state for
 
     /// <summary>Host seam set by the windowing backend: re-apply the OS window material (DWM immersive-dark + Mica) when
     /// the theme flips. Invoked on the UI thread on every theme change with the new "is dark" flag. Headless leaves it null;
@@ -2112,6 +2147,7 @@ public sealed partial class AppHost : IDisposable
         // presents it, without the UI ever parking this loop for it (the old Quiesce per pointer move).
         DrainPopupRenderActions();
         if (!_renderSeam.IsCurrentTarget(rf)) return;
+        VideoApplier.DeferAll = rf.Freeze == Threading.FreezeKind.Hold;   // E2: a frozen frame defers every video placement and release until the thaw frame
         try
         {
             if (retryOwedPresent)
@@ -2159,6 +2195,8 @@ public sealed partial class AppHost : IDisposable
                 _renderAnimations.CeilingPeriodMs = powerCap > 0
                     ? (float)CadencePacing.LatticePeriodMs(1000.0 / powerCap, RenderPeriodTicks() * 1000.0 / Stopwatch.Frequency)
                     : 0f;
+                // E21: an unshown frame (the UI's verdict, or the render side's own restore latch) keeps pending starts at t = 0.
+                _renderAnimations.HoldPendingStarts = rf.EntranceHeld || _renderHeld;
                 bool fresh = rf.PublishSeq != _lastRecordedScene;
                 if (fresh)
                 {
@@ -2276,7 +2314,7 @@ public sealed partial class AppHost : IDisposable
                 // exactly the retained pixels.
                 // Never while HELD (or when this publication is the one that releases): the held frames must submit for their uploads
                 // and copies to land, and the release must put its frame on the glass even when it is byte-identical to the last.
-                bool skip = !(_renderHeld || rf.PresentHeld) && Volatile.Read(ref _evCaptureArmed) == 0 && ShouldSkipRenderSubmit(dlHash, _lastRenderPresentedHash, repaintPending: !repaint.IsEmpty,
+                bool skip = !(_renderHeld || rf.PresentHeld) && rf.Freeze == Threading.FreezeKind.None && Volatile.Read(ref _evCaptureArmed) == 0 && ShouldSkipRenderSubmit(dlHash, _lastRenderPresentedHash, repaintPending: !repaint.IsEmpty,
                     clockActive: clockActive, hasPopupWindows: Volatile.Read(ref _popupWindowCount) != 0);
                 var submit = rf.Submit with
                 {
@@ -2415,6 +2453,10 @@ public sealed partial class AppHost : IDisposable
     /// <see cref="HoldGuardMs"/> so a gate that can never open (a rejected upload) cannot freeze the window.</summary>
     private bool DecideHold(in Threading.RenderFrame rf, int imageGaps)
     {
+        // E2: a frame that carries a freeze directive is decided by the directive alone. The faithful-frame extension below is the
+        // RESTORE hold's (it keeps the glass on the pre-hide frame until its images are resident); a freeze release is exactly the
+        // frame that must reach the glass, and a freeze hold must not latch the restore state.
+        if (rf.Freeze != Threading.FreezeKind.None) return rf.Freeze == Threading.FreezeKind.Hold;
         if (rf.PresentHeld)
         {
             // The UI is still holding: the guard's clock starts at the first release CANDIDATE, never earlier. A motion re-present
@@ -2452,7 +2494,10 @@ public sealed partial class AppHost : IDisposable
     /// present is neither counted as a present nor acknowledged (<see cref="NotePresented"/>).</summary>
     private bool PresentFrame(in Threading.RenderFrame rf, bool composited, bool hold = false)
     {
+        // E2: the freeze directive acts here so the owed-present retry (which passes no hold) carries it too.
+        if (rf.Freeze != Threading.FreezeKind.None || _frozenSnapshot is not null) FreezeBeforePresent(in rf, ref hold);
         if (hold) _swapchain.HoldNextPresent();   // one-shot, consumed by the present below
+        else if (!_isDetachedChild) RunBeforePresentWork(rf.PublishSeq);   // EP9: queued DWM writes land right before the present that shows their pixels
         if (UsesNonBlockingPresent(_isDetachedChild, _parentRenderThread is not null, EngineSwitches.NonBlockingSecondaryPresent))
         {
             if (!_swapchain.PresentNoWait())
@@ -4074,6 +4119,9 @@ public sealed partial class AppHost : IDisposable
         w = ClampWaitToCloakDebounce(w, _lastWaitKind);    // a cloaked host wakes when its park debounce ends
         w = ClampWaitToReveal(w, _lastWaitKind);           // an unrevealed pop-out wakes to look for its first present
         w = ClampWaitToRestoreHold(w);                     // an armed restore hold ends on time even if no decode lands to wake the loop
+        w = ClampWaitToFreeze(w);                          // E2: the freeze watchdog thaws on time even when nothing else wakes the loop
+        w = ClampWaitToSettle(w);                          // E17c: a settle waiting for fonts/images looks again on time
+        w = ClampWaitToTransaction(w);                     // E5: a theme transaction's prewarm polls its fonts
         w = ClampWaitToImageLeftovers(w, _lastWaitKind);   // T10: an idle page still wakes for a pinned canceled leftover
         w = ClampWaitToColdMaintenance(w);
         // Render-owned exits normally wake us through completion feedback. Keep their wall-clock
@@ -4656,6 +4704,15 @@ public sealed partial class AppHost : IDisposable
         // A theme mutation (Tok.Use / Tok.SetAccent, from anywhere: a settings click, an async album accent) is work the
         // next Paint re-renders for: it wakes that frame itself instead of waiting on an unrelated wake. One int compare.
         if (Tok.Epoch != _lastThemeEpoch) r |= WakeReasons.FrameNeeded;
+        // A stored UseTier crossing (E22) is work: it owes the frame that commits it. FrameNeeded is in ModalLoopEssentialWake, so the
+        // modal-loop keep-alive idle skip cannot swallow that frame. Not while parked: a minimized window paints nothing to commit on.
+        if (_tiers.HasPending && !_wasParked) r |= WakeReasons.FrameNeeded;
+        // E2: the capture frame, a running dissolve, a cut waiting for its Release frame and an overdue watchdog are all owed frames.
+        if (FreezeNeedsFrame()) r |= WakeReasons.FrameNeeded;
+        // E17c: a settle owes a pass until it is quiet, and while it waits for fonts/images, the pass whose deadline is due.
+        if (SettleNeedsFrame()) r |= WakeReasons.FrameNeeded;
+        // E5: a theme transaction's prewarm polls its fonts, a rollback is due, or a waiting request can start.
+        if (TxNeedsFrame()) r |= WakeReasons.FrameNeeded;
         // Own bits (not folded into FrameNeeded) so the [wake] census can name the treadmill: warming vs budget vs latch.
         if (_reconciler.HasWarmingVirtuals) r |= WakeReasons.WarmingVirtuals;
         if (_runtime.HasPending) r |= WakeReasons.RuntimePending;
@@ -4752,6 +4809,11 @@ public sealed partial class AppHost : IDisposable
     // already expose are reused; these surface the rest. All passive O(1) reads.
     internal StringTable Strings => _strings;
     internal TreeReconciler Reconciler => _reconciler;
+
+    /// <summary>E7: true while the <see cref="Flow.Persist"/> subtree of <paramref name="key"/> is parked in this window - its slot
+    /// left the tree and no slot with the key has mounted since. It is unmounted <see cref="Flow.PersistParkMs"/> after it parked
+    /// (host timer clock) unless a slot adopts it first. UI thread.</summary>
+    public bool IsPersistParked(string key) => _reconciler.IsPersistParked(key);
     internal (int initializedSlots, long indexedBytes, long textStyleBytes, long totalCapacity, long highestRequired)
         SceneCapacityCensus => _renderSeam.SceneCapacityCensus;
     internal int SceneCapacityReclaims => _renderSeam.CapacityReclaims;
@@ -4844,6 +4906,7 @@ public sealed partial class AppHost : IDisposable
                      Threading.RenderThread? parentRenderThread, RenderLoopMode? loopModeOverride,
                      int initialSceneCapacity = 0)
     {
+        _tiers = new TierRegistry(WakeFrame);   // E22: first, so ComputeWakeReasons never sees it unassigned; a stored crossing requests its frame at once (WakeFrame is _inPaint-aware)
         // Item E: 0 keeps SceneStore's own built-in default (64) and no trim floor — today's behaviour, byte-for-byte.
         _scene = initialSceneCapacity > 0 ? new SceneStore(initialSceneCapacity) : new SceneStore();
         if (initialSceneCapacity > 0) _scene.CapacityFloor = initialSceneCapacity;
@@ -4854,7 +4917,10 @@ public sealed partial class AppHost : IDisposable
         _app = app;
         _fonts = fonts;
         _isDetachedChild = isDetachedChild;
-        if (!isDetachedChild) _renderTiles = new(SliceTableCap, SliceTileCap, SliceSurfaceCap);   // a child never composites (see the field)
+        int sliceSurfaceCap = SliceSurfaceCapFor(window);
+        int sliceTileCap = Math.Max(SliceTileCap, sliceSurfaceCap);   // one slice may hold the whole resident set
+        _uiTiles = new(SliceTableCap, sliceTileCap, sliceSurfaceCap);
+        if (!isDetachedChild) _renderTiles = new(SliceTableCap, sliceTileCap, sliceSurfaceCap);   // a child never composites (see the field)
         _parentRenderThread = parentRenderThread;   // detached child: route presents through the parent's single render thread
         _window = window;
         _pacingSource = window as IInputPacingSource;   // once: the Win32 window implements it, headless does not (→ 0)
@@ -4881,9 +4947,14 @@ public sealed partial class AppHost : IDisposable
         // arrows silently resolve to "" for the rest of the session.
         StringId sbUp = strings.Intern(IconGlyphs.CaretUpSolid8), sbDown = strings.Intern(IconGlyphs.CaretDownSolid8),
                  sbLeft = strings.Intern(IconGlyphs.CaretLeftSolid8), sbRight = strings.Intern(IconGlyphs.CaretRightSolid8),
-                 sbFam = strings.Intern(Theme.IconFont);
+                 sbFam = strings.Intern(Tok.Definition.Fonts.Icon);
         strings.AddRef(sbUp); strings.AddRef(sbDown); strings.AddRef(sbLeft); strings.AddRef(sbRight); strings.AddRef(sbFam);
         SceneRecorder.ConfigureScrollbarArrowGlyphs(_scene, sbUp, sbDown, sbLeft, sbRight, sbFam);
+        _sbUp = sbUp; _sbDown = sbDown; _sbLeft = sbLeft; _sbRight = sbRight; _sbFam = sbFam;
+        _sbFamName = Tok.Definition.Fonts.Icon;
+        _lastStyleEpoch = Tok.StyleEpoch;
+        FluentGpu.Text.FontRegistry.Shared.SyncBody();   // adopt the active body chain now, so a LATER change is seen as a change (E9)
+        _lastBodyFontVersion = FluentGpu.Text.FontRegistry.Shared.BodyVersion;
         _images = images ?? new ImageCache(new FakeImageDecoder());
         _isHeadless = window.Handle.Kind == NativeHandleKind.Headless;
         if (window.Handle.Kind == NativeHandleKind.Hwnd) _videoSurfaces.WindowHandle = (nuint)window.Handle.Value;   // protected video ties output protection to THIS window (main or pop-out)
@@ -4918,6 +4989,7 @@ public sealed partial class AppHost : IDisposable
         _invalidator.DebugKeyResolver = _reconciler.DebugKeyOf;   // best-effort node→key for the --fg diag relayout-escape message (DEBUG-only invocation)
         _dispatcher = new InputDispatcher(_scene);
         _reconciler.OnSubtreeDeactivated = OnSubtreeDeactivated;
+        _reconciler.PersistTimers = _timers;   // E7: a parked Flow.Persist subtree expires on the host timer clock (held while frozen)
         _reconciler.OnSubtreeRemoved = _dispatcher.NotifySubtreeRemoved;
         _reconciler.OnSlotRebound = _dispatcher.NotifySlotRebound;   // a recycled slot that held the drag source lets go of it
         _anim =new AnimEngine(_scene);
@@ -4981,6 +5053,12 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.OpenDetachedWindow = OpenDetachedWindow;   // pop-out video window (guarded: a child host / async / headless returns null)
         // The same guard, askable in advance, so an affordance can offer or withhold the option instead of dead-clicking.
         _inputHooks.CanOpenDetachedWindow = () => !_isDetachedChild && !_isHeadless && _device.SupportsSecondarySwapchains;
+        if (!_isDetachedChild)
+        {
+            _inputHooks.RunThemeTransaction = RunThemeTransaction;   // E5: the app's theme switch and Transaction-mode options
+            _inputHooks.ThemeTransactionBusy = _txBusy;
+            _inputHooks.IsThemeTransactionRunning = () => IsThemeTransactionRunning;
+        }
         _inputHooks.SetTitleBarRegions = (regions, count) => _window.SetTitleBarRegions(regions.AsSpan(0, count));
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;
         var chromeEpoch = new Signal<int>(0);
@@ -5224,6 +5302,8 @@ public sealed partial class AppHost : IDisposable
         _reconciler.SetAmbient(Viewport.Size, _viewportSig);
         _reconciler.SetAmbient(Viewport.Scale, _viewportScaleSig);
         _reconciler.SetAmbient(Viewport.Zoom, _viewportZoomSig);
+        _reconciler.SetAmbient(TierHost.Registry, new Signal<object?>(_tiers));
+        _reconciler.SetAmbient(Viewport.InModalLoop, _inModalLoopSig);
         _reconciler.SetAmbient(FrameDiagnostics.Current, _frameStatsSig);
         _reconciler.SetAmbient(InputHooks.Current, _inputHooksSig);
         // Fully qualified: FluentGpu.Pal.FrameClock (the scroll-v3 seam clock, §5.1) is now ALSO in scope via
@@ -5289,11 +5369,37 @@ public sealed partial class AppHost : IDisposable
         // virtualized list binds its scroll handle here, and that plan write wakes the (already running) render thread
         // through a UI-asserted call — unbound, that tripped the Debug confinement guard at startup.
         Threading.ThreadGuard.BindCurrent(Threading.ThreadGuard.ThreadRole.Ui);
+#if FGGUARD
+        int mountThemeEpoch = Tok.Epoch;
+#endif
         _reconciler.MountRoot(_root);
+#if FGGUARD
+        // The baseline below absorbs any re-theme the mount itself made, so a component that themes inside its first
+        // render (Tok.Use, an accent write) would leave the first frame on whatever half of the tree rendered before it.
+        if (Tok.Epoch != mountThemeEpoch)
+            throw new InvalidOperationException(
+                "Tok.Epoch changed during the root mount: a component re-themed inside its first render. Seed the theme before constructing the host.");
+#endif
         // Baseline the re-theme epoch AFTER the root mount — startup theme injection (OS accent / Mica window background,
         // applied before this ctor returns) has already bumped Tok.Epoch, so the FIRST paint must not see a spurious change.
         _lastThemeEpoch = Tok.Epoch;
         _lastWindowBgEpoch = Tok.WindowBackgroundEpoch;
+    }
+
+    /// <summary>Re-point the overlay scrollbar's arrow glyphs at the active definition's icon family when it changed
+    /// (<c>Tok.StyleEpoch</c>): intern + pin the new family, reconfigure the recorder (which publishes), then drop the old pin.
+    /// The arrow code points are theme-invariant and stay pinned from the ctor.</summary>
+    private void RefreshScrollbarArrowFamily()
+    {
+        string icon = Tok.Definition.Fonts.Icon;
+        if (string.Equals(icon, _sbFamName, StringComparison.Ordinal)) return;
+        StringId family = _strings.Intern(icon);
+        _strings.AddRef(family);
+        StringId previous = _sbFam;
+        _sbFam = family;
+        _sbFamName = icon;
+        SceneRecorder.ConfigureScrollbarArrowGlyphs(_scene, _sbUp, _sbDown, _sbLeft, _sbRight, family);
+        _strings.Release(previous);
     }
 
     private void WakeFrame()
@@ -5352,9 +5458,17 @@ public sealed partial class AppHost : IDisposable
     /// parent's poster, and everything already queued here is handed over so no awaiter is stranded on a loop that will
     /// never tick again. Idempotent.</summary>
     private void ForwardPostsTo(Action<Action> parentPost)
+        => HandOffPosts(parentPost);
+
+    /// <summary>A host about to be disposed whose UI posts must still run (a headless mount ending while background threads
+    /// post into it): from now on <see cref="Post"/> forwards to <paramref name="target"/>, and everything already queued is
+    /// handed over first. Without it <see cref="Dispose"/> drops the queue, and a poster that latches "a wake is queued" (the
+    /// playback inbox does) never wakes again. UI thread. Idempotent.</summary>
+    public void HandOffPosts(Action<Action> target)
     {
-        Volatile.Write(ref _postForward, parentPost);
-        DrainPostsTo(parentPost);
+        ArgumentNullException.ThrowIfNull(target);
+        Volatile.Write(ref _postForward, target);
+        DrainPostsTo(target);
     }
 
     private void DrainPostsTo(Action<Action> target)
@@ -5481,6 +5595,7 @@ public sealed partial class AppHost : IDisposable
         _ring.Clear();
         long gapT = Stopwatch.GetTimestamp();                 // UI-gap segments (AppHost.UiGap.cs)
         _pumpedEvents = _window.PumpInto(_ring);              // 1 pump
+        if (_fzPhase == FreezePhase.Frozen) _pumpedEvents = _ring.DropInteractive();   // E2: input is swallowed while frozen (window lifecycle events still pass)
         _ledgerPumpQpc = GapSegment(ref _gapMessagesTicks, gapT);
         if (s_allocDiag) { db = Probe(SegPump, db, dt); dt = Stopwatch.GetTimestamp(); }
 
@@ -5609,11 +5724,13 @@ public sealed partial class AppHost : IDisposable
         // Window lifecycle relay (AppHost.WindowStateChanged): one placement + visibility sample per frame, parked frames
         // included, raised BEFORE the park gate so a minimize-to-tray handler hears the minimize in the frame it happened.
         // A handler may hide/show/restore the window, so the park decision below reads a FRESH sample after it ran.
-        WindowStatus windowStatus = new(_window.State, _window.IsVisible);
+        // A main window waiting on its reveal gate (EP8) reads as visible to the relay: the app asked for it to be shown, and the
+        // later real Show must not surface as a second "shown" edge (the first frame only seeds).
+        WindowStatus windowStatus = new(_window.State, _window.IsVisible || (_revealPending && !_isDetachedChild));
         if (_windowStateRelay.TryAdvance(windowStatus, out WindowStateChange windowChange))
         {
             WindowStateChanged?.Invoke(windowChange);
-            windowStatus = new(_window.State, _window.IsVisible);
+            windowStatus = new(_window.State, _window.IsVisible || (_revealPending && !_isDetachedChild));
         }
         // A window DWM has cloaked for a sustained period (another virtual desktop) parks exactly like a hidden one, the primary
         // as much as a pop-out: it presents nothing (Present stands down) yet keeps WS_VISIBLE, so unparked it kept painting,
@@ -6071,13 +6188,23 @@ public sealed partial class AppHost : IDisposable
             GapPaintStart(frameStart);                         // close + classify the UI gap since the last Paint (AppHost.UiGap.cs)
             long shapeCountAtFrameStart = _fonts.ShapeCount;   // P0: FrameStats.TextShapes reads the delta across this Paint
             _reconciler.BeginRenderCensus();
-            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, _window.InModalLoop);
+            bool inModalLoop = _window.InModalLoop;
+            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, inModalLoop);
+            if (inModalLoop != _lastInModalLoop)
+            {
+                _lastInModalLoop = inModalLoop;
+                _inModalLoopSig.Value = inModalLoop ? s_boxedTrue : s_boxedFalse;   // Viewport.InModalLoop: an edge, never per frame
+            }
             // --fg resize: per-tick segment timing of the modal-loop keep-alive paint. Captured only when both the flag
             // is on AND this is a keep-alive tick — zero work / zero alloc otherwise (the normal hot path is untouched).
             bool diagTick = keepAlive && s_resizeDiag;
             double ensureMs = 0, layoutMs0 = 0;
             long segStart = diagTick ? Stopwatch.GetTimestamp() : 0;
             bool resized = EnsureSize(keepAlive);
+            _tiers.FrameResized = resized;   // a measured crossing stored during this frame's layout waits one more layout (TierRegistry.Store)
+            if (_fzPhase != FreezePhase.None) FreezeFrameStart(resized);   // E2: a resize / DPI change or the watchdog cuts the freeze (and ends its snap scope) before this frame flushes
+            if (_tx is not null || _txPending is not null) TxFrameStart();  // E5: the theme transaction's step (its apply flush is this frame)
+            if (_stTcs is not null) SettlePassStart();                      // E17c: this frame is a settle pass (measured-change baseline)
             if (diagTick) { ensureMs = ElapsedMs(segStart); segStart = Stopwatch.GetTimestamp(); }
 
             // Modal-loop keep-alive idle skip. During a title-bar MOVE or edge RESIZE the OS runs its own modal
@@ -6159,12 +6286,17 @@ public sealed partial class AppHost : IDisposable
             // its contact events dispatch through the ordinary input path (InputKind.Scroll).
             _scrollPumpRing.Clear();
             int scrollPumped = _window.PumpScroll(in _palFrameClock, _scrollPumpRing);
-            if (scrollPumped > 0)
+            if (scrollPumped > 0 && _fzPhase != FreezePhase.Frozen)
                 _dispatcher.Dispatch(_scrollPumpRing.Drain(), _scrollPumpRing.DrainVelocitySamples());
 
             // The frame step: plans → this frame's offsets/motion, realize windows, chrome, the FLIP-suppression latch
             // (a reconcile landing while a user scroll moves content this frame or the last must SNAP, not fly).
             RunScrollFrame(_palFrameClock.PresentQpc / (double)Stopwatch.Frequency);
+
+            // E22 pending-tier commit (technical-plan §3.3 rule 3): AFTER the scroll frame step and BEFORE willReconcile is read, so
+            // the committed signal writes make _runtime.HasPending true and the FLIP capture below runs with the post-resize rects
+            // as "before". Only on a frame that is NOT resized (a resized frame snaps and cancels structural tracks; the crossing waits).
+            CommitPendingTiers(resized);
 
             // FLIP "First": capture presented rects of layout-animated nodes BEFORE the reconcile/relayout that moves them.
             // Skip on the very first layout — freshly-mounted nodes are unmeasured (0-size), so FLIPping them would animate
@@ -6229,7 +6361,9 @@ public sealed partial class AppHost : IDisposable
             // overlay-close watchers) drain in THIS frame's flush and the runtime queue is EMPTY at frame end. Published
             // last it left one queued computation every single frame, so the RuntimePending wake reason fired on every
             // frame and the loop could never fall out of display rate. Only when watched — 0-alloc when nothing polls.
-            if (_frameClockSig.HasSubscribers || _frameClockPaceableSig.HasSubscribers)
+            // SnapScope (E17b): the tick does not advance while a transaction snaps the UI, so FrameTicker-style sources
+            // schedule nothing (the counter resumes from where it stopped; no catch-up burst).
+            if (_snapDepth == 0 && (_frameClockSig.HasSubscribers || _frameClockPaceableSig.HasSubscribers))
             {
                 ++_frameClock;
                 if (_frameClockSig.HasSubscribers) _frameClockSig.Value = _frameClock;
@@ -6295,7 +6429,7 @@ public sealed partial class AppHost : IDisposable
             if (themeChanged)
             {
                 _lastThemeEpoch = Tok.Epoch;
-                OnApplyThemeMaterial?.Invoke(Tok.Theme == ThemeKind.Dark);   // instant OS material flip (cannot cross-fade)
+                if (!_txOwnsDwm) OnApplyThemeMaterial?.Invoke(Tok.Theme == ThemeKind.Dark);   // instant OS material flip (cannot cross-fade); a theme transaction orders its own
                 _reconciler.SetThemeTransition(themeMs);
                 _reconciler.RethemeAll();
             }
@@ -6308,6 +6442,24 @@ public sealed partial class AppHost : IDisposable
             {
                 _lastWindowBgEpoch = Tok.WindowBackgroundEpoch;
                 _lastPresentedDrawListHash = 0;
+            }
+            // A non-colour table changed (Tok.StyleEpoch): re-derive host state that was pinned from one (the icon family
+            // behind the overlay scrollbar's arrows). Runs on the UI thread before the reconcile flush, so the recorded
+            // frame of this publication already carries the new family.
+            if (Tok.StyleEpoch != _lastStyleEpoch)
+            {
+                _lastStyleEpoch = Tok.StyleEpoch;
+                RefreshScrollbarArrowFamily();
+                // E9: a run with no family of its own shapes in the theme's body font, which its style cannot see. When the
+                // definition changed that font, every cached measure is stale (they key on FontRegistry.BodyVersion) and the
+                // whole tree must re-measure; the shape and glyph-run caches evict themselves on the same version.
+                FluentGpu.Text.FontRegistry.Shared.SyncBody();
+                if (FluentGpu.Text.FontRegistry.Shared.BodyVersion != _lastBodyFontVersion)
+                {
+                    _lastBodyFontVersion = FluentGpu.Text.FontRegistry.Shared.BodyVersion;
+                    _scene.MarkAllTextLayoutDirty();
+                    _needFullLayout = true;
+                }
             }
             bool virtualsChanged = false;
             double reactiveFlushMs = 0, virtualRealizeMs = 0;
@@ -6389,7 +6541,7 @@ public sealed partial class AppHost : IDisposable
             // (resizes from the FLIP capture, enters), fold them into the presented flow, and clamp every scroll offset
             // against the PRESENTED extent. Effects and the sync below then see the geometry this frame presents.
             bool keepAliveSuppressed = _reconciler.ConsumeKeepAliveLayoutSuppressionFrame();
-            if (flowRevealFrame && SeedFlowRevealsPostLayout(capturedProjections, Motion.LayoutTransitionsSuppressed || keepAliveSuppressed, layoutSize))
+            if (flowRevealFrame && SeedFlowRevealsPostLayout(capturedProjections, Motion.LayoutTransitionsSuppressed || keepAliveSuppressed || _snapDepth > 0, layoutSize))
                 reconciled = true;
 
             DrainLayoutEffects();                              // 6.5 layout effects (Bounds valid)
@@ -6405,7 +6557,7 @@ public sealed partial class AppHost : IDisposable
                 DrainLayoutEffects();                          // the rows this pass mounted queued theirs after the 6.5 drain: run them before they paint
             }
             long tLayoutEffects = Stopwatch.GetTimestamp();
-            _connected.ReducedMotion = Motion.ReducedMotion;   // 6.5 connected-animation: remember tag rects, seed flies to arrived dests, expire stale
+            _connected.ReducedMotion = Motion.ReducedMotion || _snapDepth > 0;   // 6.5 connected-animation: remember tag rects, seed flies to arrived dests, expire stale
             _connected.Tick65();
             long tConnected = Stopwatch.GetTimestamp();
             // Responsive show/hide "make room": nodes that mounted with a SizeMode.Reflow enter now have their natural
@@ -6461,8 +6613,13 @@ public sealed partial class AppHost : IDisposable
             if (capturedProjections) ApplyProjections(keepAliveSuppressed);       // FLIP "Last+Invert+Play"
             _anim.PendingEnterReveal.Clear();                  // seeded at 6.3, read by ApplyProjections as shove carriers
             _anim.RevealExitCarriers.Clear();
+            // E21: a frame that will not be shown holds every pending-start row at t = 0; the publication carries the same verdict
+            // to the render-thread compositor (RenderFrame.EntranceHeld).
+            bool entranceHeld = EntrancesUnseen();
+            _anim.HoldPendingStarts = entranceHeld;
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
+            _reconciler.SettlePersistWaiters();                 // 7 E7: a Flow.Persist slot still waiting for a live owner has a duplicate key
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             RunReflowLayout(layoutSize);                       // 7 boundary-scoped re-solve for SizeMode.Reflow (smooth reflow)
@@ -6727,8 +6884,12 @@ public sealed partial class AppHost : IDisposable
             // The restore hold rides this publication. Decided HERE, after this frame's image pump, so a landing that completed the
             // restore releases it in the very publication that shows it. A frame whose hold bit differs from the last published one
             // is owed a publication even when nothing else changed (the release is exactly that frame).
-            bool presentHeld = EvaluateRestoreHold(resized);
-            bool holdOwesPublication = presentHeld || _lastPublishedHeld;
+            bool restoreHeld = EvaluateRestoreHold(resized);
+            // E2 frame freeze: this frame's directive (Capture / Hold / Dissolve / Release), decided HERE with the restore hold and
+            // carried by the publication. A frozen frame is also a held one, so the upload cap lifts and the skip gates stay shut.
+            Threading.FreezeKind freezeKind = ResolveFreezeDirective(out float dissolveT);
+            bool presentHeld = restoreHeld || freezeKind == Threading.FreezeKind.Hold;
+            bool holdOwesPublication = presentHeld || _lastPublishedHeld || freezeKind != Threading.FreezeKind.None || _fzLastPublished != Threading.FreezeKind.None;
             bool maybeUnchanged = !recordOnRender && _everLaidOut && !resized && !keepAlive && _popupWindows.Count == 0
                 && !holdOwesPublication
                 && !reconciled && !layoutNeeded && !transformWrote
@@ -6839,6 +7000,7 @@ public sealed partial class AppHost : IDisposable
                 subHashMs = ElapsedMs(tHash0);
                 var submitInfo = new FrameInfo(recordOnRender ? publishFrameSize : FrameSizePx(keepAlive), _window.Scale, Clear, _images.ClockMs, repaint);
                 _lastPublishedHeld = presentHeld;
+                _fzLastPublished = freezeKind;
                 _lastPublishedFrameSize = _window.ClientSizePx;   // what a restore into another size would stretch (the hold is then not armed)
                 _lastPublishedScale = _window.Scale;
                 // F101: a settle frame (resized && keepAlive) carries its hint IN the publication (settlePresent below); it
@@ -6853,7 +7015,8 @@ public sealed partial class AppHost : IDisposable
                     _framePublishSeq = _renderSeam.PublishScene(_scene, _images, _strings, recordOptions,
                         CollectionsMarshal.AsSpan(_popupSkipRoots), CollectionsMarshal.AsSpan(_reuseBlockRoots),
                         CollectionsMarshal.AsSpan(_anim.PendingStructuralDamage), _connected.Detached, _popupWindows, _anim,
-                        submitInfo, suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld);
+                        submitInfo, suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld,
+                        freeze: freezeKind, dissolveT: dissolveT, entranceHeld: entranceHeld);
                     subCaptureMs = ElapsedMs(tCap0);
                     tCap0 = Stopwatch.GetTimestamp();
                     _lastPublishedSceneSeq = _framePublishSeq;
@@ -6884,11 +7047,14 @@ public sealed partial class AppHost : IDisposable
                     _scene.ClearCaptureLedger(oldestSlotSeq);
                 }
                 else _framePublishSeq = _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo,
-                    suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld);
+                    suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld,
+                    freeze: freezeKind, dissolveT: dissolveT);
                 if (_renderThread is not null)
                 {
-                    if (_asyncActive) _renderThread.WakeAsync();   // async: UI does NOT wait (present happens later, render-side)
-                    else _renderThread.DrainSync();                  // force-sync: block until the render thread presented
+                    // A freeze CAPTURE frame waits for its turn even under async: the render side adopts only the newest publication, so the
+                    // hold frame that follows must not be published until this one was consumed (else the snapshot is never taken).
+                    if (_asyncActive && freezeKind != Threading.FreezeKind.Capture) _renderThread.WakeAsync();   // async: UI does NOT wait (present happens later, render-side)
+                    else _renderThread.DrainSync();                  // force-sync (or a freeze capture): block until the render thread presented
                     tSubmitDone = Stopwatch.GetTimestamp();          // async: present is off-thread; force-sync collapses the boundary
                     if (recordOnRender) subTailMs = ToMs(tSubmitDone - tCap0);
                 }
@@ -6900,8 +7066,8 @@ public sealed partial class AppHost : IDisposable
                     // render-confined. An inline UI-thread submit here would violate that confinement + race the parent's
                     // presents. Async: fire-and-return (BindDComp + video drain ride our first present on the render thread).
                     // Force-sync: block until the parent thread's turn drained us (mirrors the primary DrainSync contract).
-                    if (_asyncActive) _parentRenderThread.WakeAsync();
-                    else _parentRenderThread.DrainSync();
+                    if (_asyncActive && freezeKind != Threading.FreezeKind.Capture) _parentRenderThread.WakeAsync();
+                    else _parentRenderThread.DrainSync();            // force-sync, or a freeze capture frame (see the primary branch above)
                     tSubmitDone = Stopwatch.GetTimestamp();
                 }
                 else
@@ -6922,10 +7088,13 @@ public sealed partial class AppHost : IDisposable
                                 composited = true;
                             }
                             else _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain);
+                            VideoApplier.DeferAll = rf.Freeze == Threading.FreezeKind.Hold;   // E2: a frozen frame defers every video placement and release
                             heldInline = DecideHold(in rf, 0);   // the UI thread is the render thread here: the UI half decides, the gate checks the atlas
+                            if (rf.Freeze != Threading.FreezeKind.None || _frozenSnapshot is not null) FreezeBeforePresent(in rf, ref heldInline);   // E2: snapshot / hold / dissolve this present
                         }
                         tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
                         if (heldInline) _swapchain.HoldNextPresent();
+                        else if (!_isDetachedChild) RunBeforePresentWork(rf.PublishSeq);   // EP9: ordered DWM writes (see QueueBeforePresent)
                         _swapchain.Present();                       // 11 present (UI thread)
                         if (heldInline && _swapchain.LastPresentHeld) _framesHeld++;
                         else
@@ -6991,6 +7160,8 @@ public sealed partial class AppHost : IDisposable
             _window.SetHasLiveVideo(_videoSurfaces.HasLiveSurface);
 
             DrainPassiveEffects();                             // 12 passive effects
+            if (_stTcs is not null) SettleAfterPass();         // E17c: judge the settle pass (quiet? capped?) now that every effect has run
+            if (_tx is not null) TxAfterPass();                // E5: a settled transaction thaws; a rolled-back one thaws with a cut
             _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
             if (s_allocDiag) { db = Probe(SegEffects, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
@@ -7164,6 +7335,13 @@ public sealed partial class AppHost : IDisposable
             if (s_allocDiag) Probe(SegPublish, db, dt0);   // alloc-05: frame-stat box + frameclock long-box were untracked
             return LastStats;
         }
+        catch (Exception ex) when (_tx is not null)
+        {
+            // E5: a template of the theme being applied threw inside its apply or settle frames. The frame is frozen, so nothing of it
+            // was shown: the transaction rolls back under the same freeze. Any other throw propagates exactly as before.
+            if (!TxAbsorbFault(ex)) throw;
+            return LastStats;
+        }
         finally
         {
             _frameNeeded = _runtime.HasPending;
@@ -7254,7 +7432,7 @@ public sealed partial class AppHost : IDisposable
     /// (<see cref="PopupWindowsEnabled"/> false, or the PAL declined) — callers fall back to constrained placement.</summary>
     private int OpenPopupWindow(NodeHandle subtreeRoot, PopupWindowMaterial material)
     {
-        if (!PopupWindowsEnabled || subtreeRoot.IsNull) return -1;
+        if (!PopupWindowsEnabled || subtreeRoot.IsNull || _fzPhase == FreezePhase.Frozen) return -1;   // E2: no popup window opens against a frozen tree
         // NO render-thread park (F207): the HWND is the UI thread's own, and the swapchain is built by the render thread (below).
         long leaseStart = Stopwatch.GetTimestamp();
         var palWindow = _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default, material, Tok.Theme == ThemeKind.Dark));
@@ -7482,6 +7660,22 @@ public sealed partial class AppHost : IDisposable
         }
     }
 
+    /// <summary>E22: write every pending <c>UseTier</c> crossing into its signal, but only on a frame that is NOT resized. A
+    /// resized frame lays out the OLD tier at the new size and snaps (FLIP capture is skipped, structural tracks are cancelled);
+    /// the crossing then lands on the first frame after it as an ordinary animated update. Called after <c>RunScrollFrame</c> and
+    /// before <c>willReconcile</c> is computed: the writes schedule the tier's consumers, which makes <c>_runtime.HasPending</c>
+    /// true, so <c>CaptureProjections</c> runs with this frame's pre-reconcile (post-resize) rects as the FLIP "first". Zero
+    /// allocation (a table walk over already-created slots).</summary>
+    private void CommitPendingTiers(bool resized)
+    {
+        if (!_tiers.HasPending) return;
+        if (resized) { WakeFrame(); return; }   // keep them pending and owe the next eligible frame
+        _tiers.CommitPending();
+    }
+
+    /// <summary>The pending-tier table (tests / census).</summary>
+    internal TierRegistry TiersForTest => _tiers;
+
     private void PublishViewport(Size2 dip)
     {
         if (dip.Width == _lastViewportDip.Width && dip.Height == _lastViewportDip.Height) return;
@@ -7553,7 +7747,7 @@ public sealed partial class AppHost : IDisposable
         //    just laid out so bounds track the pointer with no stale translate/overlap.
         //  • ReducedMotion is a separate ACCESSIBILITY preference (gate-covered): it keeps its 1ms-tween snap and still
         //    lets opacity/etc. animate — behaviour left exactly as before.
-        bool suppressed = Motion.LayoutTransitionsSuppressed || keepAliveSuppressed;
+        bool suppressed = Motion.LayoutTransitionsSuppressed || keepAliveSuppressed || _snapDepth > 0;   // SnapScope: every FLIP lands on the laid-out bounds
         bool reduced = Motion.ReducedMotion;
 
         // Discover changed containers that explicitly own the visual projection for their subtree. A shell/card width
@@ -8401,6 +8595,8 @@ public sealed partial class AppHost : IDisposable
 
     public void Dispose()
     {
+        CancelThemeTransactionOnDispose();   // E5: a running or waiting transaction completes (its awaiter is never stranded)
+        CancelSettleOnDispose();   // E17c: a running settle completes as a cut (its awaiter is never stranded)
         FrameLedger.Release(this);
         PrepareDispose();
         _renderThread?.Dispose();   // Step 4: stop + join the fgpu-render thread before tearing down the device it submits to
@@ -8421,6 +8617,8 @@ public sealed partial class AppHost : IDisposable
     /// for unregistering the child and releasing it (<see cref="ReapDetachedChild"/>); <c>Quiesce</c> is not re-entrant, so this never parks.</summary>
     private void ReleaseRenderResourcesParked()
     {
+        ReleaseFrozenSnapshot();   // E2: the freeze's extra texture goes with the target
+        CloseFreezeSnap();
         _renderSeam.InvalidateTarget();
         PurgePopupRenderActions();   // the loop is parked (or gone): no drain can be in flight
         _imageQueue?.RemoveSceneReader(this);

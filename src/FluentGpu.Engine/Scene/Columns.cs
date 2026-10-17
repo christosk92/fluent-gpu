@@ -46,9 +46,12 @@ public struct TextMeasureEntry
     /// <summary>Strikethrough bar top, measured DOWN from the line top (DWrite strikethroughPosition flipped;
     /// headless model: SizeDip × 0.8).</summary>
     public float StrikeY;
+    /// <summary><see cref="FluentGpu.Text.FontRegistry.BodyVersion"/> at measure time (E9): a run with no family of its own
+    /// shapes in the theme's body font, which the style key cannot see, so a body-font change makes every entry miss.</summary>
+    public int FontEpoch;
 
-    public readonly bool Matches(StringId text, in TextStyle style, float maxW)
-        => Valid && Text == text && MaxW == maxW && Style == style;
+    public readonly bool Matches(StringId text, in TextStyle style, float maxW, int fontEpoch = 0)
+        => Valid && Text == text && MaxW == maxW && FontEpoch == fontEpoch && Style == style;
 }
 
 /// <summary>Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
@@ -74,19 +77,24 @@ public struct TextMeasureCache
 
     /// <summary>Probe both entries. A hit also becomes the ring's "last used" entry, so the recorder's fallback follows
     /// the width the layout pass most recently resolved at (the arranged width).</summary>
-    public bool TryGet(StringId text, in TextStyle style, float maxW, out TextMeasureEntry hit)
+    public bool TryGet(StringId text, in TextStyle style, float maxW, out TextMeasureEntry hit, int fontEpoch = 0)
     {
-        if (E0.Matches(text, in style, maxW)) { _last = 0; hit = E0; return true; }
-        if (E1.Matches(text, in style, maxW)) { _last = 1; hit = E1; return true; }
+        if (E0.Matches(text, in style, maxW, fontEpoch)) { _last = 0; hit = E0; return true; }
+        if (E1.Matches(text, in style, maxW, fontEpoch)) { _last = 1; hit = E1; return true; }
         hit = default; return false;
     }
 
-    /// <summary>Store a fresh measure into the ring, alternating slots.</summary>
+    /// <summary>Store a fresh measure into the ring. A measure at a width a slot already holds REPLACES that slot (a re-measure
+    /// at the same width: new text, style or font epoch), so the stale entry can never win <see cref="ResolveForWidth"/>'s
+    /// exact-width match; a new width alternates slots, keeping the two widths a stretched leaf is measured at.</summary>
     public void Store(in TextMeasureEntry entry)
     {
-        if (_next == 0) E0 = entry; else E1 = entry;
-        _last = _next;
-        _next = (byte)(_next ^ 1);
+        byte slot = E0.Valid && E0.MaxW == entry.MaxW ? (byte)0
+                  : E1.Valid && E1.MaxW == entry.MaxW ? (byte)1
+                  : _next;
+        if (slot == 0) E0 = entry; else E1 = entry;
+        _last = slot;
+        _next = (byte)(slot ^ 1);
     }
 
     /// <summary>The entry the recorder should read for a run drawn at <paramref name="width"/>: an exact MaxW match wins,
@@ -582,14 +590,17 @@ public struct InteractionAnim
 /// different Fill/BorderColor/TextColor and the element opted in (<c>BrushTransitionMs</c>), the reconciler captures the
 /// previously-DISPLAYED color here and the recorder cross-fades from it to the new resolved color as <c>T</c> advances
 /// (linear-light, like the hover/press cross-fade). Sparse side-table — O(transitioning nodes), 0-alloc steady frames.
+/// The live theme cross-fade (E20) rides the same row: <see cref="FillBit"/> also fades an icon layer's tint, an image's
+/// placeholder and a list row's fill, and <see cref="GradientBit"/>/<see cref="BorderBrushBit"/> fade a gradient fill and a
+/// gradient border from the spec kept in <c>SceneStore.TryGetGradientFadeFrom</c>/<c>TryGetBorderBrushFadeFrom</c>.
 /// </summary>
 public struct BrushAnim
 {
     public ColorF FillFrom, BorderFrom, TextFrom;
-    public float T;            // 0 → 1 progress (advanced by SceneStore.AdvanceBrushAnims at phase 7)
+    public float T;            // 0 → 1 progress (advanced by the unified engine's BrushFade track)
     public float DurationMs;
     public byte Channels;
-    public const byte FillBit = 1, BorderBit = 2, TextBit = 4;
+    public const byte FillBit = 1, BorderBit = 2, TextBit = 4, GradientBit = 8, BorderBrushBit = 16;
 }
 
 /// <summary>

@@ -236,7 +236,7 @@ public sealed class CommandBar : Component
             [
                 new TextEl(Icons.More)                          // EllipsisIcon E712
                 {
-                    Size = 16f, FontFamily = Theme.IconFont,
+                    Size = 16f, FontFamily = Tok.Definition.Fonts.Icon,
                     Color = Tok.TextPrimary, PressedColor = Tok.TextSecondary,
                     DisabledColor = Tok.TextDisabled,           // CommandBarEllipsisIconForegroundDisabled (:15)
                 },
