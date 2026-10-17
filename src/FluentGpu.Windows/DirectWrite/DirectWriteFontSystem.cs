@@ -100,5 +100,11 @@ public sealed class DirectWriteFontSystem : IFontSystem, IDisposable
             run?.OverflowSuffixStart ?? -1, (int)style.Case);
     }
 
-    public void Dispose() => _engine.Dispose();
+    /// <summary>Releases the DirectWrite engine. A disposed font system stops being the process default
+    /// (<see cref="TextSeam.Default"/>), so a later fallback lookup never reaches a released factory.</summary>
+    public void Dispose()
+    {
+        if (ReferenceEquals(TextSeam.Default, this)) TextSeam.Default = null;
+        _engine.Dispose();
+    }
 }
