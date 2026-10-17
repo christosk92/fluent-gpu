@@ -124,6 +124,233 @@ public sealed class OffscreenSurfaceTests
             Assert.False(host.IsTextTrimmed(Find(host.Scene, "fits")));
         }, directWrite: true);
 
+    private static readonly ColorF Green = new(0f, 1f, 0f, 1f);
+    private static readonly ColorF Yellow = new(1f, 1f, 0f, 1f);
+
+    /// <summary>One 40 × 40 DIP cell on a blue ground per feature the shell draws page content with, each holding a red or
+    /// green 20 × 20 child whose centre pixel is probed.</summary>
+    private sealed class ClippedCells : Component
+    {
+        private static BoxEl Child(ColorF c) => new() { Width = 20f, Height = 20f, Fill = c };
+
+        public override Element Render() => new BoxEl
+        {
+            Direction = 0, Width = 400f, Height = 40f, Fill = Blue, Gap = 0f, AlignItems = FlexAlign.Start,
+            Children =
+            [
+                new BoxEl { Key = "clip", Width = 40f, Height = 40f, ClipToBounds = true, Children = [Child(Red)] },
+                new BoxEl { Key = "rounded", Width = 40f, Height = 40f, ClipToBounds = true, Corners = CornerRadius4.All(8f), Children = [Child(Green)] },
+                new ScrollEl { Key = "scroll", Width = 40f, Height = 40f, EdgeCues = ScrollEdgeCues.None, Content = new BoxEl { Direction = 1, Children = [Child(Yellow), Child(Red), Child(Red), Child(Red)] } },
+                new BoxEl { Key = "group", Width = 40f, Height = 40f, OpacityGroup = true, Opacity = 1f, Children = [Child(Green)] },
+                new BoxEl { Key = "clipgroup", Width = 40f, Height = 40f, ClipToBounds = true, Corners = CornerRadius4.All(8f), OpacityGroup = true, Children = [Child(Red)] },
+                new BoxEl { Key = "outer", Width = 40f, Height = 40f, ClipToBounds = true, Children = [new BoxEl { Key = "inner", Width = 40f, Height = 40f, ClipToBounds = true, Children = [Child(Yellow)] }] },
+            ],
+        };
+    }
+
+    /// <summary>Text cells: a glyph run in a plain box, in a ClipToBounds box and in a scroll viewport, over a blue ground. Each
+    /// cell must hold pixels that are not the ground (the glyphs).</summary>
+    private sealed class ClippedText : Component
+    {
+        private static TextEl Glyphs() => new("WWW") { Size = 24f, Color = Yellow };
+
+        public override Element Render() => new BoxEl
+        {
+            Direction = 0, Width = 400f, Height = 40f, Fill = Blue, AlignItems = FlexAlign.Start,
+            Children =
+            [
+                new BoxEl { Key = "plain", Width = 80f, Height = 40f, Children = [Glyphs()] },
+                new BoxEl { Key = "clip", Width = 80f, Height = 40f, ClipToBounds = true, Children = [Glyphs()] },
+                new ScrollEl { Key = "scroll", Width = 80f, Height = 40f, EdgeCues = ScrollEdgeCues.None, Content = new BoxEl { Children = [Glyphs()] } },
+            ],
+        };
+    }
+
+    [Fact]
+    public void ClippedText_IsCaptured() => OnOffscreen(new Size2(400, 40), 1f, () => new ClippedText(), (surface, host) =>
+    {
+        byte[] px = surface.CaptureBgra(out int w, out int h);
+        var failures = new List<string>();
+        for (int cell = 0; cell < 3; cell++)
+        {
+            int lit = 0;
+            for (int y = 0; y < 40; y++)
+                for (int x = cell * 80; x < cell * 80 + 80; x++)
+                    if (px[(y * w + x) * 4 + 2] > 128) lit++;   // red channel: the blue ground has none, yellow glyphs have it
+            if (lit < 20) failures.Add($"cell {cell} ({new[] { "plain", "ClipToBounds", "scroll" }[cell]}) has {lit} glyph pixels");
+        }
+        Assert.True(failures.Count == 0, string.Join("; ", failures));
+    }, directWrite: true);
+
+    /// <summary>The shell's frame shape: a ZStack body, a clipped row that is a shared-layout group, a page column that is a clipped,
+    /// layout-animated (Reveal) member of it, a band slot and a page clip under it, each holding a filled child.</summary>
+    private sealed class FrameShape : Component
+    {
+        private static readonly LayoutTransition ColumnAnim = new(TransitionChannels.Position | TransitionChannels.Size,
+            TransitionDynamics.Tween(300f, Easing.SmoothOut), SizeMode.Reveal,
+            ExitDynamics: TransitionDynamics.Tween(300f, Easing.SmoothOut), SuppressDescendantTransitions: true);
+
+        public override Element Render() => new BoxEl
+        {
+            ZStack = true, Width = 200f, Height = 200f, Fill = Blue, ClipToBounds = true,
+            Children =
+            [
+                new BoxEl
+                {
+                    MorphId = "frame.row", Direction = 0, Grow = 1f, ClipToBounds = true,
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Key = "column", Direction = 1, Grow = 1f, Shrink = 1f, Basis = 0f, MinWidth = 0f, MinHeight = 0f, ClipToBounds = true,
+                            Animate = ColumnAnim, RelativeTo = "frame.row",
+                            Children =
+                            [
+                                new BoxEl { Key = "slot", Direction = 1, Shrink = 0f, Height = 80f, ClipToBounds = true, Children = [new BoxEl { Key = "slotfill", Height = 80f, Fill = Red }] },
+                                new BoxEl
+                                {
+                                    Key = "pageclip", Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f, ClipToBounds = true, IsolateLayout = true,
+                                    Children = [new BoxEl { Key = "pagefill", Height = 100f, Fill = Green }],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        };
+    }
+
+    [Fact]
+    public void AClippedAnimatedColumnInAClippedMorphRow_IsCaptured() => OnOffscreen(new Size2(200, 200), 1f, () => new FrameShape(), (surface, host) =>
+    {
+        for (int i = 0; i < 40; i++) host.RunFrame();
+        byte[] px = surface.CaptureBgra(out int w, out int h);
+        AssertPixel(px, w, 100, 40, Red, "the band slot's fill");
+        AssertPixel(px, w, 100, 120, Green, "the page clip's fill");
+    });
+
+    /// <summary>Scroll viewports nested in a chain of clipped boxes below a title strip, the way the shell's band and page sit: a
+    /// horizontal viewport (the pivot run) and a vertical one (the page), each over a filled child.</summary>
+    private sealed class ScrollsInClips : Component
+    {
+        public override Element Render() => new BoxEl
+        {
+            Direction = 1, Width = 300f, Height = 300f, Fill = Blue,
+            Children =
+            [
+                new BoxEl { Height = 48f, Fill = Blue },
+                new BoxEl
+                {
+                    ZStack = true, Grow = 1f, ClipToBounds = true,
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Direction = 0, Grow = 1f, ClipToBounds = true,
+                            Children =
+                            [
+                                new BoxEl
+                                {
+                                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, MinHeight = 0f, ClipToBounds = true,
+                                    Children =
+                                    [
+                                        new BoxEl
+                                        {
+                                            Direction = 1, Shrink = 0f, Height = 60f, ClipToBounds = true,
+                                            Children =
+                                            [
+                                                new ScrollEl
+                                                {
+                                                    Key = "hscroll", Horizontal = true, Height = 60f, EdgeCues = ScrollEdgeCues.None,
+                                                    Content = new BoxEl { Direction = 0, Height = 60f, Width = 120f, Fill = Red },
+                                                },
+                                            ],
+                                        },
+                                        new BoxEl
+                                        {
+                                            Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f, ClipToBounds = true,
+                                            Children =
+                                            [
+                                                new ScrollEl
+                                                {
+                                                    Key = "vscroll", Grow = 1f, EdgeCues = ScrollEdgeCues.None,
+                                                    Content = new BoxEl { Direction = 1, Height = 900f, Fill = Green },
+                                                },
+                                            ],
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        };
+    }
+
+    [Fact]
+    public void ScrollViewportsInNestedClips_AreCaptured() => OnOffscreen(new Size2(300, 300), 1f, () => new ScrollsInClips(), (surface, host) =>
+    {
+        byte[] px = surface.CaptureBgra(out int w, out int h);
+        AssertPixel(px, w, 50, 70, Red, "the horizontal viewport's content (y 48..108)");
+        AssertPixel(px, w, 50, 200, Green, "the vertical viewport's content");
+    });
+
+    /// <summary>A tree <paramref name="depth"/> boxes deep with a red 40 × 40 DIP leaf at the bottom of a clipped chain, the way
+    /// the shell's page and band sit well below its chrome.</summary>
+    private sealed class DeepTree(int depth) : Component
+    {
+        public override Element Render()
+        {
+            Element node = new BoxEl { Key = "leaf", Width = 40f, Height = 40f, Fill = Red };
+            for (int i = 0; i < depth; i++)
+                node = new BoxEl { Direction = 1, Width = 64f, Height = 64f, ClipToBounds = (i & 1) == 0, Children = [node] };
+            return new BoxEl { Width = 64f, Height = 64f, Fill = Blue, Children = [node] };
+        }
+    }
+
+    [Fact]
+    public void ADeepTree_OnTheRecommendedStack_IsCaptured() => OnOffscreen(new Size2(64, 64), 1f, () => new DeepTree(120), (surface, host) =>
+    {
+        Assert.False(surface.RecordingStackExhausted);
+        byte[] px = surface.CaptureBgra(out int w, out int h);
+        AssertPixel(px, w, 20, 20, Red, "the leaf 120 boxes down");
+    }, stackBytes: OffscreenSurface.UiThreadStackBytes);
+
+    [Fact]
+    public void ADeepTree_OnASmallStack_RefusesTheCaptureInsteadOfReturningABlankPage() => OnOffscreen(new Size2(64, 64), 1f, () => new DeepTree(120), (surface, host) =>
+    {
+        // The recorder drops the subtrees it has no stack for: the scene is laid out and the leaf is there, but nothing paints it.
+        Assert.True(surface.RecordingStackExhausted);
+        Assert.NotEqual(default, host.Scene.Bounds(Find(host.Scene, "leaf")));
+        var e = Assert.Throws<InvalidOperationException>(() => surface.CaptureBgra(out _, out _));
+        Assert.Contains("UiThreadStackBytes", e.Message);
+    }, stackBytes: 512 * 1024);
+
+    [Theory]
+    [InlineData(1f)]
+    [InlineData(1.5f)]
+    public void ClippedContent_IsCaptured(float scale) => OnOffscreen(new Size2(400, 40), scale, () => new ClippedCells(), (surface, host) =>
+    {
+        byte[] px = surface.CaptureBgra(out int w, out int h);
+        var failures = new List<string>();
+        void Probe(int cell, ColorF c, string what)
+        {
+            int x = (int)MathF.Round((cell * 40 + 10) * scale), y = (int)MathF.Round(10 * scale);
+            int i = (y * w + x) * 4;
+            int eb = (int)MathF.Round(c.B * 255f), eg = (int)MathF.Round(c.G * 255f), er = (int)MathF.Round(c.R * 255f);
+            if (Math.Abs(px[i] - eb) > 3 || Math.Abs(px[i + 1] - eg) > 3 || Math.Abs(px[i + 2] - er) > 3)
+                failures.Add($"{what}: BGRA({px[i]},{px[i + 1]},{px[i + 2]},{px[i + 3]}) expected rgb({er},{eg},{eb})");
+        }
+        Probe(0, Red, "ClipToBounds box");
+        Probe(1, Green, "rounded ClipToBounds box");
+        Probe(2, Yellow, "scroll viewport");
+        Probe(3, Green, "opacity group");
+        Probe(4, Red, "rounded clipped opacity group");
+        Probe(5, Yellow, "nested ClipToBounds");
+        Assert.True(failures.Count == 0, string.Join("; ", failures));
+    });
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Real shaping: ten narrow glyphs measure narrower than ten wide ones (the headless model makes them equal), and
@@ -159,7 +386,7 @@ public sealed class OffscreenSurfaceTests
 
     /// <summary>Build a WARP offscreen surface and a host over it on a dedicated thread (the surface's window and device belong
     /// to the thread that made them), run a few frames, then the body; skipped where the surface cannot be created.</summary>
-    private static void OnOffscreen(Size2 sizeDip, float scale, Func<Component> root, Action<OffscreenSurface, AppHost> body, bool directWrite = false)
+    private static void OnOffscreen(Size2 sizeDip, float scale, Func<Component> root, Action<OffscreenSurface, AppHost> body, bool directWrite = false, int stackBytes = 16 * 1024 * 1024)
     {
         ExceptionDispatchInfo? failure = null;
         string? skip = null;
@@ -193,7 +420,7 @@ public sealed class OffscreenSurfaceTests
                 dwrite?.Dispose();
                 app?.Dispose();
             }
-        }, 16 * 1024 * 1024);
+        }, stackBytes);
         thread.Start();
         thread.Join();
         failure?.Throw();

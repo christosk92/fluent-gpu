@@ -40,6 +40,12 @@ public sealed record OffscreenSurfaceOptions
 /// <see cref="DirectWriteFontSystem"/> (<see cref="CreateFontSystem"/>) for truthful text metrics.</para>
 /// <para>Thread: create, run frames, capture and dispose on ONE thread (the host's UI thread). Order: dispose the
 /// <see cref="AppHost"/> first (it disposes <see cref="Device"/>), then this surface (it destroys the window).</para>
+/// <para><b>Stack.</b> The scene recorder walks the tree recursively on that thread. On a default 1 MB thread a real app's
+/// tree (a page 30+ levels deep, in a Debug build) runs it out of stack and the recorder DROPS the deepest subtrees
+/// (<see cref="FrameStats.DepthAborts"/>): the chrome paints, every page and clipped region below it is blank, and the scene
+/// still lays out correctly. Create the host's thread with <see cref="UiThreadStackBytes"/> (what <c>FluentApp.Run</c> gives
+/// the on-screen UI thread). A surface whose host dropped subtrees refuses <see cref="CaptureBgra"/> and
+/// <see cref="WritePng"/> (<see cref="RecordingStackExhausted"/>) instead of handing back a blank page.</para>
 /// <code>
 /// var strings = new StringTable();
 /// if (!OffscreenSurface.TryCreate(strings, new OffscreenSurfaceOptions { SizeDip = new(400, 860), Scale = 1.5f },
@@ -55,10 +61,16 @@ public sealed record OffscreenSurfaceOptions
 /// </summary>
 public sealed partial class OffscreenSurface : IDisposable
 {
+    /// <summary>The stack to reserve for the thread that creates this surface and runs its <see cref="AppHost"/>:
+    /// 32 MB (reserve only, committed on demand), the same as the on-screen UI thread. See the class remarks.</summary>
+    public const int UiThreadStackBytes = FluentApp.UiThreadStackBytes;
+
     private readonly D3D12Device _device;
     private readonly StringTable _strings;
     private nint _hwnd;
     private bool _disposed;
+    private AppHost? _host;
+    private volatile bool _stackExhausted;
 
     private OffscreenSurface(nint hwnd, D3D12Device device, StringTable strings, OffscreenWindow window, bool warp)
     {
@@ -146,13 +158,28 @@ public sealed partial class OffscreenSurface : IDisposable
     /// (the host does not own its font system).</summary>
     public DirectWriteFontSystem CreateFontSystem() => new(_strings);
 
+    /// <summary>True once a frame of the attached host dropped subtrees because the recording thread ran out of stack
+    /// (<see cref="FrameStats.DepthAborts"/>): what is on the surface is incomplete (the deep content is missing, the chrome
+    /// is not). Sticky, since the stack belongs to the thread; <see cref="CaptureBgra"/> throws while it is set. The fix is a
+    /// thread with <see cref="UiThreadStackBytes"/>.</summary>
+    public bool RecordingStackExhausted => _stackExhausted;
+
     /// <summary>Bind the surface to the host built over it. Windowed popups (menus and flyouts in their own OS windows) need
     /// real popup HWNDs the headless platform app does not create, so they are turned off and every popup lays out in the
-    /// window, as on a backend without windowed popups.</summary>
+    /// window, as on a backend without windowed popups. It also watches the host's frames for dropped subtrees
+    /// (<see cref="RecordingStackExhausted"/>).</summary>
     public void Attach(AppHost host)
     {
         ArgumentNullException.ThrowIfNull(host);
         host.PopupWindowsEnabled = false;
+        if (_host is not null) _host.FrameCompleted -= OnHostFrame;
+        _host = host;
+        host.FrameCompleted += OnHostFrame;
+    }
+
+    private void OnHostFrame(FrameStats stats)
+    {
+        if (stats.DepthAborts > 0) _stackExhausted = true;
     }
 
     /// <summary>Resize the surface to <paramref name="sizeDip"/> (DIP) at <paramref name="scale"/> (null keeps the DPI scale).
@@ -171,6 +198,10 @@ public sealed partial class OffscreenSurface : IDisposable
     public byte[] CaptureBgra(out int width, out int height)
     {
         ThrowIfDisposed();
+        if (_stackExhausted)
+            throw new InvalidOperationException("The scene recorder ran out of stack on this thread and dropped the deepest subtrees, "
+                + "so the capture would show the chrome and a blank page. Create the host's thread with OffscreenSurface.UiThreadStackBytes "
+                + $"({UiThreadStackBytes / (1024 * 1024)} MB) of stack.");
         return _device.CaptureBgra(out width, out height);
     }
 
@@ -189,6 +220,7 @@ public sealed partial class OffscreenSurface : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        if (_host is not null) { _host.FrameCompleted -= OnHostFrame; _host = null; }
         _device.Dispose();   // idempotent: a no-op once the host disposed it
         Window.DisposeCore();
         if (_hwnd != 0) { DestroyWindow(_hwnd); _hwnd = 0; }
