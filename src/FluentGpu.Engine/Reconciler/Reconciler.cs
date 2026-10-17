@@ -408,6 +408,7 @@ public sealed partial class TreeReconciler
     private bool _layoutShapeMutated;
     private int _renderCount;   // component render-effects that ran since the last frame (granularity metric)
     private int _keepAliveLayoutSuppressionFrames;   // activation commit + first bounds-measure correction
+    private int _keepAliveSuppressionAge;               // paint frames since the window was armed (it spans TIME, not just laying-out frames)
     private float _themeTransitionMs = float.NaN;        // live-re-theme cross-fade duration; armed only during a RethemeAll flush
     private readonly List<CompEntry> _rethemeScratch = new();   // snapshot of _comps.Values for RethemeAll (defensive vs reentrancy)
 
@@ -470,6 +471,11 @@ public sealed partial class TreeReconciler
     /// <see cref="RenderCensusEnabled"/>). Call at Paint start.</summary>
     public void BeginRenderCensus()
     {
+        // The activation's layout-suppression window is two FRAMES (the swap itself and the first bounds correction). The counter is only
+        // consumed by frames that lay out, so a page whose exit leg runs layout-free frames would leave it armed until the NEXT layout
+        // (the exit's end, ~6 frames on) and swallow an unrelated size/position animation there (a band that changes height as the page
+        // lands snapped). Age it out by paint frames too.
+        if (_keepAliveLayoutSuppressionFrames > 0 && ++_keepAliveSuppressionAge > 2) _keepAliveLayoutSuppressionFrames = 0;
         DrainDeferredReplays();
         if (_imageSwaps.Count > 0) SweepImageSwaps();   // release image-swap crossfades whose window has landed
         NodeBindingFireCount = 0;
@@ -1876,7 +1882,7 @@ public sealed partial class TreeReconciler
         // geometry now, then OnBoundsChanged publishes the real width for the following frame. Suppress both projection
         // windows so navigation never turns that implementation detail into card/shelf/content-card size motion.
         if (activationChanged && options.SuppressLayoutTransitionsOnActivation)
-            _keepAliveLayoutSuppressionFrames = Math.Max(_keepAliveLayoutSuppressionFrames, 2);
+            { _keepAliveLayoutSuppressionFrames = Math.Max(_keepAliveLayoutSuppressionFrames, 2); _keepAliveSuppressionAge = 0; }
 
         if (state.ActiveKey is { } oldKey && oldKey != key && state.Entries.TryGetValue(oldKey, out var oldActive))
         {
