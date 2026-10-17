@@ -95,6 +95,15 @@ public sealed class AutoSuggestBox : Component
     public const float ItemMinHeight = 40f;
     public const float IconFontSize = 12f;
     public const float MaxPopupHeight = 374f;
+
+    /// <summary>The Standard-chrome field surface now: the active theme's (<see cref="ControlStyles.AutoSuggestBoxFieldStyle"/>), else
+    /// <see cref="FluentFieldStyle"/>. A caller's <see cref="FieldRadius"/> still wins over its radius; the ElevatedPill chrome keeps
+    /// its own surface.</summary>
+    public static TextFieldStyle DefaultFieldStyle => ControlStyles.Resolve(ControlStyles.AutoSuggestBoxFieldStyle, FluentFieldStyle);
+
+    /// <summary>The built-in field: the WinUI TextBox surface with a flat ControlStrokeColorDefault ring (the AutoSuggestBox field has no
+    /// elevation gradient). Reads the live Tok on every call.</summary>
+    public static TextFieldStyle FluentFieldStyle() => TextFieldStyle.Fluent() with { BorderBrush = null, BorderColor = Tok.StrokeControlDefault };
     public const float RightButtonMargin = 4f;   // AutoSuggestBoxRightButtonMargin
     public const float QueryButtonWidth = 32f;
     public const float QueryButtonHeight = 28f;
@@ -532,6 +541,7 @@ public sealed class AutoSuggestBox : Component
                 Height = editorH,
                 Placeholder = Placeholder,
                 Chromeless = true,
+                FieldStyle = static () => DefaultFieldStyle,   // the chromeless hover / focused fills follow this field's surface
                 OnCommit = OnEnter, OnCancel = OnEscape,
                 PreviewKeyDown = TryAcceptCompletion,
                 OnSelectionChanged = (s, len) =>
@@ -648,8 +658,10 @@ public sealed class AutoSuggestBox : Component
 
         // KeepInteriorCornersSquare: while the list is open (open-down), square the field's BOTTOM corners so it joins the
         // popup; full radius (ControlCornerRadius, or the caller's pill radius) otherwise.
-        float fieldR = FieldRadius > 0f ? FieldRadius : Radii.Control;
         bool elevated = Chrome == AutoSuggestBoxChrome.ElevatedPill;
+        // The Standard field's surface, read now (the theme's, else the WinUI field); the ElevatedPill keeps its own.
+        var fs = DefaultFieldStyle;
+        float fieldR = FieldRadius > 0f ? FieldRadius : elevated ? Radii.Control : fs.Radius;
         var fieldCorners = !elevated && open.Value
             ? new CornerRadius4(fieldR, fieldR, 0f, 0f)
             : CornerRadius4.All(fieldR);
@@ -679,19 +691,19 @@ public sealed class AutoSuggestBox : Component
             MaxHeight = Grow > 0f ? FieldMinHeight : float.NaN,
             MinHeight = FieldMinHeight, AlignItems = FlexAlign.Center,
             Corners = fieldCorners,
-            BorderWidth = elevated && hasFocus ? 2f : 1f,
-            BorderColor = elevated ? ColorF.Transparent : Tok.StrokeControlDefault,
+            BorderWidth = elevated ? (hasFocus ? 2f : 1f) : fs.BorderWidth,
+            BorderColor = elevated ? ColorF.Transparent : fs.BorderColor,
             BorderBrush = elevated
                 ? (hasFocus ? GradientSpec.Solid(Tok.AccentDefault) : Tok.CircleElevationBorder)
-                : null,
+                : fs.BorderBrush,
             HoverBorderBrush = elevated && !hasFocus ? Tok.CircleElevationBorder : null,
             PressedBorderBrush = elevated && !hasFocus ? Tok.CircleElevationBorder : null,
-            Fill = elevated && hasFocus ? Tok.FillControlInputActive : Tok.FillControlDefault,
+            Fill = elevated ? (hasFocus ? Tok.FillControlInputActive : Tok.FillControlDefault) : fs.Fill,
             // The field surface (WinUI TextBox BorderElement) owns the PointerOver fill at the field's CORNER RADIUS, and
             // CLIPS — so the inner Chromeless editor's square hover fill follows the (possibly pill) corners instead of
             // bleeding past them as a rectangle (the squaring is intentional per EditableText: "the composer rounds + clips").
-            HoverFill = elevated && hasFocus ? Tok.FillControlInputActive : Tok.FillControlSecondary,
-            PressedFill = elevated && hasFocus ? Tok.FillControlInputActive : Tok.FillControlTertiary,
+            HoverFill = elevated ? (hasFocus ? Tok.FillControlInputActive : Tok.FillControlSecondary) : fs.HoverFill,
+            PressedFill = elevated ? (hasFocus ? Tok.FillControlInputActive : Tok.FillControlTertiary) : fs.PressedFill,
             ClipToBounds = true,
             // form-validation.md: the field chrome owns the invalid border (the inner editor is borderless inside it).
             Validation = Field is { } fb ? Prop.Of(() => fb.Error.Value.IsValid ? ValidationState.None : ValidationState.Error) : default,
@@ -718,13 +730,15 @@ public sealed class AutoSuggestBox : Component
         // form-validation.md: stack the reveal-animated error message row under the field (popup still anchors to `root`).
         // Fill mode: the wrapper fills width like the root (Width=NaN + Grow); no Basis=0 (this is a COLUMN, so Basis is
         // the vertical axis — zeroing it would collapse the field+message height) and no height lock (the message needs room).
-        Element field = root;
+        // A themed underline (none on the WinUI field) shares an overlay stack with the row root; the stock field is returned as is.
+        Element field = elevated ? root : TextFieldStyle.WithUnderline(root, fs, hasFocus, true);
         if (Field is { } vfield)
             field = new BoxEl
             {
                 Direction = 1,
                 Width = Grow > 0f ? float.NaN : width, Grow = Grow,
-                Children = [root, FieldVisuals.MessageRow(vfield.Error)],
+                Children = [field, FieldVisuals.MessageRow(vfield.Error)],
+
             };
 
         if (SuggestionPresentation != AutoSuggestBoxSuggestionPresentation.Inline)

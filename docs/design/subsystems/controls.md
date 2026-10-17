@@ -458,6 +458,30 @@ revisions and occurrence reuse follow [virtualization.md](virtualization.md).
   the 48-DIP drag strip, read at every render and in the memo key) and the toast lane's `ToastLaneStyle` (side margin 24,
   cards 300-380, `FillWidth`, `ActionSize`), provided as the ambient `Toast.Lane` context (`Context<Func<ToastLaneStyle>?>`,
   provided above the `OverlayHost`) — never a new mutable static. Tests: `ControlSizeKnobTests` (Engine.Tests).
+- **As built (2026-10, P5 / Zune) — the overlay, field and status controls are theme-owned.** Thirteen more control style
+  table keys (theming.md §16.2), each a record read at RENDER with a `FluentStyle()` that is the control's previous look:
+  `MenuFlyout.Style` (the host-drawn plate as a `PopupPlate` — fill, frosted layer or none, ring, radius, elevation, presenter
+  padding — plus row height / Large row height, row margin, padding, radius and fills, label size, separator colour, thickness,
+  margin, padding; it styles every menu body, ContextMenu's included); `ContextMenu.Style` (the presenter parts: a `Header`
+  presenter `Func<ContextMenuHeader, bool, Element>`, the header divider, a `PrimaryStrip` presenter
+  `Func<ContextMenuStrip, Element>` that draws the model's primary commands as a strip above the rows inside the plain menu plate
+  — `ContextMenuStrip.Invoke(i)` runs a command and closes — and a theme-wide min width); `ContentDialog.Style` (card fill, ring,
+  radius, elevation, size limits and width; title, message, separator; command row padding, fill, gap, justify, the
+  `CommandOrder` of `ContentDialogCommand`s, star columns or hugging commands, the lone-command trailing column, and a
+  `CommandButton` presenter `Func<ContentDialogCommandArgs, BoxEl>` — the dialog keeps the default command's focus ranking);
+  `ComboBox.Style` (the field as a `TextFieldStyle`, the dropdown `PopupPlate`); `TextFieldStyle` for the TextBox field (every
+  `EditableText`-based field) and the AutoSuggestBox field (radius, the fill ramp, gradient or flat ring, an optional resting
+  underline, the focus bar; a row-rooted field gains its underline through one overlay wrapper, and the stock field keeps its
+  exact node structure); `InfoBar.Style` (plate, severity tint or a fixed fill, ring, elevation, icon, text, close button — the
+  toast card too); `ToolTip.Style`; `ProgressRing.Style`; `ProgressBar.Style`. The existing `SelectorBarStyle`,
+  `SettingsExpander.Style` and `ToastLaneStyle` records gain keys (an instance's style, or a `Toast.Lane` provider, still wins).
+  The host's `FlyoutSurface` takes the menu / dropdown plate from those styles, reports it to its overlay entry, and the
+  per-frame backdrop sync and corner squaring read that card (a plate with no frosted layer stays solid in every state).
+  `TitleBarOptions.Height` (`Prop<float>`, default `TitleBar.ExpandedHeight` 48; `TitleBar.BarHeight`) is read at every render:
+  the caption buttons stretch to it, the back / pane buttons are 4 shorter, islands and drag bands take it, and the region report
+  follows in the same frame (a tier signal gives 56 at Huge4K without a remount). Tests: `ControlStyleKeysTests` (Engine.Tests);
+  the VerticalSlice `control-style-table` suite compares all 30 keyed records under the empty and the explicit table.
+
 
 ### 5.2 Checkbox
 

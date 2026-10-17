@@ -45,6 +45,11 @@ public static class SelectorBar
     /// ComponentEl never re-runs its factory, so the items stay LIVE across parent re-renders via the props channel.
     /// The selected index is a caller <see cref="Signal{T}"/> read directly in the core (null ⇒ auto-materialize); a
     /// select/roving move WRITES the signal then fires OnChange. The core reads props with <c>UseProps</c>.</summary>
+    /// <summary>The active theme's SelectorBar look (<see cref="ControlStyles.SelectorBarStyle"/>), read at render; null when the
+    /// theme has none (the stock WinUI look). An instance's <c>style:</c> argument wins over it.</summary>
+    public static SelectorBarStyle? ThemeStyle
+        => Tok.Definition.Controls.TryGet(ControlStyles.SelectorBarStyle, out var provider) ? provider() : null;
+
     internal sealed record Props(IReadOnlyList<string> Items, IReadOnlyList<string?>? Icons, Signal<int>? Selected,
                                  Action<int>? OnChange, TemplateParts? Parts, SelectorBarStyle? Style = null);
 }
@@ -134,7 +139,9 @@ internal sealed class SelectorBarCore : Component
             if (target != i) MoveTo(target);
         }
 
-        var st = p.Style;                        // null = the stock WinUI look (every branch below keeps it byte-identical)
+        // The instance's style, else the active theme's (ControlStyles.SelectorBarStyle, read now); null = the stock WinUI look
+        // (every branch below keeps it byte-identical).
+        var st = p.Style ?? SelectorBar.ThemeStyle;
         bool showPill = st?.ShowPill ?? true;
 
         var tabs = new Element[count];

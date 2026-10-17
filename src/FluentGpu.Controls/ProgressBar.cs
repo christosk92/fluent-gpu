@@ -57,14 +57,40 @@ public static class ProgressBar
     // settle indicator2's TranslateX here so the full-width caution/critical bar sits STATIC over the track.
     const float ContainerAnimationMidPosition = 0f;
 
-    /// <summary>The indicator foreground for a state: Normal = accent, Paused = caution, Error = critical
-    /// (ProgressBar_themeresources: ProgressBarForeground / ProgressBarPausedForegroundColor / ...ErrorForegroundColor).</summary>
-    static ColorF ForegroundFor(ProgressBarState state) => state switch
+    /// <summary>The bar's look, read at RENDER through the control style table (<see cref="ControlStyles.ProgressBarStyle"/>).
+    /// Every default is the ProgressBar_themeresources value the bar has always used.</summary>
+    public sealed record Style
     {
-        ProgressBarState.Paused => Tok.SystemFillCaution,    // ProgressBarPausedForegroundColor = SystemFillColorCaution
-        ProgressBarState.Error => Tok.SystemFillCritical,    // ProgressBarErrorForegroundColor  = SystemFillColorCritical
-        _ => Tok.AccentDefault,                              // ProgressBarForeground            = AccentFillColorDefaultBrush
-    };
+        /// <summary>The band height and the indicator's thickness (ProgressBarMinHeight 3).</summary>
+        public float Height { get; init; } = MinHeight;
+        /// <summary>The under-track's thickness (ProgressBarTrackHeight 1), centred in the band.</summary>
+        public float TrackHeight { get; init; } = ProgressBar.TrackHeight;
+        /// <summary>The indicator radius (ProgressBarCornerRadius 1.5) and the track radius (ProgressBarTrackCornerRadius 0.5).</summary>
+        public float IndicatorRadius { get; init; } = ProgressBar.IndicatorRadius;
+        public float TrackRadius { get; init; } = ProgressBar.TrackRadius;
+        /// <summary>The track colour (ControlStrongStrokeColorDefault).</summary>
+        public ColorF TrackFill { get; init; } = Tok.StrokeControlStrongDefault;
+        /// <summary>The indicator per state: Normal (AccentFillColorDefault), Paused (SystemFillColorCaution), Error (SystemFillColorCritical).</summary>
+        public ColorF Foreground { get; init; } = Tok.AccentDefault;
+        public ColorF PausedForeground { get; init; } = Tok.SystemFillCaution;
+        public ColorF ErrorForeground { get; init; } = Tok.SystemFillCritical;
+        /// <summary>Whether the track shows under the indeterminate sweep (WinUI hides it: false).</summary>
+        public bool IndeterminateTrack { get; init; }
+
+        /// <summary>The indicator foreground for <paramref name="state"/> (ProgressBarForeground / ...PausedForegroundColor / ...ErrorForegroundColor).</summary>
+        public ColorF ForegroundFor(ProgressBarState state) => state switch
+        {
+            ProgressBarState.Paused => PausedForeground,
+            ProgressBarState.Error => ErrorForeground,
+            _ => Foreground,
+        };
+    }
+
+    /// <summary>The bar style now: the active theme's (<see cref="ControlStyles.ProgressBarStyle"/>), else <see cref="FluentStyle"/>.</summary>
+    public static Style DefaultStyle => ControlStyles.Resolve(ControlStyles.ProgressBarStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a ProgressBar entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new();
 
     // ── Create (the one canonical factory) ───────────────────────────────────────────────────────────
     /// <summary>The ONE canonical ProgressBar factory. <paramref name="value"/> = a caller-owned 0..1
@@ -105,11 +131,13 @@ public static class ProgressBar
     /// a static value (<see cref="Determinate"/>) or a signal-bound <c>Func</c> (<see cref="Create"/>). The value-driven
     /// Width + state recolor are stock (a PartFill modifier sees and may override them).</summary>
     static BoxEl DeterminateView(Prop<float> indicatorWidth, float width, ProgressBarState state, TemplateParts? parts)
-        => new BoxEl
+    {
+        var st = DefaultStyle;   // read now (the factory runs in its caller's render)
+        return new BoxEl
         {
             ZStack = true,
             Width = width,
-            Height = MinHeight,
+            Height = st.Height,
             Role = AutomationRole.ProgressBar,
             Children =
             [
@@ -117,21 +145,22 @@ public static class ProgressBar
                 parts.Apply(PartTrack, new BoxEl
                 {
                     Width = width,
-                    Height = TrackHeight,
-                    OffsetY = (MinHeight - TrackHeight) / 2f,
-                    Corners = CornerRadius4.All(TrackRadius),
-                    Fill = Tok.StrokeControlStrongDefault,
+                    Height = st.TrackHeight,
+                    OffsetY = (st.Height - st.TrackHeight) / 2f,
+                    Corners = CornerRadius4.All(st.TrackRadius),
+                    Fill = st.TrackFill,
                 }),
                 // DeterminateProgressBarIndicator: foreground fill, 1.5px corner, left-aligned, width = value * track width.
                 parts.Apply(PartFill, new BoxEl
                 {
                     Width = indicatorWidth,
-                    Height = MinHeight,
-                    Corners = CornerRadius4.All(IndicatorRadius),
-                    Fill = ForegroundFor(state),
+                    Height = st.Height,
+                    Corners = CornerRadius4.All(st.IndicatorRadius),
+                    Fill = st.ForegroundFor(state),
                 }),
             ],
         };
+    }
 
     // ── Indeterminate ────────────────────────────────────────────────────────────────────────────
     /// <summary>Indeterminate progress: the two clipped accent indicators sweeping across the track on the WinUI
@@ -186,7 +215,8 @@ public static class ProgressBar
             var Parts = props.Parts;
             var ts = ProgressBarTemplateSettings.For(Width);
             bool nonNormal = State != ProgressBarState.Normal;   // Paused / Error: hide track + indicator1, recolor indicator2
-            ColorF fg = ForegroundFor(State);
+            var st = DefaultStyle;   // read now: a theme swap re-renders the bar in the new look
+            ColorF fg = st.ForegroundFor(State);
 
             // Capture the two indicators so the looping translate tracks drive each independently (UseKeyframes targets the
             // component's HostNode only; per-child translate needs direct AnimEngine.Keyframes on each captured handle).
@@ -258,19 +288,19 @@ public static class ProgressBar
             var track = Parts.Apply(PartTrack, new BoxEl
             {
                 Width = Width,
-                Height = TrackHeight,
-                OffsetY = (MinHeight - TrackHeight) / 2f,
-                Corners = CornerRadius4.All(TrackRadius),
-                Fill = Tok.StrokeControlStrongDefault,
-                Opacity = 0f,
+                Height = st.TrackHeight,
+                OffsetY = (st.Height - st.TrackHeight) / 2f,
+                Corners = CornerRadius4.All(st.TrackRadius),
+                Fill = st.TrackFill,
+                Opacity = st.IndeterminateTrack ? 1f : 0f,
             });
 
             // IndeterminateProgressBarIndicator (40% width) — visible only in the Normal indeterminate state.
             var ind1 = new BoxEl
             {
                 Width = ts.Indicator1Width,
-                Height = MinHeight,
-                Corners = CornerRadius4.All(IndicatorRadius),
+                Height = st.Height,
+                Corners = CornerRadius4.All(st.IndicatorRadius),
                 Fill = fg,
                 Opacity = nonNormal ? 0f : 1f,
                 OnRealized = ind1Capture,
@@ -279,8 +309,8 @@ public static class ProgressBar
             var ind2 = new BoxEl
             {
                 Width = ind2Width,
-                Height = MinHeight,
-                Corners = CornerRadius4.All(IndicatorRadius),
+                Height = st.Height,
+                Corners = CornerRadius4.All(st.IndicatorRadius),
                 Fill = fg,
                 OnRealized = ind2Capture,
             };
@@ -296,7 +326,7 @@ public static class ProgressBar
             {
                 ZStack = true,
                 Width = Width,
-                Height = MinHeight,
+                Height = st.Height,
                 ClipToBounds = true,                 // Border Clip="...ClipRect" — the sweep is clipped to the track bounds
                 Role = AutomationRole.ProgressBar,
                 Children = [track, ind1, ind2],
@@ -332,7 +362,8 @@ public static class ProgressBar
 
             var ts = ProgressBarTemplateSettings.For(Width);
             bool nonNormal = State != ProgressBarState.Normal;
-            ColorF fg = ForegroundFor(State);
+            var st = DefaultStyle;   // read now: a theme swap re-renders the bar in the new look
+            ColorF fg = st.ForegroundFor(State);
 
             var ind1Ref = UseRef<NodeHandle>(default);
             var ind2Ref = UseRef<NodeHandle>(default);
@@ -391,18 +422,18 @@ public static class ProgressBar
             var track = Parts.Apply(PartTrack, new BoxEl
             {
                 Width = Width,
-                Height = TrackHeight,
-                OffsetY = (MinHeight - TrackHeight) / 2f,
-                Corners = CornerRadius4.All(TrackRadius),
-                Fill = Tok.StrokeControlStrongDefault,
-                Opacity = 0f,
+                Height = st.TrackHeight,
+                OffsetY = (st.Height - st.TrackHeight) / 2f,
+                Corners = CornerRadius4.All(st.TrackRadius),
+                Fill = st.TrackFill,
+                Opacity = st.IndeterminateTrack ? 1f : 0f,
             });
 
             var ind1 = new BoxEl
             {
                 Width = ts.Indicator1Width,
-                Height = MinHeight,
-                Corners = CornerRadius4.All(IndicatorRadius),
+                Height = st.Height,
+                Corners = CornerRadius4.All(st.IndicatorRadius),
                 Fill = fg,
                 Opacity = nonNormal ? 0f : 1f,
                 OnRealized = ind1Capture,
@@ -410,8 +441,8 @@ public static class ProgressBar
             var ind2 = new BoxEl
             {
                 Width = ind2Width,
-                Height = MinHeight,
-                Corners = CornerRadius4.All(IndicatorRadius),
+                Height = st.Height,
+                Corners = CornerRadius4.All(st.IndicatorRadius),
                 Fill = fg,
                 OnRealized = ind2Capture,
             };
@@ -427,7 +458,7 @@ public static class ProgressBar
             {
                 ZStack = true,
                 Width = Width,
-                Height = MinHeight,
+                Height = st.Height,
                 ClipToBounds = true,
                 Role = AutomationRole.ProgressBar,
                 Children = [track, ind1, ind2],

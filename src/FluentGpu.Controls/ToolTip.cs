@@ -67,6 +67,36 @@ public sealed class ToolTip : Component
     /// hit-test invisibility (a tooltip never intercepts input), and the realized-node capture (safe-zone geometry).</summary>
     public const string PartBubble = "Bubble";
 
+    /// <summary>The bubble's look, read at RENDER through the control style table (<see cref="ControlStyles.ToolTipStyle"/>).
+    /// Every default is the WinUI DefaultToolTipStyle (ToolTip_themeresources.xaml:42-76).</summary>
+    public sealed record Style
+    {
+        /// <summary>The bubble fill under the frosted layer (transparent: the acrylic is the body); with no
+        /// <see cref="Acrylic"/> it is the whole, solid bubble.</summary>
+        public ColorF Fill { get; init; } = ColorF.Transparent;
+        /// <summary>The frosted layer (ToolTipBackgroundBrush = AcrylicInAppFillColorDefault); null = a solid <see cref="Fill"/>.</summary>
+        public AcrylicSpec? Acrylic { get; init; } = Tok.AcrylicFlyout;
+        /// <summary>The ring (SurfaceStrokeColorFlyout) and its width (1; 0 = none).</summary>
+        public ColorF Border { get; init; } = Tok.StrokeFlyoutDefault;
+        public float BorderWidth { get; init; } = 1f;
+        /// <summary>The radius (ControlCornerRadius).</summary>
+        public float Radius { get; init; } = Radii.Control;
+        /// <summary>The elevation (the tooltip band); null = none.</summary>
+        public ShadowSpec? Shadow { get; init; } = Elevation.Tooltip;
+        /// <summary>The bubble's greatest width (320) and its padding (ToolTipBorderPadding 9,6,9,8).</summary>
+        public float MaxWidth { get; init; } = 320f;
+        public Edges4 Padding { get; init; } = new(9, 6, 9, 8);
+        /// <summary>The text (ToolTipContentThemeFontSize 12, TextFillColorPrimary).</summary>
+        public float TextSize { get; init; } = 12f;
+        public ColorF TextColor { get; init; } = Tok.TextPrimary;
+    }
+
+    /// <summary>The bubble style now: the active theme's (<see cref="ControlStyles.ToolTipStyle"/>), else <see cref="FluentStyle"/>.</summary>
+    public static Style DefaultStyle => ControlStyles.Resolve(ControlStyles.ToolTipStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a ToolTip entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new();
+
     public Element Target = new BoxEl();
     public string Text = "";
     /// <inheritdoc cref="Wrap(Element, string, float, float)"/>
@@ -635,16 +665,18 @@ public sealed class ToolTip : Component
     //   Shadow = the light transient elevation class (Elevation.Tooltip) — tooltips sit on the lowest popup band.
     Element BubbleContent(string text, Action<NodeHandle> onRealized)
     {
+        // The bubble's look, read now (the bubble is built in the overlay's render).
+        var st = DefaultStyle;
         var bubble = new BoxEl
         {
-            Fill = ColorF.Transparent,
-            Acrylic = Tok.AcrylicFlyout,
-            BorderColor = Tok.StrokeFlyoutDefault,
-            BorderWidth = 1f,
-            Corners = Radii.ControlAll,
-            Shadow = Elevation.Tooltip,
-            MaxWidth = 320f,
-            Padding = new Edges4(9, 6, 9, 8),
+            Fill = st.Fill,
+            Acrylic = st.Acrylic,
+            BorderColor = st.Border,
+            BorderWidth = st.BorderWidth,
+            Corners = CornerRadius4.All(st.Radius),
+            Shadow = st.Shadow,
+            MaxWidth = st.MaxWidth,
+            Padding = st.Padding,
             // A tooltip never intercepts input (WinUI tooltips are hit-test-transparent): the bubble must not swallow
             // wheel/press under the pointer — scrolling continues through it. Its bounds still join the safe zone,
             // tested by GEOMETRY against the real pointer (SafeZoneCheck), not by hover events.
@@ -654,11 +686,12 @@ public sealed class ToolTip : Component
             [
                 new TextEl(text)
                 {
-                    Size = 12f,
-                    Color = Tok.TextPrimary,
+                    Size = st.TextSize,
+                    Color = st.TextColor,
                     Wrap = TextWrap.Wrap,
-                    MaxWidth = 302f,   // 320 − (9 + 9) horizontal padding
+                    MaxWidth = st.MaxWidth - st.Padding.Left - st.Padding.Right,   // 320 − (9 + 9) horizontal padding
                 },
+
             ],
         };
         // Parts: restyle the bubble chrome (acrylic, stroke, elevation, padding…); the Text content, the input

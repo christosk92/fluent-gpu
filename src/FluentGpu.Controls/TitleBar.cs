@@ -55,6 +55,10 @@ public sealed record TitleBarOptions
     public TemplateParts? Parts { get; init; }
     /// <summary>The row's fixed spacing, read per render (see <see cref="TitleBar.RowSpacing"/>); null keeps <see cref="TitleBarSpacing.Default"/>.</summary>
     public Func<TitleBarSpacing>? RowSpacing { get; init; }
+    /// <summary>The bar's height (see <see cref="TitleBar.BarHeight"/>): <see cref="TitleBar.ExpandedHeight"/> (48) by default. A static
+    /// value, or a thunk / signal read at every render (a window tier: 56 at Huge4K), so the bar resizes live without a remount. The
+    /// caption buttons stretch to it, every island and drag band takes it, and the reported drag / button regions follow it.</summary>
+    public Prop<float> Height { get; init; } = TitleBar.ExpandedHeight;
 }
 
 /// <summary>The title bar row's two fixed spacers: the lead pad after the back / pane buttons (WinUI's left-header padding column,
@@ -217,6 +221,10 @@ public sealed class TitleBar : Component
     /// that reads a signal (a window tier) re-renders the bar and re-reports its regions when it changes. Null keeps
     /// <see cref="TitleBarSpacing.Default"/> (WinUI's 14 and 48).</summary>
     public Func<TitleBarSpacing>? RowSpacing;
+    /// <summary>The bar's height, read at EVERY render (a static value, a thunk or a signal; <see cref="TitleBarOptions.Height"/>):
+    /// <see cref="ExpandedHeight"/> (48) by default. The caption buttons are this tall, the back / pane buttons are 4 shorter (WinUI's
+    /// 44 in 48), the islands and drag bands take it, and a change re-reports the non-client regions in the same frame.</summary>
+    public Prop<float> BarHeight = ExpandedHeight;
 
     /// <summary>Merged mode = at least one of the merged-row slots is present. Mount-time (both fields freeze at mount),
     /// so the branch below is stable for the life of the instance.</summary>
@@ -243,6 +251,7 @@ public sealed class TitleBar : Component
                 ContentVersion = options.ContentVersion,
                 ShowRailBaseline = options.ShowRailBaseline,
                 ShowCaptionButtons = options.ShowCaptionButtons, Parts = options.Parts, RowSpacing = options.RowSpacing,
+                BarHeight = options.Height,
             };
             if (options.IconColor is { } ic) tb.IconColor = ic;
             if (options.Content is { } content) tb.Content = _ => content(tb.ContentAvail);
@@ -286,6 +295,7 @@ public sealed class TitleBar : Component
         string paneTip = PaneToggleToolTip?.Invoke() ?? "";
         var spacing = RowSpacing?.Invoke() ?? TitleBarSpacing.Default;   // subscribe: a thunk over a tier re-renders on a change
         float leadPad = MathF.Max(0f, spacing.LeadPad), dragStrip = MathF.Max(0f, spacing.MinDragStrip);
+        float barH = MathF.Max(1f, BarHeight.Current());             // subscribe: a bound height (a tier) re-renders + re-reports
 
         // Report the drag/button regions after THIS render's layout settles (phase 6.5) — deps cover everything that
         // moves the parts (resize, maximize→WM_SIZE→viewport, DPI hop→DIP viewport change, the measured-width feedback
@@ -293,7 +303,7 @@ public sealed class TitleBar : Component
         // ContentVersion rides BOTH keys: a merged island that resizes without moving any other dep (an expanding search
         // box) must re-render AND re-push its region in the same frame, or the stale rect leaves dead drag space.
         UseLayoutEffect(() => PushRegions(hooks),
-            DepKey.From(HashCode.Combine(HashCode.Combine(viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons), contentVer, paneEnabled, leadPad, dragStrip)));
+            DepKey.From(HashCode.Combine(HashCode.Combine(viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons), contentVer, paneEnabled, leadPad, dragStrip, barH)));
 
         // Memo gate: a resize-only re-render returns the cached tree alloc-free (the layout effect above already re-ran
         // — its viewport deps changed — so regions re-push without a rebuild). Key excludes the viewport on purpose.
@@ -302,7 +312,7 @@ public sealed class TitleBar : Component
         int key = unchecked(((((((epoch * 397 ^ tabsVer) * 397 ^ contentVer) * 397 ^ _availDip.Peek().GetHashCode()) * 397 ^ Tok.Epoch) * 397
                               ^ StringComparer.Ordinal.GetHashCode(paneTip)) * 397)
             ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (backEnabled ? 32 : 0) | (ShowRailBaseline ? 64 : 0) | (TabsElasticLane ? 128 : 0) | (paneEnabled ? 256 : 0)));
-        key = HashCode.Combine(key, leadPad, dragStrip);
+        key = HashCode.Combine(key, leadPad, dragStrip, barH);
         if (_cachedTree is { } cached && key == _cacheKey) return cached;
 
         // WinUI back/pane: 40w × 44h with Margin 2 (the hover backplate spans y=2..46 of the 48px bar; adjacent
@@ -311,7 +321,7 @@ public sealed class TitleBar : Component
         var navStyle = IconButton.DefaultStyle with
         {
             Size = NavButtonSize,
-            Height = 44f,
+            Height = barH - 4f,                                    // 44 in the 48 bar
             Foreground = active ? Tok.TextPrimary : Tok.TextTertiary,
         };
         var navMargin = new Edges4(2f, 2f, 2f, 2f);
@@ -383,8 +393,8 @@ public sealed class TitleBar : Component
         // what preserves the HTCAPTION contract — the band is drag space that happens to be painted.
         bool rail = (Tabs is not null || merged) && ShowRailBaseline;
         BoxEl Band(float width, float grow, float shrink) => rail
-            ? TabStrip.RailBaselineHost(width, grow) with { Shrink = shrink, Height = ExpandedHeight }
-            : new BoxEl { Width = width, Grow = grow, Shrink = shrink, Height = ExpandedHeight };
+            ? TabStrip.RailBaselineHost(width, grow) with { Shrink = shrink, Height = barH }
+            : new BoxEl { Width = width, Grow = grow, Shrink = shrink, Height = barH };
 
         // A LEFT-aligned tab strip hugging its content (Shrink=1 so a too-full strip gives way before the captions).
         // It is a Client island; the Grow=1 band after it is Caption drag space (WinUI TabStripFooter).
@@ -399,7 +409,7 @@ public sealed class TitleBar : Component
         BoxEl TabsIsland(Func<Element> f) => new()
         {
             Direction = 0, AlignItems = FlexAlign.Stretch,
-            Shrink = 1, MinWidth = 0f, Height = ExpandedHeight,
+            Shrink = 1, MinWidth = 0f, Height = barH,
             ClipToBounds = true,
             Opacity = active ? 1f : 0.5f,
             OnRealized = h => _tabs = h,
@@ -435,7 +445,7 @@ public sealed class TitleBar : Component
                 // an app-sized search field is never squeezed by a long tab strip.
                 Grow = TabsElasticLane ? 0f : 1f, Shrink = TabsElasticLane ? 0f : 1, MinWidth = 0f, Direction = 0,
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Height = ExpandedHeight,
+                Height = barH,
                 Opacity = active ? 1f : 0.5f,                      // WinUI deactivated content dim
                 Children = [centerIsland],
             };
@@ -453,7 +463,7 @@ public sealed class TitleBar : Component
                 // Hugs: its laid-out rect is reported wholesale as Client, so any slack inside it is dead drag space.
                 var trailingIsland = new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Height = ExpandedHeight,
+                    Direction = 0, AlignItems = FlexAlign.Center, Height = barH,
                     Opacity = active ? 1f : 0.5f,
                     Children = [trailingFunc()],
                 };
@@ -494,7 +504,7 @@ public sealed class TitleBar : Component
                 // the arranged width PushRegions feeds back is the honest available space even on resize-down (without
                 // Shrink the column could only track the viewport UP and _availDip would floor at the content's width).
                 Grow = 1, Shrink = 1, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Height = ExpandedHeight,
+                Height = barH,
                 Opacity = active ? 1f : 0.5f,                          // WinUI deactivated content dim
                 Children = [island],
             };
@@ -517,7 +527,7 @@ public sealed class TitleBar : Component
         {
             var captionLeading = new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.Center, Height = ExpandedHeight,
+                Direction = 0, AlignItems = FlexAlign.Center, Height = barH,
                 Opacity = active ? 1f : 0.5f,
                 Children = [captionLeadingFunc()],
             };
@@ -533,11 +543,11 @@ public sealed class TitleBar : Component
         {
             string maxGlyph = maximized ? Icons.ChromeRestore : Icons.ChromeMaximize;
             kids.Add(Caption(PartCaptionMin, Icons.ChromeMinimize, () => hooks.WindowMinimize?.Invoke(),
-                             CaptionButton.MinMax, active, h => _min = h));
+                             CaptionButton.MinMax, active, barH, h => _min = h));
             kids.Add(Caption(PartCaptionMax, maxGlyph, () => hooks.WindowToggleMaximize?.Invoke(),
-                             CaptionButton.MinMax, active, h => _max = h));
+                             CaptionButton.MinMax, active, barH, h => _max = h));
             kids.Add(Caption(PartCaptionClose, Icons.ChromeClose, () => hooks.WindowClose?.Invoke(),
-                             CaptionButton.Close, active, h => _close = h));
+                             CaptionButton.Close, active, barH, h => _close = h));
         }
         else
         {
@@ -547,7 +557,7 @@ public sealed class TitleBar : Component
 
         var root = new BoxEl
         {
-            Direction = 0, Height = ExpandedHeight, AlignItems = FlexAlign.Center,
+            Direction = 0, Height = barH, AlignItems = FlexAlign.Center,
             Padding = new Edges4(2f, 0f, 0f, 0f),                  // WinUI rest left-padding column
             ClipToBounds = true,                                   // a mis-sized bar must never paint over the page
             Children = kids.ToArray(),
@@ -555,7 +565,7 @@ public sealed class TitleBar : Component
         var appliedRoot = Parts.Apply(PartRoot, root);
         var result = appliedRoot with
         {
-            Height = ExpandedHeight, Children = root.Children,
+            Height = barH, Children = root.Children,
             OnRealized = TemplateParts.Chain<NodeHandle>(h => _root = h, appliedRoot.OnRealized),
         };
         _cachedTree = result;
@@ -563,10 +573,10 @@ public sealed class TitleBar : Component
         return result;
     }
 
-    BoxEl Caption(string part, string glyph, Action onClick, CaptionButton.Style style, bool active,
+    BoxEl Caption(string part, string glyph, Action onClick, CaptionButton.Style style, bool active, float height,
                   Action<NodeHandle> capture)
     {
-        var b = CaptionButton.Create(glyph, onClick, style, active);
+        var b = CaptionButton.Create(glyph, onClick, style, active, height);
         var applied = Parts.Apply(part, b);
         return applied with
         {

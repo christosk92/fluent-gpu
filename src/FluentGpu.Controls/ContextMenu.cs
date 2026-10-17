@@ -26,6 +26,22 @@ public readonly record struct ContextMenuModel(
     public ContextMenuModel(IReadOnlyList<MenuFlyoutItem> rows, ContextMenuHeader? header = null) : this([], rows, header) { }
 }
 
+/// <summary>What a theme's primary-verb strip presenter (<see cref="ContextMenu.Style.PrimaryStrip"/>) is handed: the model's
+/// <see cref="ContextMenuModel.Primary"/> commands, the menu's close, and whether a touch long-press opened it. <see cref="Invoke"/>
+/// runs a command and closes the menu (the strip's buttons call it), so a presenter only draws.</summary>
+public readonly record struct ContextMenuStrip(IReadOnlyList<AppBarCommand> Commands, Action Close, bool Touch)
+{
+    /// <summary>Run command <paramref name="index"/> and close the menu; a separator, a disabled command or an index out of range does nothing.</summary>
+    public void Invoke(int index)
+    {
+        if ((uint)index >= (uint)Commands.Count) return;
+        var command = Commands[index];
+        if (command.Kind == AppBarCommandKind.Separator || !command.Enabled) return;
+        command.Invoke?.Invoke();
+        Close();
+    }
+}
+
 /// <summary>Tunables for an attached context menu. <c>TouchInputMode</c> is not a knob — it is derived from the
 /// trigger (a touch long-press opens with the roomier touch metrics).</summary>
 public sealed record ContextMenuOptions
@@ -60,6 +76,30 @@ public sealed record ContextMenuOptions
 /// </summary>
 public static class ContextMenu
 {
+    /// <summary>The context menu's own presenter parts, read through the control style table (<see cref="ControlStyles.ContextMenuStyle"/>)
+    /// when a menu OPENS. The menu body's rows, separator and plate are <see cref="MenuFlyout.Style"/>. Every default is today's menu:
+    /// the built-in identity header with its divider, and the Win11 Explorer command-bar body when the model has a primary strip.</summary>
+    public sealed record Style
+    {
+        /// <summary>Draws the model's <see cref="ContextMenuModel.Header"/> (the identity strip above the commands) from the header
+        /// and whether a touch long-press opened the menu. Null = the built-in 54-DIP identity strip (60 for touch).</summary>
+        public Func<ContextMenuHeader, bool, Element>? Header { get; init; }
+        /// <summary>The 1-DIP divider between the header and the rows of a plain menu.</summary>
+        public bool HeaderDivider { get; init; } = true;
+        /// <summary>Draws the model's <see cref="ContextMenuModel.Primary"/> commands as a strip ABOVE the menu rows (a row of
+        /// round verbs, say), inside the plain menu plate (<see cref="PopupChrome.Flyout"/>). Null = the built-in Win11 Explorer
+        /// command-bar body (icon-over-label strip over the overflow rows, <see cref="PopupChrome.CommandBar"/>).</summary>
+        public Func<ContextMenuStrip, Element>? PrimaryStrip { get; init; }
+        /// <summary>The menu's least width for every attached menu; NaN = each attach's <see cref="ContextMenuOptions.MinWidth"/> (250).</summary>
+        public float MinWidth { get; init; } = float.NaN;
+    }
+
+    /// <summary>The context-menu style now: the active theme's (<see cref="ControlStyles.ContextMenuStyle"/>), else <see cref="FluentStyle"/>.</summary>
+    public static Style DefaultStyle => ControlStyles.Resolve(ControlStyles.ContextMenuStyle, FluentStyle);
+
+    /// <summary>The built-in default (what a theme table without a ContextMenu entry resolves to).</summary>
+    public static Style FluentStyle() => new();
+
     // The single currently-open context menu (process-static): a new open supersedes it (close-then-open). Fine for a
     // single interaction stream; revisit if true multi-window input concurrency lands (risk flagged in the design).
     private static OverlayHandle? _currentHandle;
@@ -87,7 +127,10 @@ public static class ContextMenu
 
         if (factory() is not { } model || !HasAnyEnabled(model)) return;
 
-        bool commandBar = model.Primary.Count > 0;
+        // The theme's presenter parts, read now (the open is the render of this menu). A theme that draws the primary strip
+        // itself keeps the plain menu chrome; without one, a primary strip selects the Win11 command-bar body as before.
+        var style = DefaultStyle;
+        bool commandBar = model.Primary.Count > 0 && style.PrimaryStrip is null;
         bool keyboard = args.Trigger == ContextRequestTrigger.Keyboard;
         bool invoke = args.Trigger == ContextRequestTrigger.Invoke;
         bool rectAnchor = keyboard || invoke;   // no pointer point → anchor to a node RECT, not a contact point
@@ -97,7 +140,7 @@ public static class ContextMenu
         OverlayHandle? handle = null;
         var fadeSlot = new Ref<Action?>(null);   // the CommandBar body fills this with its 83ms fade-close
         Action close = () => handle?.Close();
-        Func<Element> content = () => Body(model, opts, close, fadeSlot, focusFirst: keyboard, touch: touch);
+        Func<Element> content = () => Body(model, opts, style, close, fadeSlot, focusFirst: keyboard, touch: touch);
 
         // Identical to the DropDownButton canon: allowed to leave the window (ConstrainToRootBounds=false — an OS
         // DWM-acrylic popup window when it actually has to, in-window engine acrylic when it fits, OverlayHost
@@ -148,26 +191,40 @@ public static class ContextMenu
     }
 
     // Build the inner body: the Explorer command-bar shape when a primary strip is present, else a plain menu.
-    private static Element Body(ContextMenuModel model, ContextMenuOptions opts, Action close, Ref<Action?> fadeSlot, bool focusFirst, bool touch)
+    private static Element Body(ContextMenuModel model, ContextMenuOptions opts, Style style, Action close, Ref<Action?> fadeSlot,
+        bool focusFirst, bool touch)
     {
-        Element? header = model.Header is { } identity ? Header(identity, touch) : null;
-        if (model.Primary.Count > 0)
+        float minWidth = float.IsNaN(style.MinWidth) ? opts.MinWidth : style.MinWidth;
+        Element? header = model.Header is { } identity ? (style.Header is { } drawHeader ? drawHeader(identity, touch) : Header(identity, touch)) : null;
+        if (model.Primary.Count > 0 && style.PrimaryStrip is null)
         {
             // Map the menu rows onto the command-bar overflow (AppBarCommand secondary). AlwaysExpanded = the Explorer
             // "overflow shown immediately" shape; TouchInputMode = roomier rows for a long-press open.
             var secondary = ToBarCommands(model.Rows);
             return CommandBarFlyout.BuildBody(
                 model.Primary, secondary, close, fadeSlot,
-                parts: null, alwaysExpanded: true, overflowMinWidth: opts.MinWidth, touchInputMode: touch,
+                parts: null, alwaysExpanded: true, overflowMinWidth: minWidth, touchInputMode: touch,
                 labeledPrimary: true, header: header);   // Win11 Explorer shell-menu shape: icon-over-label strip
         }
-        Element menu = MenuFlyout.Build(model.Rows, close, opts.MinWidth, parts: null, focusFirst: focusFirst);
-        if (header is null) return menu;
+        Element menu = MenuFlyout.Build(model.Rows, close, minWidth, parts: null, focusFirst: focusFirst);
+        // A theme-drawn primary strip sits between the header and the rows, inside the plain menu plate.
+        Element? strip = model.Primary.Count > 0 && style.PrimaryStrip is { } drawStrip
+            ? drawStrip(new ContextMenuStrip(model.Primary, close, touch))
+            : null;
+        if (header is null && strip is null) return menu;
+        var children = new List<Element>(4);
+        if (header is not null)
+        {
+            children.Add(header);
+            if (style.HeaderDivider) children.Add(HeaderDivider());
+        }
+        if (strip is not null) children.Add(strip);
+        children.Add(menu);
         return new BoxEl
         {
             Direction = 1,
-            MinWidth = opts.MinWidth,
-            Children = [header, HeaderDivider(), menu],
+            MinWidth = minWidth,
+            Children = children.ToArray(),
         };
     }
 

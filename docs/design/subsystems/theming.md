@@ -1098,14 +1098,27 @@ has a style record, carried by the theme.
   (a provider must build from that, not from `DefaultStyle`, which would recurse).
 - **A changed table is a non-colour change** (`HasSameStyleAs` compares `Controls`): `Tok.StyleEpoch` moves and the definition is
   applied as a unit.
-- **Keys today (17):** button, appbarbutton, caption.minmax, caption.close, checkbox, colorpicker, hyperlinkbutton, iconbutton,
-  numberbox, radiobutton, repeatbutton, segmented, settingscard, slider, splitter, togglebutton, toggleswitch. Controls that have
-  no style record in this kit (ComboBox, TextBox, TabStrip, MenuFlyout, ToolTip, ScrollBar, Expander, InfoBar, ...) get a key when
-  their style record lands; `ControlRole` (the app's semantic button roles) is application policy and lives in the app's
-  provider, not in the engine table.
+- **Keys today (30):** button, appbarbutton, caption.minmax, caption.close, checkbox, colorpicker, hyperlinkbutton, iconbutton,
+  numberbox, radiobutton, repeatbutton, segmented, settingscard, slider, splitter, togglebutton, toggleswitch (EP15), and for P5
+  (Zune): menuflyout, contextmenu, contentdialog, combobox, textbox.field, autosuggestbox.field, infobar, tooltip, progressring,
+  progressbar, selectorbar, settingsexpander, toast.lane (controls.md "As built (2026-10, P5 / Zune)"). Controls that still have
+  no style record (TabStrip, ScrollBar, Expander, ...) get a key when their style record lands; `ControlRole` (the app's semantic
+  button roles) is application policy and lives in the app's provider, not in the engine table.
+- **Presenter parts.** A key's record may carry a presenter (`ContextMenu.Style.Header` / `.PrimaryStrip`,
+  `ContentDialog.Style.CommandButton`): a delegate the control calls at render with the data and the action it owns (close,
+  invoke, the default command), so a theme draws a part without owning the control's mechanics. Null is the built-in part.
+  Delegates compare by target and method, so a theme that registers a static provider keeps an equal table across rebuilds.
+- **Popup plates.** The menu and dropdown plates are drawn by the overlay host, not the control: `PopupPlate` (fill, frosted
+  layer or none, ring, radius, elevation, padding) is a member of `MenuFlyout.Style` and `ComboBox.Style`; the host's surface
+  resolves it at render and the per-frame backdrop sync reads the card the surface last rendered (never the table per frame).
+- **Keys over existing records.** `selectorbar` (`Func<SelectorBarStyle?>`: null is the stock look), `settingsexpander` and
+  `toast.lane` sit UNDER the instance-level value (`style:` argument, `Options.Style`, a `Toast.Lane` provider) and over the
+  built-in default.
+
 - **Package break.** `Button.StyleHook` is removed; `ThemeDefinition.Controls` is now a table with members (it was an empty record).
   Each affected control gains `public static Style FluentStyle()` (Button: `FluentStyle(appearance, size, palette)`).
-- Gates: `Engine.Tests/Theming/ControlStyleTableTests` (the value semantics, `StyleEpoch`, no allocation) and the VerticalSlice
+- Gates: `Engine.Tests/Theming/ControlStyleTableTests` (the value semantics, `StyleEpoch`, no allocation),
+  `Engine.Tests/Theming/ControlStyleKeysTests` (each P5 key restyles a mounted control, the empty table is the built-in look) and the VerticalSlice
   `control-style-table` suite (every control's style record and a mounted sample of each kind are identical under the empty table
   and the explicit built-in table; a definition with another Button style restyles a mounted button on the next frame; swapping
   back leaves no stale style) plus `gate.ctl.button.styletable` (the old stylehook gate, re-pointed).

@@ -49,6 +49,11 @@ public static class TextBox
 
     private static readonly TextBoxOptions DefaultOptions = new();
 
+    /// <summary>The text field's surface now: the active theme's (<see cref="ControlStyles.TextBoxFieldStyle"/>), else
+    /// <see cref="TextFieldStyle.Fluent"/>. Every <see cref="EditableText"/>-based field (TextBox, PasswordBox, NumberBox, the
+    /// ColorPicker hex box) draws its surface from it unless its composer hands it another (AutoSuggestBox, ComboBox).</summary>
+    public static TextFieldStyle DefaultFieldStyle => ControlStyles.Resolve(ControlStyles.TextBoxFieldStyle, TextFieldStyle.Fluent);
+
     /// <summary>Create a TextBox. The controlled value is a two-way <paramref name="text"/> signal (null ⇒ the field
     /// materializes its own — auto-materialize); user edits write it then fire <paramref name="onChange"/>. All other
     /// props live in <paramref name="options"/> (<see cref="TextBoxOptions"/>).</summary>
@@ -122,3 +127,72 @@ public static class TextBox
         return new BoxEl { Direction = 1, Children = stack.ToArray() };
     }
 }
+
+/// <summary>
+/// The surface of a text-entry field (WinUI TextBox / AutoSuggestBox / ComboBox field): corner radius, the state fills, the
+/// ring, an optional resting underline and the focused bottom bar. Read at RENDER through the control style table
+/// (<see cref="ControlStyles.TextBoxFieldStyle"/>, <see cref="ControlStyles.AutoSuggestBoxFieldStyle"/>, and
+/// <see cref="ComboBox.Style.Field"/>). <see cref="Fluent"/> is the WinUI field exactly: ControlCornerRadius, the
+/// ControlFillColor* ramp, the ControlElevationBorder gradient ring and the 2-DIP accent bar on focus, no underline.
+/// <para>An underline field (Zune) is <c>TextFieldStyle.Fluent() with { Radius = 0, Fill = transparent, …, BorderBrush = null,
+/// BorderWidth = 0, UnderlineThickness = 1, Underline = … }</c>: the ring goes and a line sits on the bottom edge, recoloured
+/// and thickened to the focus bar while focused.</para>
+/// </summary>
+public sealed record TextFieldStyle
+{
+    /// <summary>The field's corner radius (ControlCornerRadius).</summary>
+    public float Radius { get; init; } = Radii.Control;
+    /// <summary>The resting fill (ControlFillColorDefault).</summary>
+    public ColorF Fill { get; init; } = Tok.FillControlDefault;
+    /// <summary>The pointer-over fill (ControlFillColorSecondary).</summary>
+    public ColorF HoverFill { get; init; } = Tok.FillControlSecondary;
+    /// <summary>The pressed fill (ControlFillColorTertiary; a ComboBox field, an AutoSuggestBox field).</summary>
+    public ColorF PressedFill { get; init; } = Tok.FillControlTertiary;
+    /// <summary>The focused (input-active) fill (ControlFillColorInputActive).</summary>
+    public ColorF FocusedFill { get; init; } = Tok.FillControlInputActive;
+    /// <summary>The disabled fill (ControlFillColorDisabled).</summary>
+    public ColorF DisabledFill { get; init; } = Tok.FillControlDisabled;
+    /// <summary>The ring as a gradient (ControlElevationBorder); null = no gradient ring (<see cref="BorderColor"/> alone).</summary>
+    public GradientSpec? BorderBrush { get; init; } = Tok.ControlElevationBorder;
+    /// <summary>The ring as a flat colour, used when <see cref="BorderBrush"/> is null (transparent by default).</summary>
+    public ColorF BorderColor { get; init; } = ColorF.Transparent;
+    /// <summary>The disabled ring (ControlStrokeColorDefault, flat).</summary>
+    public GradientSpec? DisabledBorderBrush { get; init; } = GradientSpec.Solid(Tok.StrokeControlDefault);
+    /// <summary>The ring's width (1; 0 = no ring).</summary>
+    public float BorderWidth { get; init; } = 1f;
+    /// <summary>A resting line along the bottom edge (0 = none, the WinUI field).</summary>
+    public float UnderlineThickness { get; init; }
+    /// <summary>The resting underline's colour.</summary>
+    public ColorF Underline { get; init; } = ColorF.Transparent;
+    /// <summary>The focused bottom bar (TextControlElevationBorderFocused's accent stop): its colour and thickness (2).</summary>
+    public ColorF FocusBar { get; init; } = Tok.AccentDefault;
+    public float FocusBarThickness { get; init; } = 2f;
+
+    /// <summary>The built-in WinUI field. Reads the live <c>Tok</c> on every call.</summary>
+    public static TextFieldStyle Fluent() => new();
+
+    /// <summary>Wrap a field whose root is a ROW (an AutoSuggestBox field, a closed ComboBox) so <paramref name="style"/>'s underline
+    /// can sit on its bottom edge: the field and the line share an overlay stack that takes over the field's outer sizing. A
+    /// style with no underline returns <paramref name="field"/> itself, so the WinUI field keeps its exact node structure.</summary>
+    internal static Element WithUnderline(BoxEl field, TextFieldStyle style, bool focused, bool enabled)
+    {
+        if (style.UnderlineThickness <= 0f) return field;
+        bool bar = focused && enabled && style.FocusBarThickness > 0f;
+        var line = new BoxEl
+        {
+            Height = bar ? MathF.Max(style.UnderlineThickness, style.FocusBarThickness) : style.UnderlineThickness,
+            AlignSelf = FlexAlign.End,
+            Fill = bar ? style.FocusBar : style.Underline,
+            HitTestVisible = false,
+        };
+        return new BoxEl
+        {
+            ZStack = true,
+            Width = field.Width, Height = field.Height,
+            MinWidth = field.MinWidth, MaxWidth = field.MaxWidth, MinHeight = field.MinHeight, MaxHeight = field.MaxHeight,
+            Grow = field.Grow, Shrink = field.Shrink, Basis = field.Basis, AlignSelf = field.AlignSelf, Margin = field.Margin,
+            Children = [field with { Margin = default }, line],
+        };
+    }
+}
+

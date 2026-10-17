@@ -111,7 +111,7 @@ public static class Toast
     /// <summary>The auto-mounted lane's geometry (<see cref="ToastLaneStyle"/>), as an ambient context: provide a thunk ABOVE the
     /// <see cref="OverlayHost"/> (<c>Ctx.Provide(Toast.Lane, () =&gt; …, OverlayHost.Create(…))</c>) and the lane reads it at every
     /// render — a thunk that reads a signal (a window tier) re-renders the lane when it changes. No provider (or a null thunk)
-    /// keeps <see cref="ToastLaneStyle.Default"/>.</summary>
+    /// keeps the active theme's lane (<see cref="ControlStyles.ToastLaneStyle"/>), else <see cref="ToastLaneStyle.Default"/>.</summary>
     public static readonly Context<Func<ToastLaneStyle>?> Lane = new(null);
 
     // The process-default controller (the auto-mounted OverlayHost lane; save/restore stack for explicit overrides).
@@ -448,7 +448,8 @@ public sealed class ToastHost : Component
         ctl.MaxVisible = Options?.MaxVisible ?? Toast.MaxVisible;
         ctl.EdgeInset = Options?.EdgeInset ?? Toast.EdgeInset;
         // The lane's geometry: the provided thunk (it may read signals: this render subscribes to them), else the shipped lane.
-        var lane = UseContext(Toast.Lane)?.Invoke() ?? ToastLaneStyle.Default;
+        // Precedence: the provided thunk, then the active theme's lane (ControlStyles.ToastLaneStyle, read now), then the shipped lane.
+        var lane = UseContext(Toast.Lane)?.Invoke() ?? ControlStyles.Resolve(ControlStyles.ToastLaneStyle, static () => ToastLaneStyle.Default);
         var viewport = UseContextSignal(Viewport.Size);
         ctl.Lane = lane;
         // Only a filled lane with cards on it follows the window's width (a dormant or corner lane never re-renders on a resize).

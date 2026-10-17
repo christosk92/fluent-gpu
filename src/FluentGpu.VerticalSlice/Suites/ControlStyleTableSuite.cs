@@ -58,7 +58,7 @@ static class ControlStyleTableSuite
         Check("gate.ctl.styletable.non-colour a changed table is a NON-colour difference (applied as a unit), an equal table is not",
             !def.DiffersOnlyInColours(def with { Controls = a }) && def.DiffersOnlyInColours(def with { Controls = ControlStyleTable.Empty }),
             $"changed={def.DiffersOnlyInColours(def with { Controls = a })}");
-        Check("gate.ctl.styletable.explicit the explicit Fluent table lists every keyed control", ControlStyles.FluentExplicit.Count == 17, $"count={ControlStyles.FluentExplicit.Count}");
+        Check("gate.ctl.styletable.explicit the explicit Fluent table lists every keyed control", ControlStyles.FluentExplicit.Count == 30, $"count={ControlStyles.FluentExplicit.Count}");
     }
 
     // ── every control's style record: empty table == explicit built-in table ───────────────────────────────────────────
@@ -79,6 +79,13 @@ static class ControlStyleTableSuite
           .Append(RepeatButton.DefaultStyle).Append('\n').Append(Segmented.DefaultStyle).Append('\n').Append(SettingsCard.DefaultStyle).Append('\n')
           .Append(Slider.DefaultStyle).Append('\n').Append(Splitter.DefaultStyle).Append('\n').Append(ToggleButton.DefaultStyle).Append('\n')
           .Append(ToggleSwitch.DefaultStyle).Append('\n');
+        // The overlay / field / status keys (P5): menus, context menu, dialog, combo box, the two field surfaces, info bar, tooltip,
+        // ring, bar, and the keys over the existing SelectorBar / SettingsExpander / toast-lane records.
+        sb.Append(MenuFlyout.DefaultStyle).Append('\n').Append(ContextMenu.DefaultStyle).Append('\n').Append(ContentDialog.DefaultStyle).Append('\n')
+          .Append(ComboBox.DefaultStyle).Append('\n').Append(TextBox.DefaultFieldStyle).Append('\n').Append(AutoSuggestBox.DefaultFieldStyle).Append('\n')
+          .Append(InfoBar.DefaultStyle).Append('\n').Append(ToolTip.DefaultStyle).Append('\n').Append(ProgressRing.DefaultStyle).Append('\n')
+          .Append(ProgressBar.DefaultStyle).Append('\n').Append(SelectorBar.ThemeStyle).Append('\n').Append(SettingsExpander.DefaultStyle).Append('\n')
+          .Append(ControlStyles.Resolve(ControlStyles.ToastLaneStyle, static () => ToastLaneStyle.Default)).Append('\n');
         return sb.ToString();
     }
 
@@ -90,7 +97,8 @@ static class ControlStyleTableSuite
             string fromEmpty = AllStyles();
             Tok.Use(ThemeDefinition.FluentDefault with { Controls = ControlStyles.FluentExplicit }, kind);
             string fromExplicit = AllStyles();
-            Check($"gate.ctl.styletable.records-{kind} all 17 controls' default style records are identical under the empty table and the explicit built-in table",
+            Check($"gate.ctl.styletable.records-{kind} all 30 keyed style records
+ are identical under the empty table and the explicit built-in table",
                 fromEmpty == fromExplicit, fromEmpty == fromExplicit ? null : $"first difference at {FirstDiff(fromEmpty, fromExplicit)}");
         }
     }

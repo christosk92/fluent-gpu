@@ -92,11 +92,56 @@ public static class MenuFlyout
     /// <summary>A separator row (pure chrome — no owned props).</summary>
     public const string PartSeparator = "Separator";
 
-    /// <summary>The row height of <paramref name="size"/> on the kit's size axis: <see cref="ControlSize.Medium"/> (the default) is
-    /// WinUI's 36-DIP row (the 14px line inside MenuFlyoutItemThemePadding 11,8,11,9); <see cref="ControlSize.Large"/> is the
-    /// 40-DIP touch target a compact window asks for (a documented extension: WinUI has no taller menu row). Small is remapped
-    /// to Medium (the ClampSize idiom: a row shorter than its own 14px line plus padding is not a row).</summary>
-    public static float RowHeightFor(ControlSize size) => size == ControlSize.Large ? ControlMetrics.For(ControlSize.Large).MinHeight : RowHeight;
+    /// <summary>The row height of <paramref name="size"/> on the kit's size axis, in the active theme's menu style: <see cref="ControlSize.Medium"/>
+    /// (the default) is <see cref="Style.RowHeight"/> (WinUI's 36-DIP row: the 14px line inside MenuFlyoutItemThemePadding 11,8,11,9);
+    /// <see cref="ControlSize.Large"/> is <see cref="Style.LargeRowHeight"/> (the 40-DIP touch target a compact window asks for, a
+    /// documented extension: WinUI has no taller menu row). Small is remapped to Medium (the ClampSize idiom: a row shorter than its
+    /// own 14px line plus padding is not a row).</summary>
+    public static float RowHeightFor(ControlSize size) => RowHeightFor(size, DefaultStyle);
+
+    /// <summary><see cref="RowHeightFor(ControlSize)"/> in an already-resolved <paramref name="style"/>.</summary>
+    public static float RowHeightFor(ControlSize size, Style style) => size == ControlSize.Large ? style.LargeRowHeight : style.RowHeight;
+
+    /// <summary>The menu's look: the plate the host draws under the rows (<see cref="Plate"/>), the rows and the separator. Read at
+    /// RENDER through the control style table (<see cref="ControlStyles.MenuFlyoutStyle"/>), so a theme swap restyles the next
+    /// open; every default is the WinUI MenuFlyout_themeresources value the menu has always used. It also styles a
+    /// <see cref="ContextMenu"/>'s menu body (the context menu's own parts are <see cref="ContextMenu.Style"/>).</summary>
+    public sealed record Style
+    {
+        /// <summary>The presenter card (the host FlyoutSurface plate of <see cref="PopupChrome.Flyout"/>): acrylic, flyout ring,
+        /// OverlayCornerRadius, flyout elevation and the MenuFlyoutPresenterThemePadding 0,2,0,2.</summary>
+        public PopupPlate Plate { get; init; } = PopupPlate.Fluent();
+        /// <summary>The row height (Medium and Small): 36.</summary>
+        public float RowHeight { get; init; } = MenuFlyout.RowHeight;
+        /// <summary>The Large (touch) row height: the Large control metric, 40.</summary>
+        public float LargeRowHeight { get; init; } = ControlMetrics.For(ControlSize.Large).MinHeight;
+        /// <summary>A row's margin inside the plate (MenuFlyoutItemMargin 4,2,4,2).</summary>
+        public Edges4 ItemMargin { get; init; } = MenuFlyout.ItemMargin;
+        /// <summary>A row's padding (MenuFlyoutItemThemePadding 11,8,11,9).</summary>
+        public Edges4 ItemPadding { get; init; } = MenuFlyout.ItemPadding;
+        /// <summary>A row's hover/press backplate radius (ControlCornerRadius).</summary>
+        public float ItemRadius { get; init; } = Radii.Control;
+        /// <summary>The row fill on pointer-over, under the keyboard cursor and while its sub-menu is open (SubtleFillColorSecondary).</summary>
+        public ColorF ItemHoverFill { get; init; } = Tok.FillSubtleSecondary;
+        /// <summary>The row fill while pressed (SubtleFillColorTertiary).</summary>
+        public ColorF ItemPressedFill { get; init; } = Tok.FillSubtleTertiary;
+        /// <summary>The label's size (ControlContentThemeFontSize 14).</summary>
+        public float LabelSize { get; init; } = 14f;
+        /// <summary>The separator line's colour (DividerStrokeColorDefault).</summary>
+        public ColorF SeparatorColor { get; init; } = Tok.StrokeDividerDefault;
+        /// <summary>The separator line's thickness (MenuFlyoutSeparatorHeight 1).</summary>
+        public float SeparatorThickness { get; init; } = SeparatorHeight;
+        /// <summary>The separator line's margin (SeparatorThemePadding's -4 bleed past the row inset).</summary>
+        public Edges4 SeparatorMargin { get; init; } = new(-4, 0, -4, 0);
+        /// <summary>The separator row's padding around the line (1 above, 1 below).</summary>
+        public Edges4 SeparatorPadding { get; init; } = new(0, 1, 0, 1);
+    }
+
+    /// <summary>The menu style now: the active theme's (<see cref="ControlStyles.MenuFlyoutStyle"/>), else <see cref="FluentStyle"/>.</summary>
+    public static Style DefaultStyle => ControlStyles.Resolve(ControlStyles.MenuFlyoutStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a MenuFlyout entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new();
 
     /// <summary>The one canonical MenuFlyout body factory. <paramref name="focusFirst"/>: put the keyboard cursor +
     /// focus on the first selectable row after mount (WinUI keyboard-invoked menu / context menu opened via Menu key —
@@ -121,12 +166,12 @@ public static class MenuFlyout
 
     // ── Separator: a 1px DividerStrokeColorDefault line; SeparatorThemePadding -4,1,-4,1 bleeds it past the item
     //    inset to full presenter width (we model the -4 bleed with a negative horizontal margin on the line). ────────
-    internal static Element Separator(TemplateParts? parts = null) => parts.Apply(PartSeparator, new BoxEl
+    internal static Element Separator(Style st, TemplateParts? parts = null) => parts.Apply(PartSeparator, new BoxEl
     {
         Direction = 1,
         Justify = FlexJustify.Center,
-        Padding = new Edges4(0, 1, 0, 1),                          // SeparatorThemePadding vertical (1 top, 1 bottom)
-        Children = [new BoxEl { Height = SeparatorHeight, Margin = new Edges4(-4, 0, -4, 0), Fill = Tok.StrokeDividerDefault }],
+        Padding = st.SeparatorPadding,                             // SeparatorThemePadding vertical (1 top, 1 bottom)
+        Children = [new BoxEl { Height = st.SeparatorThickness, Margin = st.SeparatorMargin, Fill = st.SeparatorColor }],
     });
 
     // ── A single command/toggle/radio/sub-menu row. <paramref name="highlighted"/> = the keyboard cursor (Up/Down) →
@@ -135,7 +180,7 @@ public static class MenuFlyout
     internal static Element Row(
         MenuFlyoutItem it, int index, Action activate, bool checkColumn, bool iconColumn, bool highlighted,
         Action<int>? onKeyMove, Action<KeyEventArgs>? onRowKey, Action<Point2>? onHover, Action? onExit, Action<NodeHandle>? onRealized,
-        bool subOpen = false, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
+        Style st, bool subOpen = false, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
     {
         bool enabled = it.Enabled;
         // MenuFlyoutItemForeground = TextPrimary; Disabled = TextDisabled. PointerOver/Pressed foreground stay Primary
@@ -167,7 +212,7 @@ public static class MenuFlyout
         }
 
         // Column 2: the label (TextBlock, "*" column → grows).
-        children.Add(new TextEl(it.Label) { Size = 14f, Color = fg, Grow = 1f });
+        children.Add(new TextEl(it.Label) { Size = st.LabelSize, Color = fg, Grow = 1f });
 
         // Column 3: optional keyboard-accelerator hint, right-aligned (HorizontalAlignment=Right),
         // CaptionTextBlock (12px), MenuFlyoutItemKeyboardAcceleratorTextForeground = TextSecondary / Disabled.
@@ -185,24 +230,25 @@ public static class MenuFlyout
 
         // The keyboard cursor (highlight) and the SubMenuOpened state render the same brush as PointerOver
         // (MenuFlyoutSubItemBackgroundSubMenuOpened = SubtleFillColorSecondary) so they read identically to a hover.
-        ColorF rest = enabled && (highlighted || subOpen) ? Tok.FillSubtleSecondary : Tok.FillSubtleTransparent;
+        ColorF rest = enabled && (highlighted || subOpen) ? st.ItemHoverFill : Tok.FillSubtleTransparent;
 
         var row = new BoxEl
         {
             Direction = 0,
-            Height = RowHeightFor(size),                           // 36 (= MinHeight 32 clamped up by the 14px line + 8/9 padding); Large 40
-            MinHeight = ThemeMinHeight,                            // MenuFlyoutThemeMinHeight = 32
+            Height = RowHeightFor(size, st),                       // 36 (= MinHeight 32 clamped up by the 14px line + 8/9 padding); Large 40
+            MinHeight = MathF.Min(ThemeMinHeight, RowHeightFor(size, st)),   // MenuFlyoutThemeMinHeight = 32 (a shorter themed row keeps its height)
             AlignItems = FlexAlign.Center,
-            Margin = ItemMargin,                                   // 4,2,4,2
-            Padding = ItemPadding,                                 // 11,8,11,9
+            Margin = st.ItemMargin,                                // 4,2,4,2
+            Padding = st.ItemPadding,                              // 11,8,11,9
             Gap = 0f,                                              // columns own their fixed 28px width; no inter-gap (WinUI grid)
-            Corners = Radii.ControlAll,                            // ControlCornerRadius = 4
+            Corners = CornerRadius4.All(st.ItemRadius),            // ControlCornerRadius = 4
             // Toggle/radio surface a11y as their WinUI peers (CheckBox/RadioButton patterns); plain command = MenuItem.
             Role = it.Kind switch { MenuItemKind.Toggle => AutomationRole.CheckBox, MenuItemKind.Radio => AutomationRole.RadioButton, _ => AutomationRole.MenuItem },
             // MenuFlyoutItemBackground (explicit rest) / ...PointerOver / ...Pressed. Disabled = transparent (no hover/press).
             Fill = rest,
-            HoverFill = enabled ? Tok.FillSubtleSecondary : Tok.FillSubtleTransparent,    // SubtleFillColorSecondary
-            PressedFill = enabled ? Tok.FillSubtleTertiary : Tok.FillSubtleTransparent,   // SubtleFillColorTertiary
+            HoverFill = enabled ? st.ItemHoverFill : Tok.FillSubtleTransparent,       // SubtleFillColorSecondary
+            PressedFill = enabled ? st.ItemPressedFill : Tok.FillSubtleTransparent,   // SubtleFillColorTertiary
+
             IsEnabled = enabled,                                   // engine gate: disabled = no hit-test/focus/keyboard/click
             Focusable = enabled,                                   // roving target (focus trap Tab/Shift-Tab + Enter/Space activation)
             TabIndex = index + 1,                                  // document order within the menu
@@ -298,6 +344,9 @@ internal sealed class MenuFlyoutPresenter : Component
         int subOpen = subOpenIdx.Value;                           // subscribe → re-render the SubMenuOpened row fill
         int pendingOpen = pendingOpenIdx.Value;                   // subscribe → mount/unmount the open-delay clock
         bool closePending = pendingClose.Value;                   // subscribe → mount/unmount the close-delay clock
+
+        // The menu's look, read now (the control style table): a theme swap restyles the next open, nothing is frozen.
+        var st = MenuFlyout.DefaultStyle;
 
         bool checkColumn = false, iconColumn = false;
         for (int i = 0; i < Items.Count; i++)
@@ -520,7 +569,7 @@ internal sealed class MenuFlyoutPresenter : Component
             int idx = i;
             if (it.IsSeparator)
             {
-                rows[i] = MenuFlyout.Separator(Parts);
+                rows[i] = MenuFlyout.Separator(st, Parts);
                 continue;
             }
             // Activation: a sub-menu row OPENS its cascade (WinUI MenuFlyoutSubItem click); other rows invoke + close.
@@ -535,6 +584,7 @@ internal sealed class MenuFlyoutPresenter : Component
                 onHover: _ => OnRowHover(idx),
                 onExit: () => OnRowExit(idx),
                 onRealized: h => rowNodes.Value[idx] = h,
+                st: st,
                 subOpen: i == subOpen,
                 parts: Parts,
                 size: Size);

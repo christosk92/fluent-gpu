@@ -39,6 +39,36 @@ public static class ControlStyles
     public static readonly ControlStyleKey<Func<ToggleButton.Style>> ToggleButtonStyle = new("togglebutton");
     public static readonly ControlStyleKey<Func<ToggleSwitch.Style>> ToggleSwitchStyle = new("toggleswitch");
 
+    // ── overlays, fields, status (P5 / Zune: the presenter parts a non-Fluent style needs) ─────────────────────────────
+
+    /// <summary>MenuFlyout (and every menu body: ContextMenu, DropDownButton, MenuBar…): the plate the host draws, rows, separator.</summary>
+    public static readonly ControlStyleKey<Func<MenuFlyout.Style>> MenuFlyoutStyle = new("menuflyout");
+    /// <summary>ContextMenu's own presenter parts: the header presenter, the primary-verb strip presenter, the divider, a theme-wide min width.</summary>
+    public static readonly ControlStyleKey<Func<ContextMenu.Style>> ContextMenuStyle = new("contextmenu");
+    /// <summary>ContentDialog: card, title, message, separator, command row (fill, gap, order, presenter).</summary>
+    public static readonly ControlStyleKey<Func<ContentDialog.Style>> ContentDialogStyle = new("contentdialog");
+    /// <summary>ComboBox: the field surface (both modes) and the dropdown plate.</summary>
+    public static readonly ControlStyleKey<Func<ComboBox.Style>> ComboBoxStyle = new("combobox");
+    /// <summary>The TextBox field surface — every EditableText-based field (TextBox, PasswordBox, NumberBox, the ColorPicker hex box).</summary>
+    public static readonly ControlStyleKey<Func<TextFieldStyle>> TextBoxFieldStyle = new("textbox.field");
+    /// <summary>The AutoSuggestBox field surface (Standard chrome; the ElevatedPill keeps its own).</summary>
+    public static readonly ControlStyleKey<Func<TextFieldStyle>> AutoSuggestBoxFieldStyle = new("autosuggestbox.field");
+    /// <summary>InfoBar (and the toast card, which is an InfoBar body): plate, icon, text, close button.</summary>
+    public static readonly ControlStyleKey<Func<InfoBar.Style>> InfoBarStyle = new("infobar");
+    /// <summary>ToolTip: the bubble.</summary>
+    public static readonly ControlStyleKey<Func<ToolTip.Style>> ToolTipStyle = new("tooltip");
+    /// <summary>ProgressRing: arc colour, track, stroke weight, caps.</summary>
+    public static readonly ControlStyleKey<Func<ProgressRing.Style>> ProgressRingStyle = new("progressring");
+    /// <summary>ProgressBar: band, track, indicator radii and the per-state foregrounds.</summary>
+    public static readonly ControlStyleKey<Func<ProgressBar.Style>> ProgressBarStyle = new("progressbar");
+    /// <summary>SelectorBar: the existing <see cref="Controls.SelectorBarStyle"/> record; a provider returning null is the stock look.
+    /// An instance's <c>style:</c> argument wins.</summary>
+    public static readonly ControlStyleKey<Func<SelectorBarStyle?>> SelectorBarStyle = new("selectorbar");
+    /// <summary>SettingsExpander: the existing <see cref="SettingsExpander.Style"/> record. An instance's style wins.</summary>
+    public static readonly ControlStyleKey<Func<SettingsExpander.Style>> SettingsExpanderStyle = new("settingsexpander");
+    /// <summary>The toast lane: the existing <see cref="Controls.ToastLaneStyle"/> record. A <see cref="Toast.Lane"/> provider above the host wins.</summary>
+    public static readonly ControlStyleKey<Func<ToastLaneStyle>> ToastLaneStyle = new("toast.lane");
+
     /// <summary>The style for a control now: the active definition's provider, else <paramref name="builtIn"/> (the control's
     /// Fluent default). Reads <c>Tok.Definition</c> on every call; allocates only the style record itself.</summary>
     public static TStyle Resolve<TStyle>(ControlStyleKey<Func<TStyle>> key, Func<TStyle> builtIn) where TStyle : class
@@ -70,5 +100,18 @@ public static class ControlStyles
         .With(SliderStyle, Slider.FluentStyle)
         .With(SplitterStyle, Splitter.FluentStyle)
         .With(ToggleButtonStyle, ToggleButton.FluentStyle)
-        .With(ToggleSwitchStyle, ToggleSwitch.FluentStyle);
+        .With(ToggleSwitchStyle, ToggleSwitch.FluentStyle)
+        .With(MenuFlyoutStyle, MenuFlyout.FluentStyle)
+        .With(ContextMenuStyle, ContextMenu.FluentStyle)
+        .With(ContentDialogStyle, ContentDialog.FluentStyle)
+        .With(ComboBoxStyle, ComboBox.FluentStyle)
+        .With(TextBoxFieldStyle, TextFieldStyle.Fluent)
+        .With(AutoSuggestBoxFieldStyle, AutoSuggestBox.FluentFieldStyle)
+        .With(InfoBarStyle, InfoBar.FluentStyle)
+        .With(ToolTipStyle, ToolTip.FluentStyle)
+        .With(ProgressRingStyle, ProgressRing.FluentStyle)
+        .With(ProgressBarStyle, ProgressBar.FluentStyle)
+        .With(SelectorBarStyle, static () => null)
+        .With(SettingsExpanderStyle, SettingsExpander.FluentStyle)
+        .With(ToastLaneStyle, static () => Controls.ToastLaneStyle.Default);
 }
