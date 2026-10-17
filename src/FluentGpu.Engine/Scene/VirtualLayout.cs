@@ -419,7 +419,9 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
     public float MinCardW { get; private set; }
     public float MaxCardW { get; private set; }
     public float Gap { get; private set; }
-    public readonly int Rows;
+    // Rows is LIVE between two multi-row counts (SetRows): a 5-row chart re-fits to 4 rows in place. 1 against more stays the
+    // layout's SHAPE (the lead span and the cell math are single-row only), so it never changes on a mounted layout.
+    public int Rows { get; private set; }
     public readonly int PerPageOverride;   // 0 ⇒ auto-fit
     public float FixedCardW { get; private set; }      // 0 ⇒ auto-fit
     public int MaxColumns { get; private set; }        // 0 ⇒ unlimited; else the auto-fit never exceeds this many columns
@@ -482,6 +484,26 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
         else _cardW = MinCardW;
         return true;
     }
+
+    /// <summary>Re-fit this mounted layout to a new row count (a host's tier crossing: a chart of five rows per column that takes four
+    /// past a rung). Only BETWEEN TWO MULTI-ROW COUNTS: a single-row layout is a different shape (the lead span, the cell math), so
+    /// <c>rows</c> of 1, or a layout mounted with 1, writes nothing. The column fit does not depend on the rows; the row height follows
+    /// the cross size the engine feeds next. False when nothing changed. The caller marks its viewport layout-dirty on true.
+    /// Allocation-free.</summary>
+    public bool SetRows(int rows)
+    {
+        int r = Math.Max(1, rows);
+        if (r == Rows || r == 1 || Rows == 1) return false;
+        Rows = r;
+        return true;
+    }
+
+    /// <summary>The page that holds page <paramref name="page"/>'s first item once a page of a MULTI-ROW strip holds
+    /// <paramref name="newPerPage"/> items (columns x rows) instead of <paramref name="oldPerPage"/>: <c>floor(page * old / new)</c>, since
+    /// a multi-row page starts at item <c>page * cols * rows</c>. A host keeps its place across a live re-fit with it (a five-row page of three
+    /// columns on page 2 starts at item 30; at four by four that item is on page 1). Pure; the caller clamps to its live page count.</summary>
+    public static int PageKeepingFirstItem(int page, int oldPerPage, int newPerPage)
+        => page <= 0 || oldPerPage <= 0 || newPerPage <= 0 || oldPerPage == newPerPage ? Math.Max(0, page) : page * oldPerPage / newPerPage;
 
     /// <summary>The MINIMUM columns per page at which a lead span of <paramref name="leadSpan"/> cells is honoured
     /// (E22) — the ONE place this rule lives, shared by <see cref="EffectiveLeadSpan"/> (the geometry) and a host's

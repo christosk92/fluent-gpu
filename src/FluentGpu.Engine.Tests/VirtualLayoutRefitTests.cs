@@ -1,3 +1,4 @@
+using FluentGpu.Foundation;
 using FluentGpu.Scene;
 using Xunit;
 
@@ -5,7 +6,7 @@ namespace FluentGpu.Engine.Tests;
 
 /// <summary>
 /// A mounted virtual layout re-fits in place when its host's band changes (a window-tier crossing): <see cref="FillRowVirtualLayout.SetFit"/>
-/// (PagedShelf's live card band) and <see cref="GridVirtualLayout.SetMinCellWidth"/> (a bound ItemsView's live cell floor). The same instance
+/// (PagedShelf's live card band), <see cref="FillRowVirtualLayout.SetRows"/> (its live rows) and <see cref="GridVirtualLayout.SetMinCellWidth"/> (a bound ItemsView's live cell floor). The same instance
 /// answers for the new band, so the viewport's extent source, its offset and its realized cells survive; the grid's re-fit lands through the
 /// anchored-reseed seam, so the layout pass keeps the anchor row where the user sees it.
 /// </summary>
@@ -33,6 +34,44 @@ public class VirtualLayoutRefitTests
         Assert.Equal(10, layout.MaxColumns);
         Assert.Equal(4, layout.LeadMinColumns);
     }
+
+    [Fact]
+    public void A_multi_row_fill_row_re_fits_to_a_new_row_count_in_place()
+    {
+        // A chart of three columns of five (Huge) takes four columns of four past a rung (Huge 4K): the same instance re-fits.
+        var layout = new FillRowVirtualLayout(minCardW: 264f, maxCardW: 9999f, gap: 8f, rows: 5, maxColumns: 3);
+        layout.SetViewport(Main, Cross);
+        Assert.Equal(new RectF(0f, 0f, layout.CardW, (Cross - 4 * 8f) / 5f), layout.ItemRect(0, Cross));
+        Assert.Equal(layout.CardW + 8f, layout.ItemRect(5, Cross).X, 3);   // item 5 tops column 1 at five rows
+        Assert.Equal(0f, layout.ItemRect(5, Cross).Y, 3);
+
+        Assert.True(layout.SetRows(4));
+        Assert.Equal(4, layout.Rows);
+        Assert.False(layout.SetRows(4));                                  // unchanged: nothing written
+        float rh = (Cross - 3 * 8f) / 4f;
+        var r5 = layout.ItemRect(5, Cross);                               // item 5: column 1, row 1 at four rows
+        Assert.Equal(layout.CardW + 8f, r5.X, 3);
+        Assert.Equal(rh + 8f, r5.Y, 3);
+        Assert.Equal(rh, r5.H, 3);
+        Assert.Equal(2 * layout.CardW + 8f, layout.ContentExtent(8, Cross), 3);   // eight items: two columns of four
+
+        Assert.False(layout.SetRows(1));                                  // one row is another shape: never a live re-fit
+        Assert.Equal(4, layout.Rows);
+        var single = new FillRowVirtualLayout(rows: 1);
+        Assert.False(single.SetRows(5));
+        Assert.Equal(1, single.Rows);
+    }
+
+    [Theory]
+    [InlineData(0, 15, 16, 0)]
+    [InlineData(1, 15, 16, 0)]    // page 1 starts at item 15, which a page of sixteen holds on page 0
+    [InlineData(2, 15, 16, 1)]    // item 30 -> page 1 (16..31)
+    [InlineData(3, 15, 16, 2)]    // item 45 -> page 2 (32..47)
+    [InlineData(1, 16, 15, 1)]    // back across the rung: item 16 -> page 1 (15..29)
+    [InlineData(2, 16, 15, 2)]    // item 32 -> page 2 (30..44)
+    [InlineData(2, 15, 15, 2)]    // the same page size keeps the page
+    public void A_multi_row_page_keeps_its_first_item_across_a_page_size_change(int page, int oldPerPage, int newPerPage, int expected)
+        => Assert.Equal(expected, FillRowVirtualLayout.PageKeepingFirstItem(page, oldPerPage, newPerPage));
 
     [Fact]
     public void A_responsive_grid_takes_a_new_cell_floor_on_the_layout_pass_and_keeps_its_anchor_row()

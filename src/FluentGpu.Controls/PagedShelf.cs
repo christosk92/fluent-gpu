@@ -197,9 +197,10 @@ public static class PagedShelf
     /// The immutable item snapshot and chrome are re-pushed to the retained shelf; metadata changes preserve its pager and rows.
     /// The card band (<paramref name="minCardW"/>, <paramref name="maxCardW"/>, <paramref name="gap"/>, <paramref name="fixedCardW"/>,
     /// <paramref name="maxColumns"/>, <paramref name="leadMinColumns"/>), the built-in <paramref name="pager"/> and <paramref name="cardHeight"/> are
-    /// LIVE too: a later render's values re-fit the mounted strip in place (a window-tier crossing keeps the shelf, its cards and its page);
-    /// <paramref name="rows"/>, <paramref name="measured"/>, <paramref name="snap"/>, <paramref name="lift"/> and <paramref name="controller"/> stay mount
-    /// configuration.</summary>
+    /// LIVE too: a later render's values re-fit the mounted strip in place (a window-tier crossing keeps the shelf, its cards and its page).
+    /// <paramref name="rows"/> is live BETWEEN TWO MULTI-ROW COUNTS of a virtualized shelf (a five-row chart that takes four past a rung
+    /// re-fits in place and keeps the page holding its first visible item); one row against several is the strip's shape and stays the
+    /// mount's, like <paramref name="measured"/>, <paramref name="snap"/>, <paramref name="lift"/> and <paramref name="controller"/>.</summary>
     public static Element Create<T>(
         IReadOnlyList<T> items,
         Func<T, int, float, Element> cardAt,
@@ -275,7 +276,7 @@ public static class PagedShelf
         ItemsSelectionMode selectionMode = ItemsSelectionMode.None,
         SelectionModel? selection = null)
         => Embed.Comp(new ShelfProps<T>(items, cardAt, title, header, customPager, keyOf, maxItems, onVisibleRange, leadSpan, onInvoke, leadCardAt,
-                          new ShelfFit(pager, minCardW, maxCardW, gap, fixedCardW, maxColumns, leadMinColumns), cardHeight),
+                          new ShelfFit(pager, minCardW, maxCardW, gap, fixedCardW, maxColumns, leadMinColumns, rows), cardHeight),
                       () => new PagedShelfCore<T>(cardHeight, pager,
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
                                                headerGap, edgeFade, prevGlyph, nextGlyph, parts, overscan, measured,
@@ -383,10 +384,13 @@ internal sealed record ShelfProps<T>(IReadOnlyList<T> Items, Func<T, int, float,
 }
 
 /// <summary>A shelf's LIVE card band and pager: the fit <see cref="FillRowVirtualLayout"/> lays the strip out at (min / max card, gap,
-/// fixed card width, column cap, the lead's minimum columns) and the built-in pager affordances. Re-pushed on every render through
-/// <see cref="ShelfProps{T}"/>; a change re-fits the mounted strip in place (<see cref="FillRowVirtualLayout.SetFit"/>), so its cards,
-/// its page and its selection survive a tier crossing. <see cref="IsSet"/> is false for a default (no spec pushed).</summary>
-internal readonly record struct ShelfFit(ShelfPager Pager, float MinCardW, float MaxCardW, float Gap, float FixedCardW, int MaxColumns, int LeadMinColumns)
+/// fixed card width, column cap, the lead's minimum columns, and the rows of a multi-row strip) and the built-in pager affordances.
+/// Re-pushed on every render through <see cref="ShelfProps{T}"/>; a change re-fits the mounted strip in place
+/// (<see cref="FillRowVirtualLayout.SetFit"/>, <see cref="FillRowVirtualLayout.SetRows"/>), so its cards, its page and its selection
+/// survive a tier crossing. <see cref="Rows"/> moves only between two multi-row counts (1 against more is the strip's mount shape).
+/// <see cref="IsSet"/> is false for a default (no spec pushed).</summary>
+internal readonly record struct ShelfFit(ShelfPager Pager, float MinCardW, float MaxCardW, float Gap, float FixedCardW, int MaxColumns, int LeadMinColumns,
+                                         int Rows = 1)
 {
     /// <summary>A spec was pushed (every <see cref="PagedShelf.Create{T}"/> pushes one; a default struct is none).</summary>
     public bool IsSet => MinCardW != 0f || MaxCardW != 0f;
@@ -576,19 +580,31 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
 
     /// <summary>Takes a pushed band onto the fields every fit read uses (normalized exactly as the constructor normalizes them). True
     /// when anything moved. The card height is replaced only between two non-null functions (null-ness decides the strip's gating,
-    /// a mount-time shape); a fresh closure that answers the same heights replaces the reference without a re-fit.</summary>
+    /// a mount-time shape); a fresh closure that answers the same heights replaces the reference without a re-fit. The rows move only
+    /// on a virtualized multi-row strip and only to another multi-row count (<see cref="LiveRowsFor"/>); when a multi-row strip's page
+    /// size changes, the page becomes the one holding the old page's first item (<see cref="FillRowVirtualLayout.PageKeepingFirstItem"/>).</summary>
     bool ApplyFit(in ShelfFit fit, Func<float, float>? cardHeight)
     {
         bool changed = false;
         if (fit.IsSet)
         {
             int maxColumns = Math.Max(0, fit.MaxColumns), leadMin = Math.Max(0, fit.LeadMinColumns);
+            int rows = LiveRowsFor(_rows, fit.Rows, _measured);
             if (fit.Pager != _pager || fit.MinCardW != _minCardW || fit.MaxCardW != _maxCardW || fit.Gap != _gap
-                || fit.FixedCardW != _fixedCardW || maxColumns != _maxColumns || leadMin != _leadMinColumns)
+                || fit.FixedCardW != _fixedCardW || maxColumns != _maxColumns || leadMin != _leadMinColumns || rows != _rows)
             {
+                // A multi-row page holds cols x rows items: read the old size before the band moves, so the page can keep its first item.
+                bool multiRow = !_measured && _rows > 1;
+                float w = _w.Peek();
+                int oldPerPage = multiRow ? PerPageItemsAt(w) : 0;
                 _pager = fit.Pager; _minCardW = fit.MinCardW; _maxCardW = fit.MaxCardW; _gap = fit.Gap;
-                _fixedCardW = fit.FixedCardW; _maxColumns = maxColumns; _leadMinColumns = leadMin;
+                _fixedCardW = fit.FixedCardW; _maxColumns = maxColumns; _leadMinColumns = leadMin; _rows = rows;
                 changed = true;
+                if (multiRow && w > 1f)
+                {
+                    int page = _page.Peek(), kept = FillRowVirtualLayout.PageKeepingFirstItem(page, oldPerPage, PerPageItemsAt(w));
+                    if (kept != page) _page.Value = kept;   // ApplyProps runs before this push's render; the clamp effect bounds it there
+                }
             }
         }
         if (cardHeight is not null && _cardHeight is { } mounted && !ReferenceEquals(cardHeight, mounted))
@@ -599,6 +615,16 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         }
         return changed;
     }
+
+    /// <summary>The rows a pushed count leaves a mounted strip at: <paramref name="pushed"/> only when both it and <paramref name="mounted"/>
+    /// are multi-row and the strip is virtualized (a measured strip is single-row whatever it was given, and one row against several is the
+    /// strip's shape, so the mount's count stays). Pure.</summary>
+    internal static int LiveRowsFor(int mounted, int pushed, bool measured)
+        => !measured && mounted > 1 && pushed > 1 ? pushed : mounted;
+
+    /// <summary>Items per page at width <paramref name="w"/> under the current band and rows (the render's own perPageItems).</summary>
+    int PerPageItemsAt(float w)
+        => Math.Max(1, FillRowVirtualLayout.Fit(w, _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns).PerPage * (_measured ? 1 : _rows));
 
     // Two card widths a pushed card-height function is compared at (any two distinct widths tell a re-built closure from a new shape).
     const float CardHeightProbeA = 120f, CardHeightProbeB = 200f;
@@ -791,7 +817,8 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     readonly bool _measured;
     ShelfPager _pager;                            // live (ApplyFit)
     float _minCardW, _maxCardW, _gap;             // live (ApplyFit)
-    readonly int _rows, _perPageOverride;
+    int _rows;                                    // live between two multi-row counts (ApplyFit, LiveRowsFor)
+    readonly int _perPageOverride;
     int _maxColumns;                              // live (ApplyFit)
     float _fixedCardW;                            // live (ApplyFit)
     readonly float _headerGap, _edgeFade;
@@ -869,6 +896,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     int _lastVirtualColumns;
     float _lastVirtualCardW = float.NaN;
     int _lastVirtualLeadSpan = 1;   // E7 — a live span change reseats the bring-into-view target (FirstItemOfPage shifts)
+    int _lastVirtualRows;            // a live rows change (ShelfFit.Rows) reseats it too: a page starts at page * cols * rows
     // E18 — true until the bring-into-view effect below has run once. A REBOUND controller (ShelfController.Bind
     // overwrote its cached delegates but this is a fresh PagedShelfCore instance — a remount) seeds _page from the
     // controller's retained PageState BEFORE this effect ever runs (see the ctor), so without this flag the first
@@ -1003,7 +1031,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             _appliedFitRev = fitRev;
             // Re-fit the hoisted layout in place and mark the strip's viewport in THIS reconcile (it runs before this frame's layout
             // pass), so a crossing frame lays the cards out at the new band in one move: the strip, its cards and its page survive.
-            if (_layout is { } refit && refit.SetFit(_minCardW, _maxCardW, _gap, _fixedCardW, _maxColumns, _leadMinColumns)
+            if (_layout is { } refit && (refit.SetFit(_minCardW, _maxCardW, _gap, _fixedCardW, _maxColumns, _leadMinColumns) | refit.SetRows(_rows))
                 && Context.Scene is { } fitScene && ShelfViewport is { IsNull: false } fitVp && fitScene.IsLive(fitVp) && fitScene.HasScroll(fitVp))
                 fitScene.Mark(fitVp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
         }
@@ -1235,12 +1263,13 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             // every page past 0, so resting on page 2 while the lead gains/loses its span must snap (never animate,
             // exactly like a resize refit) onto the new item boundary or the strip goes stale relative to the header.
             bool refit = perPageColumns != _lastVirtualColumns || MathF.Abs(cardW - _lastVirtualCardW) > 0.25f
-                       || leadSpan != _lastVirtualLeadSpan;
+                       || leadSpan != _lastVirtualLeadSpan || _rows != _lastVirtualRows;
             if (!firstRealize && !animate && !refit) return; // metadata remeasurement preserves a free-panned offset
             _lastVirtualNav = nav;
             _lastVirtualColumns = perPageColumns;
             _lastVirtualCardW = cardW;
             _lastVirtualLeadSpan = leadSpan;
+            _lastVirtualRows = _rows;
             int targetPage = _page.Peek();
             // Span-aware start index (FirstItemOfPage; identity page*perPageItems when leadSpan==1 — see VirtualLayout).
             // _layout is non-null here: it was built earlier in THIS render (Element body = … below runs before this
@@ -1248,7 +1277,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             int startIndex = (_measured || _rows == 1) && _layout is { } lay
                 ? lay.FirstItemOfPage(targetPage) : targetPage * perPageItems;
             _ctl.StartBringItemIntoView(startIndex, 0f, animate && !Motion.ReducedMotion);
-        }, DepKey.From(HashCode.Combine(nav, perPageColumns, cardW, needProbe, leadSpan)));
+        }, DepKey.From(HashCode.Combine(nav, perPageColumns, cardW, needProbe, leadSpan, _rows)));
 
         Element body = _measured
             ? MeasuredVirtualBody(perPageItems, cardW, fade, stripMounted)
