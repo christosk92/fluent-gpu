@@ -90,6 +90,11 @@ public sealed class ScrollHandle
     private WheelAccelState _accel;
     private RestoreLatch _restore;
 
+    /// <summary>Where an idle plan sat before the content shrank under it (a viewport that grew, rows that measured smaller): the clamp moves the resting
+    /// offset to the new end, but the place the reader left it is the earlier one, and a layout that returns to its old size should find it there. NaN: no
+    /// clamp is outstanding. Any move of the reader's or the app's clears it.</summary>
+    private double _clampedFrom = double.NaN;
+
     /// <summary>The unrequested-jump detector's memory for this viewport (<see cref="ScrollJumpRules"/>, folded by the host
     /// after each frame's UI pose — <c>AppHost.WatchScrollJumps</c>). Evidence only.</summary>
     internal ScrollJumpWatch JumpWatch;
@@ -202,8 +207,20 @@ public sealed class ScrollHandle
         Vp = ScrollViewportId.None;
     }
 
-    /// <summary>The last shown offset (survives <see cref="Unbind"/>) — what the host saves under a ScrollKey.</summary>
+    /// <summary>The last shown offset (survives <see cref="Unbind"/>).</summary>
     public double LastShown => IsBound ? OffsetNow : _lastShown;
+
+    /// <summary>What the host saves under a ScrollKey: the shown offset, or — when the content shrank under a resting plan and clamped it — the offset it was
+    /// clamped from, so a pane that is torn down while a transient layout (a crossing's cross-fade) holds it a few DIP short comes back where the reader left it
+    /// (a restore past the new content still waits for it to grow, as any restore does).</summary>
+    public double SavedOffset
+    {
+        get
+        {
+            double shown = LastShown;
+            return !double.IsNaN(_clampedFrom) && _clampedFrom > shown && shown >= MaxOffset - 0.5 ? _clampedFrom : shown;
+        }
+    }
 
     // ── extent / restore ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -251,7 +268,11 @@ public sealed class ScrollHandle
         {
             // An idle plan whose hold now sits past the new max (content shrank) re-holds at the clamp.
             double p = prev.Dest;
-            if (p > max || p < 0.0) next = PlanAuthor.Immediate(in next, _nowSec(), Math.Clamp(p, 0.0, max));
+            if (p > max || p < 0.0)
+            {
+                if (p > max && double.IsNaN(_clampedFrom)) _clampedFrom = p;   // the place before the clamp (cleared by any move of the reader's or the app's)
+                next = PlanAuthor.Immediate(in next, _nowSec(), Math.Clamp(p, 0.0, max));
+            }
         }
         if (next.Kind is not (MotionKind.Idle or MotionKind.Drag) && next.Count > 0 && next.Dest - max >= feel.SettleEpsilonDip)
         {
@@ -294,7 +315,7 @@ public sealed class ScrollHandle
             _lastShown = Math.Max(0.0, offset);
             return;
         }
-        _restore.Cancel();
+        _restore.Cancel(); _clampedFrom = double.NaN;
         double t = _nowSec();
         ScrollPlan prev = Plan;
         if (move == ScrollMove.Follow && IsUserDriven(in prev, t)) return;
@@ -351,7 +372,7 @@ public sealed class ScrollHandle
     public void Wheel(double tNotch, double notches)
     {
         if (_slots is null) return;
-        _restore.Cancel();
+        _restore.Cancel(); _clampedFrom = double.NaN;
         ScrollPlan prev = Plan;
         MotionFeel feel = ScrollTunables.Current;
         double floor = _shownFloorSec();
@@ -395,7 +416,7 @@ public sealed class ScrollHandle
     public void AutoScroll(double dipPerS)
     {
         if (_slots is null) return;
-        _restore.Cancel();
+        _restore.Cancel(); _clampedFrom = double.NaN;
         double t = _nowSec();
         ScrollPlan prev = Plan;
         if (dipPerS == 0.0 && prev.Kind != MotionKind.Programmatic) return;
@@ -438,7 +459,7 @@ public sealed class ScrollHandle
 
     private void BeginContact(double t, double pos, double clockShift, ContactClock clock)
     {
-        _restore.Cancel();
+        _restore.Cancel(); _clampedFrom = double.NaN;
         _contactOrigin = pos;
         _contactClockShift = clockShift;
         _contactClock = clock;
@@ -545,7 +566,7 @@ public sealed class ScrollHandle
     public void ContactCancel(double t)
     {
         if (_slots is null) return;
-        _restore.Cancel();
+        _restore.Cancel(); _clampedFrom = double.NaN;
         ScrollPlan prev = Plan;
         if (prev.Kind != MotionKind.Drag) return;
         t = PlaceContactTime(ref prev, t);
@@ -556,7 +577,7 @@ public sealed class ScrollHandle
     public void ThumbTo(double t, double pos)
     {
         if (_slots is null) return;
-        _restore.Cancel();
+        _restore.Cancel(); _clampedFrom = double.NaN;
         t = AnchorAt(t);
         ScrollPlan next = PlanAuthor.Thumb(Plan, t, pos);
         Publish(in next, t);
@@ -566,7 +587,7 @@ public sealed class ScrollHandle
     public void Key(double t, KeyMove move)
     {
         if (_slots is null) return;
-        _restore.Cancel();
+        _restore.Cancel(); _clampedFrom = double.NaN;
         t = AnchorAt(t);
         ScrollPlan next = PlanAuthor.Key(Plan, t, move, ScrollTunables.Current, _viewport);
         Publish(in next, t);
@@ -576,7 +597,7 @@ public sealed class ScrollHandle
     public void Stop(double t)
     {
         if (_slots is null) return;
-        _restore.Cancel();
+        _restore.Cancel(); _clampedFrom = double.NaN;
         ScrollPlan prev = Plan;
         if (prev.Kind == MotionKind.Idle) return;
         double p = Math.Clamp(DisplayedAt(t), prev.Min, prev.Max);
