@@ -58,15 +58,16 @@ public sealed partial class FlexLayout
     // every playlist mount. This content-keyed second level (the string, not its StringId: a released id re-interns
     // under a NEW id) answers those misses without the font system. A pure function of its key: the font system's
     // Measure reads only (text, style, maxWidth) and the body-font epoch. Consulted for a node's FIRST measure only (a
-    // mount, the case it exists for — a resize re-measure never inserts). Not used for a span run (its Measure publishes
-    // the run's link/decoration rects as a side effect) or an auto-fit size. Bounded: cleared past SharedMeasureCap.
+    // mount, the case it exists for — a resize re-measure never inserts). A span run takes its own content-keyed level (MeasureSpanRunShared: its Measure publishes
+    // the run's link/decoration rects as a side effect); an auto-fit size bypasses both. Bounded: cleared past SharedMeasureCap.
     private readonly record struct SharedMeasureKey(string Text, TextStyle Style, float MaxW, int Epoch);
     private readonly Dictionary<SharedMeasureKey, TextMetrics> _sharedMeasure = new(256);
     private const int SharedMeasureCap = 8192;
 
     private TextMetrics MeasureTextShared(StringId text, in TextStyle style, float maxW, int fontEpoch, bool fitted)
     {
-        string? s = fitted || style.SpanRunId != 0 ? null : _scene.Strings?.Resolve(text);
+        if (style.SpanRunId != 0) return fitted ? _fonts.Measure(text, style, maxW) : MeasureSpanRunShared(text, in style, maxW, fontEpoch);
+        string? s = fitted ? null : _scene.Strings?.Resolve(text);
         if (s is null) return _fonts.Measure(text, style, maxW);
         var key = new SharedMeasureKey(s, style, maxW, fontEpoch);
         if (_sharedMeasure.TryGetValue(key, out var hit)) { _dTextSharedHit++; return hit; }
@@ -75,6 +76,70 @@ public sealed partial class FlexLayout
         _sharedMeasure[key] = m;
         return m;
     }
+
+    // ── shared span-run measure (page-mount RCA #5, the span half) ─────────────────────────────────────────────────────
+    // A span run (a track row's credit line: "Artist A, Artist B" as links) mints a NEW run id on every mount, so neither
+    // the per-node cache nor an id-keyed one ever hits, and its measure is the dearest text work of a mount (~8.5 us: a
+    // multi-format DirectWrite layout plus the run's link/decoration rects). Keyed on its CONTENT instead: the text, the
+    // base style with the run id cleared, the spans (by value), the overflow suffix, the width and the font epoch. The
+    // measure's side effect - the run's SpanRunRects at that width - is captured with the metrics and re-published onto
+    // the new run on a hit (immutable, so runs with equal content share one).
+    private readonly struct SpanMeasureKey(string text, TextStyle style, SpanStyle[] spans, int suffix, float maxW, int epoch)
+    {
+        public readonly string Text = text;
+        public readonly TextStyle Style = style;
+        public readonly SpanStyle[] Spans = spans;
+        public readonly int Suffix = suffix;
+        public readonly float MaxW = maxW;
+        public readonly int Epoch = epoch;
+    }
+
+    private sealed class SpanMeasureKeyComparer : IEqualityComparer<SpanMeasureKey>
+    {
+        public static readonly SpanMeasureKeyComparer Instance = new();
+        public bool Equals(SpanMeasureKey a, SpanMeasureKey b)
+        {
+            if (a.MaxW != b.MaxW || a.Epoch != b.Epoch || a.Suffix != b.Suffix || a.Spans.Length != b.Spans.Length
+                || !string.Equals(a.Text, b.Text, StringComparison.Ordinal) || !a.Style.Equals(b.Style)) return false;
+            for (int i = 0; i < a.Spans.Length; i++) if (!a.Spans[i].Equals(b.Spans[i])) return false;
+            return true;
+        }
+        public int GetHashCode(SpanMeasureKey k)
+        {
+            var h = new HashCode();
+            h.Add(k.Text.GetHashCode()); h.Add(k.MaxW); h.Add(k.Suffix); h.Add(k.Spans.Length);
+            for (int i = 0; i < k.Spans.Length; i++) { h.Add(k.Spans[i].Start); h.Add(k.Spans[i].End); h.Add(k.Spans[i].Flags); }
+            return h.ToHashCode();
+        }
+    }
+
+    private readonly Dictionary<SpanMeasureKey, (TextMetrics Metrics, SpanRunRects? Rects)> _sharedSpanMeasure = new(64, SpanMeasureKeyComparer.Instance);
+
+    private TextMetrics MeasureSpanRunShared(StringId text, in TextStyle style, float maxW, int fontEpoch)
+    {
+        var run = SpanRunTable.Shared.Resolve(style.SpanRunId);
+        string? s = run is null ? null : _scene.Strings?.Resolve(text);
+        if (s is null) return _fonts.Measure(text, style, maxW);
+        var key = new SpanMeasureKey(s, style with { SpanRunId = 0 }, run!.Spans, run.OverflowSuffixStart, maxW, fontEpoch);
+        if (_sharedSpanMeasure.TryGetValue(key, out var hit))
+        {
+            _dTextSharedHit++;
+            if (hit.Rects is { } rects) run.PublishRects(rects);
+            return hit.Metrics;
+        }
+        var m = _fonts.Measure(text, style, maxW);
+        var published = run.Rects;
+        bool current = published is not null && published.MaxWidth == maxW;
+        if (!current)
+        {
+            // Nothing published at this width: cacheable only when the run has no decorated / link span to publish for.
+            foreach (var span in run.Spans) if (span.Flags != 0) return m;
+        }
+        if (_sharedSpanMeasure.Count >= SharedMeasureCap) _sharedSpanMeasure.Clear();
+        _sharedSpanMeasure[key] = (m, current ? published : null);
+        return m;
+    }
+
     public int DiagTextMiss => _dTextMiss;
     /// <summary>Measure calls served by the within-pass memo (no recompute). <see cref="DiagMeasure"/> counts REAL
     /// measures only, so measure+memoHit is the raw call count and memoHit/(measure+memoHit) is the redundancy rate.</summary>
