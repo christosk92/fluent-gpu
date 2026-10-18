@@ -1408,7 +1408,7 @@ internal sealed class SceneRecordingContext
         byte effectClass = sl.TranslationEffectClass(idx);
         SliceRecorder.PoseKind pose;
         if (isContent) pose = SliceRecorder.PoseKind.Content;
-        else if (effectClass == 1) pose = SliceRecorder.PoseKind.Effect;
+        else if (effectClass == 1 || p.CompositeLayer) pose = SliceRecorder.PoseKind.Effect;   // a composited transition layer: its translate is a pose
         else
         {
             if (effectClass == 2) sl.AddBaked(stats.CurSlot, node, p.LocalTransform);   // a scaled effect: inline, pose baked
@@ -1683,7 +1683,7 @@ internal sealed class SceneRecordingContext
         // ── flat opacity group (NodePaint.OpacityGroup, WinUI Composition LayerVisual semantics): the subtree renders at
         // FULL alpha into a pooled offscreen RT and composites ONCE at the group alpha. Skipped at alpha ≈ 1 (a no-op) and
         // ≈ 0 (invisible — still walked for hit/anim state). A self-blur group SUBSUMES it.
-        bool isOpacityGroup = !isEdgeFade && !isBlurGroup && p.OpacityGroup && opacity < 0.999f && opacity > 0.001f && overlapsClip;
+        bool isOpacityGroup = !isEdgeFade && !isBlurGroup && (p.OpacityGroup || p.CompositeLayer) && opacity < 0.999f && opacity > 0.001f && overlapsClip;
         if (isBlurGroup || (isEdgeFade && edgeFade.Mode != EdgeFadeMode.Fade)) stickyCut = false;
         // EdgeFadeSpec.WhileStuck: the fade exists only while the node's own sticky clip is engaged. On a composite sticky
         // cut the MARKER carries it (CompositeSliceFlags.FadeWhileStuck) and the composite plan decides per turn from the

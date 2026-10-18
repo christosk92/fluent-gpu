@@ -262,6 +262,14 @@ public struct NodePaint
     /// offscreen and composite ONCE at the group alpha, so overlapping children don't double-blend. Default false =
     /// plain multiplied opacity (WinUI Visual.Opacity's per-visual behavior, the engine default).</summary>
     public bool OpacityGroup;
+    /// <summary>A COMPOSITED transition layer (<see cref="FluentGpu.Hooks.KeepAliveOptions.CompositeTransitions"/>: a keep-alive
+    /// page root). The recorder cuts the node as a translation slice whose translate-only <see cref="LocalTransform"/> is a
+    /// composite parameter (recorded pose-free, placed at its current offset — the sticky/parallax route), and treats its
+    /// opacity as a GROUP (<see cref="OpacityGroup"/>), the group alpha riding the slice marker. A page's enter/exit fade
+    /// and slide then re-record nothing below the page root: its descendants' span inputs (world, opacity) no longer move
+    /// with the transition. Pixel note: group opacity is WinUI's Visual.Opacity semantics; during the fade it differs from
+    /// the multiplied (per-draw) opacity wherever the page's own draws overlap.</summary>
+    public bool CompositeLayer;
     public int ImageId;           // VisualKind.Image: handle into the ImageCache (Fill doubles as the placeholder tint).
                                   // VisualKind.IconLayer: DOUBLES as the IconGeometryTable.Shared PathId (Fill doubles as
                                   // the resolved, theme-live layer tint) — no new NodePaint field, so the 64B cache line holds.

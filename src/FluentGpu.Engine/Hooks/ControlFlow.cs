@@ -125,8 +125,13 @@ public sealed record KeepAliveOptions(
     bool ReleaseInactiveResources = true,
     Func<object, bool>? ShouldCache = null,
     Func<object, object, LayoutTransition?>? TransitionFor = null,
-    bool SuppressLayoutTransitionsOnActivation = false)
+    bool SuppressLayoutTransitionsOnActivation = false,
+    bool CompositeTransitions = false)
 {
+    // CompositeTransitions: every entry root is a composited transition layer (NodePaint.CompositeLayer) — its enter /
+    // exit translate and fade are composite parameters, so a transition re-records nothing below the page root. The fade
+    // composites as a group (WinUI Visual.Opacity semantics) instead of multiplying each draw's alpha. Off by default.
+
     public static KeepAliveOptions Default { get; } = new();
 
     /// <summary>The old token <see cref="TransitionFor"/> receives on a boundary's first activation (nothing was

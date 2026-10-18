@@ -1942,6 +1942,7 @@ public sealed partial class TreeReconciler
             var root = _scene.CreateNode(desired.ElementTypeId);
             _scene.AppendChild(node, root);
             _keepAliveRootKey[(int)root.Raw.Index] = key;   // before Mount: descendant scroll nodes resolve scope at mount
+            if (options.CompositeTransitions) _scene.Paint(root).CompositeLayer = true;
             Mount(root, desired);
             entry = new KeepAliveEntry
             {
@@ -1990,7 +1991,7 @@ public sealed partial class TreeReconciler
             }
             else
             {
-                ReplaceKeepAliveRoot(node, entry, desired);
+                ReplaceKeepAliveRoot(node, entry, desired, options);
             }
         }
 
@@ -2109,7 +2110,7 @@ public sealed partial class TreeReconciler
         if (!entry.Cacheable) FreeKeepAliveEntry(entry);
     }
 
-    private void ReplaceKeepAliveRoot(NodeHandle parent, KeepAliveEntry entry, Element desired)
+    private void ReplaceKeepAliveRoot(NodeHandle parent, KeepAliveEntry entry, Element desired, KeepAliveOptions options)
     {
         if (_scene.IsLive(entry.Root))
         {
@@ -2121,6 +2122,7 @@ public sealed partial class TreeReconciler
         var root = _scene.CreateNode(desired.ElementTypeId);
         _scene.AppendChild(parent, root);
         _keepAliveRootKey[(int)root.Raw.Index] = entry.Key;
+        if (options.CompositeTransitions) _scene.Paint(root).CompositeLayer = true;
         Mount(root, desired);
         entry.Root = root;
         entry.El = desired;
