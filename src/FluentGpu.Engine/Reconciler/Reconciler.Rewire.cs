@@ -30,10 +30,10 @@ public sealed partial class TreeReconciler
     /// <see cref="MarkLayoutShape"/> — because this runs INSIDE a render scope, unlike a signal fire.</summary>
     private void RewireBinds(NodeHandle node, Element next)
     {
-        if (!_nodeBindings.TryGetValue((int)node.Raw.Index, out var list)) return;
-        for (int i = 0; i < list.Count; i++)
+        if (!_nodeBindings.TryGetValue((int)node.Raw.Index, out var head)) return;
+        for (var c = head; c is not null; c = c.NextNodeBinding)
         {
-            if (list[i] is not BindEffect bind) continue;   // Show/For/skeleton boundary effects share the table
+            if (c is not BindEffect bind) continue;   // Show/For/skeleton boundary effects share the table
             int writes = NodeBindingWriteCount;
             if (bind.Rewire(next) && bind.WritesLayout && NodeBindingWriteCount != writes) _layoutShapeMutated = true;
         }
@@ -71,6 +71,28 @@ internal abstract class BindEffect : Computation
         return this;
     }
 
+    /// <summary>The closure-free form: the effect carries its <paramref name="node"/> and <paramref name="rec"/>, and
+    /// <paramref name="fire"/> is a STATIC lambda (compiler-cached) that calls the reconciler's channel method with this effect.
+    /// One object per binding instead of three (effect, closure, delegate) — page-mount RCA, allocations.</summary>
+    internal BindEffect Start(TreeReconciler rec, NodeHandle node, Action<BindEffect> fire)
+    {
+        Rec = rec;
+        Node = node;
+        _fire = fire;
+        RunStale();
+        Started = true;
+        return this;
+    }
+
+    private Action<BindEffect>? _fire;
+    /// <summary>The reconciler and node a closure-free binding fires into (<see cref="Start(TreeReconciler, NodeHandle, Action{BindEffect})"/>).</summary>
+    internal TreeReconciler? Rec;
+    internal NodeHandle Node;
+    /// <summary>A channel's own first-write latch (the bound Width/Height "primed" state the closures used to capture).</summary>
+    internal bool Primed;
+
+    private protected sealed override void RunSelfBody() => _fire!(this);
+
     /// <summary>The mount run is over: every later run re-writes a channel that already shows a value (E20: a colour channel
     /// re-fired inside the live theme fade cross-fades from it; the mount run has nothing on screen to fade from).</summary>
     internal bool Started { get; private set; }
@@ -80,7 +102,7 @@ internal abstract class BindEffect : Computation
     internal sealed override void RunStale()
     {
         FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.BindFire);
-        try { RunComputation(_body!); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+        try { if (_fire is null) RunComputation(_body!); else RunComputationSelf(); } finally { FluentGpu.Hosting.MountProf.Exit(); }
     }
 
     /// <summary>Re-point this binding at the same channel of <paramref name="next"/>. A still-bound channel adopts

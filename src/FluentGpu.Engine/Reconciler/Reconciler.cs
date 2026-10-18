@@ -317,7 +317,22 @@ public sealed partial class TreeReconciler
 
 
     // Per-node reactive bindings + control-flow effects, disposed when the node is unmounted.
-    private readonly Dictionary<int, List<Computation>> _nodeBindings = new();
+    // Per node: the HEAD of its binding chain (Computation.NextNodeBinding, in wiring order). A chain instead of a List per
+    // bound node: no list object and no backing array per node (page-mount RCA, allocations).
+    private readonly Dictionary<int, Computation> _nodeBindings = new();
+
+    /// <summary>Dispose and forget every binding of the node at <paramref name="idx"/>.</summary>
+    private void DisposeNodeBindings(int idx)
+    {
+        if (!_nodeBindings.Remove(idx, out var c)) return;
+        while (c is not null)
+        {
+            var next = c.NextNodeBinding;
+            c.NextNodeBinding = null;
+            c.Dispose();
+            c = next;
+        }
+    }
     private readonly Dictionary<int, Element?> _showState = new();             // last-mounted branch per ShowEl node
     private readonly Dictionary<int, ShowEl> _showEl = new();                  // latest ShowEl per boundary node (parent re-renders replace it — see UpdateShow)
     private readonly Dictionary<int, Effect> _showEffect = new();              // the Show boundary effect, rescheduled by UpdateShow
@@ -726,9 +741,9 @@ public sealed partial class TreeReconciler
         // tokens but are not component renders, so a component re-render alone leaves them on the old theme. Scheduling
         // is enqueue-only (no _nodeBindings mutation here); harmless for token-independent binds (they re-fire to the
         // same value, equality-gated). The host's transition window cross-fades the re-rendered diffs these produce.
-        foreach (var list in _nodeBindings.Values)
-            for (int i = 0; i < list.Count; i++)
-                list[i].Schedule();
+        foreach (var head in _nodeBindings.Values)
+            for (var c = head; c is not null; c = c.NextNodeBinding)
+                c.Schedule();
     }
 
     // ── Root ──────────────────────────────────────────────────────────────────────────────────────
@@ -1561,7 +1576,7 @@ public sealed partial class TreeReconciler
         // The anchor survives but its bound-Visible effect (node-owned, so the scope dispose above never reaches it) was
         // wired for the OLD embed: drop it as UnmountSubtree does. MountComponent's BindNode wires the new embed afresh;
         // a surviving old effect would keep driving the new component's presence and stack one more per swap.
-        if (_nodeBindings.Remove((int)node.Raw.Index, out var binds)) for (int i = 0; i < binds.Count; i++) binds[i].Dispose();
+        DisposeNodeBindings((int)node.Raw.Index);
         MountComponent(node, ce);
         // Remount (the shimmer↔real swap) — a whole child tree was torn down and rebuilt. Promote AFTER MountComponent:
         // the nested RunComponent it triggers restores the enclosing scope's saved value on exit, which would otherwise
@@ -2307,8 +2322,9 @@ public sealed partial class TreeReconciler
     private void AddBinding(NodeHandle node, Computation c)
     {
         int idx = (int)node.Raw.Index;
-        if (!_nodeBindings.TryGetValue(idx, out var list)) { list = new List<Computation>(2); _nodeBindings[idx] = list; }
-        list.Add(c);
+        if (!_nodeBindings.TryGetValue(idx, out var head)) { _nodeBindings[idx] = c; return; }
+        while (head.NextNodeBinding is not null) head = head.NextNodeBinding;   // wiring order (a node binds a handful)
+        head.NextNodeBinding = c;
     }
 
     // A bound Prop<T> is either a thunk or a signal-direct payload — the BindEffect body reads whichever the channel
@@ -2781,153 +2797,275 @@ public sealed partial class TreeReconciler
         // hundred that bind anything. Route an element that binds nothing past it (page-mount RCA, allocations).
         switch (el)
         {
-            case BoxEl box when !BindsAnyChannel(box): box.OnRealized?.Invoke(node); return;
-            case TextEl text when !text.Text.IsBound && !text.Color.IsBound: text.OnRealized?.Invoke(node); return;
+            case BoxEl box:
+                BindBoxCommon(node, box);
+                if (BindsRareChannel(box)) BindChannels(node, el);   // its box branch invokes OnRealized
+                else box.OnRealized?.Invoke(node);
+                return;
+            case TextEl text:
+                BindTextCommon(node, text);
+                text.OnRealized?.Invoke(node);
+                return;
         }
         BindChannels(node, el);
     }
 
+    /// <summary>The box channels nearly every bound box uses, wired WITHOUT a closure: each effect carries its node and this
+    /// reconciler and runs a static body that calls the channel's Fire* method (page-mount RCA, allocations: one effect object per
+    /// binding instead of the effect + a closure + a delegate). The rare channels stay in <see cref="BindChannels"/>.</summary>
+    private void BindBoxCommon(NodeHandle node, BoxEl b)
+    {
+        if (b.Transform.IsBound)
+        {
+            var fx = new BindEffect<Affine2D>(Runtime, b, static e => e is BoxEl x ? x.Transform : default);
+            // Value-gate: an unchanged matrix must NOT set TransformDirty — that bit alone defeats skip-submit
+            // (AppHost maybeUnchanged requires !transformWrote). Quantized EQ/seek land here often with equal values.
+            AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxTransform((BindEffect<Affine2D>)f)));
+        }
+        if (b.Opacity.IsBound)
+        {
+            var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.Opacity : default);
+            AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxOpacity((BindEffect<float>)f)));
+        }
+        if (b.HitTestVisible.IsBound)
+        {
+            // E15: a resolved false clears NodeFlags.HitTestVisible without a re-render — hit-testing reads the
+            // flag straight off the live scene, so the flip needs no PaintDirty/re-record/re-publish at all
+            // (gate.hit.bindable: FrameStats.Rendered stays false across the flip).
+            var fx = new BindEffect<bool>(Runtime, b, static e => e is BoxEl x ? x.HitTestVisible : default);
+            AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxHitTestVisible((BindEffect<bool>)f)));
+        }
+        if (b.Fill.IsBound)
+        {
+            var fx = new BindEffect<ColorF>(Runtime, b, static e => e is BoxEl x ? x.Fill : default);
+            AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxFill((BindEffect<ColorF>)f)));
+        }
+        if (b.HoverFill.IsBound)
+        {
+            // Equality-gated (P3, same shape as Fill above): a re-fire whose resolved color did not move must not
+            // mark PaintDirty, or NodeBindingWriteCount over-counts and an equal republish repaints for nothing.
+            var fx = new BindEffect<ColorF>(Runtime, b, static e => e is BoxEl x ? x.HoverFill : default);
+            AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxHoverFill((BindEffect<ColorF>)f)));
+        }
+        if (b.PressedFill.IsBound)
+        {
+            var fx = new BindEffect<ColorF>(Runtime, b, static e => e is BoxEl x ? x.PressedFill : default);
+            AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxPressedFill((BindEffect<ColorF>)f)));
+        }
+        if (b.BorderColor.IsBound)
+        {
+            var fx = new BindEffect<ColorF>(Runtime, b, static e => e is BoxEl x ? x.BorderColor : default);
+            AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxBorderColor((BindEffect<ColorF>)f)));
+        }
+        if (b.Corners.IsBound)
+        {
+            var fx = new BindEffect<CornerRadius4>(Runtime, b, static e => e is BoxEl x ? x.Corners : default);
+            AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxCorners((BindEffect<CornerRadius4>)f)));
+        }
+        if (b.Width.IsBound)
+        {
+            var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.Width : default) { WritesLayout = true };
+            AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxWidth((BindEffect<float>)f)));
+        }
+        if (b.Height.IsBound)
+        {
+            var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.Height : default) { WritesLayout = true };
+            AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxHeight((BindEffect<float>)f)));
+        }
+    }
+
+    private void BindTextCommon(NodeHandle node, TextEl t)
+    {
+        if (t.Text.IsBound)
+        {
+            var fx = new BindEffect<string>(Runtime, t, static e => e is TextEl x ? x.Text : default) { WritesLayout = true };
+            AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireTextText((BindEffect<string>)f)));
+        }
+        if (t.Color.IsBound)
+        {
+            var fx = new BindEffect<ColorF>(Runtime, t, static e => e is TextEl x ? x.Color : default);
+            AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireTextColor((BindEffect<ColorF>)f)));
+        }
+    }
+
+    private void FireBoxTransform(BindEffect<Affine2D> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        Affine2D next = fx.Read();                // read FIRST: the read is what keeps the effect subscribed
+        if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the translation this frame
+        ref NodePaint paint = ref _scene.Paint(node);
+        if (paint.LocalTransform == next) return;
+        paint.LocalTransform = next;
+        NodeBindingWriteCount++;
+        _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+    }
+
+    private void FireBoxOpacity(BindEffect<float> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        float next = fx.Read();
+        ref NodePaint paint = ref _scene.Paint(node);
+        if (paint.Opacity == next) return;
+        paint.Opacity = next;
+        NodeBindingWriteCount++;
+        _scene.Mark(node, NodeFlags.PaintDirty);
+    }
+
+    private void FireBoxHitTestVisible(BindEffect<bool> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        bool next = fx.Read();
+        bool cur = (_scene.Flags(node) & NodeFlags.HitTestVisible) != 0;
+        if (cur == next) return;
+        if (next) _scene.Mark(node, NodeFlags.HitTestVisible); else _scene.Unmark(node, NodeFlags.HitTestVisible);
+        NodeBindingWriteCount++;
+    }
+
+    private void FireBoxFill(BindEffect<ColorF> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        ColorF next = fx.Read();
+        ref NodePaint paint = ref _scene.Paint(node);
+        if (paint.Fill == next) return;
+        BoundColorFade(fx, node, BrushAnim.FillBit);   // E20: inside the live theme fade a bound colour cross-fades
+        paint.Fill = next;
+        NodeBindingWriteCount++;
+        _scene.Mark(node, NodeFlags.PaintDirty);
+    }
+
+    private void FireBoxHoverFill(BindEffect<ColorF> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        ColorF next = fx.Read();
+        ref NodePaint paint = ref _scene.Paint(node);
+        if (paint.HoverFill == next) return;
+        paint.HoverFill = next;
+        NodeBindingWriteCount++;
+        _scene.Mark(node, NodeFlags.PaintDirty);
+    }
+
+    private void FireBoxPressedFill(BindEffect<ColorF> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        ColorF next = fx.Read();
+        ref NodePaint paint = ref _scene.Paint(node);
+        if (paint.PressedFill == next) return;
+        paint.PressedFill = next;
+        NodeBindingWriteCount++;
+        _scene.Mark(node, NodeFlags.PaintDirty);
+    }
+
+    private void FireBoxBorderColor(BindEffect<ColorF> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        ColorF next = fx.Read();
+        ref NodePaint paint = ref _scene.Paint(node);
+        if (paint.BorderColor == next) return;
+        BoundColorFade(fx, node, BrushAnim.BorderBit);   // E20
+        paint.BorderColor = next;
+        NodeBindingWriteCount++;
+        _scene.Mark(node, NodeFlags.PaintDirty);
+    }
+
+    private void FireBoxCorners(BindEffect<CornerRadius4> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        var next = fx.Read();
+        ref NodePaint paint = ref _scene.Paint(node);
+        if (paint.Corners.Equals(next)) return;
+        paint.Corners = next;
+        NodeBindingWriteCount++;
+        _scene.Mark(node, NodeFlags.PaintDirty);
+    }
+
+    private void FireBoxWidth(BindEffect<float> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        float next = fx.Read();                   // read FIRST: the read is what keeps the effect subscribed
+        if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the size this frame
+        ref var li = ref _scene.Layout(node);
+        if (fx.Primed && li.Width.Equals(next)) return;
+        fx.Primed = true;
+        li.Width = next;
+        NodeBindingWriteCount++;
+        _scene.Mark(node, NodeFlags.LayoutDirty);
+        RemirrorAncestors(node);   // a component root's bound size: its anchor reserves the mirrored copy
+        MarkParentLayoutDirty(node);   // a resized boundary must not relayout only itself
+    }
+
+    private void FireBoxHeight(BindEffect<float> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        float next = fx.Read();                   // read FIRST: the read is what keeps the effect subscribed
+        if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the size this frame
+        ref var li = ref _scene.Layout(node);
+        if (fx.Primed && li.Height.Equals(next)) return;
+        fx.Primed = true;
+        li.Height = next;
+        NodeBindingWriteCount++;
+        _scene.Mark(node, NodeFlags.LayoutDirty);
+        RemirrorAncestors(node);
+        MarkParentLayoutDirty(node);   // a resized boundary must not relayout only itself
+    }
+
+    private void FireTextText(BindEffect<string> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        var next = _strings.Intern(fx.Read());
+        ref var paint = ref _scene.Paint(node);
+        if (paint.Text == next) return;
+        SetPaintText(ref paint, next);
+        NodeBindingWriteCount++;
+        _scene.Mark(node, NodeFlags.LayoutDirty);
+    }
+
+    private void FireTextColor(BindEffect<ColorF> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        ColorF next = fx.Read();
+        ref var paint = ref _scene.Paint(node);
+        if (paint.TextColor == next) return;
+        BoundColorFade(fx, node, BrushAnim.TextBit);   // E20
+        paint.TextColor = next;
+        NodeBindingWriteCount++;
+        _scene.Mark(node, NodeFlags.PaintDirty);
+    }
+
+
     /// <summary>Does <see cref="BindChannels"/> wire any channel of <paramref name="b"/>? Must name every channel its BoxEl
-    /// branch tests (a channel missing here would never bind).</summary>
-    private static bool BindsAnyChannel(BoxEl b)
-        => b.Transform.IsBound || b.Opacity.IsBound || b.HitTestVisible.IsBound || b.Fill.IsBound || b.HoverFill.IsBound
-           || b.PressedFill.IsBound || b.BorderColor.IsBound || b.Corners.IsBound || b.RadialGradientCenter.IsBound
-           || b.FeedbackTransform.IsBound || b.FeedbackDecay.IsBound || b.GradientMix.IsBound || b.Validation.IsBound
-           || b.Width.IsBound || b.Height.IsBound;
+    /// branch still tests (a channel missing here would never bind; the common ones are <see cref="BindBoxCommon"/>'s).</summary>
+    private static bool BindsRareChannel(BoxEl b)
+        => b.RadialGradientCenter.IsBound || b.FeedbackTransform.IsBound || b.FeedbackDecay.IsBound || b.GradientMix.IsBound
+           || b.Validation.IsBound;
 
     private void BindChannels(NodeHandle node, Element el)
     {
         if (el is BoxEl b)
         {
-            if (b.Transform.IsBound)
-            {
-                var fx = new BindEffect<Affine2D>(Runtime, b, static e => e is BoxEl x ? x.Transform : default);
-                // Value-gate: an unchanged matrix must NOT set TransformDirty — that bit alone defeats skip-submit
-                // (AppHost maybeUnchanged requires !transformWrote). Quantized EQ/seek land here often with equal values.
-                AddBinding(node, fx.Start(() =>
-                {
-                    NodeBindingFireCount++;
-                    if (!_scene.IsLive(node)) return;
-                    Affine2D next = fx.Read();                // read FIRST: the read is what keeps the effect subscribed
-                    if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the translation this frame
-                    ref NodePaint paint = ref _scene.Paint(node);
-                    if (paint.LocalTransform == next) return;
-                    paint.LocalTransform = next;
-                    NodeBindingWriteCount++;
-                    _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-                }));
-            }
-            if (b.Opacity.IsBound)
-            {
-                var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.Opacity : default);
-                AddBinding(node, fx.Start(() =>
-                {
-                    NodeBindingFireCount++;
-                    if (!_scene.IsLive(node)) return;
-                    float next = fx.Read();
-                    ref NodePaint paint = ref _scene.Paint(node);
-                    if (paint.Opacity == next) return;
-                    paint.Opacity = next;
-                    NodeBindingWriteCount++;
-                    _scene.Mark(node, NodeFlags.PaintDirty);
-                }));
-            }
-            if (b.HitTestVisible.IsBound)
-            {
-                // E15: a resolved false clears NodeFlags.HitTestVisible without a re-render — hit-testing reads the
-                // flag straight off the live scene, so the flip needs no PaintDirty/re-record/re-publish at all
-                // (gate.hit.bindable: FrameStats.Rendered stays false across the flip).
-                var fx = new BindEffect<bool>(Runtime, b, static e => e is BoxEl x ? x.HitTestVisible : default);
-                AddBinding(node, fx.Start(() =>
-                {
-                    NodeBindingFireCount++;
-                    if (!_scene.IsLive(node)) return;
-                    bool next = fx.Read();
-                    bool cur = (_scene.Flags(node) & NodeFlags.HitTestVisible) != 0;
-                    if (cur == next) return;
-                    if (next) _scene.Mark(node, NodeFlags.HitTestVisible); else _scene.Unmark(node, NodeFlags.HitTestVisible);
-                    NodeBindingWriteCount++;
-                }));
-            }
-            if (b.Fill.IsBound)
-            {
-                var fx = new BindEffect<ColorF>(Runtime, b, static e => e is BoxEl x ? x.Fill : default);
-                AddBinding(node, fx.Start(() =>
-                {
-                    NodeBindingFireCount++;
-                    if (!_scene.IsLive(node)) return;
-                    ColorF next = fx.Read();
-                    ref NodePaint paint = ref _scene.Paint(node);
-                    if (paint.Fill == next) return;
-                    BoundColorFade(fx, node, BrushAnim.FillBit);   // E20: inside the live theme fade a bound colour cross-fades
-                    paint.Fill = next;
-                    NodeBindingWriteCount++;
-                    _scene.Mark(node, NodeFlags.PaintDirty);
-                }));
-            }
-            if (b.HoverFill.IsBound)
-            {
-                // Equality-gated (P3, same shape as Fill above): a re-fire whose resolved color did not move must not
-                // mark PaintDirty, or NodeBindingWriteCount over-counts and an equal republish repaints for nothing.
-                var fx = new BindEffect<ColorF>(Runtime, b, static e => e is BoxEl x ? x.HoverFill : default);
-                AddBinding(node, fx.Start(() =>
-                {
-                    NodeBindingFireCount++;
-                    if (!_scene.IsLive(node)) return;
-                    ColorF next = fx.Read();
-                    ref NodePaint paint = ref _scene.Paint(node);
-                    if (paint.HoverFill == next) return;
-                    paint.HoverFill = next;
-                    NodeBindingWriteCount++;
-                    _scene.Mark(node, NodeFlags.PaintDirty);
-                }));
-            }
-            if (b.PressedFill.IsBound)
-            {
-                var fx = new BindEffect<ColorF>(Runtime, b, static e => e is BoxEl x ? x.PressedFill : default);
-                AddBinding(node, fx.Start(() =>
-                {
-                    NodeBindingFireCount++;
-                    if (!_scene.IsLive(node)) return;
-                    ColorF next = fx.Read();
-                    ref NodePaint paint = ref _scene.Paint(node);
-                    if (paint.PressedFill == next) return;
-                    paint.PressedFill = next;
-                    NodeBindingWriteCount++;
-                    _scene.Mark(node, NodeFlags.PaintDirty);
-                }));
-            }
-            if (b.BorderColor.IsBound)
-            {
-                var fx = new BindEffect<ColorF>(Runtime, b, static e => e is BoxEl x ? x.BorderColor : default);
-                AddBinding(node, fx.Start(() =>
-                {
-                    NodeBindingFireCount++;
-                    if (!_scene.IsLive(node)) return;
-                    ColorF next = fx.Read();
-                    ref NodePaint paint = ref _scene.Paint(node);
-                    if (paint.BorderColor == next) return;
-                    BoundColorFade(fx, node, BrushAnim.BorderBit);   // E20
-                    paint.BorderColor = next;
-                    NodeBindingWriteCount++;
-                    _scene.Mark(node, NodeFlags.PaintDirty);
-                }));
-            }
-            if (b.Corners.IsBound)
-            {
-                var fx = new BindEffect<CornerRadius4>(Runtime, b, static e => e is BoxEl x ? x.Corners : default);
-                AddBinding(node, fx.Start(() =>
-                {
-                    NodeBindingFireCount++;
-                    if (!_scene.IsLive(node)) return;
-                    var next = fx.Read();
-                    ref NodePaint paint = ref _scene.Paint(node);
-                    if (paint.Corners.Equals(next)) return;
-                    paint.Corners = next;
-                    NodeBindingWriteCount++;
-                    _scene.Mark(node, NodeFlags.PaintDirty);
-                }));
-            }
             if (b.RadialGradientCenter.IsBound)
             {
                 var fx = new BindEffect<Point2>(Runtime, b, static e => e is BoxEl x ? x.RadialGradientCenter : default);
@@ -3011,81 +3149,10 @@ public sealed partial class TreeReconciler
             // Equality-gate the mark exactly like the Text/Validation bindings above. float.Equals — not == — so NaN
             // (auto) compares equal to NaN and an auto→auto re-fire is a true no-op. The FIRST run always writes+marks
             // (`primed`), keeping mount behaviour byte-identical to the ungated version.
-            if (b.Width.IsBound)
-            {
-                var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.Width : default) { WritesLayout = true };
-                bool wPrimed = false;
-                AddBinding(node, fx.Start(() =>
-                {
-                    NodeBindingFireCount++;
-                    if (!_scene.IsLive(node)) return;
-                    float next = fx.Read();                   // read FIRST: the read is what keeps the effect subscribed
-                    if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the size this frame
-                    ref var li = ref _scene.Layout(node);
-                    if (wPrimed && li.Width.Equals(next)) return;
-                    wPrimed = true;
-                    li.Width = next;
-                    NodeBindingWriteCount++;
-                    _scene.Mark(node, NodeFlags.LayoutDirty);
-                    RemirrorAncestors(node);   // a component root's bound size: its anchor reserves the mirrored copy
-                    MarkParentLayoutDirty(node);   // a resized boundary must not relayout only itself
-                }));
-            }
-            if (b.Height.IsBound)
-            {
-                var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.Height : default) { WritesLayout = true };
-                bool hPrimed = false;
-                AddBinding(node, fx.Start(() =>
-                {
-                    NodeBindingFireCount++;
-                    if (!_scene.IsLive(node)) return;
-                    float next = fx.Read();                   // read FIRST: the read is what keeps the effect subscribed
-                    if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the size this frame
-                    ref var li = ref _scene.Layout(node);
-                    if (hPrimed && li.Height.Equals(next)) return;
-                    hPrimed = true;
-                    li.Height = next;
-                    NodeBindingWriteCount++;
-                    _scene.Mark(node, NodeFlags.LayoutDirty);
-                    RemirrorAncestors(node);
-                    MarkParentLayoutDirty(node);   // a resized boundary must not relayout only itself
-                }));
-            }
             b.OnRealized?.Invoke(node);
         }
         else if (el is TextEl t)
         {
-            if (t.Text.IsBound)
-            {
-                var fx = new BindEffect<string>(Runtime, t, static e => e is TextEl x ? x.Text : default) { WritesLayout = true };
-                AddBinding(node, fx.Start(() =>
-                {
-                    NodeBindingFireCount++;
-                    if (!_scene.IsLive(node)) return;
-                    var next = _strings.Intern(fx.Read());
-                    ref var paint = ref _scene.Paint(node);
-                    if (paint.Text == next) return;
-                    SetPaintText(ref paint, next);
-                    NodeBindingWriteCount++;
-                    _scene.Mark(node, NodeFlags.LayoutDirty);
-                }));
-            }
-            if (t.Color.IsBound)
-            {
-                var fx = new BindEffect<ColorF>(Runtime, t, static e => e is TextEl x ? x.Color : default);
-                AddBinding(node, fx.Start(() =>
-                {
-                    NodeBindingFireCount++;
-                    if (!_scene.IsLive(node)) return;
-                    ColorF next = fx.Read();
-                    ref var paint = ref _scene.Paint(node);
-                    if (paint.TextColor == next) return;
-                    BoundColorFade(fx, node, BrushAnim.TextBit);   // E20
-                    paint.TextColor = next;
-                    NodeBindingWriteCount++;
-                    _scene.Mark(node, NodeFlags.PaintDirty);
-                }));
-            }
             t.OnRealized?.Invoke(node);
         }
         else if (el is SpanTextEl st)
@@ -4760,7 +4827,7 @@ public sealed partial class TreeReconciler
             if (_imageSwaps.Remove(idx, out var swap)) UnpinImageNode(node, swap.OutgoingId);
             _keepWhileHiddenNodes.Remove(idx);   // the slot may be reused by a node that never asked to be kept
         }
-        if (_nodeBindings.Remove(idx, out var binds)) for (int i = 0; i < binds.Count; i++) binds[i].Dispose();
+        DisposeNodeBindings(idx);
         _providerSig.Remove(idx);
         _mirroredChild.Remove(idx);
         _showState.Remove(idx);

@@ -150,7 +150,7 @@ public sealed partial class TreeReconciler
         }
         int idx = (int)node.Raw.Index;
         if (_nodeBindings.TryGetValue(idx, out var binds))
-            for (int i = 0; i < binds.Count; i++) binds[i].Schedule();
+            for (var c = binds; c is not null; c = c.NextNodeBinding) c.Schedule();
         if (_keepAliveState.TryGetValue(idx, out var kas))
             foreach (var ka in kas.Entries.Values)
                 if (!ka.Attached) RenderPersistedOnce(ka.Root);

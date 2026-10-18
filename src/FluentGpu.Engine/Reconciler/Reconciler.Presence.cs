@@ -45,30 +45,33 @@ public sealed partial class TreeReconciler
             BindContract.MorphVisibleBind(el.GetType().Name);
 
         var fx = new BindEffect<bool>(Runtime, el, static e => e.Visible);
-        AddBinding(node, fx.Start(() =>
+        AddBinding(node, fx.Start(this, node, static f => f.Rec!.FirePresence((BindEffect<bool>)f)));
+    }
+
+    private void FirePresence(BindEffect<bool> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        bool next = fx.Read();
+        bool wasCollapsed = _scene.IsCollapsed(node);
+        bool nowCollapsed = !next;
+        if (wasCollapsed == nowCollapsed) return;
+        NodeBindingWriteCount++;
+        _scene.SetCollapsed(node, nowCollapsed);
+        SetSubtreeHidden(node, nowCollapsed);
+        RemirrorAncestors(node);   // a component's root (or a bound anchor): the boundary above leaves/rejoins flow too
+        // false→true edge: treat like a mount — seed the node's declared Enter (the true→false edge just snaps,
+        // matching a static collapse; there is no exit-animation hook here because a collapsed node is already
+        // out of layout/paint the instant this effect runs, so there is nothing left to animate OUT of). The
+        // declared Enter is read off fx.El — the element this node was LAST reconciled against, not the mount one.
+        if (wasCollapsed && !nowCollapsed && SuppressBoundTransitions == 0 && Anim is { } anim && !Motion.ReducedMotion && !anim.Snapping
+            && SynthesizeDeclarative(node, fx.El) is { } dt && dt.Enter.Active)
         {
-            NodeBindingFireCount++;
-            if (!_scene.IsLive(node)) return;
-            bool next = fx.Read();
-            bool wasCollapsed = _scene.IsCollapsed(node);
-            bool nowCollapsed = !next;
-            if (wasCollapsed == nowCollapsed) return;
-            NodeBindingWriteCount++;
-            _scene.SetCollapsed(node, nowCollapsed);
-            SetSubtreeHidden(node, nowCollapsed);
-            RemirrorAncestors(node);   // a component's root (or a bound anchor): the boundary above leaves/rejoins flow too
-            // false→true edge: treat like a mount — seed the node's declared Enter (the true→false edge just snaps,
-            // matching a static collapse; there is no exit-animation hook here because a collapsed node is already
-            // out of layout/paint the instant this effect runs, so there is nothing left to animate OUT of). The
-            // declared Enter is read off fx.El — the element this node was LAST reconciled against, not the mount one.
-            if (wasCollapsed && !nowCollapsed && SuppressBoundTransitions == 0 && Anim is { } anim && !Motion.ReducedMotion && !anim.Snapping
-                && SynthesizeDeclarative(node, fx.El) is { } dt && dt.Enter.Active)
-            {
-                anim.SeedEnterOver(node, dt.Enter, dt, EnterRestOf(fx.El));
-                if (dt.Size == SizeMode.Reflow) anim.PendingEnterReflow.Add(node);
-                else if (dt.Size == SizeMode.FlowReveal) anim.PendingEnterReveal.Add(node);
-            }
-        }));
+            anim.SeedEnterOver(node, dt.Enter, dt, EnterRestOf(fx.El));
+            if (dt.Size == SizeMode.Reflow) anim.PendingEnterReflow.Add(node);
+            else if (dt.Size == SizeMode.FlowReveal) anim.PendingEnterReveal.Add(node);
+        }
     }
 
     /// <summary>Walk NODE and every live descendant's mounted <c>CompEntry</c>, setting <c>Hidden</c> and refreshing

@@ -245,6 +245,26 @@ public abstract class Computation : IDisposable
         return true;   // Dirty
     }
 
+    /// <summary><see cref="RunComputation"/> without a delegate: tracks and runs <see cref="RunSelfBody"/> (a subclass that
+    /// carries its own state, so it needs no closure per instance).</summary>
+    internal void RunComputationSelf()
+    {
+        if (Disposed) return;
+        DisposeChildrenAndCleanups();
+        UnlinkSources();
+
+        var prevC = Tracking.Current;
+        Tracking.Current = this;
+        try { RunSelfBody(); }
+        finally { Tracking.Current = prevC; State = Clean; }
+    }
+
+    /// <summary>The body <see cref="RunComputationSelf"/> runs.</summary>
+    private protected virtual void RunSelfBody() { }
+
+    /// <summary>The next binding of the same scene node (the reconciler's per-node binding chain; null = last).</summary>
+    internal Computation? NextNodeBinding;
+
     /// <summary>Re-run the body (clearing nested owned computations + cleanups + old source links first).</summary>
     internal void RunComputation(Action body)
     {
