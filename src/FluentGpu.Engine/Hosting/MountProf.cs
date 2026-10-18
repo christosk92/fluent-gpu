@@ -12,6 +12,8 @@ namespace FluentGpu.Hosting;
 /// allocation. A bucket is entered/exited around a code region; time is attributed to the INNERMOST open bucket, so
 /// the numbers add up to the frame (no double counting through recursion). Cost when off: one static bool read.
 /// </summary>
+// Allocation-free when off: every buffer below is sized/created only under On (the VerticalSlice alloc-zero gates
+// touch this type inside their measured window; a 16 KB stack array there failed them).
 public static class MountProf
 {
     public static readonly bool On = Environment.GetEnvironmentVariable("FGPU_PROF") is { Length: > 0 };
@@ -21,12 +23,12 @@ public static class MountProf
     public const int Frame = 0, Flush = 1, Render = 2, CompSetup = 3, MountSelf = 4, WriteCols = 5, Bind = 6, SceneOps = 7,
         Layout = 8, Measure = 9, TextMeasure = 10, Arrange = 11, Record = 12, Unmount = 13, BindFire = 14, Reconcile = 15,
         RealizeVirtual = 16, Effects = 17, Presence = 18, RecordDirty = 19, Capture = 20, ImagePump = 21, PreRecord = 22, PostRecord = 23, Anim = 24, Count = 25;
-    static readonly string[] s_names = ["frame", "flush", "render", "compSetup", "mount", "writeCols", "bind", "sceneOps",
+    static readonly string[] s_names = !On ? [] : ["frame", "flush", "render", "compSetup", "mount", "writeCols", "bind", "sceneOps",
         "layout", "measure", "textMeasure", "arrange", "record", "unmount", "bindFire", "reconcile", "realizeV", "effects", "presence", "recordDirty", "capture", "imagePump", "preRecord", "postRecord", "anim"];
 
-    static readonly long[] s_ticks = new long[Count];
-    static readonly int[] s_calls = new int[Count];
-    static readonly int[] s_stack = new int[4096];
+    static readonly long[] s_ticks = On ? new long[Count] : [];
+    static readonly int[] s_calls = On ? new int[Count] : [];
+    static readonly int[] s_stack = On ? new int[4096] : [];
     static int s_sp;
     static long s_last;
     static long s_frameStart, s_alloc0;
@@ -36,11 +38,11 @@ public static class MountProf
     public static int RootSolves, SubtreeSolves, SizeStableProbes;
     public static long RecordDirtyCalls, RecordDirtyIters;
     public static int MeasRoot, MeasSub, MeasProbe;
-    static readonly StringBuilder s_sb = new(512);
-    static readonly Dictionary<int, int> s_measPerNode = new();
-    static readonly HashSet<(int, float)> s_measPairs = new();
+    static readonly StringBuilder s_sb = On ? new(512) : null!;
+    static readonly Dictionary<int, int> s_measPerNode = On ? new() : null!;
+    static readonly HashSet<(int, float)> s_measPairs = On ? new() : null!;
     static int s_measDirty;
-    public static readonly StringBuilder Events = new();
+    public static readonly StringBuilder Events = On ? new() : null!;   // null when off: read only under On
     public static void NoteMeasure(int node, float availW, bool dirty)
     {
         s_measPerNode[node] = s_measPerNode.GetValueOrDefault(node) + 1;

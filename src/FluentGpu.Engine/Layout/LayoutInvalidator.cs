@@ -15,7 +15,7 @@ public sealed class LayoutInvalidator
     private readonly SceneStore _scene;
     private readonly FlexLayout _layout;
     private readonly List<NodeHandle> _roots = new();
-    private readonly HashSet<uint> _rootSet = new();   // PruneNestedRoots' ancestor lookup (live roots: an index names one node)
+    private readonly HashSet<uint> _rootSet = new(64);   // PruneNestedRoots' ancestor lookup (live roots: an index names one node)
     private readonly List<NodeHandle> _escaped = new();   // this frame's boundary-less marks, pending the size-stable probe
 
     /// <summary>Relayout escapes counted since the last <see cref="BeginFrame"/> — surfaced as
