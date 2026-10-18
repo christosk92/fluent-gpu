@@ -7749,6 +7749,8 @@ public sealed partial class AppHost : IDisposable
         //    lets opacity/etc. animate — behaviour left exactly as before.
         bool suppressed = Motion.LayoutTransitionsSuppressed || keepAliveSuppressed || _snapDepth > 0;   // SnapScope: every FLIP lands on the laid-out bounds
         bool reduced = Motion.ReducedMotion;
+        // Suppressed by the user scroll alone: only the transitions that opt in (AnimateDuringScroll) still start.
+        bool scrollOnly = suppressed && Motion.LayoutTransitionsSuppressedByScrollOnly && !keepAliveSuppressed && _snapDepth == 0;
 
         // Discover changed containers that explicitly own the visual projection for their subtree. A shell/card width
         // commit commonly changes dozens of descendant card/shelf bounds; allowing every descendant's authored
@@ -7810,7 +7812,8 @@ public sealed partial class AppHost : IDisposable
             if (s_motionDiag) { fLog = kv.Value.Rel; tLog = _scene.IsLive(n) ? RelRect(n) : default; }
             if (n == _dispatcher.Drag.ActiveNode) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "drag-skip", fLog, tLog); continue; }   // E5: the pointer owns the dragged node's transform
             if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "dead-node", fLog, tLog); continue; }
-            if (suppressed) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "suppressed-snap", fLog, tLog); _anim.SnapStructuralToLayout(n); continue; }   // skip-start + cancel-in-flight → snap to laid-out bounds
+            if (suppressed && !(scrollOnly && _anim.TryGetTransition(n, out var scrollSpec) && scrollSpec.AnimateDuringScroll))
+            { if (s_motionDiag) LogMotionNode(n.Raw.Index, "suppressed-snap", fLog, tLog); _anim.SnapStructuralToLayout(n); continue; }   // skip-start + cancel-in-flight → snap to laid-out bounds
             if (IsBelowProjectionSuppressionRoot(n))
             {
                 if (s_motionDiag) LogMotionNode(n.Raw.Index, "below-root-snap", fLog, tLog);

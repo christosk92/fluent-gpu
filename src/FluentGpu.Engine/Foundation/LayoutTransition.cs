@@ -118,7 +118,10 @@ public readonly record struct LayoutTransition(
     bool SuppressDescendantTransitions = false,
     // Optional EXIT-only delay. Null preserves the historical behavior (exit reuses DelayMs); setting 0 lets a delayed
     // entrance dismiss immediately — the TransitionHelper-style asymmetric show/hide timing used by shy overlays.
-    float? ExitDelayMs = null)
+    float? ExitDelayMs = null,
+    // This transition keeps animating while a user scroll is moving content. The scroll-motion latch snaps every FLIP so cards never fly
+    // through a scrolling viewport; a surface that the scroll itself CAUSES to change (a band folding as the page scrolls down) opts out.
+    bool AnimateDuringScroll = false)
 {
     /// <summary>Translate-only reflow (the default for reordered / moved items). Springs.</summary>
     public static LayoutTransition Slide => new(TransitionChannels.Position, TransitionDynamics.Default);
