@@ -26,6 +26,8 @@ public readonly record struct MenuFlyoutItem(string Label, IconRef Icon = defaul
 {
     public MenuItemKind Kind { get; init; }
     public bool IsChecked { get; init; }
+    /// <summary>The label is CONTENT (a playlist's or a device's name), not a command word: a style's <see cref="MenuFlyout.Style.LabelCase"/> leaves it as written.</summary>
+    public bool Literal { get; init; }
     /// <summary>Trailing right-aligned keyboard-accelerator text (WinUI KeyboardAcceleratorTextOverride), e.g. "Ctrl+S".</summary>
     public string? AcceleratorText { get; init; }
     /// <summary>Nested items (Kind == <see cref="MenuItemKind.SubMenu"/> only) — the cascading sub-menu's rows.</summary>
@@ -135,6 +137,10 @@ public static class MenuFlyout
         public Edges4 SeparatorMargin { get; init; } = new(-4, 0, -4, 0);
         /// <summary>The separator row's padding around the line (1 above, 1 below).</summary>
         public Edges4 SeparatorPadding { get; init; } = new(0, 1, 0, 1);
+        /// <summary>Whether a row's icon is drawn (and its 28 column reserved). False: the menu is words only. Default true.</summary>
+        public bool ShowIcons { get; init; } = true;
+        /// <summary>The case transform of a row's label, applied at shaping (the stored label is never rewritten). Default <see cref="TextCase.AsWritten"/>.</summary>
+        public TextCase LabelCase { get; init; } = TextCase.AsWritten;
     }
 
     /// <summary>The menu style now: the active theme's (<see cref="ControlStyles.MenuFlyoutStyle"/>), else <see cref="FluentStyle"/>.</summary>
@@ -212,7 +218,7 @@ public static class MenuFlyout
         }
 
         // Column 2: the label (TextBlock, "*" column → grows).
-        children.Add(new TextEl(it.Label) { Size = st.LabelSize, Color = fg, Grow = 1f });
+        children.Add(new TextEl(it.Label) { Size = st.LabelSize, Color = fg, Grow = 1f, Case = it.Literal ? TextCase.AsWritten : st.LabelCase });
 
         // Column 3: optional keyboard-accelerator hint, right-aligned (HorizontalAlignment=Right),
         // CaptionTextBlock (12px), MenuFlyoutItemKeyboardAcceleratorTextForeground = TextSecondary / Disabled.
@@ -354,7 +360,7 @@ internal sealed class MenuFlyoutPresenter : Component
             var it = Items[i];
             if (it.IsSeparator) continue;
             if (it.Kind is MenuItemKind.Toggle or MenuItemKind.Radio) checkColumn = true;
-            if (it.Icon.HasContent) iconColumn = true;
+            if (it.Icon.HasContent && st.ShowIcons) iconColumn = true;
         }
 
         bool IsSelectable(int i) => i >= 0 && i < Items.Count && !Items[i].IsSeparator && Items[i].Enabled;

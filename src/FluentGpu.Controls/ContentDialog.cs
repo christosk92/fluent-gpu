@@ -45,6 +45,8 @@ public sealed class ContentDialog : Component
 
     public string TriggerLabel = "Show dialog";
     public string Title = "Title";
+    /// <summary>The title carries CONTENT (a name): the style's <see cref="Style.TitleCase"/> leaves it as written.</summary>
+    public bool TitleLiteral;
     public string Message = "";
     // null = the localized default label (Strings.Dialog.Ok, neutral "OK") resolved at render — so it translates and
     // re-resolves on a culture change. Set to a non-null string to override; set to "" to hide the primary button.
@@ -162,6 +164,8 @@ public sealed class ContentDialog : Component
         public int TitleWeight { get; init; } = 600;
         public ColorF TitleColor { get; init; } = Tok.TextPrimary;
         public float TitleGap { get; init; } = ContentGap;
+        /// <summary>The case transform of the title, applied at shaping (the stored title is never rewritten). Default <see cref="TextCase.AsWritten"/>; a dialog whose title carries a name sets <see cref="TitleLiteral"/>.</summary>
+        public TextCase TitleCase { get; init; } = TextCase.AsWritten;
         /// <summary>The message text (14, TextFillColorPrimary).</summary>
         public float MessageSize { get; init; } = ContentSize;
         public ColorF MessageColor { get; init; } = Tok.TextPrimary;
@@ -184,6 +188,8 @@ public sealed class ContentDialog : Component
         /// <summary>Draws one command; null = the built-in Button (accent for the default command), sized by <see cref="CommandSize"/>
         /// and <see cref="CommandMinWidth"/>.</summary>
         public Func<ContentDialogCommandArgs, BoxEl>? CommandButton { get; init; }
+        /// <summary>The case transform of a command's label (the verbs are command words, never names). Default <see cref="TextCase.AsWritten"/>.</summary>
+        public TextCase CommandCase { get; init; } = TextCase.AsWritten;
     }
 
     static readonly ContentDialogCommand[] s_winUiOrder = [ContentDialogCommand.Primary, ContentDialogCommand.Secondary, ContentDialogCommand.Close];
@@ -344,6 +350,7 @@ public sealed class ContentDialog : Component
         float commandMinW = MathF.Max(0f, CommandMinWidth);
         BoxEl CommandButton(ContentDialogCommand command, string text, bool accent, bool enabled, Action onClick)
         {
+            text = FluentGpu.Text.TextCaseMap.Apply(text, st.CommandCase);
             // A theme's command presenter draws the command; the dialog keeps the focus ranking and the row's star columns.
             if (st.CommandButton is { } present)
             {
@@ -440,6 +447,7 @@ public sealed class ContentDialog : Component
                     Size = st.TitleSize,
                     Weight = (ushort)st.TitleWeight,      // FontWeight="SemiBold" on the Title presenter (ContentDialog_themeresources.xaml:238)
                     Color = st.TitleColor,
+                    Case = TitleLiteral ? TextCase.AsWritten : st.TitleCase,
                     Wrap = TextWrap.Wrap,
                     MaxLines = 2,
                     Trim = TextTrim.WordEllipsis,
