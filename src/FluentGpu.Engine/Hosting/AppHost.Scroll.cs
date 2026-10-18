@@ -235,7 +235,7 @@ public sealed partial class AppHost
     {
         var handle = TryGetScrollHandle(node);
         if (handle is null) return;
-        if (oldKey is not null) _scrollMemory.Save(oldKey, handle.LastShown);
+        if (oldKey is not null) _scrollMemory.Save(oldKey, handle.SavedOffset);
         if (newKey is not null && _scrollMemory.TryGet(newKey, out double saved)) handle.Restore(saved);
         else if (oldKey is not null) handle.ScrollTo(0.0, ScrollMove.Immediate);   // fresh content → top
     }
@@ -244,7 +244,7 @@ public sealed partial class AppHost
     {
         if (!_scene.TryGetScroll(node, out var sc) || sc.ScrollKey is null) return;
         var handle = TryGetScrollHandle(node);
-        if (handle is not null) _scrollMemory.Save(sc.ScrollKey, handle.LastShown);
+        if (handle is not null) _scrollMemory.Save(sc.ScrollKey, handle.SavedOffset);
     }
 
     // ── the UI frame step (phase 2.5) ───────────────────────────────────────────────────────────────────────────
