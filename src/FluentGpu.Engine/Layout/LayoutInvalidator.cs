@@ -145,7 +145,10 @@ public sealed class LayoutInvalidator
             {
                 var n = _escaped[i];
                 if (!_scene.IsLive(n)) continue;
-                if (_layout.TryResolveSizeStable(n)) LocalResolvesThisFrame++;
+                int mp0 = _layout.DiagMeasure;
+                bool stable = _layout.TryResolveSizeStable(n);
+                FluentGpu.Hosting.MountProf.MeasProbe += _layout.DiagMeasure - mp0;
+                if (stable) LocalResolvesThisFrame++;
                 else rootScheduled = true;
             }
             if (rootScheduled && !_roots.Contains(_scene.Root)) _roots.Add(_scene.Root);
@@ -154,12 +157,15 @@ public sealed class LayoutInvalidator
 
         // Running an ancestor root and a descendant root is harmless (layout is idempotent); we keep it simple and
         // just dedupe exact roots. The root case re-solves against the window; others reflow against their own bounds.
+        if (FluentGpu.Hosting.MountProf.On) FluentGpu.Hosting.MountProf.Events.Append(" [rd dirty=").Append(dirty.Count).Append(" roots=").Append(_roots.Count).Append(" hasRoot=").Append(_roots.Contains(_scene.Root) ? 1 : 0).Append(']');
         for (int i = 0; i < _roots.Count; i++)
         {
             var r = _roots[i];
             if (!_scene.IsLive(r)) continue;
-            if (r == _scene.Root) _layout.Run(r, window);
-            else _layout.RunSubtree(r);
+            int m0 = _layout.DiagMeasure;
+            if (r == _scene.Root) { _layout.Run(r, window); FluentGpu.Hosting.MountProf.MeasRoot += _layout.DiagMeasure - m0; }
+            else { _layout.RunSubtree(r); FluentGpu.Hosting.MountProf.MeasSub += _layout.DiagMeasure - m0; }
+            if (FluentGpu.Hosting.MountProf.On) FluentGpu.Hosting.MountProf.Events.Append(r == _scene.Root ? "R" : "s").Append(_layout.DiagMeasure - m0).Append(',');
         }
     }
 }

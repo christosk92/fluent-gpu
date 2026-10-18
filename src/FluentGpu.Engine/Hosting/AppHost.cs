@@ -6185,6 +6185,7 @@ public sealed partial class AppHost : IDisposable
             DeliverPendingPlatformEvents(includeSystemColors: true);
 
             long frameStart = Stopwatch.GetTimestamp();
+            MountProf.FrameBegin();
             GapPaintStart(frameStart);                         // close + classify the UI gap since the last Paint (AppHost.UiGap.cs)
             long shapeCountAtFrameStart = _fonts.ShapeCount;   // P0: FrameStats.TextShapes reads the delta across this Paint
             _reconciler.BeginRenderCensus();
@@ -6468,10 +6469,14 @@ public sealed partial class AppHost : IDisposable
                 _anim.DrainSettledCallbacks();                                  // 3− reveal settle callbacks the last frame queued (an Expander unmounting its
                                                                                 // panel, a band's collapse commit) — app code, so never inside phases 6–13
                 long tRx0 = Stopwatch.GetTimestamp();
+                MountProf.Enter(MountProf.Flush);
                 FlushToQuiescence();                                            // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings — the whole committed write
                 long tRx1 = Stopwatch.GetTimestamp();
+                MountProf.Exit();
                 SyncScrollPlansMidFrame();                                      // plans the reconcile just authored (ScrollKey → 0, controller posts) window THIS frame
-                virtualsChanged = _reconciler.ReRealizeVirtuals();   // virtual boundary re-realize (granular): EVERY covered row, this frame
+                MountProf.Enter(MountProf.RealizeVirtual);
+                virtualsChanged = _reconciler.ReRealizeVirtuals();
+                MountProf.Exit();   // virtual boundary re-realize (granular): EVERY covered row, this frame
                 long tVr1 = Stopwatch.GetTimestamp();
                 if (virtualsChanged && _runtime.HasPending) FlushRebindsToQuiescence();   // bound-row rebinds (slot signal writes) land THIS frame
                 long tRx2 = Stopwatch.GetTimestamp();
@@ -6503,6 +6508,7 @@ public sealed partial class AppHost : IDisposable
             // down instead of jumping in its commit frame). Reset after the 7.05 pass.
             bool flowRevealFrame = _anim.HasFlowRevealWork || (capturedProjections && CapturedFlowReveal());
             _layout.DeferOffsetClamp = flowRevealFrame;
+            MountProf.Enter(MountProf.Layout);
             if (layoutNeeded && !_scene.Root.IsNull)
             {
                 if (_needFullLayout || !_everLaidOut)
@@ -6535,6 +6541,7 @@ public sealed partial class AppHost : IDisposable
                             _scene.ClearLayoutDirty();
                 }
             }
+            MountProf.Exit();
             long tSolve = Stopwatch.GetTimestamp();            // of LayoutMs: the flex solve itself (full or scoped + realize catch-up)
 
             // 6.3 SizeMode.FlowReveal — BEFORE layout effects and the post-layout scroll sync: seed this commit's reveals
@@ -6617,6 +6624,7 @@ public sealed partial class AppHost : IDisposable
             // to the render-thread compositor (RenderFrame.EntranceHeld).
             bool entranceHeld = EntrancesUnseen();
             _anim.HoldPendingStarts = entranceHeld;
+            MountProf.Enter(MountProf.Anim);
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
             _reconciler.SettlePersistWaiters();                 // 7 E7: a Flow.Persist slot still waiting for a live owner has a duplicate key
@@ -6698,6 +6706,7 @@ public sealed partial class AppHost : IDisposable
             }
             _dispatcher.TickGestureArenas(dtMs);               // 7 §7A arena timer tick (Hold long-press promotion on idle-held frames)
             long tAnim = Stopwatch.GetTimestamp();
+            MountProf.Exit(); MountProf.Enter(MountProf.ImagePump);
             if (s_allocDiag) { db = Probe(SegAnim, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             // Reveal starts are stamped at the CURRENT active wall time before applying incoming textures. Never
             // drive this clock from dtMs: sparse UI work resyncs that animation delta to zero, but the render thread
@@ -6746,6 +6755,7 @@ public sealed partial class AppHost : IDisposable
             if (FluentGpu.Foundation.GpuProfile.IsWeak && _device.TryGetVramUsage(out long __vu, out long __vb) && _vramShed.Decide(__vu, __vb))
                 _vramShed.NoteShed(_images.EvictToVramPressure(__vb, __vu));
             long tImagePump = Stopwatch.GetTimestamp();
+            MountProf.Exit(); MountProf.Enter(MountProf.PreRecord);
             if (s_allocDiag) { db = Probe(SegImages, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             // There is no post-layout scroll re-realize catch-up: the plans are evaluated at phase 2.5 (top of Paint),
@@ -6814,6 +6824,7 @@ public sealed partial class AppHost : IDisposable
             if (!recordOnRender)
             {
             PathRealizationCache.Shared.NextFrame();
+            MountProf.Exit(); MountProf.Enter(MountProf.Record);
             recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 CollectionsMarshal.AsSpan(_popupSkipRoots),
                 spans: _spanTable, spanReuseDisabled: spanDisable,
@@ -6826,6 +6837,7 @@ public sealed partial class AppHost : IDisposable
                 // parent records STANDALONE (null) instead: it presents through its own swapchain's direct route (F090).
                 slices: _isDetachedChild ? null : _uiSlices,
                 detached: _connected.Detached);        // 8 detached fly snapshots — the root slice's top-band tail (no-op when none)
+            MountProf.Exit(); MountProf.Enter(MountProf.PostRecord);
             _anim.PendingStructuralDamage.Clear();   // retains capacity → no steady-state alloc
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
             }
@@ -6867,6 +6879,7 @@ public sealed partial class AppHost : IDisposable
             }
             if (!recordOnRender) _scene.ClearRecordDirty();
             long tRecord = Stopwatch.GetTimestamp();
+            MountProf.Exit();
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             // Modal-loop repaint (WM_EXITSIZEMOVE settle): present at SyncInterval 0 + skip the latency waitable so the
             // WndProc thread isn't blocked up to a vblank. Mid-drag resize is deferred (no keep-alive paints); this path
@@ -7201,6 +7214,7 @@ public sealed partial class AppHost : IDisposable
             var presentStats = _swapchain.LastPresentStats;
             bool dwmFresh = presentStats.Valid && presentStats.DwmSampleSeq != 0 && presentStats.DwmSampleSeq != _dwmSampleSeqSeen;
             if (dwmFresh) _dwmSampleSeqSeen = presentStats.DwmSampleSeq;
+            MountProf.FrameEnd("measure=" + _layout.DiagMeasure + " textMiss=" + _layout.DiagTextMiss + " visited=" + recordStats.NodesVisited + " drawn=" + recordStats.DrawnNodeCount + " spansReused=" + recordStats.SpansReused + " spansReRec=" + recordStats.SpansReRecorded + " spanBytes=" + recordStats.SpanBytesCopied + " miss(glob/scoped/dirty/key/clip/cap)=" + recordStats.SpanReuseMisses.GlobalDisabled + "/" + recordStats.SpanReuseMisses.ScopedBlocked + "/" + recordStats.SpanReuseMisses.ExactDirty + "/" + recordStats.SpanReuseMisses.ExactKey + "/" + recordStats.SpanReuseMisses.ExactClip + "/" + recordStats.SpanReuseMisses.ExactCapacity);
             LastStats = new FrameStats(recordOnRender ? _lastRecordedCommandCount : _isDetachedChild ? _drawList.CommandCount : _uiSlices.TotalCommandCount, clicks, hotAlloc, reconciled || layoutNeeded)
             {
                 SlackMs = slackMs,

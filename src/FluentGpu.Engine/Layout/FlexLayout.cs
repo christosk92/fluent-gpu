@@ -248,6 +248,7 @@ public sealed partial class FlexLayout
         // Copy out BEFORE BeginMeasurePass: the probe measure re-writes this slot (and may resize the array).
         float availW = rec.PAvailW, pw = rec.PW, ph = rec.PH;
         if (LayoutSig(node) != rec.PInputSig) return false;
+        FluentGpu.Hosting.MountProf.SizeStableProbes++;
         // Also copy the ARRANGED rect before measuring — Measure overwrites Bounds W/H with the hypothetical size.
         RectF arranged = _scene.Bounds(node);
         BeginMeasurePass();
@@ -279,6 +280,7 @@ public sealed partial class FlexLayout
     {
         if (root.IsNull) return;
         // Snapshot so the per-Run print stays per-call even though the counters are now frame accumulators (host-reset).
+        FluentGpu.Hosting.MountProf.RootSolves++;
         int m0 = _dMeasure, th0 = _dTextHit, tm0 = _dTextMiss, a0 = _dArrange, mh0 = _dMeasureMemoHit;
         BeginMeasurePass();
         Measure(root, window.Width);
@@ -297,6 +299,7 @@ public sealed partial class FlexLayout
     public void RunSubtree(NodeHandle node)
     {
         if (node.IsNull) return;
+        FluentGpu.Hosting.MountProf.SubtreeSolves++;
         BeginMeasurePass();
         ref LayoutInput li = ref _scene.Layout(node);
         ref RectF b = ref _scene.Bounds(node);
@@ -507,6 +510,13 @@ public sealed partial class FlexLayout
     // ── Measure: fill Bounds.W/H with each node's base (hypothetical) border-box size ──
     private Size2 Measure(NodeHandle node, float availW = float.PositiveInfinity)
     {
+        if (!FluentGpu.Hosting.MountProf.On) return MeasureCore(node, availW);
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Measure);
+        try { return MeasureCore(node, availW); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+    }
+
+    private Size2 MeasureCore(NodeHandle node, float availW)
+    {
         // P1 presence: a collapsed node (incl. a collapsed scroll/grid/zstack root — "a collapsed virtual slot root
         // measures 0 at its rect") measures 0×0 unconditionally, before the viewport/grid/zstack dispatch and before
         // the memo lookup (no memo entry recorded — cheap enough to redo, and TryResolveSizeStable's LayoutSig
@@ -552,6 +562,7 @@ public sealed partial class FlexLayout
         // solve), so a measure≫arrange reading now means genuine recompute redundancy rather than call-site churn
         // the memo absorbs.
         _dMeasure++;
+        if (FluentGpu.Hosting.MountProf.On) FluentGpu.Hosting.MountProf.NoteMeasure((int)node.Raw.Index, availW, (_scene.Flags(node) & NodeFlags.LayoutDirty) != 0 || !_scene.IsLayoutClean(node));
         ref LayoutInput li = ref _scene.Layout(node);
         ref NodePaint paint = ref _scene.Paint(node);
 
@@ -596,7 +607,9 @@ public sealed partial class FlexLayout
                     float chosen = FitTextSize(paint.Text, li.TextStyle, maxW);
                     if (chosen < li.TextStyle.SizeDip) { fit = chosen; eff = li.TextStyle with { SizeDip = chosen }; }
                 }
+                FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.TextMeasure);
                 var m = _fonts.Measure(paint.Text, eff, maxW);
+                FluentGpu.Hosting.MountProf.Exit();
                 w = m.Size.Width; h = m.Size.Height;
                 // Retain the face's decoration metrics alongside the size: the recorder places underline/strikethrough
                 // bars (NodePaint.TextDecorations) from this row at record time without re-touching the font seam.
@@ -800,6 +813,13 @@ public sealed partial class FlexLayout
 
     // ── Arrange: position + size children within the node's final box ──
     private void Arrange(NodeHandle node, float x, float y, float finalW, float finalH)
+    {
+        if (!FluentGpu.Hosting.MountProf.On) { ArrangeCore(node, x, y, finalW, finalH); return; }
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Arrange);
+        try { ArrangeCore(node, x, y, finalW, finalH); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+    }
+
+    private void ArrangeCore(NodeHandle node, float x, float y, float finalW, float finalH)
     {
         // P1 presence: snap to 0×0 at the offered position and stop — no recursion into a collapsed subtree (its
         // children are never visited during layout; the recorder/hit-test walks independently early-return on the

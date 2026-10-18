@@ -1466,9 +1466,18 @@ public sealed partial class SceneStore : ISceneBackend
 
     private void MarkRecordDirty(int idx, byte bits)
     {
+        if (!FluentGpu.Hosting.MountProf.On) { MarkRecordDirtyCore(idx, bits); return; }
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.RecordDirty);
+        try { MarkRecordDirtyCore(idx, bits); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+    }
+
+    private void MarkRecordDirtyCore(int idx, byte bits)
+    {
         if ((uint)idx >= (uint)_high || _gen[idx] == 0 || bits == 0) return;
+        FluentGpu.Hosting.MountProf.RecordDirtyCalls++;
         for (int n = idx; n != 0; n = _parent[n])
         {
+            FluentGpu.Hosting.MountProf.RecordDirtyIters++;
             byte oldAggregate = _recordDirty[n];
             byte oldSelf = _recordDirtySelf[n];
             byte oldDescendant = _recordDirtyDescendant[n];

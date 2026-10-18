@@ -905,6 +905,13 @@ public sealed partial class TreeReconciler
 
     private void Mount(NodeHandle node, Element el)
     {
+        if (!FluentGpu.Hosting.MountProf.On) { MountCore(node, el); return; }
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.MountSelf);
+        try { MountCore(node, el); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+    }
+
+    private void MountCore(NodeHandle node, Element el)
+    {
         if (_renderCensus is not null) _censusMounts++;
         MountedNodes++;   // always-on: the cold-realize ramp's node budget is a delta across one grow (see MountedNodes)
         _reconciled = true;
@@ -935,12 +942,18 @@ public sealed partial class TreeReconciler
         if (el is KeepAliveEl ka) { MountKeepAlive(node, ka); return; }
         if (el is SkelRegionEl skr) { MountSkeletonRegion(node, skr); return; }
 
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.WriteCols);
         WriteColumns(node, el, isMount: true);
+        FluentGpu.Hosting.MountProf.Exit();
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Bind);
         BindNode(node, el);
+        FluentGpu.Hosting.MountProf.Exit();
         foreach (var childEl in ChildrenOf(el))
         {
+            FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.SceneOps);
             var child = _scene.CreateNode(childEl.ElementTypeId);
             _scene.AppendChild(node, child);
+            FluentGpu.Hosting.MountProf.Exit();
             Mount(child, childEl);
         }
     }
@@ -1277,6 +1290,7 @@ public sealed partial class TreeReconciler
 
     private void MountComponent(NodeHandle node, ComponentEl ce)
     {
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.CompSetup);
         var comp = ce.Factory();
         InjectContext(comp.Context, node);
         comp.Context.Owner = comp;   // diagnostic identity for the hook computations this context will create (Computation.DiagOwner)
@@ -1345,6 +1359,7 @@ public sealed partial class TreeReconciler
         WriteAnchorColumns(node, ce, old: null);
         // E7: a Flow.Persist slot owns its key here, adopting the parked subtree of that key (or waiting for its live owner).
         if (IsPersistSlot(ce)) MountPersistSlot(node, entry, ((PersistProps)ce.Props!).Key);
+        FluentGpu.Hosting.MountProf.Exit();
         effect.RunNow();                                  // first render + child mount (deferred if mounted parked)
     }
 
@@ -1387,7 +1402,7 @@ public sealed partial class TreeReconciler
         {
             if (RenderFaultSink is { } faultSink)
             {
-                try { newRendered = comp.RenderWithHooks(); }
+                try { FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Render); try { newRendered = comp.RenderWithHooks(); } finally { FluentGpu.Hosting.MountProf.Exit(); } }
                 catch (Exception ex)
                 {
                     comp.Context.EndRender();
@@ -1395,12 +1410,13 @@ public sealed partial class TreeReconciler
                     newRendered = new BoxEl();
                 }
             }
-            else newRendered = comp.RenderWithHooks();
+            else { FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Render); try { newRendered = comp.RenderWithHooks(); } finally { FluentGpu.Hosting.MountProf.Exit(); } }
             if (entry.DerivedSkeletonStyle is { } skeletonStyle)
                 newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
             t1 = census ? Stopwatch.GetTimestamp() : 0;
             _layoutShapeMutated = false;
-            ReconcileSingleChild(node, newRendered, entry.Rendered);
+            FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Reconcile);
+            try { ReconcileSingleChild(node, newRendered, entry.Rendered); } finally { FluentGpu.Hosting.MountProf.Exit(); }
         }
         finally { if (catchUp) EndThemeCatchUp(savedThemeMs, savedThemeFromT); }
         // Nested component renders (children mounted/re-rendered inside this reconcile) report their own rows; this
@@ -2757,7 +2773,7 @@ public sealed partial class TreeReconciler
     /// re-rendered element. Mount-only here: <c>OnRealized</c> (fires once per node).</summary>
     private void BindNode(NodeHandle node, Element el)
     {
-        BindPresence(node, el);   // P1: Element.Visible lives on the base type — wire it for EVERY element kind
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Presence); BindPresence(node, el); FluentGpu.Hosting.MountProf.Exit();   // P1: Element.Visible lives on the base type — wire it for EVERY element kind
         if (el is BoxEl b)
         {
             if (b.Transform.IsBound)
@@ -4673,6 +4689,13 @@ public sealed partial class TreeReconciler
     }
 
     private void UnmountSubtree(NodeHandle node)
+    {
+        if (!FluentGpu.Hosting.MountProf.On) { UnmountSubtreeCore(node); return; }
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Unmount);
+        try { UnmountSubtreeCore(node); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+    }
+
+    private void UnmountSubtreeCore(NodeHandle node)
     {
         // E7: a Flow.Persist slot detaches and parks its subtree (or hands it to a waiting slot) before its children unmount.
         if (_persistKeyByNode.Count != 0 && _persistKeyByNode.Remove((int)node.Raw.Index, out var persistKey)) ReleasePersistSlot(node, persistKey);
