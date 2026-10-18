@@ -166,6 +166,8 @@ public sealed class ContentDialog : Component
         public float TitleGap { get; init; } = ContentGap;
         /// <summary>The case transform of the title, applied at shaping (the stored title is never rewritten). Default <see cref="TextCase.AsWritten"/>; a dialog whose title carries a name sets <see cref="TitleLiteral"/>.</summary>
         public TextCase TitleCase { get; init; } = TextCase.AsWritten;
+        /// <summary>An element at the end of the title's row, given the dialog's close action (a theme's close mark); null = none (the default).</summary>
+        public Func<Action, Element>? TitleTrailing { get; init; }
         /// <summary>The message text (14, TextFillColorPrimary).</summary>
         public float MessageSize { get; init; } = ContentSize;
         public ColorF MessageColor { get; init; } = Tok.TextPrimary;
@@ -435,6 +437,28 @@ public sealed class ContentDialog : Component
             ? new ScrollEl { Content = Content, ContentSized = true, MaxHeight = st.MaxHeight - 200f, EdgeCues = ScrollEdgeCues.None }
             : new TextEl(Message) { Size = st.MessageSize, Color = st.MessageColor, Wrap = TextWrap.Wrap };
 
+        Element TitleRow(Style st, Action close)
+        {
+            var title = Parts.Apply(PartTitle, new TextEl(Title)
+            {
+                Size = st.TitleSize,
+                Weight = (ushort)st.TitleWeight,      // FontWeight="SemiBold" on the Title presenter (ContentDialog_themeresources.xaml:238)
+                Color = st.TitleColor,
+                Case = TitleLiteral ? TextCase.AsWritten : st.TitleCase,
+                Wrap = TextWrap.Wrap,
+                MaxLines = 2,
+                Trim = TextTrim.WordEllipsis,
+                Margin = new Edges4(0, 0, 0, st.TitleGap),   // ContentDialogTitleMargin 0,0,0,12
+            });
+            if (st.TitleTrailing is not { } trailing) return title;
+            // A theme's trailing element (a close mark) ends the title's row; the gap under the title moves to the row.
+            return new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f, Margin = title.Margin,
+                Children = [title with { Margin = default, Grow = 1f, MinWidth = 0f }, trailing(close)],
+            };
+        }
+
         var contentRegion = new BoxEl
         {
             Direction = 1,
@@ -442,17 +466,7 @@ public sealed class ContentDialog : Component
             Fill = st.ContentFill,   // ContentDialogTopOverlay = LayerFillColorAltBrush
             Children =
             [
-                Parts.Apply(PartTitle, new TextEl(Title)
-                {
-                    Size = st.TitleSize,
-                    Weight = (ushort)st.TitleWeight,      // FontWeight="SemiBold" on the Title presenter (ContentDialog_themeresources.xaml:238)
-                    Color = st.TitleColor,
-                    Case = TitleLiteral ? TextCase.AsWritten : st.TitleCase,
-                    Wrap = TextWrap.Wrap,
-                    MaxLines = 2,
-                    Trim = TextTrim.WordEllipsis,
-                    Margin = new Edges4(0, 0, 0, st.TitleGap),   // ContentDialogTitleMargin 0,0,0,12
-                }),
+                TitleRow(st, RunClose),
                 contentBody,
             ],
         };
