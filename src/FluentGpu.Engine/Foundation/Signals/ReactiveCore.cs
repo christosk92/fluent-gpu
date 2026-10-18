@@ -427,6 +427,7 @@ public sealed class ReactiveRuntime
                 if (!computation.Disposed)
                 {
                     units++;
+                    if (FluentGpu.Hosting.MountProf.On) FluentGpu.Hosting.MountProf.NoteUnit(computation, computation.StaleCause);
                     try { computation.RunIfNecessary(); }
                     finally
                     {

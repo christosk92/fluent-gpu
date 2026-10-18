@@ -43,6 +43,14 @@ public static class MountProf
     static readonly HashSet<(int, float)> s_measPairs = On ? new() : null!;
     static int s_measDirty;
     public static readonly StringBuilder Events = On ? new() : null!;   // null when off: read only under On
+    static readonly Dictionary<string, int> s_units = On ? new() : null!;
+    /// <summary>A reactive unit about to run in a flush: tallied by what made it stale and what it is (diag only, allocates).</summary>
+    internal static void NoteUnit(FluentGpu.Signals.Computation unit, FluentGpu.Signals.ISignalSource? cause)
+    {
+        string what = unit.DiagOwner?.GetType().Name ?? unit.GetType().Name;
+        string key = FluentGpu.Signals.SignalDiag.Describe(cause) + " -> " + what;
+        s_units[key] = s_units.GetValueOrDefault(key) + 1;
+    }
     public static void NoteMeasure(int node, float availW, bool dirty)
     {
         s_measPerNode[node] = s_measPerNode.GetValueOrDefault(node) + 1;
@@ -90,6 +98,7 @@ public static class MountProf
         if (!On) return;
         Array.Clear(s_ticks); Array.Clear(s_calls);
         Events.Clear();
+        s_units.Clear();
         s_measPerNode.Clear(); s_measPairs.Clear(); s_measDirty = 0;
         RootSolves = SubtreeSolves = SizeStableProbes = 0; RecordDirtyCalls = RecordDirtyIters = 0; MeasRoot = MeasSub = MeasProbe = 0;
         s_sp = 0;
@@ -128,6 +137,11 @@ public static class MountProf
         }
         if (extra.Length > 0) sb.Append(' ').Append(extra);
         if (Events.Length > 0) sb.Append(" ev:").Append(Events);
+        if (s_units.Count > 0)
+        {
+            sb.Append(" units:");
+            foreach (var kv in s_units.OrderByDescending(k => k.Value).Take(8)) sb.Append(" [").Append(kv.Value).Append(' ').Append(kv.Key).Append(']');
+        }
         sb.Append('\n');
         try { File.AppendAllText(s_path, sb.ToString()); } catch (IOException) { }
     }
