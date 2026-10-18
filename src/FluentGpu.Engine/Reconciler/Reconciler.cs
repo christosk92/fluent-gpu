@@ -862,7 +862,9 @@ public sealed partial class TreeReconciler
     public void ArmKeepAliveLayoutSuppression()
     {
         _keepAliveLayoutSuppressionFrames = Math.Max(_keepAliveLayoutSuppressionFrames, 2);
-        _keepAliveSuppressionAge = 0;
+        // A page mounted after the switch settles over a few frames (the tier and the measured widths publish a frame or two after the mount), so this
+        // window outlives an activation's: it ages out after six paint frames, not two.
+        _keepAliveSuppressionAge = -4;
     }
 
     private void InjectContext(RenderContext ctx, NodeHandle anchor)
