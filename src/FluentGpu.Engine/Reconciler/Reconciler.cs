@@ -2776,6 +2776,27 @@ public sealed partial class TreeReconciler
     private void BindNode(NodeHandle node, Element el)
     {
         FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Presence); BindPresence(node, el); FluentGpu.Hosting.MountProf.Exit();   // P1: Element.Visible lives on the base type — wire it for EVERY element kind
+        // The channel wiring captures `node` in closures, and C# allocates their shared display class on ENTRY of the method
+        // that declares them, a bound channel or not: one object per mounted node, 1,600+ on a playlist mount for the few
+        // hundred that bind anything. Route an element that binds nothing past it (page-mount RCA, allocations).
+        switch (el)
+        {
+            case BoxEl box when !BindsAnyChannel(box): box.OnRealized?.Invoke(node); return;
+            case TextEl text when !text.Text.IsBound && !text.Color.IsBound: text.OnRealized?.Invoke(node); return;
+        }
+        BindChannels(node, el);
+    }
+
+    /// <summary>Does <see cref="BindChannels"/> wire any channel of <paramref name="b"/>? Must name every channel its BoxEl
+    /// branch tests (a channel missing here would never bind).</summary>
+    private static bool BindsAnyChannel(BoxEl b)
+        => b.Transform.IsBound || b.Opacity.IsBound || b.HitTestVisible.IsBound || b.Fill.IsBound || b.HoverFill.IsBound
+           || b.PressedFill.IsBound || b.BorderColor.IsBound || b.Corners.IsBound || b.RadialGradientCenter.IsBound
+           || b.FeedbackTransform.IsBound || b.FeedbackDecay.IsBound || b.GradientMix.IsBound || b.Validation.IsBound
+           || b.Width.IsBound || b.Height.IsBound;
+
+    private void BindChannels(NodeHandle node, Element el)
+    {
         if (el is BoxEl b)
         {
             if (b.Transform.IsBound)

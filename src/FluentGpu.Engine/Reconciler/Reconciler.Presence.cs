@@ -34,7 +34,13 @@ public sealed partial class TreeReconciler
     /// Visible — collapsing a hero participant mid-flight would break ConnectedAnimation capture.</summary>
     private void BindPresence(NodeHandle node, Element el)
     {
-        if (!el.Visible.IsBound) return;
+        // The wiring below captures `node` in closures, and C# allocates their display class on ENTRY of the method that
+        // declares them — bound or not. Nearly every node binds no Visible: test before entering (page-mount RCA, allocations).
+        if (el.Visible.IsBound) BindPresenceCore(node, el);
+    }
+
+    private void BindPresenceCore(NodeHandle node, Element el)
+    {
         if (BindContract.CompiledIn && BindContract.Enabled && el.MorphId is not null)
             BindContract.MorphVisibleBind(el.GetType().Name);
 
