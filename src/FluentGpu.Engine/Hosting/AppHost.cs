@@ -4502,6 +4502,35 @@ public sealed partial class AppHost : IDisposable
         => (ComputeWakeReasons() & (ColdInteractiveWake | WakeReasons.Anim | WakeReasons.Orphans | WakeReasons.RuntimePending)) == 0
            && ColdMaintenanceNowMs >= _coldQuietFromMs;
 
+    /// <summary>Is the host settled enough for a SHORT pause an app schedules itself (the Wavee governor's post-navigation gen-0
+    /// collection: a few ms)? Nothing a person set in motion is moving (a scroll or drag, a held or pressed touch), no UI animation
+    /// row is due, no exit orphan is animating, no reactive work is pending, and no interaction-semantic input (press, release,
+    /// key, wheel: the warm-cadence input kinds) arrived in the last <paramref name="interactionQuietMs"/>. Unlike
+    /// <see cref="IsInteractionQuiet"/>, hover motion, the post-input warm hold and the 2 s hold of the allocating cold services do
+    /// not count: those guard multi-megabyte services, and a hand resting on the mouse would hold a few-millisecond pause back
+    /// until it lands in a later, visible frame instead (measured: a pointer move every 40 ms kept every post-navigation
+    /// collection from running). UI thread.</summary>
+    public bool IsSettledForPause(long interactionQuietMs)
+        => (ComputeWakeReasons() & (SettledInteractiveWake | WakeReasons.Anim | WakeReasons.Orphans | WakeReasons.RuntimePending)) == 0
+           && (_lastInteractionMs == long.MinValue || ColdMaintenanceNowMs - _lastInteractionMs >= interactionQuietMs);
+
+    /// <summary><see cref="ColdInteractiveWake"/> minus the post-input warm hold: interaction that is MOVING right now.</summary>
+    internal const WakeReasons SettledInteractiveWake = ColdInteractiveWake & ~WakeReasons.WarmCadence;
+
+    // The last interaction-semantic input (press, release, cancel, key, wheel), on the cold-maintenance clock.
+    private long _lastInteractionMs = long.MinValue;
+
+    /// <summary>Diagnostics: milliseconds since the last interaction-semantic input (-1 = none yet).</summary>
+    public long MsSinceInteraction => _lastInteractionMs == long.MinValue ? -1 : ColdMaintenanceNowMs - _lastInteractionMs;
+
+    /// <summary>Diagnostics: the wake bits that hold <see cref="IsInteractionQuiet"/> false right now (None when only the
+    /// input hold does). UI thread.</summary>
+    public WakeReasons InteractionQuietBlockers
+        => ComputeWakeReasons() & (ColdInteractiveWake | WakeReasons.Anim | WakeReasons.Orphans | WakeReasons.RuntimePending);
+
+    /// <summary>Diagnostics: milliseconds until the last input stops holding <see cref="IsInteractionQuiet"/> false (0 = none).</summary>
+    public long InteractionQuietInputHoldMs => _coldQuietFromMs == long.MinValue ? 0 : Math.Max(0, _coldQuietFromMs - ColdMaintenanceNowMs);
+
     private void NoteColdInteraction() => _coldQuietFromMs = ColdMaintenanceNowMs + ColdMaintenanceDeadline.QuietMs;
 
     private int ClampWaitToColdMaintenance(int wait)
@@ -5638,6 +5667,9 @@ public sealed partial class AppHost : IDisposable
             _warmCadenceUntilMs = _timers.NowMs + WarmCadenceHoldMs;
         // Input of any kind (hover included: it repaints) holds the allocating cold services back (RunColdMaintenance below).
         if (inputKindMask != 0 || clicks > 0) NoteColdInteraction();
+        // The kinds only, not `clicks`: Dispatch also counts a handled bare-hover move (a HoverMove handler) as handled, and a
+        // hand resting over one is not an interaction (a real click always carries PointerDown/PointerUp).
+        if ((inputKindMask & WarmCadenceInputMask) != 0) _lastInteractionMs = ColdMaintenanceNowMs;
 
         // Step 4 fault injection (--fg device-lost=N=<frameN>): force a controlled DEVICE_REMOVED so the next submit
         // fails and the recovery rendezvous below is exercised on real hardware.
