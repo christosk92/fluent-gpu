@@ -28,6 +28,8 @@ public static class MountProf
 
     static readonly long[] s_ticks = On ? new long[Count] : [];
     static readonly int[] s_calls = On ? new int[Count] : [];
+    static readonly long[] s_bytes = On ? new long[Count] : [];   // exclusive UI-thread allocation per bucket
+    static long s_lastAlloc;
     static readonly int[] s_stack = On ? new int[4096] : [];
     static int s_sp;
     static long s_last;
@@ -75,7 +77,9 @@ public static class MountProf
     static void EnterCore(int bucket)
     {
         long t = Stopwatch.GetTimestamp();
-        if (s_sp > 0) s_ticks[s_stack[s_sp - 1]] += t - s_last;
+        long a = GC.GetAllocatedBytesForCurrentThread();
+        if (s_sp > 0) { s_ticks[s_stack[s_sp - 1]] += t - s_last; s_bytes[s_stack[s_sp - 1]] += a - s_lastAlloc; }
+        s_lastAlloc = a;
         if (s_sp < s_stack.Length) s_stack[s_sp] = bucket;
         s_sp++;
         s_calls[bucket]++;
@@ -88,7 +92,9 @@ public static class MountProf
         if (s_sp > 0)
         {
             s_sp--;
-            if (s_sp < s_stack.Length) s_ticks[s_stack[s_sp]] += t - s_last;
+            long a = GC.GetAllocatedBytesForCurrentThread();
+            if (s_sp < s_stack.Length) { s_ticks[s_stack[s_sp]] += t - s_last; s_bytes[s_stack[s_sp]] += a - s_lastAlloc; }
+            s_lastAlloc = a;
         }
         s_last = t;
     }
@@ -96,7 +102,7 @@ public static class MountProf
     public static void FrameBegin()
     {
         if (!On) return;
-        Array.Clear(s_ticks); Array.Clear(s_calls);
+        Array.Clear(s_ticks); Array.Clear(s_calls); Array.Clear(s_bytes);
         Events.Clear();
         s_units.Clear();
         s_measPerNode.Clear(); s_measPairs.Clear(); s_measDirty = 0;
@@ -104,7 +110,7 @@ public static class MountProf
         s_sp = 0;
         s_pause0 = GC.GetTotalPauseDuration();
         s_gc0 = GC.CollectionCount(0); s_gc1 = GC.CollectionCount(1); s_gc2 = GC.CollectionCount(2);
-        s_alloc0 = GC.GetAllocatedBytesForCurrentThread();
+        s_alloc0 = s_lastAlloc = GC.GetAllocatedBytesForCurrentThread();
         s_frameStart = s_last = Stopwatch.GetTimestamp();
         EnterCore(Frame);
     }
@@ -135,6 +141,9 @@ public static class MountProf
             double ms = s_ticks[i] * 1000.0 / Stopwatch.Frequency;
             sb.Append(' ').Append(s_names[i]).Append('=').Append(ms.ToString("0.00", CultureInfo.InvariantCulture)).Append('/').Append(s_calls[i]);
         }
+        sb.Append(" allocKBx:");
+        for (int i = 0; i < Count; i++)
+            if (s_bytes[i] >= 1024) sb.Append(' ').Append(s_names[i]).Append('=').Append(s_bytes[i] / 1024);
         if (extra.Length > 0) sb.Append(' ').Append(extra);
         if (Events.Length > 0) sb.Append(" ev:").Append(Events);
         if (s_units.Count > 0)
