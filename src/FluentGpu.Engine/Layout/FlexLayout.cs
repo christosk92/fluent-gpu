@@ -48,6 +48,33 @@ public sealed partial class FlexLayout
     public int DiagMeasure => _dMeasure;
     public int DiagArrange => _dArrange;
     public int DiagTextHit => _dTextHit;
+    /// <summary>Per-node measure-cache misses answered by the shared content-keyed cache (no font-system call).</summary>
+    public int DiagTextSharedHit => _dTextSharedHit;
+    private int _dTextSharedHit;
+
+    // ── shared text measure (page-mount RCA #5) ─────────────────────────────────────────────────────────────────────
+    // The per-node TextMeasureCache dies with its node: a freshly mounted row's "3:45" re-ran the font system's layout
+    // although the same text, style and width was measured a frame (or a page) earlier — 396–577 misses at ~1.6 µs on
+    // every playlist mount. This content-keyed second level (the string, not its StringId: a released id re-interns
+    // under a NEW id) answers those misses without the font system. A pure function of its key: the font system's
+    // Measure reads only (text, style, maxWidth) and the body-font epoch. Consulted for a node's FIRST measure only (a
+    // mount, the case it exists for — a resize re-measure never inserts). Not used for a span run (its Measure publishes
+    // the run's link/decoration rects as a side effect) or an auto-fit size. Bounded: cleared past SharedMeasureCap.
+    private readonly record struct SharedMeasureKey(string Text, TextStyle Style, float MaxW, int Epoch);
+    private readonly Dictionary<SharedMeasureKey, TextMetrics> _sharedMeasure = new(256);
+    private const int SharedMeasureCap = 8192;
+
+    private TextMetrics MeasureTextShared(StringId text, in TextStyle style, float maxW, int fontEpoch, bool fitted)
+    {
+        string? s = fitted || style.SpanRunId != 0 ? null : _scene.Strings?.Resolve(text);
+        if (s is null) return _fonts.Measure(text, style, maxW);
+        var key = new SharedMeasureKey(s, style, maxW, fontEpoch);
+        if (_sharedMeasure.TryGetValue(key, out var hit)) { _dTextSharedHit++; return hit; }
+        var m = _fonts.Measure(text, style, maxW);
+        if (_sharedMeasure.Count >= SharedMeasureCap) _sharedMeasure.Clear();
+        _sharedMeasure[key] = m;
+        return m;
+    }
     public int DiagTextMiss => _dTextMiss;
     /// <summary>Measure calls served by the within-pass memo (no recompute). <see cref="DiagMeasure"/> counts REAL
     /// measures only, so measure+memoHit is the raw call count and memoHit/(measure+memoHit) is the redundancy rate.</summary>
@@ -55,7 +82,7 @@ public sealed partial class FlexLayout
 
     /// <summary>Host-driven per-frame reset: zero the diag counters at the top of a frame so DiagMeasure/Arrange/TextMiss
     /// read that frame's total after all layout (full + scoped + phase-7 reflow) has run. Cheap; no-op meaning when off.</summary>
-    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = 0; }
+    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dTextSharedHit = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = 0; }
 
     // Within-pass Measure memo. Measure(node, availW) is a PURE function of the node's subtree content + availW within
     // ONE layout solve (it has no external mutable input; its only side effect is writing the node's Bounds W/H). But the
@@ -608,7 +635,9 @@ public sealed partial class FlexLayout
                     if (chosen < li.TextStyle.SizeDip) { fit = chosen; eff = li.TextStyle with { SizeDip = chosen }; }
                 }
                 FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.TextMeasure);
-                var m = _fonts.Measure(paint.Text, eff, maxW);
+                // A node's FIRST measure only (a fresh mount): a live re-measure (resize, a text edit) stays off the shared
+                // level, so a drag-resize never fills it with one-off widths.
+                var m = mc.Valid ? _fonts.Measure(paint.Text, eff, maxW) : MeasureTextShared(paint.Text, in eff, maxW, fontEpoch, fit > 0f);
                 FluentGpu.Hosting.MountProf.Exit();
                 w = m.Size.Width; h = m.Size.Height;
                 // Retain the face's decoration metrics alongside the size: the recorder places underline/strikethrough

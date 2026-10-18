@@ -2039,7 +2039,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGet((int)h.Raw.Index, out s);
-    public void ClearShadow(NodeHandle h) { int idx = (int)h.Raw.Index; _shadows.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearShadow(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_shadows.Contains(idx)) return; _shadows.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetArc(NodeHandle h, in ArcSpec a)
     {
@@ -2049,7 +2049,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetArc(NodeHandle h, out ArcSpec a) => _arcs.TryGet((int)h.Raw.Index, out a);
-    public void ClearArc(NodeHandle h) { int idx = (int)h.Raw.Index; _arcs.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearArc(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_arcs.Contains(idx)) return; _arcs.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetPolylineStroke(NodeHandle h, in PolylineStrokeSpec p)
     {
@@ -2059,7 +2059,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetPolylineStroke(NodeHandle h, out PolylineStrokeSpec p) => _polylines.TryGet((int)h.Raw.Index, out p);
-    public void ClearPolylineStroke(NodeHandle h) { int idx = (int)h.Raw.Index; _polylines.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearPolylineStroke(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_polylines.Contains(idx)) return; _polylines.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetPath(NodeHandle h, in PathSpec ps)
     {
@@ -2069,7 +2069,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetPath(NodeHandle h, out PathSpec ps) => _paths.TryGet((int)h.Raw.Index, out ps);
-    public void ClearPath(NodeHandle h) { int idx = (int)h.Raw.Index; _paths.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearPath(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_paths.Contains(idx)) return; _paths.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetSeries(NodeHandle h, in SeriesSpec spec)
     {
@@ -2079,7 +2079,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetSeries(NodeHandle h, out SeriesSpec spec) => _series.TryGet((int)h.Raw.Index, out spec);
-    public void ClearSeries(NodeHandle h) { int idx = (int)h.Raw.Index; _series.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearSeries(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_series.Contains(idx)) return; _series.Remove(idx); MarkRecordDirty(idx); }
 
     /// <summary>The tier-3 STENCIL path clip for this node (gpu-renderer.md §6). Setting it marks SparsePaint and
     /// dirties the record exactly like <see cref="SetPath"/> does for the FillPath lane, so a changed silhouette
@@ -2094,7 +2094,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetClipPath(NodeHandle h, out ClipPathSpec cs) => _clipPaths.TryGet((int)h.Raw.Index, out cs);
-    public void ClearClipPath(NodeHandle h) { int idx = (int)h.Raw.Index; _clipPaths.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearClipPath(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_clipPaths.Contains(idx)) return; _clipPaths.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetGradient(NodeHandle h, in GradientSpec g)
     {
@@ -2104,7 +2104,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGet((int)h.Raw.Index, out g);
-    public void ClearGradient(NodeHandle h) { int idx = (int)h.Raw.Index; _gradients.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearGradient(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_gradients.Contains(idx)) return; _gradients.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetRadialGradientCenter(NodeHandle h, Point2 center)
     {
@@ -2135,7 +2135,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetGradientTo(NodeHandle h, out GradientSpec g) => _gradientTos.TryGet((int)h.Raw.Index, out g);
-    public void ClearGradientTo(NodeHandle h) { int idx = (int)h.Raw.Index; _gradientTos.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearGradientTo(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_gradientTos.Contains(idx)) return; _gradientTos.Remove(idx); MarkRecordDirty(idx); }
 
     /// <summary>The fill's blend toward <see cref="SetGradientTo"/>. Paint-only: equal writes are no-ops; 0 is stored as
     /// absent (the recorder's default).</summary>
@@ -2194,7 +2194,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetBorderBrush(NodeHandle h, out GradientSpec g) => _borderBrushes.TryGet((int)h.Raw.Index, out g);
-    public void ClearBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; _borderBrushes.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_borderBrushes.Contains(idx)) return; _borderBrushes.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetHoverGradient(NodeHandle h, in GradientSpec g)
     {
@@ -2204,7 +2204,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetHoverGradient(NodeHandle h, out GradientSpec g) => _hoverGradients.TryGet((int)h.Raw.Index, out g);
-    public void ClearHoverGradient(NodeHandle h) { int idx = (int)h.Raw.Index; _hoverGradients.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearHoverGradient(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_hoverGradients.Contains(idx)) return; _hoverGradients.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetPressedGradient(NodeHandle h, in GradientSpec g)
     {
@@ -2214,7 +2214,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetPressedGradient(NodeHandle h, out GradientSpec g) => _pressedGradients.TryGet((int)h.Raw.Index, out g);
-    public void ClearPressedGradient(NodeHandle h) { int idx = (int)h.Raw.Index; _pressedGradients.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearPressedGradient(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_pressedGradients.Contains(idx)) return; _pressedGradients.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetHoverBorderBrush(NodeHandle h, in GradientSpec g)
     {
@@ -2224,7 +2224,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetHoverBorderBrush(NodeHandle h, out GradientSpec g) => _hoverBorderBrushes.TryGet((int)h.Raw.Index, out g);
-    public void ClearHoverBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; _hoverBorderBrushes.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearHoverBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_hoverBorderBrushes.Contains(idx)) return; _hoverBorderBrushes.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetPressedBorderBrush(NodeHandle h, in GradientSpec g)
     {
@@ -2234,7 +2234,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetPressedBorderBrush(NodeHandle h, out GradientSpec g) => _pressedBorderBrushes.TryGet((int)h.Raw.Index, out g);
-    public void ClearPressedBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; _pressedBorderBrushes.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearPressedBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_pressedBorderBrushes.Contains(idx)) return; _pressedBorderBrushes.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetAcrylic(NodeHandle h, in AcrylicSpec a)
     {
@@ -2244,7 +2244,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGet((int)h.Raw.Index, out a);
-    public void ClearAcrylic(NodeHandle h) { int idx = (int)h.Raw.Index; _acrylics.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearAcrylic(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_acrylics.Contains(idx)) return; _acrylics.Remove(idx); MarkRecordDirty(idx); }
 
     /// <summary>BoxEl.RepaintBoundary: the subtree records into its own retained slice (SceneRecorder's isolation cut).
     /// Equality-gated so an identical re-render marks nothing.</summary>
@@ -2282,7 +2282,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetEdgeFade(NodeHandle h, out EdgeFadeSpec e) => _edgeFades.TryGet((int)h.Raw.Index, out e);
-    public void ClearEdgeFade(NodeHandle h) { int idx = (int)h.Raw.Index; _edgeFades.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearEdgeFade(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_edgeFades.Contains(idx)) return; _edgeFades.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetImageEffects(NodeHandle h, in ImageVisualEffects effects)
     {
