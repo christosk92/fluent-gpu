@@ -77,7 +77,11 @@ internal abstract class BindEffect : Computation
 
     private protected sealed override void OnStale() => Runtime.Schedule(this);
 
-    internal sealed override void RunStale() => RunComputation(_body!);
+    internal sealed override void RunStale()
+    {
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.BindFire);
+        try { RunComputation(_body!); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+    }
 
     /// <summary>Re-point this binding at the same channel of <paramref name="next"/>. A still-bound channel adopts
     /// <paramref name="next"/> as <see cref="El"/>; if its payload also differs (by <c>Prop&lt;T&gt;</c> equality) the

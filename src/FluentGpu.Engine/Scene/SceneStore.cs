@@ -679,6 +679,16 @@ public sealed partial class SceneStore : ISceneBackend
         _lastChild[p] = c;
         _childCount[p]++;
         MarkRecordDirty(c, RecordDirtyLayout);
+        PropagateMovedSubtreeBits(p, c);
+    }
+
+    /// <summary>A re-attached subtree keeps the record-dirty bits it gathered under its old parent; its NEW ancestors must hold
+    /// them as descendant bits too, or the early out in <see cref="WalkRecordDirty"/> would stop at the moved node (already
+    /// stamped) and leave the new chain unmarked. A fresh node has no bits (CreateNode zeroes them): one byte read.</summary>
+    private void PropagateMovedSubtreeBits(int p, int c)
+    {
+        byte carried = (byte)(_recordDirtySelf[c] | _recordDirtyDescendant[c]);
+        if (carried != 0) WalkRecordDirty(0, p, carried);
     }
 
     /// <summary>Attach <paramref name="child"/> as the first child without freeing/recreating it. Used by reverse
@@ -695,6 +705,7 @@ public sealed partial class SceneStore : ISceneBackend
         _firstChild[p] = c;
         _childCount[p]++;
         MarkRecordDirty(c, RecordDirtyLayout);
+        PropagateMovedSubtreeBits(p, c);
     }
 
     /// <summary>Unlink a child from its parent without freeing it (used by keyed reconcile to reorder).</summary>
@@ -1466,20 +1477,53 @@ public sealed partial class SceneStore : ISceneBackend
 
     private void MarkRecordDirty(int idx, byte bits)
     {
+        if (!FluentGpu.Hosting.MountProf.On) { MarkRecordDirtyCore(idx, bits); return; }
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.RecordDirty);
+        try { MarkRecordDirtyCore(idx, bits); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+    }
+
+    private void MarkRecordDirtyCore(int idx, byte bits)
+    {
         if ((uint)idx >= (uint)_high || _gen[idx] == 0 || bits == 0) return;
-        for (int n = idx; n != 0; n = _parent[n])
+        FluentGpu.Hosting.MountProf.RecordDirtyCalls++;
+        WalkRecordDirty(idx, idx, bits);
+    }
+
+    /// <summary>The record-dirty walk from <paramref name="start"/> to the root: <paramref name="self"/> takes the bits as
+    /// its own (pass 0 for none), every other node on the way as a descendant contribution.
+    /// <para>EARLY OUT (the page-mount RCA, root cause 1): an ancestor that already holds these descendant bits, stamped for
+    /// the publication being built, was reached by an earlier walk of this same publication, and that walk went on to the
+    /// root (or stopped at a node that had, by the same rule) — so every node above it already holds them with this stamp
+    /// and the rest of the walk would change nothing. Without the stop, every mark paid the node's full depth: a Zune
+    /// playlist mount made 20,390 marks over a ~62-deep tree, 1,267,313 ancestor visits, 4.4 ms of a 16 ms frame. Stamps
+    /// cannot retire mid-publication (a consumer's sequence is at most the last published one, below this stamp); the one
+    /// way to break the chain is re-parenting a subtree that carries bits, which <see cref="PropagateMovedSubtreeBits"/>
+    /// repairs on attach.</para></summary>
+    private void WalkRecordDirty(int self, int start, byte bits)
+    {
+        ulong walkStamp = _publishSeq + 1;
+        bool transformBit = (bits & RecordDirtyTransform) != 0;
+        bool contentBit = (bits & (RecordDirtyContent | RecordDirtyLayout)) != 0;
+        for (int n = start; n != 0; n = _parent[n])
         {
+            FluentGpu.Hosting.MountProf.RecordDirtyIters++;
+            if (n != self && (_recordDirtyDescendant[n] & bits) == bits && (_recordDirty[n] & bits) == bits)
+            {
+                ref var held = ref _recordDirtyStamp[n];
+                if ((!transformBit || held.DescendantTransform == walkStamp) && (!contentBit || held.DescendantContent == walkStamp))
+                    break;
+            }
             byte oldAggregate = _recordDirty[n];
             byte oldSelf = _recordDirtySelf[n];
             byte oldDescendant = _recordDirtyDescendant[n];
             byte nextAggregate = (byte)(oldAggregate | bits);
-            byte nextSelf = n == idx ? (byte)(oldSelf | bits) : oldSelf;
-            byte nextDescendant = n == idx ? oldDescendant : (byte)(oldDescendant | bits);
+            byte nextSelf = n == self ? (byte)(oldSelf | bits) : oldSelf;
+            byte nextDescendant = n == self ? oldDescendant : (byte)(oldDescendant | bits);
             // Restamp only this contribution, including when its bit was already present. Ancestors' descendant
             // bits must outlive this publication, but their independent self bits can retire as soon as consumed.
             ref var stamps = ref _recordDirtyStamp[n];
             ulong stamp = _publishSeq + 1;
-            if (n == idx)
+            if (n == self)
             {
                 if ((bits & RecordDirtyTransform) != 0) stamps.SelfTransform = stamp;
                 if ((bits & (RecordDirtyContent | RecordDirtyLayout)) != 0) stamps.SelfContent = stamp;
@@ -1496,10 +1540,10 @@ public sealed partial class SceneStore : ISceneBackend
             // its snapshot row at the first write until a full capture: the lyrics karaoke wipe advanced at the
             // full-capture cadence (~5 Hz) while every frame wrote a new split. Ancestors are unchanged except for
             // their dirty bytes, so they stay gated on a bit change below.
-            if (n == idx) NoteCaptureChanged(n);
+            if (n == self) NoteCaptureChanged(n);
             if (nextAggregate == oldAggregate && nextSelf == oldSelf && nextDescendant == oldDescendant)
                 continue;
-            if (n != idx) NoteCaptureChanged(n);   // P8: the record-dirty BYTES are captured columns - a changed bit is a changed row
+            if (n != self) NoteCaptureChanged(n);   // P8: the record-dirty BYTES are captured columns - a changed bit is a changed row
 
             _recordDirty[n] = nextAggregate;
             _recordDirtySelf[n] = nextSelf;

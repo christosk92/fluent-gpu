@@ -100,7 +100,9 @@ public static class SceneRecorder
                                           SliceRecorder? slices = null, FluentGpu.Animation.DetachedAnimSlab? detached = null)
     {
         var context = scene.Recording;
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Capture);
         var snapshot = context.CaptureInline(scene, images);
+        FluentGpu.Hosting.MountProf.Exit();
         ReadOnlySpan<FluentGpu.Animation.DetachedNode> detachedNodes = default;
         if (detached is not null && detached.Count > 0)
         {
