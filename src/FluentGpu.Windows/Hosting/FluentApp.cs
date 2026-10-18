@@ -788,6 +788,9 @@ public static class FluentApp
     /// give back under pressure. Null before the window is up or after it closed.</summary>
     public static ImageCache? EngineImages => s_host?.Images;
 
+    /// <summary>The running host's <see cref="AppHost.IsInteractionQuiet"/> (true when no host runs). UI thread.</summary>
+    public static bool IsInteractionQuiet => s_host?.IsInteractionQuiet ?? true;
+
     /// <summary>Compact per-class GPU residency fragment (top tracked-resource classes, render-target pool
     /// occupancy, upload-arena counters) — see <see cref="D3D12Device.DiagGpuCensusLine"/>. Pairs with <see
     /// cref="GpuResidency"/> in an app's memory sampler: `gpu bytes=… resources=…` plus this fragment appended

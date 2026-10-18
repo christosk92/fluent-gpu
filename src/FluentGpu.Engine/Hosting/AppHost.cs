@@ -4493,6 +4493,15 @@ public sealed partial class AppHost : IDisposable
     internal const WakeReasons ColdInteractiveWake = WakeReasons.ScrollAnim | WakeReasons.ScrollProducer | WakeReasons.DragDropWork
         | WakeReasons.DragActive | WakeReasons.GestureHold | WakeReasons.TouchPress | WakeReasons.WarmCadence;
 
+    /// <summary>Is the host QUIET enough for out-of-band maintenance an app schedules itself (the Wavee heap governor's
+    /// post-navigation gen-0 collection): no interaction live (the cold-maintenance rule: a scroll or drag in motion, a held
+    /// or pressed touch, the post-input warm hold, nor any input in the last <c>ColdMaintenanceDeadline.QuietMs</c>), no UI
+    /// animation row due, no exit orphan still animating and no reactive work pending. Steady non-interactive motion (a
+    /// playhead, a visualizer) does not count, as for the engine's own cold services. UI thread.</summary>
+    public bool IsInteractionQuiet
+        => (ComputeWakeReasons() & (ColdInteractiveWake | WakeReasons.Anim | WakeReasons.Orphans | WakeReasons.RuntimePending)) == 0
+           && ColdMaintenanceNowMs >= _coldQuietFromMs;
+
     private void NoteColdInteraction() => _coldQuietFromMs = ColdMaintenanceNowMs + ColdMaintenanceDeadline.QuietMs;
 
     private int ClampWaitToColdMaintenance(int wait)
