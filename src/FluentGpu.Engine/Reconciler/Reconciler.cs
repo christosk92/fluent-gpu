@@ -4828,6 +4828,10 @@ public sealed partial class TreeReconciler
             _keepWhileHiddenNodes.Remove(idx);   // the slot may be reused by a node that never asked to be kept
         }
         DisposeNodeBindings(idx);
+        // Element.Stagger / RelativeTo rows are node-indexed like the rest: a freed index must not hand its stagger or its
+        // FLIP anchor to the next node that reuses it (WriteColumns' own remove only covers a node that is re-written).
+        _childStagger.Remove(idx);
+        _relativeKey.Remove(idx);
         _providerSig.Remove(idx);
         _mirroredChild.Remove(idx);
         _showState.Remove(idx);
