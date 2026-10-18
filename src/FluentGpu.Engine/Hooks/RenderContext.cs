@@ -458,6 +458,10 @@ public sealed partial class RenderContext
     /// and the tree it would re-render is byte-identical. Falls back to <see cref="RequestRerender"/> when unwired.</summary>
     public Action? RequestFrame;
     public AnimEngine? Anim;
+    /// <summary>Reconciler-injected: open the keep-alive activation's layout-transition suppression window (this frame's layout and the next) NOW.
+    /// For a component that MOUNTS a page's content after the keep-alive switch itself (a deferred cold mount): the content's first layouts must
+    /// land, not animate in from zero as a keep-alive activation's would not.</summary>
+    public Action? SuppressLayoutTransitions;
     public ImageCache? Images;                  // host-injected; backs UseImage / PrefetchImage
     public SceneStore? Scene;                   // reconciler-injected; for measuring nodes (AbsoluteRect) + overlay positioning
     /// <summary>Reconciler-injected bound-list removal seam: detach realized logical indices into the exit-orphan layer,

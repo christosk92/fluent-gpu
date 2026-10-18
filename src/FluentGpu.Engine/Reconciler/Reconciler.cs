@@ -856,10 +856,20 @@ public sealed partial class TreeReconciler
     private Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? _beginVirtualRemovalSeam;
     private Func<NodeHandle, object, Signal<object?>?>? _resolveContextSeam;
 
+    private Action? _armSuppressionSeam;
+
+    /// <summary>Open the keep-alive activation's layout-suppression window (two frames), as an activation does.</summary>
+    public void ArmKeepAliveLayoutSuppression()
+    {
+        _keepAliveLayoutSuppressionFrames = Math.Max(_keepAliveLayoutSuppressionFrames, 2);
+        _keepAliveSuppressionAge = 0;
+    }
+
     private void InjectContext(RenderContext ctx, NodeHandle anchor)
     {
         ctx.Runtime = Runtime;
         ctx.Anim = Anim;
+        ctx.SuppressLayoutTransitions = _armSuppressionSeam ??= ArmKeepAliveLayoutSuppression;
         ctx.Images = Images;
         ctx.Scene = _scene;
         ctx.RequestFrame = RequestFrame;
