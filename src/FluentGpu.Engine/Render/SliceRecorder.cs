@@ -166,6 +166,7 @@ public sealed partial class SliceRecorder
         public AcrylicRecipe Acrylic;
         public RectF Bounds;       // slice-space (pose-free window DIP) subtree bounds
         public bool PoseLocked;    // the stream holds a viewport-fixed op baked at the record-time delta
+        public bool Fractional;    // a composited transition layer (NodePaint.CompositeLayer): placed at its exact sub-pixel offset
         // which cut budget the slice spends when registered (effect budget / acrylic budget / a free distributable fade)
         public BudgetClass Budget;
         // a repaint boundary's raster downscale (BoxEl.RasterScale): > 1 = the low-resolution route (no tiles)
@@ -484,6 +485,21 @@ public sealed partial class SliceRecorder
     {
         ref Rec r = ref _recs[slot];
         r.Pose = pose; r.BaseWorld = baseWorld; r.Ox = ox; r.Oy = oy; r.FreeLocal = freeLocal; r.OwnDx = ownDx; r.OwnDy = ownDy;
+        r.Fractional = false;
+    }
+
+    /// <summary>The slice at <paramref name="slot"/> is a composited transition layer: it and every slice below it place at their
+    /// exact (sub-pixel) offset — see <see cref="SliceFrame.PhaseX"/>.</summary>
+    internal void SetFractional(int slot) => _recs[slot].Fractional = true;
+
+    private bool UnderFractional(int slot)
+    {
+        for (int s = slot, guard = 0; s >= 0 && guard < 64; s = _recs[s].Parent, guard++)
+        {
+            if (_recs[s].Fractional) return true;
+            if (s == RootSlot) break;
+        }
+        return false;
     }
 
     internal void SetMarker(int slot, in RectF clip, int flags, in PushLayerCmd layer, in AcrylicRecipe acrylic,
@@ -2256,7 +2272,9 @@ public sealed partial class SliceRecorder
                     // The group's transform is its slice's posed offset (whole device px) and its footprint the placed
                     // extent of what it encloses (+ its blur reach): a group moved rigidly by an ancestor scroll keeps its
                     // surface origin relative to its content — the group-cache key (GroupCacheKey) then matches.
-                    var gT = Affine2D.Translation(MathF.Round(e.AccDx * scale), MathF.Round(e.AccDy * scale));
+                    var gT = UnderFractional(e.Slot)
+                        ? Affine2D.Translation(MathF.Floor(e.AccDx * scale), MathF.Floor(e.AccDy * scale))
+                        : Affine2D.Translation(MathF.Round(e.AccDx * scale), MathF.Round(e.AccDy * scale));
                     RectF gFoot = ScalePx(e.Rect, scale);
                     if (!gFoot.IsEmpty && gSigma > 0f)
                     {
@@ -2331,7 +2349,19 @@ public sealed partial class SliceRecorder
             bool grows = covSlot >= 0 && GrowsOnMainAxis(covSlot, scene);
             SegmentOrigin(r.Kind, grows ? (_recs[covSlot].Horizontal ? 1 : 0) : -1, bDip, scale,
                 out float ox, out float oy, out float residualX, out float residualY);
-            var frame = new SliceFrame((int)ox, (int)oy, residualX, residualY, scale);
+            // Under a composited transition layer the slice places at its EXACT offset: the composite keeps the whole-pixel
+            // part, the raster takes the fraction (SliceFrame.Phase) — so `ox`/`oy` (slice px = DIP·scale − ox) carry it from
+            // here on, and every slice-px rect below (content, needed tiles, damage, span cull) follows.
+            bool fractional = UnderFractional(e.Slot);
+            float phaseX = 0f, phaseY = 0f;
+            int originX = (int)ox, originY = (int)oy;
+            if (fractional)
+            {
+                float px = e.AccDx * scale, py = e.AccDy * scale;
+                phaseX = px - MathF.Floor(px); phaseY = py - MathF.Floor(py);
+                ox -= phaseX; oy -= phaseY;
+            }
+            var frame = new SliceFrame(originX, originY, residualX, residualY, scale, phaseX, phaseY);
             RectF contentPx = bDip.IsEmpty ? default : new RectF(bDip.X * scale - ox, bDip.Y * scale - oy, bDip.W * scale, bDip.H * scale);
             int sub = e.Segment * 8 + r.Role;
             ulong identity = SegmentIdentity(e.Slot, e.Segment);
@@ -2429,7 +2459,9 @@ public sealed partial class SliceRecorder
             RectF srcPx = default;
             if (e.HasLayer) LayerParams(in e.Layer, e.InnerClip, scale, out alpha, out sigma, out feather, out srcPx);
             ApplyDist(in e.Dist, scale, ref alpha, ref feather, out EdgeFeather feather2);
-            var transform = Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
+            var transform = fractional
+                ? Affine2D.Translation(originX + MathF.Floor(e.AccDx * scale), originY + MathF.Floor(e.AccDy * scale))
+                : Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
             RectF clipPx = StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH);
             if (r.Pose == PoseKind.Posed)
             {

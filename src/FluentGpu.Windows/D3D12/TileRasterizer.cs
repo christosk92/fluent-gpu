@@ -152,7 +152,8 @@ public sealed unsafe partial class D3D12Device
         float s = _frameScale <= 0f ? 1f : _frameScale;
         ChooseShift(dx, w, out int spx, out int tlx);
         ChooseShift(dy, h, out int spy, out int tly);
-        float sx = -spx / s, sy = -spy / s;
+        // SliceFrame.Phase: a slice placed at a sub-pixel offset rasters at that fraction (the composite places it whole-pixel).
+        float sx = (-spx + row.Frame.PhaseX) / s, sy = (-spy + row.Frame.PhaseY) / s;
         // target px = replay px + tlx (SetScissorRect's arithmetic): the clamp lives in replay px, the one space a tile
         // and the inline-group scratches it opens share.
         _replayClampOn = clamp;

@@ -51,8 +51,12 @@ public readonly record struct TileKey(int SliceId, short Tx, short Ty);
 /// <summary>Where a slice's space sits on the device grid (§A.7): <see cref="OriginX"/>/<see cref="OriginY"/> = the slice
 /// origin FLOORED to whole device px; <see cref="ResidualX"/>/<see cref="ResidualY"/> = the dropped fraction, baked into
 /// the raster so text keeps the same subpixel phase at rest and in motion; <see cref="Scale"/> = the raster scale (DPI).
-/// The composite then samples 1:1 (point) because the poser's translate is already whole-device-pixel.</summary>
-public readonly record struct SliceFrame(int OriginX, int OriginY, float ResidualX, float ResidualY, float Scale);
+/// The composite then samples 1:1 (point) because the poser's translate is already whole-device-pixel.
+/// <see cref="PhaseX"/>/<see cref="PhaseY"/> = a SUB-PIXEL placement phase (0..1 device px) the raster adds to every op: a
+/// slice under a composited transition layer (NodePaint.CompositeLayer) places at a fractional offset; the composite keeps
+/// its whole-pixel part and the tiles are rastered at the fraction, so the slice lands exactly where the inline route drew it
+/// (no snapping, no resampling). A phase change re-rasters the tiles (SliceGeometry), never re-records.</summary>
+public readonly record struct SliceFrame(int OriginX, int OriginY, float ResidualX, float ResidualY, float Scale, float PhaseX = 0f, float PhaseY = 0f);
 
 /// <summary>One tile's retained state. <see cref="Surface"/> = the surface slot holding its pixels (−1 = none);
 /// <see cref="Invalid"/> = why it must be re-rastered (<see cref="InvalidationReason.None"/> = valid);

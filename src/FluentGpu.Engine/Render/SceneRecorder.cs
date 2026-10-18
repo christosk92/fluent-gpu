@@ -1460,6 +1460,7 @@ internal sealed class SceneRecordingContext
         dl.CompositeSlice(in cmd, key);
         sl.AddChild(stats.CurSlot, slot);
         sl.SetPose(slot, pose, in baseWorld, ox, oy, in freeLocal, ownDx, ownDy);
+        if (p.CompositeLayer) sl.SetFractional(slot);
         sl.SetMarker(slot, in clip, 0, default, default);
         if (pose == SliceRecorder.PoseKind.Content)
         {

@@ -359,6 +359,7 @@ public sealed partial class SliceTable
             if (row.Frame.Scale != frame.Scale) InvalidateSlice(s, InvalidationReason.ScaleChanged);
             else if (row.Kind != kind || row.Frame.OriginX != frame.OriginX || row.Frame.OriginY != frame.OriginY
                      || row.Frame.ResidualX != frame.ResidualX || row.Frame.ResidualY != frame.ResidualY
+                     || row.Frame.PhaseX != frame.PhaseX || row.Frame.PhaseY != frame.PhaseY
                      || row.Identity != identity)
                 InvalidateSlice(s, InvalidationReason.SliceGeometry);
         }
