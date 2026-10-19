@@ -22,6 +22,15 @@ public static class PersonPicture
 
     // ── WinUI design constants (PersonPicture.cpp OnSizeChanged + _themeresources) ─────────────────────────────────
     private const float InitialsFontFraction = 0.42f;  // "font size to be 42% of the container"
+    // The floor: legible initials. 42 % of a small avatar (a 24 attribution portrait: 10.08) falls under the 11 DIP type floor, so the
+    // initials hold 11 there, but never more than half the diameter, so a tiny avatar's letters still sit inside its circle.
+    private const float InitialsFontFloor = 11f;
+    private const float InitialsFontCapFraction = 0.5f;
+
+    /// <summary>The initials' font size for an avatar <paramref name="size"/> wide: 42 % of it (WinUI's rule), at least
+    /// 11 DIP (the type floor) where that still fits in half the diameter, never under 1.</summary>
+    public static float InitialsFontSizeFor(float size)
+        => MathF.Max(1f, MathF.Max(size * InitialsFontFraction, MathF.Min(InitialsFontFloor, size * InitialsFontCapFraction)));
     private const float BadgePlateFraction = 0.50f;    // "badging plate to be about 50% of the control"
     private const float BadgeFontFraction = 0.60f;     // "font size to be 60% of the badging plate"
 
@@ -31,7 +40,7 @@ public static class PersonPicture
     public readonly record struct PersonPictureTemplateSettings(
         string ActualInitials,   // the resolved glyph-or-initials string (empty when a photo is shown)
         bool UseSymbolFont,      // true ⇒ render ActualInitials with the symbol font (Group / NoPhotoOrInitials glyph)
-        float InitialsFontSize,  // Width * 0.42, min 1
+        float InitialsFontSize,  // Width * 0.42, floored at 11 where that fits in half the width (InitialsFontSizeFor), min 1
         float BadgePlateSize,    // Width * 0.50
         float BadgeFontSize)     // BadgePlateSize * 0.60, min 1
     {
@@ -41,7 +50,7 @@ public static class PersonPicture
             return new PersonPictureTemplateSettings(
                 actualInitials,
                 useSymbolFont,
-                MathF.Max(1f, size * InitialsFontFraction),
+                InitialsFontSizeFor(size),
                 plate,
                 MathF.Max(1f, plate * BadgeFontFraction));
         }
@@ -119,7 +128,7 @@ public static class PersonPicture
                 [
                     new TextEl(actualText)
                     {
-                        Size = ts.InitialsFontSize,                // Width * 0.42 (WinUI OnSizeChanged), min 1
+                        Size = ts.InitialsFontSize,                // Width * 0.42 (WinUI OnSizeChanged), floored at 11 (InitialsFontSizeFor)
                         Weight = 600,                              // InitialsTextBlock FontWeight=SemiBold in EVERY state (PersonPicture.xaml:66)
                         LineBounds = TextLineBounds.Tight,         // TextLineBounds="Tight" — optical (cap-height) centering (PersonPicture.xaml:66)
                         Color = Tok.TextPrimary,                   // PersonPictureForegroundThemeBrush = TextFillColorPrimary
@@ -178,7 +187,7 @@ public static class PersonPicture
     public static BoxEl Bound(Prop<string> displayName, Prop<string> imageUrl, float size = 96f, ColorF? fill = null)
     {
         var circle = Radii.Circle(size);
-        float initialsFontSize = MathF.Max(1f, size * InitialsFontFraction);
+        float initialsFontSize = InitialsFontSizeFor(size);
         ColorF resolvedFill = fill ?? Tok.FillControlAltQuaternary;
 
         Prop<string> initialsText = Prop.Of(() => InitialsFromDisplayName(displayName.Current() ?? ""));
