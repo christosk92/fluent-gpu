@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Everything else (net10 posture, PublishAot, the engine ProjectReferences, the source generators) comes from
+       FluentGpu.App.props through Directory.Build.props. Publish a native exe with:
+         dotnet publish -c Release            (RID = the SDK's own architecture)
+         dotnet publish -c Release -r win-arm64 -->
+  <PropertyGroup>
+    <!-- WinExe = no console window. Use Exe while you want Console output. -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>FluentGpuApp</RootNamespace>
+    <AssemblyName>FluentGpuApp</AssemblyName>
+  </PropertyGroup>
+
+</Project>

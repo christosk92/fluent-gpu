@@ -1,0 +1,31 @@
+<Project>
+
+  <!-- The FluentGpu engine is a checkout next to this app, referenced through $(EngineRoot) (never a package here).
+       FluentGpu.App.props (at the engine root) brings the whole app baseline: net10 / GC posture, PublishAot for the
+       exe, the engine ProjectReferences, the source generators and the NativeAOT vswhere fix. docs/guide/new-app.md.
+
+       Pin a different checkout per machine or worktree in a git-ignored EngineRoot.local.props:
+         <Project><PropertyGroup><EngineRoot>D:\src\fluent-gpu\</EngineRoot></PropertyGroup></Project>
+       A command-line -p:EngineRoot=... wins over both. -->
+  <Import Project="$(MSBuildThisFileDirectory)EngineRoot.local.props"
+          Condition="'$(EngineRoot)' == '' and Exists('$(MSBuildThisFileDirectory)EngineRoot.local.props')" />
+  <PropertyGroup>
+    <EngineRoot Condition="'$(EngineRoot)' == ''">FLUENTGPU_ENGINE_ROOT</EngineRoot>
+    <!-- A relative EngineRoot is relative to THIS folder; the trailing slash is optional. -->
+    <EngineRoot>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)', '$(EngineRoot)'))</EngineRoot>
+    <_FgAppPropsPath>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)', '$(EngineRoot)'))FluentGpu.App.props</_FgAppPropsPath>
+  </PropertyGroup>
+
+  <Import Project="$(_FgAppPropsPath)" Condition="Exists('$(_FgAppPropsPath)')" />
+
+  <Target Name="RequireFluentGpuCheckout" BeforeTargets="BeforeBuild;Restore;CollectPackageReferences"
+          Condition="!Exists('$(_FgAppPropsPath)')">
+    <Error Text="FluentGpu engine checkout not found: '$(_FgAppPropsPath)' does not exist. Clone https://github.com/christosk92/fluent-gpu and set EngineRoot (Directory.Build.props, a git-ignored EngineRoot.local.props, or -p:EngineRoot=...)." />
+  </Target>
+
+  <PropertyGroup>
+    <!-- Warning-clean, like the engine. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>
