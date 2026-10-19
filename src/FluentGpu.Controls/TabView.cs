@@ -30,6 +30,10 @@ public sealed record TabViewItem
     /// <summary>Segoe Fluent Icons glyph (the IconSource analog): 16px, 10px right margin, foreground follows the
     /// header ramp (TabViewItemHeaderIconSize/IconMargin, TabView_themeresources.xaml:246-247; ramps :95-99).</summary>
     public string? Icon { get; init; }
+    /// <summary>A leading visual drawn instead of <see cref="Icon"/> (a 16x16 cover thumbnail, an artist disc), invoked per
+    /// render. Honoured by a <see cref="TabStrip"/> with a <see cref="TabStrip.Form"/> (Chrome appearance), where it is also
+    /// the face of a Compact form's icon-only cells.</summary>
+    public Func<Element>? IconContent { get; init; }
     /// <summary>WinUI <c>TabViewItem.IsClosable</c> (idl:217-219, default true) — gates the close button, middle-click
     /// close and Ctrl+F4.</summary>
     public bool IsClosable { get; init; } = true;

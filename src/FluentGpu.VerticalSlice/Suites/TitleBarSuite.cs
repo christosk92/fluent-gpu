@@ -25,7 +25,7 @@ namespace FluentGpu.VerticalSlice.Harness;
 //  Nothing asserted this before — HeadlessWindow.LastTitleBarRegions existed and was read by no gate. These checks
 //  drive the MERGED one-row bar (tabs + centre + trailing + captions) headlessly and assert the report itself.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-public static class TitleBarSuite
+public static partial class TitleBarSuite
 {
     const float BarW = 1400f;
     const float MinDragStrip = 48f;      // TitleBar.MinDragStrip (private) — the guaranteed drag column before the captions
@@ -148,6 +148,8 @@ public static class TitleBarSuite
             $"clear={afterClear} last={after[^1].Hit} run={LongestInteriorCaptionRun(after, afterButtonsLeft):0.#} count={after.Length}");
 
         RailBaselineChecks(strings);
+        ShellRowsChecks(strings);
+        KeyedChildrenChecks(strings);
 
         // ── (g) the pane toggle's live enabled state: a disabled toggle re-renders in place, and re-enables ────────────
         {

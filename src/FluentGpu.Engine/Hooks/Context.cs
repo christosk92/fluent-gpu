@@ -371,6 +371,12 @@ public sealed class InputHooks
     /// <summary>Node → its laid-out absolute rect (window DIP) — host-wired to <c>SceneStore.AbsoluteRect</c>. The
     /// TitleBar control builds its region report from captured part handles in a layout effect.</summary>
     public Func<NodeHandle, RectF>? GetNodeRect;
+    /// <summary>Run <c>action</c> ONCE after the current frame's layout settles: with the 6.5 layout effects when queued
+    /// during the main solve (an <see cref="Element.OnBoundsChanged"/> callback), else after the frame's late scoped
+    /// relayouts. The seam a control uses to publish something derived from SEVERAL nodes' final rects in the SAME frame a
+    /// child moved, without re-rendering itself: the TitleBar's keyed children re-push the non-client regions this way.
+    /// Callers dedupe (queue once per frame) and pass a cached delegate. Null in a host-less tree.</summary>
+    public Action<Action>? QueueAfterLayout;
     /// <summary>Bumped by the host on WindowFocus/WindowBlur/WindowStateChanged: the TitleBar reads it (subscribes)
     /// and pulls <see cref="GetWindowState"/>/<see cref="IsWindowActive"/> for the current values on re-render.</summary>
     public Signal<int>? WindowChromeEpoch;
