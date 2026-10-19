@@ -43,6 +43,287 @@ static class TextSuite
         GlyphAtlasUploadChecks();
         ColorGlyphBakeChecks();
         SpanEllipsisChecks();
+        TextAlignChecks(strings);
+    }
+
+    // §4 TextEl.TextAlign / TextEl.FontFeatures (docs/plans/app-authoring-ergonomics-implementation.md §4). Headless advance
+    // model at Size 10: 5.5 DIP per char, 14 DIP lines. The seam queries are called exactly as the input dispatcher calls
+    // them (wrap width = QueryMaxWidth, align width = the node's laid width = the glyph op's Bounds.W), so a caret/range
+    // x here is where the renderer places the glyph: the DirectWrite engine applies the SAME TextTypography.LineOffset
+    // to its laid glyphs and cluster table (glyph-x ≡ hit-test is pinned on real DirectWrite in
+    // FluentGpu.Windows.Tests/Scout/TextAlignTypographyTests).
+    static void TextAlignChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        var scene = new SceneStore();
+        var recon = new TreeReconciler(scene, strings);
+        var dispatcher = new InputDispatcher(scene) { Fonts = fonts };
+        CursorId cursor = CursorId.Arrow;
+        dispatcher.OnCursorChanged = c => cursor = c;
+        recon.ReconcileRoot(new BoxEl
+        {
+            Direction = 1, Width = 300, Height = 200,
+            Children =
+            [
+                // [0] NoWrap number measured at +Inf (11 DIP) but arranged 100 wide — the core case.
+                new TextEl("42") { Size = 10f, Width = 100f, TextAlign = TextAlign.End, FontFeatures = FontFeatures.TabularFigures, Underline = true },
+                // [1] same, with trailing spaces — they hang and must not shift the line.
+                new TextEl("42  ") { Size = 10f, Width = 100f, TextAlign = TextAlign.End },
+                // [2] End-aligned hyperlink paragraph: "Read the docs now" = 93.5 DIP in a 200 box → offset 106.5.
+                new SpanTextEl([new TextSpan("Read the "), new TextSpan("docs", OnClick: () => { }), new TextSpan(" now")])
+                { Size = 10f, Width = 200f, Wrap = TextWrap.NoWrap, TextAlign = TextAlign.End },
+            ],
+        }, null);
+        new FlexLayout(scene, fonts).Run(scene.Root);
+        var endNode = Child(scene, scene.Root, 0);
+        var trailNode = Child(scene, scene.Root, 1);
+        var linkNode = Child(scene, scene.Root, 2);
+
+        // (a) the style + the draw op carry align/features; the op's box is the align width the render engine uses.
+        var endStyle = scene.Layout(endNode).TextStyle;
+        var dl = new DrawList();
+        SceneRecorder.Record(scene, dl);
+        var dev = new HeadlessGpuDevice();
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(300, 200), 1f, ColorF.Transparent));
+        int opTypo = -1; float opBoxW = -1f;
+        foreach (var g in dev.LastGlyphs)
+            if (strings.Resolve(g.Text) == "42") { opTypo = g.Typography; opBoxW = g.Bounds.W; }
+        Check("gate.text.align.op TextEl.TextAlign/FontFeatures reach TextStyle and the glyph op (packed Typography; Bounds.W = the arranged box)",
+            endStyle.Align == TextAlign.End && endStyle.Features == FontFeatures.TabularFigures
+            && TextTypography.AlignOf(opTypo) == TextAlign.End && TextTypography.FeaturesOf(opTypo) == FontFeatures.TabularFigures
+            && Near(opBoxW, 100f, 0.01f),
+            $"style={endStyle.Align}/{endStyle.Features} op={TextTypography.AlignOf(opTypo)}/{TextTypography.FeaturesOf(opTypo)} boxW={opBoxW:0.0}");
+
+        // (b) end-aligned NoWrap text in a wider box: glyph x (= LineOffset(End, 100, 11) = 89) ≡ caret ≡ range rect ≡ hit-test.
+        string t42 = "42";
+        float boxW = scene.Bounds(endNode).W;
+        float glyphX = TextTypography.LineOffset(TextAlign.End, boxW, 11f);
+        fonts.GetCaret(t42, endStyle, float.PositiveInfinity, 0, out float caret0, out _, out _, out _, boxW);
+        fonts.GetCaret(t42, endStyle, float.PositiveInfinity, 2, out float caret2, out _, out _, out _, boxW);
+        Span<RectF> rr = stackalloc RectF[4];
+        int nr = fonts.GetRangeRects(t42, endStyle, float.PositiveInfinity, 0, 2, rr, boxW);
+        int hitLead = fonts.HitTestText(t42, endStyle, float.PositiveInfinity, new Point2(glyphX + 1f, 5f), out _, boxW);
+        int hitSecond = fonts.HitTestText(t42, endStyle, float.PositiveInfinity, new Point2(glyphX + 7f, 5f), out _, boxW);
+        int hitLeftOfText = fonts.HitTestText(t42, endStyle, float.PositiveInfinity, new Point2(20f, 5f), out _, boxW);
+        bool barAligned = false;
+        foreach (var r in dev.LastRects)
+            if (Near(r.Rect.H, 1f, 0.01f) && Near(r.Rect.X, 89f, 0.01f) && Near(r.Rect.W, 11f, 0.01f)) barAligned = true;
+        Check("gate.text.align.end-nowrap end-aligned NoWrap text in a wider box: glyph x, caret, range rect and hit-test agree (x = 89 = 100 − 11); the underline bar follows",
+            Near(boxW, 100f, 0.01f) && Near(glyphX, 89f, 0.01f) && Near(caret0, 89f, 0.01f) && Near(caret2, 100f, 0.01f)
+            && nr == 1 && Near(rr[0].X, 89f, 0.01f) && Near(rr[0].W, 11f, 0.01f)
+            && hitLead == 0 && hitSecond == 1 && hitLeftOfText == 0 && barAligned,
+            $"boxW={boxW:0.0} glyphX={glyphX:0.0} caret0={caret0:0.0} caret2={caret2:0.0} rect={(nr > 0 ? rr[0].ToString() : "none")} hits={hitLead}/{hitSecond}/{hitLeftOfText} bar={barAligned}");
+
+        // (c) trailing spaces do not shift end alignment.
+        var trailStyle = scene.Layout(trailNode).TextStyle;
+        fonts.GetCaret("42  ", trailStyle, float.PositiveInfinity, 0, out float trailCaret0, out _, out _, out _, scene.Bounds(trailNode).W);
+        Check("gate.text.align.trailing-space trailing spaces hang: \"42  \" End-aligns its digits exactly where \"42\" does",
+            Near(trailCaret0, caret0, 0.01f), $"withSpaces={trailCaret0:0.00} plain={caret0:0.00}");
+
+        // (d) center on a 2-line wrapped run: "aaaa bb" at 30 → "aaaa " (visible 22) | "bb" (11) → offsets 4 and 9.5.
+        var center = new TextStyle(default, 10f, 400, TextWrap.Wrap, Align: TextAlign.Center);
+        Span<RectF> cr = stackalloc RectF[4];
+        int nc = fonts.GetRangeRects("aaaa bb", center, 30f, 0, 7, cr, 30f);
+        fonts.GetCaret("aaaa bb", center, 30f, 5, out float cLine1X, out float cLine1Top, out _, out int cLine1, 30f);
+        int cHit = fonts.HitTestText("aaaa bb", center, 30f, new Point2(10f, 20f), out _, 30f);   // line 1, inside the first 'b' [9.5, 15)
+        Check("gate.text.align.center-wrapped center on a 2-line wrapped run: each line centers on its own visible width",
+            nc == 2 && Near(cr[0].X, 4f, 0.01f) && Near(cr[1].X, 9.5f, 0.01f) && Near(cr[1].Y, 14f, 0.01f)
+            && cLine1 == 1 && Near(cLine1X, 9.5f, 0.01f) && Near(cLine1Top, 14f, 0.01f) && cHit == 5,
+            $"rects={nc}: {(nc > 0 ? cr[0].X : -1):0.0}/{(nc > 1 ? cr[1].X : -1):0.0} caret5=({cLine1X:0.0}, line {cLine1}) hit={cHit}");
+
+        // (e) justify widens inter-word gaps except on the last line: "aa bb cc dd" at 40 → "aa bb " | "cc dd".
+        // Line 0 visible 27.5, one interior space → +12.5; 'b' moves 16.5 → 29 and the visible end reaches the box (40).
+        var just = new TextStyle(default, 10f, 400, TextWrap.Wrap, Align: TextAlign.Justify);
+        const string jt = "aa bb cc dd";
+        fonts.GetCaret(jt, just, 40f, 3, out float jB, out _, out _, out _, 40f);
+        fonts.GetCaret(jt, just, 40f, 5, out float jEnd0, out _, out _, out _, 40f);
+        fonts.GetCaret(jt, just, 40f, 9, out float jD, out _, out _, out int jLine, 40f);
+        var startStyle = just with { Align = TextAlign.Start };
+        fonts.GetCaret(jt, startStyle, 40f, 9, out float sD, out _, out _, out _, 40f);
+        Check("gate.text.align.justify justify widens inter-word gaps on every line but the last",
+            Near(jB, 29f, 0.01f) && Near(jEnd0, 40f, 0.01f) && jLine == 1 && Near(jD, 16.5f, 0.01f) && Near(jD, sD, 0.01f),
+            $"b={jB:0.0} line0End={jEnd0:0.0} lastLine d={jD:0.0} (start {sD:0.0}, line {jLine})");
+
+        // (f) TextStyle equality (the measure-cache / SameLayoutInput key) separates align and features.
+        var baseStyle = new TextStyle(default, 14f, 400);
+        var centered = baseStyle with { Align = TextAlign.Center };
+        var tabular = baseStyle with { Features = FontFeatures.TabularFigures };
+        var slashed = baseStyle with { Features = FontFeatures.SlashedZero };
+        var ss01 = baseStyle with { Features = FontFeatures.StylisticSet01 };
+        bool keysSplit = baseStyle != centered && baseStyle != tabular && slashed != ss01
+            && baseStyle == new TextStyle(default, 14f, 400, Align: TextAlign.Start, Features: FontFeatures.None);
+        var entry = new TextMeasureEntry { Valid = true, Text = strings.Intern("x"), Style = baseStyle, MaxW = float.PositiveInfinity };
+        bool cacheSplit = entry.Matches(entry.Text, baseStyle, float.PositiveInfinity)
+            && !entry.Matches(entry.Text, baseStyle with { Align = TextAlign.End }, float.PositiveInfinity)
+            && !entry.Matches(entry.Text, baseStyle with { Features = FontFeatures.TabularFigures }, float.PositiveInfinity);
+        bool packRound = true;
+        foreach (var a in new[] { TextAlign.Start, TextAlign.Center, TextAlign.End, TextAlign.Justify })
+            foreach (var f in new[] { FontFeatures.None, FontFeatures.TabularFigures | FontFeatures.SlashedZero, FontFeatures.StylisticSet20 | FontFeatures.LiningFigures })
+            {
+                int pk = TextTypography.Pack(a, f);
+                if (TextTypography.AlignOf(pk) != a || TextTypography.FeaturesOf(pk) != f) packRound = false;
+            }
+        Check("gate.text.align.style-key TextStyle inequality on align/features keeps measure-cache keys separate; the op packing round-trips",
+            keysSplit && cacheSplit && packRound, $"keys={keysSplit} cache={cacheSplit} pack={packRound}");
+
+        // (g) headless measure is unchanged by align (alignment is positioning only), wrapped and not.
+        bool measureSame = true;
+        var para = strings.Intern("aa bb cc dd ee");
+        foreach (var a in new[] { TextAlign.Center, TextAlign.End, TextAlign.Justify })
+            foreach (float mw in new[] { float.PositiveInfinity, 40f, 25f })
+            {
+                var st = new TextStyle(default, 10f, 400, TextWrap.Wrap);
+                var m0 = fonts.Measure(para, st, mw);
+                var m1 = fonts.Measure(para, st with { Align = a, Features = FontFeatures.TabularFigures }, mw);
+                if (m0.Size != m1.Size || m0.Baseline != m1.Baseline) measureSame = false;
+            }
+        Check("gate.text.align.measure-unchanged headless measure is identical for every TextAlign (and FontFeatures)", measureSame, $"same={measureSame}");
+
+        // (h) span artifacts follow the line offset: the "docs" link rect is laid at [49.5, 71.5) Start-aligned and the
+        // dispatcher shifts it by LineOffset(End, 200, 93.5) = 106.5 → Hand over [156, 178), arrow at the unshifted spot.
+        var lr = scene.AbsoluteRect(linkNode);
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(lr.X + 160f, lr.Y + 7f), 0, 0) });
+        bool handShifted = cursor == CursorId.Hand;
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(lr.X + 55f, lr.Y + 7f), 0, 0) });
+        bool arrowUnshifted = cursor != CursorId.Hand;
+        var linkRun = SpanRunTable.Shared.Resolve(scene.Layout(linkNode).TextStyle.SpanRunId);
+        float linkLineW = float.NaN;
+        if (linkRun?.Rects is { } lrr)
+            foreach (var art in lrr.Rects) if (art.Kind == SpanStyle.LinkBit) linkLineW = art.LineWidth;
+        Check("gate.text.align.span-artifacts an End-aligned paragraph's hyperlink rect moves with its line (Hand at the aligned x, not the Start x)",
+            handShifted && arrowUnshifted && Near(linkLineW, 93.5f, 0.01f),
+            $"handShifted={handShifted} arrowUnshifted={arrowUnshifted} lineW={linkLineW:0.0}");
+
+        TextAlignJustifyArtifactChecks(strings, fonts);
+        TextAlignTrimQueryChecks(strings, fonts);
+    }
+
+    // (i) Justify span artifacts follow the DRAWN box, not the measure wrap width. On DirectWrite a wrapped paragraph in a
+    // non-stretching column measures at the column width but its box shrinks to the widest natural line, and the renderer
+    // justifies at that box (Bounds.W). Headless reports wrapped boxes AT maxWidth, so the gate lays the node in a 35 box
+    // and then re-publishes the run's artifacts at a 43 wrap width (same breaks: "aa bb " | "cc dd") — exactly the
+    // DirectWrite shape (SpanRunRects.MaxWidth 43 ≠ Bounds.W 35). Line 0 visible 27.5, one interior gap: justified at 35
+    // the gap widens by 7.5 → the "bb" link/underline sit at [24, 35) (at 43 they would sit at [32, 43); Start at [16.5, 27.5)).
+    static void TextAlignJustifyArtifactChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        var scene = new SceneStore();
+        var recon = new TreeReconciler(scene, strings);
+        var dispatcher = new InputDispatcher(scene) { Fonts = fonts };
+        CursorId cursor = CursorId.Arrow;
+        dispatcher.OnCursorChanged = c => cursor = c;
+        recon.ReconcileRoot(new BoxEl
+        {
+            Direction = 1, Width = 300, Height = 200,
+            Children =
+            [
+                // [0] justified paragraph with an underlined hyperlink on its justified first line.
+                new SpanTextEl([new TextSpan("aa "), new TextSpan("bb", Underline: true, OnClick: () => { }), new TextSpan(" cc dd")])
+                { Size = 10f, Width = 35f, TextAlign = TextAlign.Justify },
+                // [1] whole-node underline, 2 wrapped lines: the justified first line fills the box → bar [0, 35).
+                new TextEl("aa bb cc dd") { Size = 10f, Width = 35f, Wrap = TextWrap.Wrap, TextAlign = TextAlign.Justify, Underline = true },
+                // [2] whole-node underline, single (last ⇒ unjustified) line: the bar keeps the natural 27.5.
+                new TextEl("aa bb") { Size = 10f, Width = 60f, TextAlign = TextAlign.Justify, Underline = true },
+            ],
+        }, null);
+        new FlexLayout(scene, fonts).Run(scene.Root);
+        var spanNode = Child(scene, scene.Root, 0);
+        ref readonly TextStyle spanStyle = ref scene.Layout(spanNode).TextStyle;
+        string text = strings.Resolve(scene.Paint(spanNode).Text);
+        fonts.Measure(scene.Paint(spanNode).Text, spanStyle, 43f);   // re-publish at the wider measure width
+        var run = SpanRunTable.Shared.Resolve(spanStyle.SpanRunId);
+        float boxW = scene.Bounds(spanNode).W;
+        SpanRect link = default, bar = default;
+        bool setup = run?.Rects is { } laid && Near(laid.MaxWidth, 43f, 0.01f) && Near(boxW, 35f, 0.01f) && text == "aa bb cc dd";
+        if (run?.Rects is { } arts)
+            foreach (var a in arts.Rects)
+            {
+                if (a.Kind == SpanStyle.LinkBit) link = a;
+                if (a.Kind == SpanStyle.UnderlineBit) bar = a;
+            }
+        // Published Start-laid + the line's gap counts; placed at the drawn box they match the seam's own justified query.
+        var placed = TextTypography.PlaceSpanRect(in link, TextAlign.Justify, boxW);
+        Span<RectF> q = stackalloc RectF[2];
+        int nq = fonts.GetRangeRects(text, spanStyle, boxW, 3, 5, q, boxW);
+        bool artsOk = Near(link.Rect.X, 16.5f, 0.01f) && Near(link.LineWidth, 27.5f, 0.01f)
+            && link.JustifyGaps == 1 && link.GapsBefore == 1 && link.GapsIn == 0
+            && Near(placed.X, 24f, 0.01f) && Near(placed.W, 11f, 0.01f)
+            && nq == 1 && Near(q[0].X, placed.X, 0.01f) && Near(q[0].W, placed.W, 0.01f);
+
+        // Hit-test (dispatcher) and paint (recorder) both place at Bounds.W.
+        var sr = scene.AbsoluteRect(spanNode);
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(sr.X + 26f, sr.Y + 7f), 0, 0) });
+        bool handAtDrawn = cursor == CursorId.Hand;
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(sr.X + 20f, sr.Y + 7f), 0, 0) });
+        bool arrowAtStart = cursor != CursorId.Hand;
+        var dl = new DrawList();
+        SceneRecorder.Record(scene, dl);
+        var dev = new HeadlessGpuDevice();
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(300, 200), 1f, ColorF.Transparent));
+        bool spanBar = false, fullBar = false, naturalBar = false;
+        foreach (var r in dev.LastRects)
+        {
+            if (!Near(r.Rect.H, 1f, 0.01f)) continue;
+            if (Near(r.Rect.X, 24f, 0.01f) && Near(r.Rect.W, 11f, 0.01f)) spanBar = true;
+            if (Near(r.Rect.X, 0f, 0.01f) && Near(r.Rect.W, 35f, 0.01f)) fullBar = true;
+            if (Near(r.Rect.X, 0f, 0.01f) && Near(r.Rect.W, 27.5f, 0.01f)) naturalBar = true;
+        }
+        Check("gate.text.align.justify-artifacts justified span link/underline rects are placed at the drawn box (Bounds.W 35), not the measure wrap width (43): hit-test, bar and the seam's justified range agree; whole-node bars follow the justified first line",
+            setup && artsOk && handAtDrawn && arrowAtStart && spanBar && fullBar && naturalBar && bar.JustifyGaps == 1,
+            $"setup={setup} link={link.Rect} lineW={link.LineWidth:0.0} gaps={link.JustifyGaps}/{link.GapsBefore}/{link.GapsIn} placed={placed} query={(nq > 0 ? q[0].ToString() : "none")} hand={handAtDrawn} arrow={arrowAtStart} bars span={spanBar} full={fullBar} natural={naturalBar}");
+    }
+
+    // (j) NoWrap + Trim: the renderer ellipsizes at Bounds.W, so the dispatcher's selection hit-test must lay the line at
+    // the same width (an untrimmed +Inf query line sits at a different Center/End offset). Untrimmed NoWrap keeps +Inf.
+    static void TextAlignTrimQueryChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        var scene = new SceneStore();
+        var recon = new TreeReconciler(scene, strings);
+        var probe = new MaxWidthProbeFonts(fonts);
+        var dispatcher = new InputDispatcher(scene) { Fonts = probe };
+        recon.ReconcileRoot(new BoxEl
+        {
+            Direction = 1, Width = 300, Height = 200,
+            Children =
+            [
+                new TextEl("aaaaaaaaaa") { Size = 10f, Width = 30f, Trim = TextTrim.CharacterEllipsis, TextAlign = TextAlign.Center, IsTextSelectionEnabled = true },
+                new TextEl("aaaaaaaaaa") { Size = 10f, Width = 30f, TextAlign = TextAlign.Center, IsTextSelectionEnabled = true },
+            ],
+        }, null);
+        new FlexLayout(scene, fonts).Run(scene.Root);
+        float Press(NodeHandle n)
+        {
+            var r = scene.AbsoluteRect(n);
+            probe.LastHitMaxWidth = float.NaN;
+            dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(r.X + 15f, r.Y + 7f), 0, 0) });
+            dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(r.X + 15f, r.Y + 7f), 0, 0) });
+            return probe.LastHitMaxWidth;
+        }
+        var trimmed = Child(scene, scene.Root, 0);
+        var untrimmed = Child(scene, scene.Root, 1);
+        float trimW = Press(trimmed), plainW = Press(untrimmed);
+        Check("gate.text.align.trim-query a NoWrap+Trim selectable text hit-tests at the renderer's ellipsis width (Bounds.W); untrimmed NoWrap stays unbounded",
+            Near(trimW, scene.Bounds(trimmed).W, 0.01f) && Near(trimW, 30f, 0.01f) && float.IsPositiveInfinity(plainW),
+            $"trimmed maxW={trimW:0.0} (box {scene.Bounds(trimmed).W:0.0}) untrimmed maxW={plainW}");
+    }
+
+    /// <summary>Forwards to a real font system and records the wrap width the last hit-test was asked for.</summary>
+    private sealed class MaxWidthProbeFonts(IFontSystem inner) : IFontSystem
+    {
+        public float LastHitMaxWidth = float.NaN;
+        public TextMetrics Measure(StringId text, in TextStyle style, float maxWidth = float.PositiveInfinity)
+            => inner.Measure(text, in style, maxWidth);
+        public int HitTestText(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, Point2 point, out bool trailing,
+            float alignWidth = float.PositiveInfinity)
+        {
+            LastHitMaxWidth = maxWidth;
+            return inner.HitTestText(text, in style, maxWidth, point, out trailing, alignWidth);
+        }
+        public void GetCaret(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, int charIndex, out float x, out float lineTop,
+            out float lineHeight, out int lineIndex, float alignWidth = float.PositiveInfinity)
+            => inner.GetCaret(text, in style, maxWidth, charIndex, out x, out lineTop, out lineHeight, out lineIndex, alignWidth);
+        public int GetRangeRects(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, int start, int end, Span<RectF> rects,
+            float alignWidth = float.PositiveInfinity)
+            => inner.GetRangeRects(text, in style, maxWidth, start, end, rects, alignWidth);
     }
 
     // Colour emoji (COLR/CPAL) bake decisions — the Windows GlyphRenderer is DirectWrite-bound, so the two rules it

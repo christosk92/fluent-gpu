@@ -46,6 +46,9 @@ public struct TextMeasureEntry
     /// <summary>Strikethrough bar top, measured DOWN from the line top (DWrite strikethroughPosition flipped;
     /// headless model: SizeDip × 0.8).</summary>
     public float StrikeY;
+    /// <summary>First line's advance without trailing hanging whitespace (TextMetrics.FirstLineWidth; NaN = not
+    /// reported) — the width and alignment basis of an aligned single-run decoration bar.</summary>
+    public float FirstLineWidth;
 
     public readonly bool Matches(StringId text, in TextStyle style, float maxW)
         => Valid && Text == text && MaxW == maxW && Style == style;

@@ -1,0 +1,30 @@
+<Project>
+
+  <!-- Consumer defaults of the FluentGpu package, imported (via nuget.g.props) into every project that references it.
+       Only switches that are safe for any consumer: the app owns its TFM, PublishAot and warning policy.
+       The ProjectReference equivalent (plus PublishAot, the publish RID and the vswhere fix) is FluentGpu.App.props. -->
+
+  <PropertyGroup>
+    <!-- FluentGpu is a Windows UI stack: the Win32 paths behind it are intentional, so CA1416 is noise in the app. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <!-- Debug skips the trim/AOT/single-file Roslyn analyzers that PublishAot switches on (ILLink's analyzer dominates
+       an edit-build). Release keeps them and the AOT publish's ILC checks everything again. Configuration is still
+       empty this early when it was not passed (the SDK defaults it to Debug later), hence "!= 'Release'". An explicit
+       value in the project wins (it is evaluated after this file). -->
+  <PropertyGroup Condition="'$(Configuration)' != 'Release'">
+    <EnableTrimAnalyzer Condition="'$(EnableTrimAnalyzer)' == ''">false</EnableTrimAnalyzer>
+    <EnableAotAnalyzer Condition="'$(EnableAotAnalyzer)' == ''">false</EnableAotAnalyzer>
+    <EnableSingleFileAnalyzer Condition="'$(EnableSingleFileAnalyzer)' == ''">false</EnableSingleFileAnalyzer>
+  </PropertyGroup>
+
+  <!-- The bundled source generators read these (dormant until used): FluentGpuLocBase="true" on the base-culture JSON
+       AdditionalFiles item, the generated Strings namespace, and the hardcoded-string analyzer opt-in. -->
+  <ItemGroup>
+    <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="FluentGpuLocBase" />
+    <CompilerVisibleProperty Include="FluentGpuLocNamespace" />
+    <CompilerVisibleProperty Include="FluentGpuLocHardcodedAssemblies" />
+  </ItemGroup>
+
+</Project>

@@ -766,6 +766,12 @@ public sealed partial class InputDispatcher
     /// only). Null = Ctrl+wheel scrolls exactly as before.</summary>
     public Func<float, bool>? OnZoomWheel;
 
+    /// <summary>An app-routed caption right-click (<see cref="TitleBarRegionFlags.AppContextMenu"/>: a right
+    /// PointerDown/PointerUp pair carrying <see cref="NonClientInput.SyntheticPointerId"/>) that no
+    /// <c>OnContextRequested</c> handled: the host opens the window's system menu at this window-DIP point
+    /// (<c>IPlatformWindow.ShowSystemMenu</c>), so a drag band without an app menu keeps the shell menu.</summary>
+    public Action<Point2>? OnNonClientContextUnhandled;
+
     /// <summary>Raised when the window loses activation: pressed/hover/drag state has been cleared; the host closes
     /// light-dismiss overlays here (WinUI window-deactivation dismiss).</summary>
     public Action? OnWindowBlur;
@@ -1094,6 +1100,11 @@ public sealed partial class InputDispatcher
                     {
                         var ctxHit = HitTest(e.PositionPx);   // interaction-gated, matches the press tracking above
                         if (!ctxHit.IsNull && ctxHit == _contextDown && DispatchContextRequest(ctxHit, e.PositionPx, ContextRequestTrigger.Pointer)) handled++;
+                        else if (e.PointerId == NonClientInput.SyntheticPointerId && OnNonClientContextUnhandled is { } sysMenu)
+                        {
+                            sysMenu(e.PositionPx);   // app-routed caption right-click nobody claimed → the shell's system menu
+                            handled++;
+                        }
                         _contextDown = NodeHandle.Null;
                         break;
                     }
@@ -3476,12 +3487,19 @@ public sealed partial class InputDispatcher
     private string SelectableTextOf(NodeHandle node) => _scene.Strings?.Resolve(_scene.Paint(node).Text) ?? "";
 
     /// <summary>The seam wrap width for a text leaf's queries — the node's laid width when the style wraps, else
-    /// unbounded (the EditableText.QueryMaxWidth convention; matches the recorder's DrawGlyphRun Bounds.W).</summary>
+    /// unbounded (the EditableText.QueryMaxWidth convention; matches the recorder's DrawGlyphRun Bounds.W). A TRIMMING
+    /// style also queries at the laid width even when NoWrap: the renderer ellipsizes at Bounds.W, and an untrimmed
+    /// (+Inf) query line would sit at a different Center/End offset than the drawn trimmed line.</summary>
     private float QueryMaxWidth(NodeHandle node)
     {
         ref LayoutInput li = ref _scene.Layout(node);
-        return li.TextStyle.Wrap != TextWrap.NoWrap ? MathF.Max(1f, _scene.Bounds(node).W) : float.PositiveInfinity;
+        return li.TextStyle.Wrap != TextWrap.NoWrap || li.TextStyle.Trim != TextTrim.None
+            ? MathF.Max(1f, _scene.Bounds(node).W) : float.PositiveInfinity;
     }
+
+    /// <summary>The seam align width for a text leaf's queries — the node's laid width, the same box the recorder hands
+    /// the glyph op as Bounds.W, so a Center/End/Justify line hit-tests where it is drawn (TextStyle.Align).</summary>
+    private float QueryAlignWidth(NodeHandle node) => _scene.Bounds(node).W;
 
     /// <summary>Press on a selectable text leaf: single click anchors the drag (no selection yet — unless it lands on
     /// a hyperlink span, which keeps the press a clean link click); double-click selects the word under the press;
@@ -3493,7 +3511,7 @@ public sealed partial class InputDispatcher
         string text = SelectableTextOf(node);
         if (text.Length == 0) return;
         if (clickCount == 1 && HitLinkSpan(node, local) >= 0) return;   // a link press never starts a selection
-        int idx = fonts.HitTestText(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), local, out _);
+        int idx = fonts.HitTestText(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), local, out _, QueryAlignWidth(node));
         _selText = node;
         switch (clickCount)
         {
@@ -3526,7 +3544,7 @@ public sealed partial class InputDispatcher
         var node = _selText;
         string text = SelectableTextOf(node);
         if (text.Length == 0) return;
-        int idx = fonts.HitTestText(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), local, out _);
+        int idx = fonts.HitTestText(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), local, out _, QueryAlignWidth(node));
         ApplyTextSelection(node, Math.Min(_selAnchor, idx), Math.Max(_selAnchor, idx));
     }
 
@@ -3545,7 +3563,7 @@ public sealed partial class InputDispatcher
         if (end > start && ResolveFonts() is { } fonts)
         {
             string text = SelectableTextOf(node);
-            n = fonts.GetRangeRects(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), start, end, rects);
+            n = fonts.GetRangeRects(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), start, end, rects, QueryAlignWidth(node));
         }
         _scene.SetTextEditRects(node, rects[..n], default);
         _scene.Mark(node, NodeFlags.PaintDirty);
@@ -3571,14 +3589,18 @@ public sealed partial class InputDispatcher
     /// span actually carries an action.</summary>
     private int HitLinkSpan(NodeHandle node, Point2 local)
     {
-        int runId = _scene.Layout(node).TextStyle.SpanRunId;
+        ref readonly TextStyle style = ref _scene.Layout(node).TextStyle;
+        int runId = style.SpanRunId;
         if (runId == 0 || SpanRunTable.Shared.Resolve(runId) is not { } run || run.Rects is not { } rects) return -1;
         if (!_scene.TryGetSpanText(node, out var spans)) return -1;
         var arts = rects.Rects;
+        float boxW = QueryAlignWidth(node);
         for (int i = 0; i < arts.Length; i++)
         {
             if (arts[i].Kind != SpanStyle.LinkBit) continue;
-            var rr = arts[i].Rect;
+            // Rects are laid Start-aligned + unjustified; place them where the renderer draws the line in this box
+            // (Center/End line offset, Justify gap widening at Bounds.W — the recorder's (b1) rule).
+            var rr = TextTypography.PlaceSpanRect(in arts[i], style.Align, boxW);
             if (local.X >= rr.X && local.X < rr.X + rr.W && local.Y >= rr.Y && local.Y < rr.Y + rr.H)
             {
                 int si = arts[i].Span;

@@ -139,6 +139,52 @@ public sealed class GeneratorTests
     }
 
     [Fact]
+    public void GlyphTableGenerator_Emits_Per_Glyph_Xml_Doc()
+    {
+        var (gen, _) = Harness.Generate(new GlyphTableGenerator(), "",
+            ("glyphs.json", "{\"Play\":\"e768\"}"));
+        Assert.Contains("/// <summary>Segoe Fluent Icons glyph \"Play\" (U+E768).</summary>", gen);
+        Assert.DoesNotContain("<summary>Glyph U+", gen);
+    }
+
+    [Fact]
+    public void GlyphTableGenerator_Emits_All_Table_In_Declaration_Order()
+    {
+        var (gen, _) = Harness.Generate(new GlyphTableGenerator(), "",
+            ("glyphs.json", "{\"Play\":\"E768\",\"Pause\":\"E769\"}"));
+        Assert.Contains("IReadOnlyList<global::FluentGpu.Controls.IconGlyph> All => s_all;", gen);
+        Assert.Contains("private static readonly global::FluentGpu.Controls.IconGlyph[] s_all", gen);
+        int play = gen.IndexOf("new global::FluentGpu.Controls.IconGlyph(\"Play\", Play)", System.StringComparison.Ordinal);
+        int pause = gen.IndexOf("new global::FluentGpu.Controls.IconGlyph(\"Pause\", Pause)", System.StringComparison.Ordinal);
+        Assert.True(play >= 0 && pause > play, "All lists every glyph in glyphs.json order");
+        Assert.Contains("(2 in total)", gen);
+    }
+
+    [Fact]
+    public void GlyphTableGenerator_TryGetName_First_Name_Wins_On_Shared_Codepoint()
+    {
+        var (gen, _) = Harness.Generate(new GlyphTableGenerator(), "",
+            ("glyphs.json", "{\"Star\":\"E734\",\"FavoriteStar\":\"E734\",\"Play\":\"E768\"}"));
+        Assert.Contains("public static bool TryGetName(string? glyph,", gen);
+        Assert.Contains("case \"\\uE734\": name = \"Star\"; return true;", gen);
+        Assert.DoesNotContain("name = \"FavoriteStar\"", gen);   // a duplicate case label would not compile
+        Assert.Contains("case \"\\uE768\": name = \"Play\"; return true;", gen);
+        Assert.Contains("default: name = null; return false;", gen);
+        // Both names still get a constant and an All entry.
+        Assert.Contains("public const string FavoriteStar", gen);
+        Assert.Contains("IconGlyph(\"FavoriteStar\", FavoriteStar)", gen);
+    }
+
+    [Fact]
+    public void GlyphTableGenerator_Bad_Codepoint_Is_Left_Out_Of_All_And_TryGetName()
+    {
+        var (gen, _) = Harness.Generate(new GlyphTableGenerator(), "",
+            ("glyphs.json", "{\"Play\":\"E768\",\"Broken\":\"NOPE\"}"));
+        Assert.DoesNotContain("Broken", gen);
+        Assert.Contains("(1 in total)", gen);
+    }
+
+    [Fact]
     public void GlyphTableGenerator_FGGLYPH002_On_Bad_Codepoint()
     {
         var (_, diags) = Harness.Generate(new GlyphTableGenerator(), "",

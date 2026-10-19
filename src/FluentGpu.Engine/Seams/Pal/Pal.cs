@@ -136,8 +136,31 @@ public enum TitleBarHit : byte { Client = 0, Caption = 1, MinButton = 2, MaxButt
 
 /// <summary>One reported titlebar region: a rect in CLIENT DIP (the engine's space) + its non-client classification.
 /// Pushed on titlebar relayout only (push-on-change — never per frame). First match wins at hit-test, so callers list
-/// interactive islands and buttons BEFORE the catch-all <see cref="TitleBarHit.Caption"/> band.</summary>
-public readonly record struct TitleBarRegion(RectF RectDip, TitleBarHit Hit);
+/// interactive islands and buttons BEFORE the catch-all <see cref="TitleBarHit.Caption"/> band.
+/// <paramref name="Flags"/> refines the region's non-client behaviour (<see cref="TitleBarRegionFlags"/>).</summary>
+public readonly record struct TitleBarRegion(RectF RectDip, TitleBarHit Hit, TitleBarRegionFlags Flags = TitleBarRegionFlags.None);
+
+/// <summary>Per-region refinements of <see cref="TitleBarRegion"/>.</summary>
+[Flags]
+public enum TitleBarRegionFlags : byte
+{
+    None = 0,
+    /// <summary>On a <see cref="TitleBarHit.Caption"/> region: a right-click is routed to the APP (a synthetic right
+    /// PointerDown/PointerUp pair with <see cref="NonClientInput.SyntheticPointerId"/> at the click point) instead of
+    /// opening the system menu; the dispatcher raises the nearest <c>OnContextRequested</c> and, when nothing handles
+    /// it, calls <see cref="IPlatformWindow.ShowSystemMenu"/> — the menu still opens as the fallback. Set by the host on
+    /// every engine-collected <c>BoxEl.WindowDrag</c> drag band.</summary>
+    AppContextMenu = 1,
+}
+
+/// <summary>Pointer ids shared by the platform's non-client synthesis and the dispatcher.</summary>
+public static class NonClientInput
+{
+    /// <summary>The pointer id a custom-frame backend stamps on client events it synthesizes from NON-CLIENT input (caption
+    /// buttons, caption-band hover, app-routed right-clicks) — high enough never to collide with a real OS pointer id and
+    /// past the ring's coalescing slots.</summary>
+    public const uint SyntheticPointerId = 0xFFFFFFFE;
+}
 
 /// <summary>
 /// POD input event drained from the host-owned ring once per frame (no C# events across the seam).
@@ -470,7 +493,11 @@ public interface IPlatformPopupWindow : IDisposable
 /// Sanitized through <see cref="ZoomLadder.Clamp"/> by the backend.
 /// <paramref name="SkipDropAndTouchpad"/> = do not register the window as an OS file-drop target and do not create the
 /// DirectManipulation touchpad producer (a few ms of COM/OLE activation per window). For a window that never takes a file drop and
-/// has no touchpad-scrolled content, such as the video pop-out; the touchpad then scrolls through the wheel fallback. Default false.</summary>
+/// has no touchpad-scrolled content, such as the video pop-out; the touchpad then scrolls through the wheel fallback. Default false.
+/// The overlay shape (a desktop widget): <paramref name="Topmost"/> = created above every non-topmost window (re-settable through
+/// <see cref="IPlatformWindow.SetTopmost"/>); <paramref name="ToolWindow"/> = no taskbar button and no Alt+Tab entry;
+/// <paramref name="Resizable"/> false = the user cannot drag the frame or maximize (code still sizes it), while the frame, the
+/// shadow and the rounded corners stay. The defaults keep the ordinary app window.</summary>
 public readonly record struct WindowDesc(
     string Title,
     Size2 SizePx,
@@ -479,7 +506,10 @@ public readonly record struct WindowDesc(
     bool CustomFrame = false,
     Size2 MinClientSizeDip = default,
     float Zoom = 1f,
-    bool SkipDropAndTouchpad = false);
+    bool SkipDropAndTouchpad = false,
+    bool Topmost = false,
+    bool ToolWindow = false,
+    bool Resizable = true);
 
 /// <summary>How native input should affect a bounded platform wait.</summary>
 public enum PlatformInputWakePolicy : byte
@@ -724,6 +754,12 @@ public interface IPlatformWindow : IDisposable
     /// Anything not covered stays HTCLIENT (the bar's interactive content). An empty span clears all regions.</summary>
     void SetTitleBarRegions(ReadOnlySpan<TitleBarRegion> regions) { }
 
+    /// <summary>Open the window's system menu (Restore / Move / Size / Minimize / Maximize / Close) at
+    /// <paramref name="screenPx"/> (physical virtual-screen px) — the fallback of an app-routed caption right-click
+    /// (<see cref="TitleBarRegionFlags.AppContextMenu"/>) that no <c>OnContextRequested</c> handled. Win32 posts itself
+    /// a message and runs <c>TrackPopupMenu</c> outside the frame. Default: a no-op.</summary>
+    void ShowSystemMenu(Point2 screenPx) { }
+
     /// <summary>Current placement (drives the custom max↔restore glyph). Change is signaled via
     /// <see cref="InputKind.WindowStateChanged"/>; this property is the pull side.</summary>
     WindowState State => WindowState.Normal;
@@ -779,6 +815,24 @@ public interface IPlatformWindow : IDisposable
     /// <summary>Minimum CLIENT size in physical px (Win32 <c>WM_GETMINMAXINFO</c>). Default <c>0×0</c> = no clamp, so
     /// the primary window is unaffected; a detached mini-player sets a floor.</summary>
     void SetMinClientSizePx(Size2 px) { }
+
+    // ── size-to-content seam (AppHost.SizeToContent; the defaults are no-ops, so a backend without it never resizes) ──
+
+    /// <summary>Resize the window so its CLIENT area is exactly <paramref name="px"/> physical px, keeping the outer origin
+    /// and never activating it (Win32: the frame is added for the current style/DPI, then <c>SetWindowPos(SWP_NOMOVE)</c>).
+    /// The host's size-to-content phase drives it with <c>ceil(dip × Scale)</c> — the EFFECTIVE scale, zoom included —
+    /// so the DIP layout viewport the next frame sees is the content's natural size. Default: a no-op.</summary>
+    void SetClientSizePx(Size2 px) { }
+
+    /// <summary>The descriptor's opt-in minimum client size (<see cref="WindowDesc.MinClientSizeDip"/>, logical DIP at the
+    /// raw OS DPI scale; an empty axis = no floor). The size-to-content phase clamps its target to it. Default: none.</summary>
+    Size2 MinClientSizeDip => default;
+
+    /// <summary>A counter the backend bumps each time the USER resized the window (Win32: a <c>WM_EXITSIZEMOVE</c> whose
+    /// modal loop changed the client size, or a restored-to-restored <c>WM_SIZE</c> outside that loop at an unchanged DPI
+    /// that the host did not request — a Win+Arrow snap). Programmatic sizes never bump it. The host compares
+    /// it per frame: a change switches <c>SizeToContent</c> back to manual (WPF semantics). Default 0 (never).</summary>
+    long UserResizeEpoch => 0;
 
     /// <summary>Tell the window whether it currently composites a LIVE video surface. Pushed by the host at the video
     /// drain, one way, engine → PAL (the same direction as <see cref="SetMinClientSizePx"/>); the PAL only ever reads

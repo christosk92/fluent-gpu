@@ -1,0 +1,64 @@
+<Project>
+
+  <!-- ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+       FluentGpu.App.props — the importable build baseline for an app (or a library of an app) that consumes this
+       engine checkout through ProjectReferences. Import it from your Directory.Build.props:
+
+         <Import Project="<engine checkout>\FluentGpu.App.props" />
+
+       It sets the engine's net10 / zero-alloc / GC posture, keeps the parent Configuration on the out-of-tree engine
+       references, and wires FluentGpu.App.targets to run right AFTER your csproj body (through
+       BeforeMicrosoftNETSdkTargets), where OutputType is known: PublishAot for executables only, the publish RID, the
+       engine ProjectReferences, the source-generator analyzer and the vswhere fix for the NativeAOT link.
+
+       Every property is a default: a value your csproj / Directory.Build.props / command line already set wins.
+       Guide: docs/guide/new-app.md.
+       ──────────────────────────────────────────────────────────────────────────────────────────────────────────────── -->
+
+  <PropertyGroup>
+    <_FluentGpuAppPropsImported>true</_FluentGpuAppPropsImported>
+
+    <TargetFramework Condition="'$(TargetFramework)' == '' and '$(TargetFrameworks)' == ''">net10.0</TargetFramework>
+    <LangVersion Condition="'$(LangVersion)' == ''">14</LangVersion>
+    <Nullable Condition="'$(Nullable)' == ''">enable</Nullable>
+    <ImplicitUsings Condition="'$(ImplicitUsings)' == ''">enable</ImplicitUsings>
+    <AllowUnsafeBlocks Condition="'$(AllowUnsafeBlocks)' == ''">true</AllowUnsafeBlocks>
+    <InvariantGlobalization Condition="'$(InvariantGlobalization)' == ''">true</InvariantGlobalization>
+
+    <!-- The engine's zero-alloc / perf posture (src/Directory.Build.props). AOT/trim engage at publish only. -->
+    <Deterministic Condition="'$(Deterministic)' == ''">true</Deterministic>
+    <ServerGarbageCollection Condition="'$(ServerGarbageCollection)' == ''">false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection Condition="'$(ConcurrentGarbageCollection)' == ''">true</ConcurrentGarbageCollection>
+
+    <!-- The engine projects live outside your solution. In a SOLUTION build MSBuild unsets Configuration/Platform for
+         such references, so `dotnet build My.slnx -c Release` built the engine as Debug and copied its Debug DLLs into
+         the Release app (the DEBUG self-checks then ran every frame — Wavee, 2026-09-17). Keep the parent's. -->
+    <ShouldUnsetParentConfigurationAndPlatform Condition="'$(ShouldUnsetParentConfigurationAndPlatform)' == ''">false</ShouldUnsetParentConfigurationAndPlatform>
+
+    <!-- A FluentGpu app is a Windows composition root: the Win32 paths are intentional, so CA1416 is noise. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <!-- FLUENTGPU_DIAG passthrough: `dotnet publish -p:FluentGpuDiag=true` keeps the engine's diagnostics probes. The
+       [Conditional] erasure is decided by the CALLING assembly, so the app needs the symbol too (ops/diag/README.md). -->
+  <PropertyGroup Condition="'$(FluentGpuDiag)' == 'true'">
+    <DefineConstants>$(DefineConstants);FLUENTGPU_DIAG</DefineConstants>
+  </PropertyGroup>
+
+  <!-- Engine location. Default: the directory of THIS file (the props lives at the engine repo root). A relative
+       EngineRoot resolves against the project directory; the trailing slash is normalised. FluentGpuEngineRoot is the
+       normalised value every reference below uses (EngineRoot itself may be a read-only global property). -->
+  <PropertyGroup>
+    <EngineRoot Condition="'$(EngineRoot)' == ''">$(MSBuildThisFileDirectory)</EngineRoot>
+    <FluentGpuEngineRoot>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(EngineRoot)'))</FluentGpuEngineRoot>
+  </PropertyGroup>
+
+  <!-- Run FluentGpu.App.targets after the project body but BEFORE the SDK's targets: PublishAot must be known before the
+       SDK infers PublishSelfContained / the publish RID (Microsoft.NET.RuntimeIdentifierInference.targets, imported
+       ahead of Directory.Build.targets). A project that already uses BeforeMicrosoftNETSdkTargets imports
+       FluentGpu.App.targets itself from that file. -->
+  <PropertyGroup Condition="'$(BeforeMicrosoftNETSdkTargets)' == ''">
+    <BeforeMicrosoftNETSdkTargets>$(MSBuildThisFileDirectory)FluentGpu.App.targets</BeforeMicrosoftNETSdkTargets>
+  </PropertyGroup>
+
+</Project>

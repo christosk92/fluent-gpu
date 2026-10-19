@@ -822,7 +822,7 @@ public sealed class EditableText : Component
         ref LayoutInput ll = ref scene.Layout(_laneNode);
         float vw = scene.Bounds(_laneNode).W - ll.Padding.Left - ll.Padding.Right;
         if (vw <= 1f) return false;
-        fonts.GetCaret(disp, style, maxW, disp.Length, out float endX, out _, out _, out _);
+        fonts.GetCaret(disp, style, maxW, disp.Length, out float endX, out _, out _, out _, QueryAlignWidth(scene, tn));
         maxScroll = MathF.Max(0f, endX + 2f - vw);
         return maxScroll > 0.5f;
     }
@@ -842,7 +842,7 @@ public sealed class EditableText : Component
         ref LayoutInput ll = ref scene.Layout(_laneNode);
         float vh = scene.Bounds(_laneNode).H - ll.Padding.Top - ll.Padding.Bottom;
         if (vh <= 1f) return false;
-        fonts.GetCaret(disp, style, maxW, disp.Length, out _, out float lastTop, out float lastLh, out _);
+        fonts.GetCaret(disp, style, maxW, disp.Length, out _, out float lastTop, out float lastLh, out _, QueryAlignWidth(scene, tn));
         maxScroll = MathF.Max(0f, lastTop + lastLh - vh);
         return maxScroll > 0.5f;
     }
@@ -904,12 +904,12 @@ public sealed class EditableText : Component
         string disp = DisplayText();
         var style = scene.Layout(tn).TextStyle;
         float maxW = QueryMaxWidth(scene, tn);
-        fonts.GetCaret(disp, style, maxW, DocToDisplay(_core.Active), out float cx, out float top, out float lh, out _);
+        fonts.GetCaret(disp, style, maxW, DocToDisplay(_core.Active), out float cx, out float top, out float lh, out _, QueryAlignWidth(scene, tn));
 
         float sticky = float.IsNaN(_core.StickyX) ? cx : _core.StickyX;   // remember the goal X on the first vertical move
         int lines = page ? Math.Max(1, (int)((Height - 11f) / MathF.Max(1f, lh))) : 1;
         float targetY = top + lh * 0.5f + direction * lines * lh;        // hit-test mid-line (clamps at doc edges)
-        int dispIdx = fonts.HitTestText(disp, style, maxW, new Point2(sticky, targetY), out _);
+        int dispIdx = fonts.HitTestText(disp, style, maxW, new Point2(sticky, targetY), out _, QueryAlignWidth(scene, tn));
         _core.SetCaret(DisplayToDoc(dispIdx), extend);
         _core.StickyX = sticky;   // SetCaret reset it — the control re-establishes the goal column after the move
         SyncVisual();
@@ -1097,12 +1097,19 @@ public sealed class EditableText : Component
         if (scene is null || tn.IsNull || !scene.IsLive(tn)) return _core.Active;
         string disp = DisplayText();   // hit-testing runs on the EDIT text (mask-aware), never the placeholder
         if (disp.Length == 0) return 0;
-        int dispIdx = fonts.HitTestText(disp, scene.Layout(tn).TextStyle, QueryMaxWidth(scene, tn), textLocal, out _);
+        int dispIdx = fonts.HitTestText(disp, scene.Layout(tn).TextStyle, QueryMaxWidth(scene, tn), textLocal, out _, QueryAlignWidth(scene, tn));
         return DisplayToDoc(dispIdx);
     }
 
+    /// <summary>The seam wrap width: the laid width for a multi-line editor — or a TRIMMING style (the renderer ellipsizes
+    /// at Bounds.W, so an untrimmed +Inf query line would mis-place an aligned caret/selection) — else unbounded.</summary>
     private float QueryMaxWidth(SceneStore scene, NodeHandle tn)
-        => AcceptsReturn ? MathF.Max(1f, scene.Bounds(tn).W) : float.PositiveInfinity;
+        => AcceptsReturn || scene.Layout(tn).TextStyle.Trim != TextTrim.None
+            ? MathF.Max(1f, scene.Bounds(tn).W) : float.PositiveInfinity;
+
+    /// <summary>The seam align width: the text node's laid width — the same box the recorder draws the run in (glyph op
+    /// Bounds.W), so an aligned style's caret/selection/hit-test match the glyphs (a Start-aligned editor ignores it).</summary>
+    private static float QueryAlignWidth(SceneStore scene, NodeHandle tn) => scene.Bounds(tn).W;
 
     // ── SyncVisual: the single scene-state writer (caret POD + selection/underline rect slab + caret-follow) ───────
     // Geometry is RAW text-local (document-space); the wrapper transform applies -ScrollX once for glyphs + decorations.
@@ -1117,7 +1124,7 @@ public sealed class EditableText : Component
         var style = scene.Layout(tn).TextStyle;
         float maxW = QueryMaxWidth(scene, tn);
 
-        fonts.GetCaret(disp, style, maxW, DocToDisplay(_core.Active), out float cx, out float top, out float lh, out _);
+        fonts.GetCaret(disp, style, maxW, DocToDisplay(_core.Active), out float cx, out float top, out float lh, out _, QueryAlignWidth(scene, tn));
 
         // Caret-follow (single-line): keep the caret inside [pad, viewport - pad] of the padded lane.
         float scrollX = _scroll?.Peek() ?? 0f;
@@ -1129,7 +1136,7 @@ public sealed class EditableText : Component
             if (vw > 1f)
             {
                 const float pad = 8f;
-                fonts.GetCaret(disp, style, maxW, disp.Length, out float endX, out _, out _, out _);
+                fonts.GetCaret(disp, style, maxW, disp.Length, out float endX, out _, out _, out _, QueryAlignWidth(scene, tn));
                 float maxScroll = MathF.Max(0f, endX + 2f - vw);
                 if (cx - scrollX > vw - pad) scrollX = cx - (vw - pad);
                 if (cx - scrollX < pad) scrollX = cx - pad;
@@ -1146,7 +1153,7 @@ public sealed class EditableText : Component
             if (vh > 1f)
             {
                 const float pad = 6f;
-                fonts.GetCaret(disp, style, maxW, disp.Length, out _, out float lastTop, out float lastLh, out _);
+                fonts.GetCaret(disp, style, maxW, disp.Length, out _, out float lastTop, out float lastLh, out _, QueryAlignWidth(scene, tn));
                 float maxScrollY = MathF.Max(0f, lastTop + lastLh - vh);
                 float caretBottom = top + lh;
                 if (caretBottom - scrollY > vh - pad) scrollY = caretBottom - (vh - pad);
@@ -1176,7 +1183,7 @@ public sealed class EditableText : Component
         if (selActive)
         {
             var (selStart, selLen) = _core.Selection;
-            nSel = fonts.GetRangeRects(disp, style, maxW, DocToDisplay(selStart), DocToDisplay(selStart + selLen), sel);
+            nSel = fonts.GetRangeRects(disp, style, maxW, DocToDisplay(selStart), DocToDisplay(selStart + selLen), sel, QueryAlignWidth(scene, tn));
         }
 
         // IME clause underline bars: thin bars at the bottom of each covered line fragment (thick for target clauses).
@@ -1189,7 +1196,7 @@ public sealed class EditableText : Component
             if (clauses == 0)
             {
                 // No clause segmentation → one Input-style underline across the whole composition.
-                int n = fonts.GetRangeRects(disp, style, maxW, DocToDisplay(ime.Start), DocToDisplay(ime.Start + ime.Len), frag);
+                int n = fonts.GetRangeRects(disp, style, maxW, DocToDisplay(ime.Start), DocToDisplay(ime.Start + ime.Len), frag, QueryAlignWidth(scene, tn));
                 for (int i = 0; i < n && nUl < ul.Length; i++)
                     ul[nUl++] = new RectF(frag[i].X, frag[i].Y + frag[i].H - 2f, frag[i].W, 1f);
             }
@@ -1200,7 +1207,7 @@ public sealed class EditableText : Component
                     var cl = ime.Clauses[c];
                     bool target = cl.Kind is ImeClauseKind.TargetConverted or ImeClauseKind.TargetNotConverted;
                     int n = fonts.GetRangeRects(disp, style, maxW,
-                        DocToDisplay(ime.Start + cl.Start), DocToDisplay(ime.Start + cl.Start + cl.Length), frag);
+                        DocToDisplay(ime.Start + cl.Start), DocToDisplay(ime.Start + cl.Start + cl.Length), frag, QueryAlignWidth(scene, tn));
                     for (int i = 0; i < n && nUl < ul.Length; i++)
                         ul[nUl++] = new RectF(frag[i].X, frag[i].Y + frag[i].H - 2f, frag[i].W, target ? 2f : 1f);
                 }

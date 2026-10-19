@@ -39,12 +39,41 @@ public sealed partial class AppDataStore
         _settingsKey = $@"Software\{publisher}\{product}\Settings";
     }
 
-    /// <summary>A store rooted at <c>HKCU\Software\{publisher}\{product}</c> (and the matching LocalAppData/Temp folders).</summary>
+    /// <summary>
+    /// A store whose values live in the <c>\Settings</c> SUBKEY of <c>HKCU\Software\{publisher}\{product}</c> — i.e.
+    /// <c>HKCU\Software\{publisher}\{product}\Settings</c> (see <see cref="RegistryPath"/>) — with the matching
+    /// <c>%LOCALAPPDATA%\{publisher}\{product}</c> / <c>%TEMP%\{publisher}\{product}</c> folders. <see cref="Clear"/>
+    /// deletes only that <c>\Settings</c> subkey, never the product key above it.
+    /// </summary>
+    /// <param name="publisher">One registry-key / folder name segment (e.g. <c>"Contoso"</c>).</param>
+    /// <param name="product">One registry-key / folder name segment (e.g. <c>"MyApp"</c>).</param>
+    /// <exception cref="ArgumentNullException">A name is null.</exception>
+    /// <exception cref="ArgumentException">A name is empty/whitespace, contains <c>\</c> or <c>/</c>, has leading or
+    /// trailing whitespace, or is <c>"."</c>/<c>".."</c> — any of which would silently nest (or escape) the registry key
+    /// and the data folders instead of naming one segment.</exception>
     public static AppDataStore ForUnpackaged(string publisher, string product)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(publisher);
-        ArgumentException.ThrowIfNullOrWhiteSpace(product);
+        ValidateSegment(publisher, nameof(publisher));
+        ValidateSegment(product, nameof(product));
         return new AppDataStore(publisher, product);
+    }
+
+    /// <summary>The full registry path of the settings container, e.g. <c>HKCU\Software\Contoso\MyApp\Settings</c>
+    /// (values are stored in the <c>\Settings</c> subkey, not in the product key itself). Handy for docs, diagnostics
+    /// and "where did my settings go?" support answers.</summary>
+    public string RegistryPath => @"HKCU\" + _settingsKey;
+
+    private static void ValidateSegment(string value, string paramName)
+    {
+        ArgumentNullException.ThrowIfNull(value, paramName);
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException("The name must not be empty or whitespace.", paramName);
+        if (value.IndexOf('\\') >= 0 || value.IndexOf('/') >= 0)
+            throw new ArgumentException($"The name '{value}' must be a single segment: '\\' and '/' would nest the registry key and folders.", paramName);
+        if (char.IsWhiteSpace(value[0]) || char.IsWhiteSpace(value[^1]))
+            throw new ArgumentException($"The name '{value}' must not have leading or trailing whitespace.", paramName);
+        if (value is "." or "..")
+            throw new ArgumentException($"The name '{value}' is not a valid folder segment.", paramName);
     }
 
     // ── well-known folders (BCL; created on first access, idempotent) ────────────────────────────────────────────────

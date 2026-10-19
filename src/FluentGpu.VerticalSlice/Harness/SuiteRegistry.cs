@@ -64,6 +64,8 @@ public static class SuiteRegistry
         new("zone-list-spikes", "controls", FluentGpu.VerticalSlice.Suites.ZoneListSpikeChecks.Run),   // Wave-0 spikes for Wavee's Home zone list: E17 sticky-in-realized-row, E18 controller rebind, KeepAlive same-key view, nested-shelf alloc
         new("component-anchor", "controls", FluentGpu.VerticalSlice.Suites.ComponentAnchorChecks.Run),   // E14: WriteAnchorColumns applies a ComponentEl's base-Element props to its own anchor (sticky/visible/exit/alloc)
         new("titlebar", "titlebar", TitleBarSuite.Run),
+        new("window-drag", "titlebar", FluentGpu.VerticalSlice.Suites.WindowDragSuite.Run),   // app-ergonomics §1: BoxEl.WindowDrag regions (+ step-0 overlay shape record)
+        new("size-to-content", "size-to-content", FluentGpu.VerticalSlice.Suites.SizeToContentSuite.Run),   // app-ergonomics §3: the window follows the content's natural size
         new("nav", "nav", NavSuite.Run),
         new("overlay", "overlay", OverlaySuite.Run),
         new("layerpool", "layerpool", LayerPoolSuite.Run),

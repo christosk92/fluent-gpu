@@ -34,7 +34,7 @@ public static class FluentApp
     // held here rather than read off the captured options record because DwmSetWindowAttribute is re-callable: both the
     // startup apply and the host's re-theme hook must see the CURRENT variant, or a live change would be reverted by the
     // next theme flip.
-    private static bool s_mica, s_customFrame, s_micaAlt;
+    private static bool s_mica, s_customFrame, s_micaAlt, s_acrylic, s_topmost;
 
     /// <summary>True when the window is using Mica <b>BaseAlt</b> (a stronger tint of the desktop wallpaper than base
     /// Mica) rather than base Mica. Seeded from <see cref="AppOptions.MicaAlt"/>; changed by
@@ -50,7 +50,74 @@ public static class FluentApp
     {
         s_micaAlt = micaAlt;
         if (WindowHandle != 0 && s_mica)
-            Win32Theme.ApplyWindowMaterial(WindowHandle, Theme.Dark, s_mica, s_customFrame, micaAlt);
+            Win32Theme.ApplyWindowMaterial(WindowHandle, Theme.Dark, s_mica, s_customFrame, micaAlt, s_acrylic);
+    }
+
+    /// <summary>True when the window shows the desktop-acrylic backdrop instead of Mica. Seeded from
+    /// <see cref="AppOptions.Acrylic"/>; changed by <see cref="SetWindowMaterialAcrylic"/>.</summary>
+    public static bool WindowMaterialAcrylic => s_acrylic;
+
+    /// <summary>Switch the LIVE window between desktop acrylic (<paramref name="acrylic"/> true) and Mica — the acrylic
+    /// sibling of <see cref="SetWindowMaterialAlt"/>, with the same stickiness across theme flips. UI-thread only; no-op
+    /// when the window is not Mica-backed (<see cref="AppOptions.Mica"/> false).</summary>
+    public static void SetWindowMaterialAcrylic(bool acrylic)
+    {
+        s_acrylic = acrylic;
+        if (WindowHandle != 0 && s_mica)
+            Win32Theme.ApplyWindowMaterial(WindowHandle, Theme.Dark, s_mica, s_customFrame, s_micaAlt, acrylic);
+    }
+
+    /// <summary>True while the main window stays above every non-topmost window. Seeded from
+    /// <see cref="AppOptions.Topmost"/>; changed by <see cref="SetTopmost"/>.</summary>
+    public static bool Topmost => s_topmost;
+
+    /// <summary>Pin the main window above other windows (or release it). Never activates or moves it. UI-thread only; before
+    /// the window exists this only records the value.</summary>
+    public static void SetTopmost(bool topmost)
+    {
+        s_topmost = topmost;
+        if (s_window is { IsClosed: false } w) w.SetTopmost(topmost);
+    }
+
+    /// <summary>The main window's outer rect in physical virtual-screen px (default before the window exists) — what an
+    /// app persists to put the window back where the user left it, paired with <see cref="MoveWindowPx"/>.</summary>
+    public static RectF WindowBoundsPx => s_window is { IsClosed: false } w ? w.OuterBoundsPx : default;
+
+    /// <summary>Capture the main window as the user sees it — DWM's composite, so the Mica/acrylic backdrop, the DWM frame and
+    /// DirectComposition children (video) are in it, unlike the <c>--screenshot</c> swapchain readback — to a PNG at
+    /// <paramref name="path"/> (directory created, file overwritten). The visible frame bounds
+    /// (<c>DWMWA_EXTENDED_FRAME_BOUNDS</c>, physical px) grown by <paramref name="padPx"/> and clipped to the virtual screen;
+    /// a window another window covers is raised topmost for the grab and put back. False (with a <c>[shot-window]</c>
+    /// stderr line) before the window exists, when it is minimized or hidden, or when the grab or the write fails.
+    /// UI-thread only. The command-line form is <c>--fg shot-window=PATH</c>.</summary>
+    public static bool CaptureWindowPng(string path, int padPx = 0)
+        => s_window is { IsClosed: false } w && WindowCapture.CaptureToPng(w.Handle.Value, path, padPx);
+
+    /// <summary>Move the main window's outer origin to (<paramref name="x"/>, <paramref name="y"/>) physical virtual-screen
+    /// px without resizing or activating it. UI-thread only.</summary>
+    public static void MoveWindowPx(float x, float y) => s_window?.MoveToPx(new Point2(x, y));
+
+    /// <summary>Resize the main window's client area to <paramref name="widthDip"/>×<paramref name="heightDip"/> DIP (the
+    /// same raw-DPI rule <see cref="AppOptions.Width"/>/<see cref="AppOptions.Height"/> use; app zoom does not scale it).
+    /// Works on a window that is not <see cref="AppOptions.Resizable"/>. UI-thread only.</summary>
+    public static void ResizeWindow(float widthDip, float heightDip) => s_window?.SetClientSizeDip(widthDip, heightDip);
+
+    // Seeded from AppOptions.SizeToContent at Run; the live value is the host's (the user resizing the frame flips it).
+    private static SizeToContent s_sizeToContent;
+
+    /// <summary>Which axes the main window currently sizes to its content (<see cref="AppOptions.SizeToContent"/>). Reads
+    /// <see cref="FluentGpu.Hosting.SizeToContent.Manual"/> once the user has resized the frame by hand. UI-thread only.</summary>
+    public static SizeToContent SizeToContent => s_host?.SizeToContent ?? s_sizeToContent;
+
+    /// <summary>Size the main window to its content on <paramref name="mode"/>'s axes from the next laid-out frame on, or
+    /// stop (<see cref="FluentGpu.Hosting.SizeToContent.Manual"/>). The live sibling of
+    /// <see cref="AppOptions.SizeToContent"/> — e.g. re-enable it after the user resized the window. UI-thread only; before
+    /// the window exists this only records the value (<see cref="Run(Func{Component}, AppOptions?)"/> seeds it from
+    /// <see cref="AppOptions.SizeToContent"/>).</summary>
+    public static void SetSizeToContent(SizeToContent mode)
+    {
+        s_sizeToContent = mode;
+        if (s_host is { } h) h.SizeToContent = mode;
     }
 
     // The LIVE app-zoom state, seeded from AppOptions at Run and re-writable through SetZoom. Held here rather than
@@ -163,9 +230,12 @@ public static class FluentApp
     /// Alt+Tab; the frame loop parks exactly as if minimized (no reconcile, layout or present; <c>UseIsActive</c> false)
     /// while playback, timers on other threads, posts and OS events keep running. Showing brings it back in the placement
     /// it had (a window hidden while minimized comes back minimized — restore it yourself). Idempotent; a no-op without
-    /// a window. UI-thread only.</summary>
+    /// a window. UI-thread only. An explicit call takes visibility over from <see cref="SizeToContent"/>'s show-when-fitted
+    /// (a window the app hid during mount stays hidden).</summary>
     public static void SetWindowVisible(bool visible)
     {
+        // Before the no-op early-out: hiding a window that is still hidden waiting for its first fit must cancel that show.
+        s_host?.CancelShowWhenFitted();
         if (s_window is not { IsClosed: false } w || w.IsVisible == visible) return;
         if (visible) w.Show();
         else w.Hide();
@@ -231,6 +301,21 @@ public static class FluentApp
     // binds roles per thread at runtime, so nothing in the engine assumes the process main thread. An exception on the
     // UI thread is captured and rethrown on the caller so unhandled-exception logging / exit codes behave as before.
     internal const int UiThreadStackBytes = 32 * 1024 * 1024;
+
+    /// <summary>The main window's <see cref="WindowDesc"/> for <paramref name="o"/> — the one AppOptions → platform mapping
+    /// (title, size, Mica composition, custom frame, min size, zoom and the overlay shape Topmost / ToolWindow / Resizable).
+    /// Factored out of <see cref="RunCore"/> so a test can assert the mapping without creating a window.</summary>
+    internal static WindowDesc DescribeWindow(AppOptions o) => new(
+        o.Title,
+        new Size2(o.Width, o.Height),
+        1f,
+        o.Mica,
+        CustomFrame: o.CustomFrame,
+        MinClientSizeDip: new Size2(o.MinWidth, o.MinHeight),
+        Zoom: ZoomLadder.Clamp(o.Zoom),
+        Topmost: o.Topmost,
+        ToolWindow: o.ToolWindow,
+        Resizable: o.Resizable);
 
     internal static void RunCore(Func<Component> root, AppOptions o, HarnessOptions h)
     {
@@ -313,20 +398,13 @@ public static class FluentApp
         var app = lifetime.Own(new Win32App());
         // customFrame: the app draws its own WinUI TitleBar (caption stripped, engine caption buttons, snap layouts) —
         // an explicit opt-in (the gallery): apps without a TitleBar keep the standard OS frame.
-        var window = (Win32Window)app.CreateWindow(new WindowDesc(
-            o.Title,
-            new Size2(o.Width, o.Height),
-            1f,
-            o.Mica,
-            CustomFrame: o.CustomFrame,
-            MinClientSizeDip: new Size2(o.MinWidth, o.MinHeight),
-            Zoom: ZoomLadder.Clamp(o.Zoom)));
+        var window = (Win32Window)app.CreateWindow(DescribeWindow(o));
         BootStamp("create-window");
         // Publish the real top-level HWND so app-layer callers (the Windows-APIs page: SMTC / pickers / taskbar) can pass
         // it as their explicit nint hwnd — the host accessor, not an Engine-seam invention. Cleared when the run ends.
         WindowHandle = window.Handle.Value;
         // Seed the live material state (see SetWindowMaterialAlt) — every later apply reads these, not the options record.
-        s_mica = o.Mica; s_customFrame = o.CustomFrame; s_micaAlt = o.MicaAlt;
+        s_mica = o.Mica; s_customFrame = o.CustomFrame; s_micaAlt = o.MicaAlt; s_acrylic = o.Acrylic; s_topmost = o.Topmost;
         // Seed the live app-zoom state (see SetZoom): the window was CREATED at the clamped factor above, so the first
         // frame already lays out at the user's persisted level — keep the statics in agreement with it.
         s_zoom = ZoomLadder.Clamp(o.Zoom);
@@ -339,7 +417,8 @@ public static class FluentApp
         if (Win32Theme.ReadAccentRamp() is { } ramp) Tok.SetAccent(in ramp);
         else if (Win32Theme.AccentLight2() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
         else if (Win32Theme.Accent() is { } b) Theme.Accent = ColorF.FromRgba(b.R, b.G, b.B);
-        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, s_mica, s_customFrame, s_micaAlt);
+        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, s_mica, s_customFrame, s_micaAlt, s_acrylic);
+        if (o.ToolWindow) Win32Theme.ApplyRoundCorners(window.Handle.Value);
         if (o.Mica) Theme.WindowBackground = ColorF.Transparent;
         BootStamp("accent+material");
 
@@ -389,6 +468,8 @@ public static class FluentApp
         // interaction pays no cold-start ramp. 0 disables the hold (see AppHost.WarmCadenceHoldMs).
         host.WarmCadenceHoldMs = o.WarmCadenceMs;
         host.RenderCensus = o.RenderCensus;
+        s_sizeToContent = o.SizeToContent;
+        host.SizeToContent = o.SizeToContent;   // before the first frame: its layout is the first fit
         s_host = host;
 
         // Relay the host's UI-thread single-instance redirect to the app-layer static event (the Windows-APIs page
@@ -408,7 +489,7 @@ public static class FluentApp
         // and the Mica system backdrop flip to the new theme's variant (instant — the OS can't cross-fade its backdrop;
         // the in-app content cross-fades). Mirrors the one-shot startup ApplyWindowMaterial above. Reads the LIVE material
         // statics so a SetWindowMaterialAlt change survives every subsequent theme flip.
-        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, s_mica, s_customFrame, s_micaAlt);
+        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, s_mica, s_customFrame, s_micaAlt, s_acrylic);
         // Relay the host's UI-thread OS color-settings-change to the app-layer static event (the app subscribes to follow
         // the OS dark-mode/accent live while its theme mode is "System").
         Action forwardSystemColors = () => SystemColorsChanged?.Invoke();
@@ -439,7 +520,9 @@ public static class FluentApp
 
         // StartHidden: the window exists (HWND, swapchain, host, the mounted tree) but is never shown, so the first frame
         // is already parked — the loop blocks on messages until SetWindowVisible(true), and that show edge paints.
-        if (!o.StartHidden) window.Show();
+        // SizeToContent: the window stays hidden until the first fit landed (AppHost.ShowWhenFitted), so it never flashes
+        // at the AppOptions size; Manual shows at once.
+        if (!o.StartHidden) host.ShowWhenFitted();
         BootStamp(o.StartHidden ? "window-start-hidden" : "window-show");
 
         // Optional diagnostic-harness takeover (the gallery's SoakProbe longevity / leak-hunt + targeted-stress modes,
@@ -504,6 +587,8 @@ public static class FluentApp
             }
             return sb.ToString();
         }
+        // `--fg shot-window=PATH`: the composed-window capture, armed at the first presented frame (null = not asked for).
+        using WindowShot? windowShot = WindowShot.FromSwitches(window, window.Handle.Value);
         while (!window.IsClosed)
         {
             host.RunFrame();
@@ -668,6 +753,7 @@ public static class FluentApp
                         $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{inputPaceTok}");
                 }
             }
+            if (windowShot is not null && windowShot.Tick(host.PresentedSequence)) break;   // `shot-exit`: captured, end the run
             if (h.Frames > 0 && n >= h.Frames) break;
             if (h.Screenshot != null)
                 window.WaitForWork(h.FrameWaitMs);   // deterministic ~8ms/frame so time-driven animations advance (and never block)
@@ -778,8 +864,28 @@ public sealed record AppOptions
     public bool Mica { get; init; } = true;
     /// <summary>Use Mica BaseAlt (the flatter File-Explorer tint) instead of the default Mica Base.</summary>
     public bool MicaAlt { get; init; }
+    /// <summary>Show the desktop-acrylic backdrop (a blur of whatever is behind the window) instead of Mica. Needs
+    /// <see cref="Mica"/> (the composited backdrop path); changed live by <see cref="FluentApp.SetWindowMaterialAcrylic"/>.</summary>
+    public bool Acrylic { get; init; }
     /// <summary>The app draws its own title bar (OS caption stripped; engine caption buttons + snap layouts).</summary>
     public bool CustomFrame { get; init; }
+    /// <summary>Keep the window above other windows from creation on (an overlay); changed live by
+    /// <see cref="FluentApp.SetTopmost"/>.</summary>
+    public bool Topmost { get; init; }
+    /// <summary>No taskbar button and no Alt+Tab entry (a desktop widget that lives in the notification area). The
+    /// window keeps the Win11 rounded corners.</summary>
+    public bool ToolWindow { get; init; }
+    /// <summary>False = the user cannot resize or maximize the window (code still can, through
+    /// <see cref="FluentApp.ResizeWindow"/>). Default true.</summary>
+    public bool Resizable { get; init; } = true;
+    /// <summary>Size the window to its content on these axes (WPF <c>SizeToContent</c>): after every frame whose layout
+    /// ran, the client area follows the content's natural size (DPI and app zoom included), clamped to
+    /// <see cref="MinWidth"/>/<see cref="MinHeight"/> and the monitor work area. <see cref="Width"/>/<see cref="Height"/>
+    /// are then only the size the first layout happens at; the window is shown after its first fit (unless
+    /// <see cref="StartHidden"/>), so it never flashes at that size. The user resizing the frame switches it to
+    /// <see cref="FluentGpu.Hosting.SizeToContent.Manual"/>; changed live by <see cref="FluentApp.SetSizeToContent"/>.
+    /// Default Manual.</summary>
+    public SizeToContent SizeToContent { get; init; }
     /// <summary>Adaptive GPU pacing (default <c>true</c>): when MEASURED whole-frame on-GPU execution proves the panel
     /// rate is unsustainable at the current window size, pace continuous motion to a steady sustainable cadence rather
     /// than thrashing into vblank misses. Self-releasing, and it never paces a genuine interaction. Set <c>false</c> to

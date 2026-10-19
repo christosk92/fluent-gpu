@@ -41,11 +41,59 @@ public sealed unsafe class DWriteTextShaper : IDisposable
         _an = a;
     }
 
+    // FontFeatures bit → DWRITE_FONT_FEATURE_TAG (bits 4..7 are unassigned → 0, skipped). Bit layout: FontFeatures.
+    private static readonly DWRITE_FONT_FEATURE_TAG[] s_featureTags =
+    [
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_LINING_FIGURES,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_OLD_STYLE_FIGURES,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_SLASHED_ZERO,
+        0, 0, 0, 0,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_1,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_2,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_3,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_4,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_5,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_6,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_7,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_8,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_9,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_10,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_11,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_12,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_13,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_14,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_15,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_16,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_17,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_18,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_19,
+        DWRITE_FONT_FEATURE_TAG.DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_20,
+    ];
+
     /// <summary>Shape [start, start+length) of <paramref name="text"/> with the given face/script/direction at
-    /// <paramref name="size"/> DIP. Returns the shaped glyphs (logical order) in a reused buffer.</summary>
-    public ReadOnlySpan<GlyphPlacement> Shape(char* text, int start, int length, IDWriteFontFace* face, float size, ushort scriptId, byte shapes, bool rtl)
+    /// <paramref name="size"/> DIP. Returns the shaped glyphs (logical order) in a reused buffer.
+    /// <paramref name="features"/> is a packed <c>FontFeatures</c> mask: every set bit becomes one enabled OpenType
+    /// feature in ONE <c>DWRITE_TYPOGRAPHIC_FEATURES</c> range covering the whole sub-run, handed IDENTICALLY to
+    /// <c>GetGlyphs</c> (substitution: tnum/onum/zero/ssNN swap glyph ids) and <c>GetGlyphPlacements</c> (positioning:
+    /// tnum's equal advances) — a mismatch would place one feature's glyphs with another's advances. The font's default
+    /// features (kern, liga, …) still apply; 0 ⇒ the null-features call (unchanged).</summary>
+    public ReadOnlySpan<GlyphPlacement> Shape(char* text, int start, int length, IDWriteFontFace* face, float size, ushort scriptId, byte shapes, bool rtl,
+        uint features = 0)
     {
         if (length <= 0) return ReadOnlySpan<GlyphPlacement>.Empty;
+        // Feature list on the stack (≤ 24 entries) — zero allocation per shape.
+        DWRITE_FONT_FEATURE* featList = stackalloc DWRITE_FONT_FEATURE[s_featureTags.Length];
+        uint featCount = 0;
+        for (int b = 0; b < s_featureTags.Length; b++)
+            if ((features & (1u << b)) != 0 && s_featureTags[b] != 0)
+                featList[featCount++] = new DWRITE_FONT_FEATURE { nameTag = s_featureTags[b], parameter = 1 };
+        DWRITE_TYPOGRAPHIC_FEATURES typo = new DWRITE_TYPOGRAPHIC_FEATURES { features = featList, featureCount = featCount };
+        DWRITE_TYPOGRAPHIC_FEATURES* typoPtr = &typo;
+        uint rangeLen = (uint)length;
+        DWRITE_TYPOGRAPHIC_FEATURES** featRanges = featCount > 0 ? &typoPtr : null;
+        uint* featRangeLens = featCount > 0 ? &rangeLen : null;
+        uint featRangeCount = featCount > 0 ? 1u : 0u;
         if (_cluster.Length < length) { _cluster = new ushort[length]; _textProps = new DWRITE_SHAPING_TEXT_PROPERTIES[length]; }
         if (_maxGlyphs < 3 * length / 2 + 16) GrowGlyphs(3 * length / 2 + 16);
 
@@ -61,7 +109,7 @@ public sealed unsafe class DWriteTextShaper : IDisposable
             fixed (DWRITE_SHAPING_TEXT_PROPERTIES* tp = _textProps)
             fixed (DWRITE_SHAPING_GLYPH_PROPERTIES* gp = _glyphProps)
                 hr = _an->GetGlyphs(text + start, (uint)length, face, BOOL.FALSE, isRtl, &sa, null, null,
-                    null, null, 0, (uint)_maxGlyphs, cm, tp, gi, gp, &actual);
+                    featRanges, featRangeLens, featRangeCount, (uint)_maxGlyphs, cm, tp, gi, gp, &actual);
             if ((uint)hr == 0x8007007A) { GrowGlyphs(_maxGlyphs * 2); continue; }
             Check(hr, "GetGlyphs");
             break;
@@ -73,7 +121,7 @@ public sealed unsafe class DWriteTextShaper : IDisposable
         fixed (float* adv = _adv)
         fixed (DWRITE_GLYPH_OFFSET* off = _off)
             Check(_an->GetGlyphPlacements(text + start, cm, tp, (uint)length, gi, gp, actual, face, size,
-                BOOL.FALSE, isRtl, &sa, null, null, null, 0, adv, off), "GetGlyphPlacements");
+                BOOL.FALSE, isRtl, &sa, null, featRanges, featRangeLens, featRangeCount, adv, off), "GetGlyphPlacements");
 
         int gc = (int)actual;
         if (_out.Length < gc) _out = new GlyphPlacement[gc];

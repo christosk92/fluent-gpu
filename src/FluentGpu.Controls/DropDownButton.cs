@@ -84,7 +84,8 @@ public sealed class DropDownButton : Component
                 FlyoutPlacement.BottomLeft,
                 // WinUI menus are WINDOWED popups (FlyoutBase_Partial.cpp:3181-3205 SetIsWindowedPopup) — a tall
                 // menu may escape the window when the platform supports popup windows (constrained fallback otherwise).
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+                // PopupOptions.Menu = FocusTrap + LightDismiss + Flyout chrome + ConstrainToRootBounds=false.
+                PopupOptions.Menu);
             // A reopen during this menu's close fade owns the cell now: only the current handle clears it.
             opened.ClosedAction = () => { if (ReferenceEquals(handle.Value, opened)) handle.Value = null; };
         }

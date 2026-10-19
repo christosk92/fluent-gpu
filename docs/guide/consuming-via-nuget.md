@@ -100,10 +100,11 @@ typed `Strings` class:
 <ItemGroup>
   <AdditionalFiles Include="assets\loc\en-US.json" FluentGpuLocBase="true" />
 </ItemGroup>
-<ItemGroup>
-  <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="FluentGpuLocBase" />
-</ItemGroup>
 ```
+
+The package's `buildTransitive/FluentGpu.props` already declares the compiler-visible `FluentGpuLocBase` metadata and
+the `FluentGpuLocNamespace` property (set it to choose the namespace of the generated `Strings` class). It also turns
+off CA1416 and the trim/AOT analyzers outside Release.
 
 **Form validators** — annotate a `partial` type with `[FluentGpu.Forms.Validatable]` and the generator emits its
 `Validator<T>[]`. Both are no-ops if you don't use them.
@@ -118,5 +119,7 @@ The engine ships no fonts, icons, or localization files — those are app conten
 
 ## Next
 
+- [Starting a new app](./new-app.md) — the `fluentgpu-app` template and `FluentGpu.App.props` for building against an
+  engine checkout instead of the package; ARM64 publishing.
 - [Getting started](./getting-started.md) — the frame loop, headless runs, the verification harness.
 - [Reactivity](./reactivity.md) — the signals model everything builds on.

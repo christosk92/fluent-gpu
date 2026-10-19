@@ -26,6 +26,12 @@ namespace FluentGpu.Text.Headless;
 /// size × 0.62); the line model's SizeDip becomes the MAX size across base + spans. The whole paragraph still wraps
 /// as ONE flow over the per-char advances. <c>Measure</c> additionally publishes the run's link/decoration rect
 /// artifacts (link = full line band; underline bar at baseline + 1 × 1; strike bar at metricSize × 0.8).</item>
+/// <item>ALIGNMENT (<c>TextStyle.Align</c>, the queries' <c>alignWidth</c>): a line's visible width excludes its trailing
+/// ' ' run; Center/End shift the whole line by <c>TextTypography.LineOffset</c> (the DirectWrite engine's formula);
+/// Justify adds (alignWidth − visible width) / (interior ' ' count) to every interior space of every line but the last
+/// (headless has no hard breaks; overflow-suffix lines stay Start). Measure is alignment-independent; span artifacts are
+/// published Start-aligned (Justify too) with their line's visible width (SpanRect.LineWidth) and justify gap counts
+/// (JustifyGaps/GapsBefore/GapsIn) — consumers place them at the drawn box via TextTypography.PlaceSpanRect.</item>
 /// </list>
 /// <see cref="Measure"/>, <see cref="HitTestText"/>, <see cref="GetCaret"/> and <see cref="GetRangeRects"/> all run the
 /// SAME line walk (<see cref="LayoutLines"/>), so headless hit-tests agree with headless layout positions exactly.
@@ -37,6 +43,10 @@ public sealed class HeadlessFontSystem : IFontSystem
     {
         public int Start, End;
         public int VisibleBodyEnd, SuffixStart;
+        /// <summary>Alignment: whole-line offset (Center/End), end of the visible (non-trailing-space) chars, and the
+        /// extra advance each interior space before <see cref="VisEnd"/> gets (Justify).</summary>
+        public float X, JustifyPer;
+        public int VisEnd;
     }
 
     private readonly StringTable _strings;
@@ -48,6 +58,8 @@ public sealed class HeadlessFontSystem : IFontSystem
     private int _overflowSuffixStart = -1;
     private bool _overflowSuffixVisible;
     private float[] _xs = new float[64];
+    // Justify: prefix count of ' ' chars (_spaces[i] = spaces in [0, i)), built only when a line is justified.
+    private int[] _spaces = new int[64];
 
     public HeadlessFontSystem(StringTable strings)
     {
@@ -123,6 +135,10 @@ public sealed class HeadlessFontSystem : IFontSystem
     public long ShapeCount { get; private set; }
 
     public TextMetrics Measure(StringId text, in TextStyle style, float maxWidth = float.PositiveInfinity)
+        => Measure(text, in style, maxWidth, publishArtifacts: true);
+
+    /// <inheritdoc/>
+    public TextMetrics Measure(StringId text, in TextStyle style, float maxWidth, bool publishArtifacts)
     {
         ShapeCount++;   // headless has no real shaper: one deterministic "shape" per Measure call (P0 counter parity)
         string s = _strings.Resolve(text);
@@ -140,11 +156,20 @@ public sealed class HeadlessFontSystem : IFontSystem
         // An unbreakable over-long word keeps the wrapped box width clamped to maxWidth (1 line, width = maxWidth).
         // NoWrap + Trim/MaxLines still clamps the reported box to maxWidth so virtual grid cells don't spill.
         var size = wrapped || clampW ? new Size2(maxWidth, _lineCount * lineH) : new Size2(total, lineH);
+        float firstLineW = _lineCount > 0 ? VisibleWidth(s.AsSpan(), in style, ref _lines[0]) : 0f;
         // Span runs: publish the link/decoration rect artifacts on the run (recorder bars + dispatcher hyperlinks).
-        if (style.SpanRunId != 0 && SpanRunTable.Shared.Resolve(style.SpanRunId) is { } run && ReferenceEquals(run.Spans, _spans))
+        // Laid Start-aligned, Justify included (consumers place Center/End/Justify at the drawn box —
+        // TextTypography.PlaceSpanRect); a justified first line reports FirstLineWidth +Inf (it fills its box).
+        if (style.Align != TextAlign.Start)
+        {
+            PrepareUnalignedLines(s.AsSpan(), in style);
+            if (style.Align == TextAlign.Justify && _lineCount > 0 && JustifyGapsOf(0) > 0) firstLineW = float.PositiveInfinity;
+        }
+        // A pure measure (publishArtifacts false: the SizeToContent probe / auto-fit search) leaves them alone.
+        if (publishArtifacts && style.SpanRunId != 0 && SpanRunTable.Shared.Resolve(style.SpanRunId) is { } run && ReferenceEquals(run.Spans, _spans))
             PublishSpanArtifacts(run, in style, maxWidth, lineH, baseline);
         float metricSize = MetricSize(in style);
-        return new TextMetrics(size, baseline, baseline + 1f, 1f, metricSize * 0.8f);
+        return new TextMetrics(size, baseline, baseline + 1f, 1f, metricSize * 0.8f, firstLineW);
     }
 
     private void PublishSpanArtifacts(SpanRun run, in TextStyle style, float maxWidth, float lineH, float baseline)
@@ -152,6 +177,8 @@ public sealed class HeadlessFontSystem : IFontSystem
         var rects = new List<SpanRect>();   // measure-miss only (content/width change) — cold-path alloc, like TextMeasureCache fills
         float strikeY = MetricSize(in style) * 0.8f;
         var spans = run.Spans;
+        bool aligned = style.Align != TextAlign.Start;   // VisEnd/_spaces prepared by Measure (PrepareUnalignedLines)
+        bool justify = style.Align == TextAlign.Justify;
         for (int i = 0; i < spans.Length; i++)
         {
             byte flags = spans[i].Flags;
@@ -160,29 +187,33 @@ public sealed class HeadlessFontSystem : IFontSystem
             {
                 float top = li * lineH;
                 ref readonly var line = ref _lines[li];
+                float lineW = aligned ? LineVisibleWidth(in style, in line) : float.NaN;
+                int gaps = justify ? JustifyGapsOf(li) : 0;
                 if (line.SuffixStart >= 0)
                 {
                     AddArtifactsForRange(rects, in style, in line,
                         System.Math.Max(spans[i].Start, line.Start), System.Math.Min(spans[i].End, line.VisibleBodyEnd),
-                        top, lineH, baseline, strikeY, i, flags);
+                        top, lineH, baseline, strikeY, i, flags, lineW, 0);
                     AddArtifactsForRange(rects, in style, in line,
                         System.Math.Max(spans[i].Start, line.SuffixStart), System.Math.Min(spans[i].End, line.End),
-                        top, lineH, baseline, strikeY, i, flags);
+                        top, lineH, baseline, strikeY, i, flags, lineW, 0);
                 }
                 else AddArtifactsForRange(rects, in style, in line,
                     System.Math.Max(spans[i].Start, line.Start), System.Math.Min(spans[i].End, line.End),
-                    top, lineH, baseline, strikeY, i, flags);
+                    top, lineH, baseline, strikeY, i, flags, lineW, gaps);
             }
         }
         run.PublishRects(new SpanRunRects(maxWidth, rects.ToArray()));
     }
 
-    public int HitTestText(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, Point2 point, out bool trailing)
+    public int HitTestText(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, Point2 point, out bool trailing,
+        float alignWidth = float.PositiveInfinity)
     {
         trailing = false;
         if (text.Length == 0) return 0;
         ResolveSpans(text, in style);
         LayoutLines(text, in style, maxWidth);
+        AlignLines(text, in style, alignWidth);
         float lineH = LineHeightOf(in style);
         int li = point.Y < 0f ? 0 : (int)(point.Y / lineH);
         if (li >= _lineCount) li = _lineCount - 1;
@@ -192,10 +223,25 @@ public sealed class HeadlessFontSystem : IFontSystem
         {
             float bodyW = DisplayX(in style, in line, line.VisibleBodyEnd);
             if (line.VisibleBodyEnd > line.Start && point.X < bodyW)
-                return HitTestRange(in style, line.Start, line.VisibleBodyEnd, 0f, point.X, out trailing);
+                return HitTestRange(in style, line.Start, line.VisibleBodyEnd, line.X, point.X, out trailing);
             return HitTestRange(in style, line.SuffixStart, line.End, bodyW, point.X, out trailing);
         }
-        if (len <= 0 || point.X <= 0f) return start;                  // empty line / left of the line → line start
+        if (len <= 0 || point.X <= line.X) return start;              // empty line / left of the line → line start
+        if (line.X != 0f || line.JustifyPer != 0f)
+        {
+            // Aligned line: walk the display cells (offset + justified gaps) — the same DisplayX the rects read.
+            for (int k = start; k < line.End; k++)
+            {
+                float cx = DisplayX(in style, in line, k), cw = DisplayX(in style, in line, k + 1) - cx;
+                if (point.X < cx + cw)
+                {
+                    trailing = point.X >= cx + cw * 0.5f;
+                    return k + (trailing ? 1 : 0);
+                }
+            }
+            trailing = true;
+            return line.End;
+        }
         if (_spans is null)
         {
             float cells = point.X / AdvanceOf(in style);
@@ -219,11 +265,13 @@ public sealed class HeadlessFontSystem : IFontSystem
         return line.End;
     }
 
-    public void GetCaret(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, int charIndex, out float x, out float lineTop, out float lineHeight, out int lineIndex)
+    public void GetCaret(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, int charIndex, out float x, out float lineTop, out float lineHeight, out int lineIndex,
+        float alignWidth = float.PositiveInfinity)
     {
         if (charIndex < 0) charIndex = 0; else if (charIndex > text.Length) charIndex = text.Length;
         ResolveSpans(text, in style);
         LayoutLines(text, in style, maxWidth);
+        AlignLines(text, in style, alignWidth);
         lineHeight = LineHeightOf(in style);
         int li = _lineCount - 1;
         for (int i = 0; i < _lineCount; i++)
@@ -233,13 +281,15 @@ public sealed class HeadlessFontSystem : IFontSystem
         lineIndex = li;
     }
 
-    public int GetRangeRects(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, int start, int end, Span<RectF> rects)
+    public int GetRangeRects(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, int start, int end, Span<RectF> rects,
+        float alignWidth = float.PositiveInfinity)
     {
         if (start < 0) start = 0;
         if (end > text.Length) end = text.Length;
         if (end <= start) return 0;
         ResolveSpans(text, in style);
         LayoutLines(text, in style, maxWidth);
+        AlignLines(text, in style, alignWidth);
         float lineH = LineHeightOf(in style);
         int written = 0;
         for (int li = 0; li < _lineCount && written < rects.Length; li++)
@@ -310,7 +360,84 @@ public sealed class HeadlessFontSystem : IFontSystem
     private void AddLine(int start, int end)
     {
         if (_lines.Length == _lineCount) System.Array.Resize(ref _lines, _lines.Length * 2);
-        _lines[_lineCount++] = new LineRange { Start = start, End = end, VisibleBodyEnd = -1, SuffixStart = -1 };
+        _lines[_lineCount++] = new LineRange { Start = start, End = end, VisibleBodyEnd = -1, SuffixStart = -1, VisEnd = end };
+    }
+
+    /// <summary>Visible width of a line (trailing ' ' run excluded; an overflow-suffix line's full display width) in its
+    /// UNALIGNED frame; also records <see cref="LineRange.VisEnd"/>.</summary>
+    private float VisibleWidth(ReadOnlySpan<char> s, in TextStyle style, ref LineRange line)
+    {
+        if (line.SuffixStart >= 0)
+        {
+            line.VisEnd = line.End;
+            return DisplayX(in style, in line, line.End) - line.X;
+        }
+        int e = line.End;
+        while (e > line.Start && s[e - 1] == ' ') e--;
+        line.VisEnd = e;
+        return XAt(in style, e) - XAt(in style, line.Start);
+    }
+
+    /// <summary>The recorded visible width of a laid line (after <see cref="AlignLines"/> or <see cref="VisibleWidth"/>).</summary>
+    private float LineVisibleWidth(in TextStyle style, in LineRange line)
+        => line.SuffixStart >= 0 ? DisplayX(in style, in line, line.End) - line.X
+            : XAt(in style, line.VisEnd) - XAt(in style, line.Start);
+
+    /// <summary>Apply <c>style.Align</c> against <paramref name="alignWidth"/> (+Inf ⇒ the widest line) to the laid lines —
+    /// the DirectWrite engine's rule (TextLayoutEngine.ApplyAlignment) over the uniform advance model.</summary>
+    private void AlignLines(ReadOnlySpan<char> s, in TextStyle style, float alignWidth)
+    {
+        if (style.Align == TextAlign.Start) return;
+        float boxW = alignWidth;
+        if (!float.IsFinite(boxW))
+        {
+            boxW = 0f;
+            for (int li = 0; li < _lineCount; li++)
+            {
+                float lw = DisplayX(in style, in _lines[li], _lines[li].End);
+                if (lw > boxW) boxW = lw;
+            }
+        }
+        if (style.Align == TextAlign.Justify) BuildSpaceTable(s);
+        for (int li = 0; li < _lineCount; li++)
+        {
+            ref var line = ref _lines[li];
+            float w = VisibleWidth(s, in style, ref line);
+            if (style.Align == TextAlign.Justify)
+            {
+                int interior = JustifyGapsOf(li);
+                float slack = boxW - w;
+                if (interior > 0 && slack > 0f) line.JustifyPer = slack / interior;
+                continue;
+            }
+            line.X = TextTypography.LineOffset(style.Align, boxW, w);
+        }
+    }
+
+    /// <summary>Prefix count of ' ' chars (_spaces[i] = spaces in [0, i)) in the reused grow-only table.</summary>
+    private void BuildSpaceTable(ReadOnlySpan<char> s)
+    {
+        if (_spaces.Length < s.Length + 1) System.Array.Resize(ref _spaces, System.Math.Max(s.Length + 1, _spaces.Length * 2));
+        int c = 0;
+        for (int i = 0; i < s.Length; i++) { _spaces[i] = c; if (s[i] == ' ') c++; }
+        _spaces[s.Length] = c;
+    }
+
+    /// <summary>Measure's unaligned line prep for the span artifacts: records every line's <see cref="LineRange.VisEnd"/>
+    /// (the visible width the consumers align) and, under Justify, the space table <see cref="JustifyGapsOf"/> reads.</summary>
+    private void PrepareUnalignedLines(ReadOnlySpan<char> s, in TextStyle style)
+    {
+        if (style.Align == TextAlign.Justify) BuildSpaceTable(s);
+        for (int li = 0; li < _lineCount; li++) VisibleWidth(s, in style, ref _lines[li]);
+    }
+
+    /// <summary>The interior spaces a justified line <paramref name="li"/> widens (0 = never justified: the last line or
+    /// an overflow-suffix line). Needs <see cref="BuildSpaceTable"/> + the line's VisEnd.</summary>
+    private int JustifyGapsOf(int li)
+    {
+        ref readonly var line = ref _lines[li];
+        if (li + 1 >= _lineCount || line.SuffixStart >= 0) return 0;
+        return _spaces[line.VisEnd] - _spaces[line.Start];
     }
 
     private void AddOverflowLine(ReadOnlySpan<char> s, in TextStyle style, int bodyStart, int bodyEnd, int textEnd, float maxWidth)
@@ -360,10 +487,13 @@ public sealed class HeadlessFontSystem : IFontSystem
     private float DisplayX(in TextStyle style, in LineRange line, int index)
     {
         if (line.SuffixStart >= 0 && index >= line.SuffixStart)
-            return XAt(in style, line.VisibleBodyEnd) - XAt(in style, line.Start)
+            return line.X + XAt(in style, line.VisibleBodyEnd) - XAt(in style, line.Start)
                  + XAt(in style, index) - XAt(in style, line.SuffixStart);
         if (line.SuffixStart >= 0 && index > line.VisibleBodyEnd) index = line.VisibleBodyEnd;
-        return XAt(in style, index) - XAt(in style, line.Start);
+        float x = line.X + XAt(in style, index) - XAt(in style, line.Start);
+        if (line.JustifyPer != 0f)   // every interior space before the index widened by the share
+            x += line.JustifyPer * (_spaces[System.Math.Min(index, line.VisEnd)] - _spaces[line.Start]);
+        return x;
     }
 
     private int HitTestRange(in TextStyle style, int start, int end, float offsetX, float pointX, out bool trailing)
@@ -386,17 +516,25 @@ public sealed class HeadlessFontSystem : IFontSystem
     }
 
     private void AddArtifactsForRange(List<SpanRect> rects, in TextStyle style, in LineRange line,
-        int start, int end, float top, float lineH, float baseline, float strikeY, int spanIndex, byte flags)
+        int start, int end, float top, float lineH, float baseline, float strikeY, int spanIndex, byte flags, float lineW,
+        int gaps)
     {
         if (start >= end) return;
         float x0 = DisplayX(in style, in line, start);
         float w = DisplayX(in style, in line, end) - x0;
+        // Justify-at-use: the gaps DisplayX would widen left of / inside [start, end) (the same min(index, VisEnd) rule).
+        int before = 0, inside = 0;
+        if (gaps > 0)
+        {
+            before = _spaces[System.Math.Min(start, line.VisEnd)] - _spaces[line.Start];
+            inside = _spaces[System.Math.Min(end, line.VisEnd)] - _spaces[line.Start] - before;
+        }
         if ((flags & SpanStyle.LinkBit) != 0)
-            rects.Add(new SpanRect(new RectF(x0, top, w, lineH), spanIndex, SpanStyle.LinkBit));
+            rects.Add(new SpanRect(new RectF(x0, top, w, lineH), spanIndex, SpanStyle.LinkBit, lineW, gaps, before, inside));
         if ((flags & SpanStyle.UnderlineBit) != 0)
-            rects.Add(new SpanRect(new RectF(x0, top + baseline + 1f, w, 1f), spanIndex, SpanStyle.UnderlineBit));
+            rects.Add(new SpanRect(new RectF(x0, top + baseline + 1f, w, 1f), spanIndex, SpanStyle.UnderlineBit, lineW, gaps, before, inside));
         if ((flags & SpanStyle.StrikethroughBit) != 0)
-            rects.Add(new SpanRect(new RectF(x0, top + strikeY, w, 1f), spanIndex, SpanStyle.StrikethroughBit));
+            rects.Add(new SpanRect(new RectF(x0, top + strikeY, w, 1f), spanIndex, SpanStyle.StrikethroughBit, lineW, gaps, before, inside));
     }
 
     private void AddRangeRect(in TextStyle style, in LineRange line, int start, int end, int lineIndex, float lineH,

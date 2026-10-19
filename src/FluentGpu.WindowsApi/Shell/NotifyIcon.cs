@@ -75,6 +75,7 @@ public sealed unsafe class NotifyIcon : IDisposable
     private HICON _icon;          // owned; kept for the icon's lifetime so a re-add has something to send
     private string? _iconPath;
     private bool _iconAutoSize;   // SetIcon(path): reloaded at the new frame size when the taskbar DPI changes
+    private Func<TrayIconRequest, TrayIconBitmap>? _iconSource;   // SetIconSource: re-rendered on every shell change
     private string _tip;
     private NotifyIconShellState _shell;
 
@@ -160,6 +161,51 @@ public sealed unsafe class NotifyIcon : IDisposable
     /// <see cref="SetIcon(string)"/>. False when the file cannot be loaded (the previous image stays).</summary>
     public bool SetIcon(string icoPath, int sizePx)
         => sizePx <= 0 ? SetIcon(icoPath) : LoadIcon(icoPath, sizePx, autoSize: false);
+
+    /// <summary>
+    /// Use a bitmap as the icon: tightly packed, top-down, PREMULTIPLIED BGRA8, <paramref name="width"/> ×
+    /// <paramref name="height"/> × 4 bytes (draw it at <see cref="SmallIconSizeForDpi"/>(<see cref="TaskbarDpi"/>) for a
+    /// crisp frame). Built into an icon (<c>CreateDIBSection</c> 32bpp + a 1bpp mask → <c>CreateIconIndirect</c>), pushed if
+    /// the icon is shown, and the previous handle destroyed after the shell has the new one. Replaces an icon path or an
+    /// <see cref="SetIconSource">icon source</see> (neither is re-applied on a shell change any more). False when the icon
+    /// could not be built (the previous image stays) or the icon is disposed.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">A side is outside 1–256 px.</exception>
+    /// <exception cref="ArgumentException">The span is not exactly <c>width × height × 4</c> bytes.</exception>
+    public bool SetIcon(ReadOnlySpan<byte> premultipliedBgra, int width, int height)
+    {
+        TrayIconPixels.Validate(premultipliedBgra, width, height, nameof(premultipliedBgra));
+        System.Diagnostics.Debug.Assert(TrayIconPixels.IsPremultiplied(premultipliedBgra),
+            "NotifyIcon.SetIcon: pixels are not premultiplied (a colour channel exceeds its alpha; alpha-0 pixels must be colour 0)");
+        if (_disposed) return false;
+        HICON built = CreateIconFromPremultiplied(premultipliedBgra, width, height);
+        if (built == HICON.NULL) return false;
+        _iconPath = null;
+        _iconAutoSize = false;
+        _iconSource = null;
+        return SwapIn(built);
+    }
+
+    /// <summary>
+    /// Draw the icon from <paramref name="render"/>: it is called now, and again whenever the taskbar's DPI or light/dark
+    /// changes (also after an explorer restart that changed either), with the frame size and theme to draw for — so a
+    /// glyph icon (<see cref="TrayIconArt.Glyph"/>) stays crisp and legible. Replaces an icon path. Call it again (or
+    /// <see cref="RefreshIconSource"/>) when the art itself changes (a new badge value). A callback that throws or returns
+    /// a malformed bitmap is logged and the previous image stays. Runs on the icon's thread. No-op once disposed.
+    /// </summary>
+    public void SetIconSource(Func<TrayIconRequest, TrayIconBitmap> render)
+    {
+        ArgumentNullException.ThrowIfNull(render);
+        if (_disposed) return;
+        _iconSource = render;
+        _iconPath = null;
+        _iconAutoSize = false;
+        RenderFromSource();
+    }
+
+    /// <summary>Re-run the current <see cref="SetIconSource">icon source</see> now (its inputs changed). False when there is
+    /// no source, it failed, or the shell refused the push.</summary>
+    public bool RefreshIconSource() => RenderFromSource();
 
     /// <summary>Set the tooltip (<c>NIM_MODIFY(NIF_TIP | NIF_SHOWTIP)</c> when shown), cut to <see cref="MaxTipChars"/>.
     /// Returns false only when the shell refused a push to a shown icon.</summary>
@@ -349,13 +395,92 @@ public sealed unsafe class NotifyIcon : IDisposable
             Diag.Line($"[notifyicon] icon not loaded: {icoPath} @ {sizePx}px (GetLastError=0x{(uint)Marshal.GetLastPInvokeError():X8})");
             return false;
         }
-        HICON previous = _icon;
-        _icon = loaded;
         _iconPath = icoPath;
         _iconAutoSize = autoSize;
+        _iconSource = null;
+        return SwapIn(loaded);
+    }
+
+    /// <summary>The one icon-swap order: hold the new handle, push it (<c>NIM_MODIFY(NIF_ICON)</c> when shown), then destroy
+    /// the previous one — the shell copied the new one during the call.</summary>
+    private bool SwapIn(HICON next)
+    {
+        HICON previous = _icon;
+        _icon = next;
         bool ok = !_added || Modify(P.NIF_ICON);
-        if (previous != HICON.NULL) DestroyIcon(previous);   // the shell copied the new one during the call
+        if (previous != HICON.NULL && previous != next) DestroyIcon(previous);
         return ok;
+    }
+
+    private bool RenderFromSource()
+    {
+        Func<TrayIconRequest, TrayIconBitmap>? render = _iconSource;
+        if (render is null || _disposed) return false;
+        var request = new TrayIconRequest(SmallIconSizeForDpi(_shell.TaskbarDpi), _shell.TaskbarLight);
+        TrayIconBitmap bmp;
+        try { bmp = render(request); }
+        catch (Exception ex)
+        {
+            Diag.Line($"[notifyicon] icon source threw at {request.SizePx}px: {ex}");
+            return false;
+        }
+        if (bmp.PremultipliedBgra is null || !TrayIconPixels.IsValid(bmp.PremultipliedBgra, bmp.Width, bmp.Height))
+        {
+            Diag.Line($"[notifyicon] icon source returned a malformed bitmap ({bmp.Width}x{bmp.Height}, {bmp.PremultipliedBgra?.Length ?? 0} bytes)");
+            return false;
+        }
+        HICON built = CreateIconFromPremultiplied(bmp.PremultipliedBgra, bmp.Width, bmp.Height);
+        return built != HICON.NULL && SwapIn(built);
+    }
+
+    /// <summary>A 32bpp alpha icon from premultiplied BGRA: the colour bitmap is a top-down DIB section holding the STRAIGHT
+    /// alpha a 32bpp icon frame carries (as an <c>.ico</c> does), the 1bpp mask marks the fully transparent pixels; both
+    /// bitmaps are deleted once <c>CreateIconIndirect</c> has copied them. <see cref="HICON.NULL"/> on failure (logged).</summary>
+    private static HICON CreateIconFromPremultiplied(ReadOnlySpan<byte> premultiplied, int width, int height)
+    {
+        const uint BI_RGB = 0, DIB_RGB_COLORS = 0;
+        BITMAPINFO bmi = default;
+        bmi.bmiHeader.biSize = (uint)sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = width;
+        bmi.bmiHeader.biHeight = -height;   // top-down rows
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        void* bits = null;
+        HBITMAP color = CreateDIBSection(HDC.NULL, &bmi, DIB_RGB_COLORS, &bits, HANDLE.NULL, 0);
+        if (color == HBITMAP.NULL || bits == null)
+        {
+            if (color != HBITMAP.NULL) DeleteObject((HGDIOBJ)(void*)color);
+            Diag.Line($"[notifyicon] icon bitmap not created: {width}x{height} (GetLastError=0x{(uint)Marshal.GetLastPInvokeError():X8})");
+            return HICON.NULL;
+        }
+        HBITMAP mask = HBITMAP.NULL;
+        try
+        {
+            TrayIconPixels.Unpremultiply(premultiplied, new Span<byte>(bits, width * height * 4));
+            int stride = TrayIconPixels.MaskStride(width);
+            byte[] maskBits = new byte[stride * height];
+            TrayIconPixels.BuildMask(premultiplied, width, height, maskBits);
+            fixed (byte* m = maskBits) mask = CreateBitmap(width, height, 1, 1, m);
+            if (mask == HBITMAP.NULL)
+            {
+                Diag.Line($"[notifyicon] icon mask not created: {width}x{height}");
+                return HICON.NULL;
+            }
+            ICONINFO info = default;
+            info.fIcon = BOOL.TRUE;
+            info.hbmMask = mask;
+            info.hbmColor = color;
+            HICON icon = CreateIconIndirect(&info);
+            if (icon == HICON.NULL)
+                Diag.Line($"[notifyicon] CreateIconIndirect failed: {width}x{height} (GetLastError=0x{(uint)Marshal.GetLastPInvokeError():X8})");
+            return icon;
+        }
+        finally
+        {
+            DeleteObject((HGDIOBJ)(void*)color);
+            if (mask != HBITMAP.NULL) DeleteObject((HGDIOBJ)(void*)mask);
+        }
     }
 
     private bool TryGetRectCore(out RECT rect)
@@ -411,6 +536,7 @@ public sealed unsafe class NotifyIcon : IDisposable
         bool reload = _iconAutoSize && _iconPath is not null && NotifyIconShellState.IconSizeChanged(_shell, next);
         _shell = next;
         if (reload) LoadIcon(_iconPath!, SmallIconSizeForDpi(next.TaskbarDpi), autoSize: true);
+        else if (_iconSource is not null) RenderFromSource();   // a drawn icon follows the size AND the light/dark ink
         if (raise) Raise(NotifyIconEvent.ShellChanged, 0, 0);
     }
 

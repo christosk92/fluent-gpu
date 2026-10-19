@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "FluentGpu",
+  "classifications": [ "Desktop", "Windows", "FluentGpu" ],
+  "identity": "FluentGpu.App.Template",
+  "groupIdentity": "FluentGpu.App",
+  "name": "FluentGpu app",
+  "description": "A FluentGpu desktop app (NativeAOT, Direct3D 12): a Mica window with the custom-frame TitleBar and one page, built against a FluentGpu engine checkout through FluentGpu.App.props.",
+  "shortName": "fluentgpu-app",
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "sourceName": "FluentGpuApp",
+  "preferNameDirectory": true,
+  "symbols": {
+    "EnginePath": {
+      "type": "parameter",
+      "datatype": "text",
+      "description": "Path of the FluentGpu engine checkout (the folder holding FluentGpu.App.props). Absolute, or relative to the new project folder. Change it later in Directory.Build.props or a git-ignored EngineRoot.local.props.",
+      "defaultValue": "..\\fluent-gpu",
+      "replaces": "FLUENTGPU_ENGINE_ROOT"
+    },
+    "GlobalJson": {
+      "type": "parameter",
+      "datatype": "bool",
+      "description": "Add a global.json that pins the .NET 10 SDK feature band the engine builds with (10.0.300, latestFeature). Turn off when the folder already sits under a global.json.",
+      "defaultValue": "true"
+    }
+  },
+  "sources": [
+    {
+      "modifiers": [
+        {
+          "condition": "(!GlobalJson)",
+          "exclude": [ "global.json" ]
+        }
+      ]
+    }
+  ],
+  "primaryOutputs": [
+    { "path": "FluentGpuApp.csproj" }
+  ]
+}
