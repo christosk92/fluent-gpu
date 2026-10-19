@@ -317,9 +317,12 @@ leaf values / generated forwarders (NOT SPEC-INDEX §2 contracts); owner `src/Fl
   "improve, don't port / JSON-over-XML but not for computed data" rule). Kills the silent drift where a new `TokenSet`
   field lacked its `Tok` accessor.
 - **`GlyphTableGenerator` (Icons codepoints from JSON).** `src/FluentGpu.SourceGen/Engine/GlyphTableGenerator.cs`
-  reads a `glyphs.json` AdditionalFile (`src/FluentGpu.Controls/glyphs.json`, ~105 entries, marked
-  `FluentGpuGlyphs="true"` in the csproj) and emits `public const string <Name> = "\uXXXX";` into `partial class
-  FluentGpu.Controls.Icons` (`Icons.Glyphs.g.cs`). Dormant unless a `glyphs.json` is present (per the JSON-source-of-truth
+  reads a `glyphs.json` AdditionalFile (`src/FluentGpu.Controls/glyphs.json`, 123 entries, marked
+  `FluentGpuGlyphs="true"` in the csproj) and emits `public const string <Name> = "\uXXXX";` (each with the XML doc
+  `Segoe Fluent Icons glyph "<Name>" (U+XXXX).`) into `partial class FluentGpu.Controls.Icons` (`Icons.Glyphs.g.cs`),
+  plus `Icons.All` (an `IReadOnlyList<IconGlyph>` over one static array, in JSON order; `IconGlyph(Name, Glyph)` is
+  hand-declared in `Icons.cs`) and the reverse lookup `Icons.TryGetName(glyph, out name)` (a string switch; when names
+  share a codepoint, the first in JSON order wins). Dormant unless a `glyphs.json` is present (per the JSON-source-of-truth
   preference; distinct from the layered-vector `ThemedIconData.g.cs`).
 
 ---

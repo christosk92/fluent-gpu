@@ -3023,10 +3023,11 @@ sealed class ForAllocProbe : Component
 //     the pool thread, which posts whenever it is next scheduled.
 sealed class ResourceProbe : Component
 {
-    public const int MaxLoads = 8;
+    public const int MaxLoads = 16;
     public const int HangGuardMs = 10_000;   // a hang guard only — every wait below ends on the real event
 
     public readonly Signal<int> Key = new(0);
+    public readonly Signal<int> Rev = new(0);   // re-render the body WITHOUT a deps change (re-points Options)
     public ResourceOptions Options = ResourceOptions.Default;
     public bool ObserveCancellation = true;
     public Resource<string> Res;
@@ -3048,6 +3049,24 @@ sealed class ResourceProbe : Component
     {
         if (!_loads[index].Task.Wait(HangGuardMs)) throw new TimeoutException($"resource load #{index} never started");
         return _loads[index].Task.Result;
+    }
+
+    /// <summary>How many loads have started (any thread; the loader increments it before publishing its gate).</summary>
+    public int Started => Volatile.Read(ref _started);
+
+    /// <summary>Pump frames (RunFrame — parked frames included) until <paramref name="done"/> holds; false on the hang
+    /// guard. For waits that are not a settle count (a poll posted by the parked System.Threading.Timer also rides the
+    /// counting poster).</summary>
+    public static bool PumpUntil(AppHost host, Func<bool> done)
+    {
+        long deadline = Environment.TickCount64 + HangGuardMs;
+        while (!done())
+        {
+            if (Environment.TickCount64 > deadline) return false;
+            host.RunFrame();
+            Thread.Yield();
+        }
+        return true;
     }
 
     /// <summary>Pump frames until <paramref name="count"/> completions have been delivered to the UI thread (Settle
@@ -3075,6 +3094,7 @@ sealed class ResourceProbe : Component
         public override Element Render()
         {
             int k = p.Key.Value;   // subscribe → a deps change re-renders and reloads the resource on the new key
+            _ = p.Rev.Value;       // subscribe → a plain re-render re-points p.Options (the poll-shape change gates)
             p.Res = UseResource(async ct =>
             {
                 var tcs = new TaskCompletionSource<string>();

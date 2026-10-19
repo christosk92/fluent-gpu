@@ -130,13 +130,36 @@ Skel.Region(album.Loadable, AlbumRow, count: 8,                      // shimmer 
 | `Loadable` | Pending/Ready/Failed value spine — bind into `Skel.Region` / a leaf `.Bind()` |
 | `IsFetching` | `IReadSignal<bool>` — true while any load (initial / deps / refresh / mutate-revalidate) is in flight |
 | `IsStale` | `IReadSignal<bool>` — flips true once the data is older than `StaleTimeMs` (immediately when 0, the default) |
-| `LastError` | the last failure (kept even when a refresh failure leaves the prior `Ready` value visible) |
-| `Refresh()` | re-run the loader, **keeping the current `Ready` value visible while it loads**; a refresh failure keeps the old value + sets `LastError` |
+| `Error` | `IReadSignal<Exception?>` — the last failure, reactive (an error banner next to data a failed refresh kept visible); null after a success or a `Mutate` |
+| `LastError` | the same value without subscribing (`Error.Peek()`) |
+| `Refresh()` | re-run the loader, **keeping the current `Ready` value visible while it loads**; a refresh failure keeps the old value + sets `Error` |
 | `Mutate(v, refresh = true)` | write `v` as `Ready` **immediately** (optimistic), cancel any in-flight load, then revalidate |
 
 `ResourceOptions`: `StaleTimeMs` (0 = stale on Ready; the `IsStale` flip is driven by the host frame-clock timer queue,
 not a poller) and `KeepPreviousData` (a deps change keeps showing the previous `Ready` value while the new identity
-loads, instead of resetting to `Pending(seed)`).
+loads, instead of resetting to `Pending(seed)`), plus polling:
+
+| Option | Default | Behaviour |
+|---|---|---|
+| `RefetchIntervalMs` | 0 (off) | re-run the loader this long after the previous load **completed** (success or failure). A slow load is never cancelled or stacked: a load in flight just delays the next poll until it settles |
+| `RefetchWhileInactive` | false | keep polling while the component is inactive (`UseIsActive` false: a `Flow.KeepAlive`-parked page, a collapsed subtree, a minimized/hidden/cloaked window, an app suspend). Default: the poll pauses |
+| `RefetchOnActivate` | true | on re-activation, refetch once right away if a poll came due while paused (deduped against a load in flight); otherwise the poll keeps its due time. False: resume a full interval after activation |
+| `BackoffOnError` | true | after n failures in a row the next poll waits interval × 2^n (capped at 8×, ±10% jitter); a success resets it |
+
+```csharp
+var usage = UseResource(ct => api.GetUsageAsync(ct), seed: Usage.Empty,
+                        options: new ResourceOptions { RefetchIntervalMs = 60_000 });
+// usage.IsFetching → a subtle spinner; usage.Error.Value → "couldn't refresh" beside the kept data
+```
+
+Polling details: the poll runs on the host timer queue while the component is active. Host timers only run inside
+`Paint`, which does not run while the window is parked, so with `RefetchWhileInactive` the inactive cadence uses a
+`System.Threading.Timer` that posts the refetch to the UI thread (UI posts are drained while parked, and the result
+lands while parked too). "Overdue" means time since the last completion, not staleness, so `StaleTimeMs = 0` does not
+make every activation refetch. A deps change or unmount cancels the armed poll (the re-keyed load re-arms it when it
+completes); a `Mutate(v, refresh: false)` re-arms it from the mutate. Options are re-read every render: changing the
+interval re-arms from the last completion **without forcing a fetch** (if that time has already passed, the poll moves to a
+full interval from now), and `0` stops polling. Gates: `gate.resource.poll-*`, `gate.resource.error-signal`.
 
 ## The hooks (state side)
 

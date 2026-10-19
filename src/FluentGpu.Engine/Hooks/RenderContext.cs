@@ -151,6 +151,27 @@ public sealed record ResourceOptions
 {
     public float StaleTimeMs { get; init; }
     public bool KeepPreviousData { get; init; }
+
+    /// <summary>Poll: re-run the loader this many ms after the previous load COMPLETED (success or failure); 0 = off.
+    /// Measured from completion, so a slow loader is never cancelled or stacked by a tick. Pauses while the component is
+    /// inactive (<c>UseIsActive</c> false: a KeepAlive-parked page, a collapsed subtree, a minimized/hidden window, an
+    /// app suspend) unless <see cref="RefetchWhileInactive"/>.</summary>
+    public float RefetchIntervalMs { get; init; }
+
+    /// <summary>Keep polling while inactive. Host timers do not run while the window is parked, so the inactive cadence
+    /// rides a <see cref="System.Threading.Timer"/> that posts the refetch to the UI thread (posts drain while parked).</summary>
+    public bool RefetchWhileInactive { get; init; }
+
+    /// <summary>On re-activation, refetch immediately if a poll came due while paused (once — deduped against an
+    /// in-flight load); otherwise the poll keeps its original due time. False: resume a full interval after activation.
+    /// Only meaningful with <see cref="RefetchIntervalMs"/> &gt; 0. Overdue is time since the last completion, never
+    /// staleness (<see cref="StaleTimeMs"/> = 0 does not make every activation refetch).</summary>
+    public bool RefetchOnActivate { get; init; } = true;
+
+    /// <summary>After n consecutive failed loads the next poll waits <see cref="RefetchIntervalMs"/> × 2^n (capped at
+    /// 8×, ±10% jitter); a success resets it.</summary>
+    public bool BackoffOnError { get; init; } = true;
+
     public static ResourceOptions Default { get; } = new();
 }
 
@@ -159,6 +180,7 @@ internal interface IResourceControl<T>
     Loadable<T> Loadable { get; }
     IReadSignal<bool> IsFetching { get; }
     IReadSignal<bool> IsStale { get; }
+    IReadSignal<Exception?> Error { get; }
     Exception? LastError { get; }
     void Refresh();
     void Mutate(T optimistic, bool refresh);
@@ -183,7 +205,11 @@ public readonly struct Resource<T>
     public IReadSignal<bool> IsFetching => _c!.IsFetching;
     /// <summary>True once the current data is older than <see cref="ResourceOptions.StaleTimeMs"/> (immediately when 0).</summary>
     public IReadSignal<bool> IsStale => _c!.IsStale;
-    /// <summary>The last load failure (kept even when a refresh failure leaves the prior <c>Ready</c> value visible); null on success.</summary>
+    /// <summary>The last load failure as a reactive signal (read <c>.Value</c> to subscribe — an error banner beside data
+    /// that a failed poll kept visible); null after a success or a <see cref="Mutate"/>.</summary>
+    public IReadSignal<Exception?> Error => _c!.Error;
+    /// <summary>The last load failure (kept even when a refresh failure leaves the prior <c>Ready</c> value visible); null
+    /// on success. A non-subscribing read of <see cref="Error"/>.</summary>
     public Exception? LastError => _c?.LastError;
     /// <summary>Re-run the loader keeping the current <c>Ready</c> value visible while it loads (stale-while-revalidate);
     /// a refresh failure keeps the old value + sets <see cref="LastError"/>.</summary>
@@ -210,18 +236,172 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
     public T Seed = default!;
     public Func<CancellationToken, Task<T>> Loader = null!;   // latest closure, re-pointed each render
     public Action<Action> Post = null!;                       // UI-thread marshal for completions
-    public FluentGpu.Hosting.HostTimerQueue? Queue;           // drives the stale-time flip (UI cadence; NOT the media clock)
-    public Exception? LastError { get; private set; }
+    public FluentGpu.Hosting.HostTimerQueue? Queue;           // drives the stale-time flip + the poll (UI cadence; NOT the media clock)
+    public Type? OwnerType;                                   // names the poll timer in the [wake] census (timersSeen=)
+    public readonly Signal<Exception?> ErrorSig = new(null);  // the reactive last error (Resource.Error)
+    public Exception? LastError => ErrorSig.Peek();
     // True while the visible Ready value is the PREVIOUS deps identity's, kept by a KeepPreviousData re-key. A failure
     // must then surface Failed: that value is a placeholder for the new identity, not a stale copy of it.
     private bool _keptForeign;
     private readonly Action<long> _staleFire;
 
-    public ResourceCell() => _staleFire = OnStaleFire;
+    // ── Polling (ResourceOptions.RefetchIntervalMs) ──────────────────────────────────────────────────────────────────
+    // ONE logical due time (_pollDueMs, host-queue clock) placed on one of two timers: the host queue while active (it
+    // drains only inside Paint), or — inactive with RefetchWhileInactive — a System.Threading.Timer that POSTS the fire
+    // (posts drain while the window is parked). Armed from every completion (Settle) and from a no-refresh Mutate;
+    // cleared by every Launch, so a tick can never land on a live load (and a tick that somehow does re-arms, never
+    // Refresh()es — that would cancel the in-flight load and starve a slow loader). PollGen guards the host entry.
+    public long PollGen;
+    public IReadSignal<bool>? ActiveSig;                      // UseIsActive memo (the caller's call site)
+    public Effect? ActiveWatcher;                             // created when polling is first enabled
+    private double _pollDueMs = double.NaN;                   // NaN = nothing armed (never settled / in flight / off)
+    private double _lastSettleMs = double.NaN;                // host clock of the last completion / no-refresh mutate
+    private int _failures;                                    // consecutive failed loads (backoff exponent)
+    private bool _pollActive = true, _hostArmed, _parkArmed, _disposed, _activeNext;
+    private long _parkDueTick;                                // Environment.TickCount64 due of the parked timer
+    private System.Threading.Timer? _parkTimer;
+    private readonly Action<long> _pollFire;
+    private readonly Action _parkPosted, _applyActive;
+
+    public ResourceCell()
+    {
+        _staleFire = OnStaleFire;
+        _pollFire = OnPollFire;
+        _parkPosted = OnParkPosted;
+        _applyActive = () => SetActive(_activeNext);
+    }
 
     Loadable<T> IResourceControl<T>.Loadable => Loadable;
     IReadSignal<bool> IResourceControl<T>.IsFetching => IsFetchingSig;
     IReadSignal<bool> IResourceControl<T>.IsStale => IsStaleSig;
+    IReadSignal<Exception?> IResourceControl<T>.Error => ErrorSig;
+
+    private bool PollEnabled => Options.RefetchIntervalMs > 0f && Queue is not null && !_disposed;
+
+    // The next poll's delay: the interval, or after n consecutive failures interval × 2^n (cap 8×) with ±10% jitter.
+    // Computed once per arm (the jitter is drawn once, not per frame).
+    private double NextIntervalMs()
+    {
+        double ms = Math.Max(Options.RefetchIntervalMs, 1f);
+        if (_failures > 0 && Options.BackoffOnError)
+            ms *= (1 << Math.Min(_failures, 3)) * (0.9 + 0.2 * Random.Shared.NextDouble());
+        return ms;
+    }
+
+    /// <summary>Arm the poll <see cref="NextIntervalMs"/> after <paramref name="fromMs"/> (host clock).</summary>
+    private void ArmPoll(double fromMs)
+    {
+        CancelPoll();
+        if (!PollEnabled) return;
+        _pollDueMs = fromMs + NextIntervalMs();
+        PlacePoll();
+    }
+
+    /// <summary>Put the armed due time on the timer that runs in the current activation state (or leave it parked —
+    /// remembered for the activation-overdue check — when inactive without <c>RefetchWhileInactive</c>).</summary>
+    private void PlacePoll()
+    {
+        if (double.IsNaN(_pollDueMs) || !PollEnabled) return;
+        if (_pollActive)
+        {
+            PollGen++;
+            _hostArmed = true;
+            Queue!.Schedule(_pollDueMs, PollGen, _pollFire, OwnerType);
+        }
+        else if (Options.RefetchWhileInactive) ArmParkTimer(Math.Max(0.0, _pollDueMs - Queue!.NowMs));
+    }
+
+    /// <summary>Take the armed poll off both timers, keeping its due time.</summary>
+    private void UnplacePoll()
+    {
+        PollGen++;
+        if (_hostArmed) { _hostArmed = false; Queue?.Cancel(_pollFire); }   // eager: no phantom wake toward a dead deadline
+        if (_parkArmed) { _parkArmed = false; try { _parkTimer?.Change(Timeout.Infinite, Timeout.Infinite); } catch (ObjectDisposedException) { } }
+    }
+
+    private void CancelPoll() { UnplacePoll(); _pollDueMs = double.NaN; }
+
+    private void OnPollFire(long g)
+    {
+        if (g != PollGen) return;
+        _hostArmed = false;
+        PollDue();
+    }
+
+    // The poll came due (UI thread). Never Refresh() a live load: re-arm from now and let its completion re-arm again.
+    private void PollDue()
+    {
+        _pollDueMs = double.NaN;
+        if (!PollEnabled) return;
+        if (IsFetchingSig.Peek()) { ArmPoll(Queue!.NowMs); return; }
+        Refresh();
+    }
+
+    private void ArmParkTimer(double ms)
+    {
+        long due = (long)Math.Ceiling(ms);
+        _parkDueTick = Environment.TickCount64 + due;
+        _parkArmed = true;
+        _parkTimer ??= new System.Threading.Timer(static s => ((ResourceCell<T>)s!).OnParkTimer(), this, Timeout.Infinite, Timeout.Infinite);
+        _parkTimer.Change(due, Timeout.Infinite);
+    }
+
+    private void OnParkTimer() => Post(_parkPosted);   // pool thread → UI thread (posts drain while parked)
+
+    // UI thread. A fire that was superseded (disarmed, or re-armed later) is dropped by the flag / due-tick check.
+    private void OnParkPosted()
+    {
+        if (!_parkArmed || _disposed) return;
+        long left = _parkDueTick - Environment.TickCount64;
+        if (left > 0) { try { _parkTimer?.Change(left, Timeout.Infinite); } catch (ObjectDisposedException) { } return; }
+        _parkArmed = false;
+        PollDue();
+    }
+
+    /// <summary>The activation edge (the watcher effect over <c>UseIsActive</c>). Inactive: move the armed poll to the
+    /// parked timer (<c>RefetchWhileInactive</c>) or pause it. Active: an overdue poll fires once now
+    /// (<c>RefetchOnActivate</c>; in-flight deduped — a Launch already cleared the due time), else it keeps its due time.</summary>
+    private void SetActive(bool active)
+    {
+        if (_pollActive == active) return;
+        _pollActive = active;
+        if (!PollEnabled) return;
+        UnplacePoll();
+        if (double.IsNaN(_pollDueMs)) return;   // nothing armed (in flight / never settled): the completion arms the right timer
+        if (active && _pollDueMs <= Queue!.NowMs)
+        {
+            if (Options.RefetchOnActivate) { PollDue(); return; }
+            _pollDueMs = Queue.NowMs + NextIntervalMs();   // resume the cadence a full interval after activation
+        }
+        PlacePoll();
+    }
+
+    /// <summary>Create the activation watcher the first time polling is enabled (render-time, like UseInterval's).</summary>
+    public void EnsureActiveWatcher(FluentGpu.Signals.ReactiveRuntime rt)
+    {
+        if (ActiveWatcher is not null || ActiveSig is null || Options.RefetchIntervalMs <= 0f) return;
+        _pollActive = ActiveSig.Peek();   // the first effect run is then a no-op
+        var sig = ActiveSig;
+        ActiveWatcher = new Effect(rt, () => { _activeNext = sig.Value; Reactive.Untrack(_applyActive); });
+    }
+
+    /// <summary>Options re-pointed by a render. A changed poll shape re-arms from the last completion WITHOUT forcing a
+    /// fetch (an already-overdue due time moves to a full interval from now); interval 0 cancels.</summary>
+    public void SetOptions(ResourceOptions next, FluentGpu.Signals.ReactiveRuntime rt)
+    {
+        var prev = Options;
+        Options = next;
+        if (prev.RefetchIntervalMs == next.RefetchIntervalMs && prev.RefetchWhileInactive == next.RefetchWhileInactive
+            && prev.BackoffOnError == next.BackoffOnError) return;
+        EnsureActiveWatcher(rt);
+        if (!PollEnabled || IsFetchingSig.Peek() || double.IsNaN(_lastSettleMs)) { CancelPoll(); return; }   // the completion arms
+        double now = Queue!.NowMs;
+        double due = _lastSettleMs + NextIntervalMs();
+        if (due <= now) due = now + NextIntervalMs();
+        UnplacePoll();
+        _pollDueMs = due;
+        PlacePoll();
+    }
 
     private void OnStaleFire(long g) { if (g == StaleGen) IsStaleSig.Value = true; }
 
@@ -247,6 +427,7 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
     // for whether it lands (so a completion enqueued before a supersession is dropped when it drains late).
     private void Launch(long epoch)
     {
+        CancelPoll();   // a load is now live: its completion re-arms the poll (cadence measured from completion)
         IsFetchingSig.Value = true;
         var token = Cts.Token;
         var loader = Loader;
@@ -270,23 +451,27 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
     // is dropped, so an older/slower fetch never overwrites a newer one.
     private void Settle(long epoch, T value, Exception? error)
     {
-        if (epoch != Epoch) return;
+        if (epoch != Epoch || _disposed) return;
         IsFetchingSig.Value = false;
+        _lastSettleMs = Queue?.NowMs ?? 0.0;
         if (error is null)
         {
-            LastError = null;
+            ErrorSig.Value = null;
+            _failures = 0;
             _keptForeign = false;
             Loadable.SetReady(value);
             ArmStale();
         }
         else
         {
-            LastError = error;
+            ErrorSig.Value = error;
+            _failures++;
             // A refresh/revalidation failure keeps the prior Ready value (stale-while-revalidate); surface Failed when
             // there is no prior data to keep, or when the kept data belongs to the previous deps identity (a re-key).
             if (_keptForeign) { _keptForeign = false; Loadable.Value.Value = Seed; Loadable.SetFailed(error); }
             else if (!Loadable.IsReady) Loadable.SetFailed(error);
         }
+        ArmPoll(_lastSettleMs);   // the poll cadence is measured from completion (success or failure — backoff above)
     }
 
     /// <summary>Initial / deps-change load. <paramref name="keepPrevious"/> keeps a prior <c>Ready</c> value visible
@@ -315,19 +500,31 @@ internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceCont
         long epoch = Advance();          // (1) cancel in-flight so a stale completion can't clobber the optimistic value
         StaleGen++;
         IsStaleSig.Value = false;
-        LastError = null;
+        ErrorSig.Value = null;
         _keptForeign = false;            // the optimistic value belongs to the current identity
         Loadable.SetReady(optimistic);   // (2) optimistic write, visible immediately
-        if (refresh) Launch(epoch);      // (3) revalidate on this epoch (keeps Ready(optimistic) visible until it lands)
-        else { IsFetchingSig.Value = false; ArmStale(); }
+        if (refresh) Launch(epoch);      // (3) revalidate on this epoch (keeps Ready(optimistic) visible until it lands; its completion re-arms the poll)
+        else
+        {
+            IsFetchingSig.Value = false;
+            ArmStale();
+            _lastSettleMs = Queue?.NowMs ?? 0.0;
+            ArmPoll(_lastSettleMs);      // no revalidation: the poll re-arms from the mutate itself
+        }
     }
 
     public void DisposeCell()
     {
+        _disposed = true;
         Epoch++;        // any in-flight completion posted after here is epoch-dropped by Settle
         StaleGen++;     // drop any pending stale timer
         try { Cts?.Cancel(); } catch { /* already disposed */ }
         Cts?.Dispose();
+        ActiveWatcher?.Dispose();
+        UnplacePoll();  // PollGen bump + eager host-queue cancel + parked timer disarm
+        _pollDueMs = double.NaN;
+        _parkTimer?.Dispose();
+        _parkTimer = null;
     }
 }
 
@@ -1141,10 +1338,15 @@ public sealed partial class RenderContext
     /// <see cref="Resource{T}.Refresh"/>/<see cref="Resource{T}.Mutate"/> drive revalidation. Every load is EPOCH-stamped,
     /// so an older/slower fetch can never overwrite a newer one; the in-flight load + any stale timer are cancelled on
     /// unmount. <paramref name="seed"/> is the placeholder while Pending; <paramref name="options"/> tunes stale time and
-    /// keep-previous-data (default: <c>StaleTimeMs=0</c> ⇒ stale on Ready; deps change ⇒ reset to <c>Pending(seed)</c>).</summary>
+    /// keep-previous-data (default: <c>StaleTimeMs=0</c> ⇒ stale on Ready; deps change ⇒ reset to <c>Pending(seed)</c>)
+    /// and polling (<see cref="ResourceOptions.RefetchIntervalMs"/>: re-run the loader that long after each completion,
+    /// paused while inactive unless <see cref="ResourceOptions.RefetchWhileInactive"/>, exponential backoff on errors).</summary>
     public Resource<T> UseResource<T>(Func<CancellationToken, Task<T>> loader, T seed = default!, DepKey deps = default, ResourceOptions? options = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
         var post = UsePost();   // UsePost consumes no hook cell, so calling it here does not shift the ordinal
+        // The poll's activation gate, keyed to the CALLER's call site (like UseActivation) so a conditionally skipped
+        // UseResource never hands its cells to the next one. A lazy memo: nothing computes it unless polling is enabled.
+        var active = UseIsActive(__hf, __hl);
         int idx = LookupCell(__hf, __hl, out var __k);
         ResourceCell<T> cell;
         if (idx < 0)
@@ -1156,15 +1358,18 @@ public sealed partial class RenderContext
                 Deps = deps, HasDeps = true,
                 Options = options ?? ResourceOptions.Default,
                 Seed = seed, Loader = loader, Post = post, Queue = ResolveTimers(),
+                OwnerType = Owner?.GetType(), ActiveSig = active,
             };
             RegisterCell(__k, cell, cleanupCapable: true);
+            cell.EnsureActiveWatcher(Rt);       // polling only (no-op otherwise); the first settle arms the poll
             cell.Reload(keepPrevious: false);   // initial load (Loadable already Pending(seed) ⇒ no signal write during render)
             return new Resource<T>(cell);
         }
         cell = (ResourceCell<T>)_cells[idx];
         cell.Loader = loader;                    // re-point the latest closure (fresh lambdas don't restart the load)
         cell.Seed = seed;
-        if (options is not null) cell.Options = options;
+        // Re-pointed each render; a changed poll shape re-arms from the last completion without forcing a fetch.
+        if (options is not null && !ReferenceEquals(options, cell.Options)) cell.SetOptions(options, Rt);
         if (cell.Deps != deps)
         {
             cell.Deps = deps;

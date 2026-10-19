@@ -44,6 +44,7 @@ sealed class TinyPeriodWindow(HeadlessWindow inner, long periodQpc = 4) : IPlatf
     public bool IsVisible => _w.IsVisible;
     public IPlatformTextInput TextInput => _w.TextInput;
     public void SetTitleBarRegions(ReadOnlySpan<TitleBarRegion> regions) => _w.SetTitleBarRegions(regions);
+    public void ShowSystemMenu(Point2 screenPx) => _w.ShowSystemMenu(screenPx);
     public WindowState State => _w.State;
     public bool IsActive => _w.IsActive;
     public void Minimize() => _w.Minimize();

@@ -139,11 +139,18 @@ public static partial class Win32Theme
     /// the desktop wallpaper, the "tabbed window" kind; false = Mica Base (DWMSBT_MAINWINDOW), the neutral "main window"
     /// backdrop. Not a cosmetic pair: on a strongly coloured wallpaper Alt reads as saturated chrome where Base stays
     /// near-neutral. Ignored when mica is false.</param>
-    public static void ApplyWindowMaterial(nint hwnd, bool dark, bool mica = true, bool customFrame = false, bool micaAlt = false)
+    /// <param name="acrylic">true = the desktop-acrylic system backdrop (DWMSBT_TRANSIENTWINDOW, WinUI
+    /// <c>DesktopAcrylicBackdrop</c>) on the same composited sheet Mica uses: a frosted blur of whatever is behind the window,
+    /// not of the wallpaper — the material for a window that floats over other apps. Wins over <paramref name="micaAlt"/>;
+    /// ignored when mica is false (an opaque window has no transparent pixels for it to show through).</param>
+    public static void ApplyWindowMaterial(nint hwnd, bool dark, bool mica = true, bool customFrame = false, bool micaAlt = false,
+        bool acrylic = false)
     {
         int d = dark ? 1 : 0;
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, in d, sizeof(int));
-        int backdrop = mica ? (micaAlt ? DWMSBT_TABBEDWINDOW : DWMSBT_MAINWINDOW) : DWMSBT_TRANSIENTWINDOW;
+        int backdrop = !mica ? DWMSBT_TRANSIENTWINDOW
+            : acrylic ? DWMSBT_TRANSIENTWINDOW
+            : micaAlt ? DWMSBT_TABBEDWINDOW : DWMSBT_MAINWINDOW;
         DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, in backdrop, sizeof(int));
 
         if (customFrame)
@@ -163,6 +170,14 @@ public static partial class Win32Theme
             MARGINS m = new() { cxLeftWidth = -1, cxRightWidth = -1, cyTopHeight = -1, cyBottomHeight = -1 };
             DwmExtendFrameIntoClientArea(hwnd, in m);
         }
+    }
+
+    /// <summary>Ask DWM for the standard Win11 rounded window corners. A tool window (WS_EX_TOOLWINDOW) is left square by
+    /// the system default, so an overlay that drops its taskbar button calls this to keep the app-window shape.</summary>
+    public static void ApplyRoundCorners(nint hwnd)
+    {
+        int corner = DWMWCP_ROUND;
+        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, in corner, sizeof(int));
     }
 
     /// <summary>Apply the OS material used by windowed popup HWNDs. WinUI's <c>MenuFlyoutPresenter</c> is a TRANSPARENT

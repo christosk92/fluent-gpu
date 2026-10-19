@@ -3,6 +3,7 @@
 [← Guide index](./README.md)
 
 > Building a **new app from the published package**? See **[Consuming FluentGpu via NuGet](./consuming-via-nuget.md)**.
+> Starting an app against an engine **checkout**? Use the `fluentgpu-app` template — **[Starting a new app](./new-app.md)**.
 > This page covers working inside the repo (project references) and driving the loop yourself.
 
 ## Run an app (Windows, batteries-included)
@@ -41,6 +42,38 @@ public static void Run<T>(AppOptions? options = null) where T : Component, new()
 
 That's all you need to build apps. The rest of this page is for when you want to drive the loop yourself, or run
 headless (tests/CI).
+
+### Size the window to its content
+
+A small window (an overlay, a widget, a dialog-like tool) does not need hand-computed DIP heights. Set
+`AppOptions.SizeToContent` (the enum is in `FluentGpu.Hosting`) and the window follows the content's natural size:
+
+```csharp
+FluentApp.Run(() => new Widget(), new AppOptions
+{
+    Title = "Usage", Width = 340, Height = 200,       // only the size the first layout happens at
+    SizeToContent = SizeToContent.Height,              // Manual (default) | Width | Height | WidthAndHeight
+    MinWidth = 240, MinHeight = 120,                   // the fit never goes below these
+});
+FluentApp.SetSizeToContent(SizeToContent.Manual);     // live: stop (or start again) from code
+```
+
+- `Width` fits the natural (unconstrained) width; `Height` fits the natural height at the current width;
+  `WidthAndHeight` takes the natural width, then the height at that width.
+- It runs after every frame whose layout ran, so content that grows or shrinks (a row appears, a text wraps) resizes the
+  window by itself. The size is converted at the effective scale, app zoom included (`ceil(dip × Scale)`), so N DIP of
+  content gets N DIP of layout space at any zoom. The target is clamped to `MinWidth`/`MinHeight` and the work area of
+  the monitor the window is on.
+- The root must be content-sized on the fitted axis. Content that fills its parent (`Grow`, stretch, a plain
+  `ScrollView`) has no natural size: that axis measures 0 and is left alone.
+- The window is shown after its first fit, so it never flashes at `Width`/`Height` (with `StartHidden` it stays hidden).
+- The user dragging the frame switches the mode to `Manual`, as in WPF. Fitting is skipped while the window is
+  maximized, fullscreen, minimized or hidden, and during the OS move/size loop.
+- Content whose size depends on the window size (a responsive layout that is wider in a narrow window) would resize
+  forever; an A→B→A flip within four frames holds the window at its size until the content changes.
+- `FluentApp.ResizeWindow(w, h)` is still there for a one-off size. It uses the raw DPI scale (app zoom does not apply).
+- Under the hood: `AppHost.SizeToContent` and `AppHost.ShowWhenFitted()` (a custom host calls these itself),
+  `FlexLayout.MeasureNatural(root, availW)`, `IPlatformWindow.SetClientSizePx`. Gates: `--suite size-to-content`.
 
 ## The frame loop you actually call
 

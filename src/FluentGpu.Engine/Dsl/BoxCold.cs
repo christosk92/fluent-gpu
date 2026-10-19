@@ -215,6 +215,7 @@ internal sealed class BoxColdGesture : IEquatable<BoxColdGesture>
     public Action<RectF>? OnBoundsChanged;
     public Func<NodeHandle>? FollowRect;
     public LayoutTransition? Animate;
+    public WindowDragRole WindowDrag;
 
     public BoxColdGesture CloneFor(BoxEl owner)
     {
@@ -250,7 +251,8 @@ internal sealed class BoxColdGesture : IEquatable<BoxColdGesture>
             && EqualityComparer<int>.Default.Equals(TabIndex, o.TabIndex)
             && EqualityComparer<Action<RectF>?>.Default.Equals(OnBoundsChanged, o.OnBoundsChanged)
             && EqualityComparer<Func<NodeHandle>?>.Default.Equals(FollowRect, o.FollowRect)
-            && EqualityComparer<LayoutTransition?>.Default.Equals(Animate, o.Animate);
+            && EqualityComparer<LayoutTransition?>.Default.Equals(Animate, o.Animate)
+            && WindowDrag == o.WindowDrag;
     }
 
     public override bool Equals(object? obj) => Equals(obj as BoxColdGesture);

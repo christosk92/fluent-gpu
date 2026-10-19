@@ -73,8 +73,26 @@ sealed partial class DropDownButtonControlPage : Component
 {
     static readonly Signal<string> _pick = new("—");
 
+    static readonly Signal<bool> _compact = new(false);
+
     public override Element Render() => GalleryPage.Shell("DropDownButton", "A button that displays a flyout of choices when clicked.",
-        ExampleCard.Show(MenuSample));
+        ExampleCard.Show(MenuSample),
+        ExampleCard.Show(IconMenuSample));
+
+    [Sample("An icon-only menu button (IconButton.Menu)", Description = "The items factory runs each time the menu opens, so the 'Compact' check reads live state. A re-click closes the menu; Down, F4, Enter or Space open it from the keyboard with the first row focused. PopupOptions.Menu lets the menu leave a window too small for it.")]
+    static Element IconMenu(Knobs k)
+    {
+        var disabled = k.Toggle("Disabled");
+        return HStack(8,
+            IconButton.Menu(Icons.More, () => new[]
+            {
+                new MenuFlyoutItem("Refresh", Icons.Refresh, true, () => _pick.Value = "Refresh"),
+                MenuFlyoutItem.Toggle("Compact", _compact.Peek(), () => _compact.Value = !_compact.Peek()),
+                MenuFlyoutItem.Separator,
+                new MenuFlyoutItem("Settings", Icons.Settings, true, () => _pick.Value = "Settings"),
+            }, toolTip: "More options", isEnabled: !disabled.Value),
+            GalleryPage.LiveText(() => $"Chosen: {_pick.Value}"));
+    }
 
     [Sample("A DropDownButton with a menu flyout", Description = "The 'Show selection' knob adds a live readout of the chosen item.")]
     static Element Menu(Knobs k)

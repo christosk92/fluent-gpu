@@ -130,6 +130,8 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 
 ## Guide index
 
+0. **[new-app.md](./new-app.md)** — start an app: the `fluentgpu-app` template, `FluentGpu.App.props`/`.targets`,
+   NativeAOT publishing (x64/ARM64), the small-overlay-window recipe.
 1. **[getting-started.md](./getting-started.md)** — minimal app, hosting, the frame loop you call, project layout.
 2. **[reactivity.md](./reactivity.md)** — signals, the update model, `UseState`/`UseSignal`/`UseComputed`, effects,
    the one `Component` model (run-once is inferred), bindings, `For`/`Show`, context. *The most important doc.*

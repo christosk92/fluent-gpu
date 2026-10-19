@@ -149,11 +149,29 @@ public readonly record struct PopupOptions(
         get => !_noScrim;
         init => _noScrim = !value;
     }
+
+    /// <summary>The menu preset — what every <see cref="MenuFlyout"/> opened from a button should pass (DropDownButton,
+    /// <c>IconButton.Menu</c>): <see cref="FocusTrap"/> (Tab/Shift-Tab rove the rows), light dismiss
+    /// (Escape / click-outside / window deactivation), <see cref="PopupChrome.Flyout"/> (MenuPopupThemeTransition), and
+    /// <see cref="ConstrainToRootBounds"/> = false. WinUI menus are WINDOWED popups (FlyoutBase_Partial.cpp:3181-3205
+    /// SetIsWindowedPopup): a menu that fits stays in-window, one that would be clipped by a small window escapes into
+    /// an OS popup window (<c>OverlayHost.NeedsPopupWindow</c>), and a host without popup-window support falls back to
+    /// constrained in-window placement. Derive variants with <c>with</c> (e.g. <c>PopupOptions.Menu with { PassThrough = … }</c>).</summary>
+    public static PopupOptions Menu => new(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Flyout)
+    {
+        ConstrainToRootBounds = false,
+    };
 }
 
 public interface IOverlayService
 {
+    /// <summary>Open <paramref name="content"/> anchored to a node. The defaults (<c>default(PopupOptions)</c>) are a
+    /// CONSTRAINED popup — clamped inside the window, so a tall menu in a small window clips. For a menu pass
+    /// <see cref="PopupOptions.Menu"/> (the 4-argument overload) so it can escape into a popup window when it does not fit.</summary>
     OverlayHandle Open(Func<NodeHandle> anchor, Func<Element> content, FlyoutPlacement placement = FlyoutPlacement.BottomLeft);
+    /// <summary>Open <paramref name="content"/> anchored to a node with explicit <paramref name="options"/>. Menus
+    /// (a <see cref="MenuFlyout"/> body) should pass <see cref="PopupOptions.Menu"/>: focus trap, light dismiss and
+    /// windowed-when-escaping placement, the WinUI menu contract.</summary>
     OverlayHandle Open(Func<NodeHandle> anchor, Func<Element> content, FlyoutPlacement placement, PopupOptions options);
 
     /// <summary>Open anchored to an arbitrary window-DIP RECT instead of a scene node — pointer-relative placement

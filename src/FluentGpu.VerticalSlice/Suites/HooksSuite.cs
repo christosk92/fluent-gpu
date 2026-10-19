@@ -65,6 +65,7 @@ static class HooksSuite
         FlowShowRefreshChecks(strings);
         ForTypedChecks(strings);
         ResourceChecks(strings);
+        ResourcePollChecks.Run(strings);
         PropNetClobberChecks(strings);
         PropUnionChecks(strings);
         BindRewireChecks.Run(strings);
