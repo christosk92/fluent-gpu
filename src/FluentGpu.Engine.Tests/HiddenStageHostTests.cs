@@ -186,6 +186,9 @@ public sealed class HiddenStageHostTests : IDisposable
         host.RunFrame();
         Assert.Equal(HiddenStage.Shallow, host.HiddenStageForTest);
         Assert.True(SpinWait.SpinUntil(() => host.HiddenAppliedForTest == HiddenStage.Shallow, 5_000), "the render thread never applied the stage");
+        // ApplyHiddenStage publishes "applied" BEFORE its device release, and the second release is the idle trim's later
+        // pass: wait for both instead of racing the render thread (it lost under full-suite load).
+        Assert.True(SpinWait.SpinUntil(() => device.HiddenReleases.Count >= 2, 5_000), "the render thread never released twice");
         Assert.Equal(0, host.RenderTilesResidentForTest);   // the RENDER table, not the UI one
         Assert.Equal(new[] { HiddenStage.Shallow, HiddenStage.Shallow }, device.HiddenReleases.ToArray());
 
