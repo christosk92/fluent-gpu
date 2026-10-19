@@ -68,6 +68,8 @@ public static class ControlStyles
     public static readonly ControlStyleKey<Func<SettingsExpander.Style>> SettingsExpanderStyle = new("settingsexpander");
     /// <summary>The toast lane: the existing <see cref="Controls.ToastLaneStyle"/> record. A <see cref="Toast.Lane"/> provider above the host wins.</summary>
     public static readonly ControlStyleKey<Func<ToastLaneStyle>> ToastLaneStyle = new("toast.lane");
+    /// <summary>PersonPicture: the <see cref="PersonPicture.Style"/> record (the initials' floor). Absent: the 42 % rule alone.</summary>
+    public static readonly ControlStyleKey<Func<PersonPicture.Style>> PersonPictureStyle = new("personpicture");
 
     /// <summary>The style for a control now: the active definition's provider, else <paramref name="builtIn"/> (the control's
     /// Fluent default). Reads <c>Tok.Definition</c> on every call; allocates only the style record itself.</summary>
