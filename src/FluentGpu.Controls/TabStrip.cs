@@ -396,7 +396,7 @@ public sealed class TabStrip : Component
 
     Element Tab(int index, int selectedIndex, TabViewItem item, bool selected, bool closeVisible,
                 Action select, Action close, Signal<int> hoveredSig, IOverlayService menuOverlay,
-                float cellW = float.NaN, float cellMinW = float.NaN, bool fixedCell = false, bool iconOnly = false)
+                float cellW = float.NaN, bool fixedCell = false, bool iconOnly = false)
     {
         bool formed = !float.IsNaN(cellW);
         float tabW = formed ? cellW : Math.Clamp(TabWidth, MinTabWidth, MaxTabWidth);
@@ -554,9 +554,15 @@ public sealed class TabStrip : Component
                     new BoxEl
                     {
                         Key = "selected-edge",
-                        Width = tabW + 10f,
+                        // A formed cell's width eases (FormWidthMotion): the silhouette FILLS the cell with a 5-DIP overhang
+                        // either side (basis 0, so the share is the cell's width, never a cached measure), so it follows
+                        // every frame, the reflow's seed frame included. A plain cell keeps its explicit width.
+                        Width = formed ? float.NaN : tabW + 10f,
+                        Grow = formed ? 1f : 0f,
+                        Basis = formed ? 0f : float.NaN,
+                        Margin = formed ? new Edges4(-5f, 0f, -5f, 0f) : default,
                         Height = TabHeight + 1f,
-                        OffsetX = -5f,
+                        OffsetX = formed ? 0f : -5f,
                         AlignSelf = FlexAlign.End,
                         TabShape = true,
                         TabFlareRadius = 4f,
@@ -578,9 +584,12 @@ public sealed class TabStrip : Component
                     new BoxEl
                     {
                         Key = "selected-bg",
-                        Width = tabW + 8f,
+                        Width = formed ? float.NaN : tabW + 8f,
+                        Grow = formed ? 1f : 0f,
+                        Basis = formed ? 0f : float.NaN,
+                        Margin = formed ? new Edges4(-4f, 0f, -4f, 0f) : default,
                         Height = TabHeight,
-                        OffsetX = -4f,
+                        OffsetX = formed ? 0f : -4f,
                         AlignSelf = FlexAlign.End,
                         TabShape = true,
                         TabFlareRadius = 4f,
@@ -623,10 +632,13 @@ public sealed class TabStrip : Component
             {
                 Key = item.Key ?? "tab#" + index,
                 ZStack = true,
+                // The cell's width EASES when the form re-resolves (FormWidthMotion). No MinWidth/MaxWidth clamp: one would
+                // pin the in-flight width to the new rung (a 160 -> 200 growth clamped at the 200 floor). A fixed cell is
+                // exact by Shrink = 0; a fitting ladder's floor is Resolve's (it scrolls rather than go under it), so only a
+                // lane not yet re-measured (the one frame of a live resize) may squeeze a cell below it.
                 Width = tabW,
-                MinWidth = fixedCell ? tabW : MathF.Min(cellMinW, tabW),
-                MaxWidth = tabW,
                 Shrink = fixedCell ? 0f : 1f,
+                Animate = FormWidthMotion,
                 DropTarget = item.DropTarget,
                 OnRealized = h => { if ((uint)index < (uint)_tabNodes.Length) _tabNodes[index] = h; },
                 Children = layers.ToArray(),
@@ -651,6 +663,15 @@ public sealed class TabStrip : Component
     //  The MUX rail grammar sized by a TabStripForm: a Ladder (every tab one width, narrowing to a floor, then scrolling)
     //  or Compact (the selected tab labelled, the rest icon-only cells). Widths resolve against the host's measured lane.
 
+    /// <summary>A formed tab's width change (a ladder rung at a tier crossing, the lane's share as tabs come and go, the
+    /// Compact selection moving): the cell's width eases over <see cref="Motion.ControlFast"/> THROUGH REAL LAYOUT, so the
+    /// tabs after it, the "+" and the drag band glide with it; a new target mid-flight bends it (the reflow row retargets
+    /// from where it is). Unclipped: the selected plate overhangs the cell by its flares. A live (modal) resize and reduced
+    /// motion snap it, as every projection.</summary>
+    internal static readonly LayoutTransition FormWidthMotion = new(TransitionChannels.Size,
+        TransitionDynamics.Tween(Motion.ControlFast, Easing.FluentDecelerate), Size: SizeMode.Reflow, Axes: SizeAxes.Width,
+        ReflowUnclipped: true);
+
     /// <summary>The Chrome strip's fixed, non-tab chrome: the 8-DIP lead padding, the 6-DIP seamed lead, the optional
     /// "+" (32 plus its 3-DIP lead margin) and the 5-DIP trailing flare room.</summary>
     internal static float ChromeFixedWidth(bool addButton) => 8f + 6f + 5f + (addButton ? 35f : 0f);
@@ -661,7 +682,6 @@ public sealed class TabStrip : Component
     {
         EnsureTabGeometry(count, geomVer);   // sizes _tabNodes (the scroll-into-view target)
         float rowH = host is { } h ? MathF.Max(1f, h.RowHeight.Current()) : TitleBar.ExpandedHeight;
-        float floor = MathF.Min(spec.MinTabWidth, form.TabWidth);
 
         var tabs = new Element[count + 1];
         tabs[0] = RailBaselineHost(6f, lineMargin: selected == 0 ? new Edges4(0f, 0f, 4f, 0f) : default);
@@ -674,12 +694,12 @@ public sealed class TabStrip : Component
                                 (CloseButtonOverlayMode != TabViewCloseButtonOverlayMode.OnPointerOver ||
                                  isSelected || hovered == index);
             float w = isSelected ? form.SelectedWidth : form.TabWidth;
-            // Compact cells and a scrolling ladder are exact; a fitting ladder may still flex down to its floor (the frame
-            // before a narrowed lane is measured).
+            // Compact cells and a scrolling ladder are exact; a fitting ladder may still flex (the frame before a narrowed
+            // lane is measured).
             bool fixedCell = form.IconOnlyUnselected || form.Scrolls;
             tabs[i + 1] = Tab(index, selected, items[index], isSelected, closeVisible,
                 () => select(index), () => close(index), hoveredSig, menuOverlay,
-                cellW: w, cellMinW: floor, fixedCell: fixedCell, iconOnly: iconOnly);
+                cellW: w, fixedCell: fixedCell, iconOnly: iconOnly);
         }
 
         Element tabsPart;

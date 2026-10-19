@@ -121,7 +121,11 @@ public readonly record struct LayoutTransition(
     float? ExitDelayMs = null,
     // This transition keeps animating while a user scroll is moving content. The scroll-motion latch snaps every FLIP so cards never fly
     // through a scrolling viewport; a surface that the scroll itself CAUSES to change (a band folding as the page scrolls down) opts out.
-    bool AnimateDuringScroll = false)
+    bool AnimateDuringScroll = false,
+    // A SizeMode.Reflow node clips to its bounds while its size animates (its content may still be arranged at the far size,
+    // and would paint over its neighbours). True keeps painting its overflow: for content laid out AT the animated size that
+    // draws outside its own box on purpose (a Chrome tab's flared selected plate, which overhangs the cell by its flares).
+    bool ReflowUnclipped = false)
 {
     /// <summary>Translate-only reflow (the default for reordered / moved items). Springs.</summary>
     public static LayoutTransition Slide => new(TransitionChannels.Position, TransitionDynamics.Default);

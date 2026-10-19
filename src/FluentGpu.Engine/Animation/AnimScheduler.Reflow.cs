@@ -163,7 +163,9 @@ public sealed partial class AnimEngine
         // region easing 0→H is the pathological case: it starts at ZERO and covers the whole sibling below). Add
         // the clip for the life of the track and remember that WE added it — a node that declared ClipToBounds
         // itself, or a ScrollEl / VirtualListEl viewport, must never be un-clipped when the row is freed.
-        if (!r.Has(AnimFlags.ClipAdded) && !hadRow && _scene.IsLive(node) && (_scene.Flags(node) & NodeFlags.ClipsToBounds) == 0)
+        // LayoutTransition.ReflowUnclipped opts out: content laid out at the animated size that overhangs its box on purpose.
+        if (!spec.ReflowUnclipped && !r.Has(AnimFlags.ClipAdded) && !hadRow && _scene.IsLive(node)
+            && (_scene.Flags(node) & NodeFlags.ClipsToBounds) == 0)
         {
             _scene.Mark(node, NodeFlags.ClipsToBounds);
             _scene.Mark(node, NodeFlags.PaintDirty);

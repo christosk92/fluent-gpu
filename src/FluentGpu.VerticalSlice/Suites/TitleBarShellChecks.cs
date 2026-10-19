@@ -93,7 +93,9 @@ public static partial class TitleBarSuite
         window.Show();
         var probe = new TwoRowProbe();
         using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
-        void Settle(int frames = 8) { for (int i = 0; i < frames; i++) host.RunFrame(); }
+        // 24 frames: a formed strip EASES its tab widths over ControlFast (167 ms, ~11 frames), so a form or tab-count change
+        // settles well inside it.
+        void Settle(int frames = 24) { for (int i = 0; i < frames; i++) host.RunFrame(); }
         Settle();
 
         float rowsH = TitleBar.TabRowHeight + TitleBar.ExpandedHeight;
