@@ -36,6 +36,10 @@ public sealed record TitleBarOptions
     /// row overruns — the centre column stops flexing and becomes app-sized. Use with a tab strip that owns a real
     /// horizontal viewport, so overflow clips and scrolls instead of squeezing the search field or the identity cluster.</summary>
     public bool TabsElasticLane { get; init; }
+    /// <summary>In merged mode, while this answers true the tabs island FILLS the row's free lane instead of hugging (a search field that takes the
+    /// lead island at a narrow window): the drag bands beside the centre column stop growing, so the field gets the room; the fixed drag strip before
+    /// the captions stays. Read each render (a signal read here re-renders the bar).</summary>
+    public Func<bool>? TabsFill { get; init; }
     /// <summary>MERGED-ROW slot: the flexible, centred island that sits between the tab strip and the trailing island.
     /// Like <see cref="Content"/> the builder receives the LIVE measured width of its flexible column
     /// (<see cref="TitleBar.CenterAvail"/>) so an expanding search island can clamp itself. Setting this (or
@@ -236,6 +240,8 @@ public sealed class TitleBar : Component
     /// <summary>In merged mode, make the tabs island the row's ONE shrinkable lane (it still hugs — see
     /// <see cref="TitleBarOptions.TabsElasticLane"/>).</summary>
     public bool TabsElasticLane;
+    /// <summary>The tabs island fills the free lane while this answers true (see <see cref="TitleBarOptions.TabsFill"/>).</summary>
+    public Func<bool>? TabsFill;
     /// <summary>MERGED ROW (the one-row chrome): the FLEXIBLE, centred island that lives between the tab strip and the
     /// trailing island — a window search box, a now-playing chip, … Setting this (or <see cref="Trailing"/>) switches the
     /// bar from the classic <c>Content</c>-XOR-<c>Tabs</c> shape into
@@ -336,7 +342,7 @@ public sealed class TitleBar : Component
                 ShowPaneToggle = options.ShowPaneToggle, OnPaneToggle = options.OnPaneToggle,
                 PaneToggleEnabledSignal = options.PaneToggleEnabledSignal,
                 PaneToggleToolTip = options.PaneToggleToolTip,
-                Tabs = options.Tabs, TabsVersion = options.TabsVersion, TabsElasticLane = options.TabsElasticLane,
+                Tabs = options.Tabs, TabsVersion = options.TabsVersion, TabsElasticLane = options.TabsElasticLane, TabsFill = options.TabsFill,
                 Trailing = options.Trailing, CaptionLeading = options.CaptionLeading,
                 ContentVersion = options.ContentVersion,
                 ShowRailBaseline = options.ShowRailBaseline,
@@ -436,10 +442,11 @@ public sealed class TitleBar : Component
         // instead of letting the strip paint out over the drag strip and the caption buttons.
         // Opacity: the WinUI deactivated dim the content column has always had — the tabs island had none, which read
         // as a title bar half-lit on blur. Composited only; layout and hit-testing are untouched.
+        bool tabsFill = merged && Tabs is not null && TabsFill?.Invoke() == true;
         BoxEl TabsIsland(Func<Element> f) => new()
         {
             Direction = 0, AlignItems = FlexAlign.Stretch,
-            Shrink = 1, MinWidth = 0f, Height = barH,
+            Grow = tabsFill ? 1f : 0f, Shrink = 1, MinWidth = 0f, Height = barH,
             ClipToBounds = true,
             Opacity = active ? 1f : 0.5f,
             OnRealized = h => _tabs = h,
@@ -455,7 +462,7 @@ public sealed class TitleBar : Component
             // cluster and the START of the right cluster. (That is NOT the window centre unless the two clusters are
             // the same width; an app that needs true window-centring pads the lighter side inside its own islands.)
             if (Tabs is { } mergedTabs) kids.Add(TabsIsland(mergedTabs));
-            kids.Add(Band(float.NaN, 1f, 1f));
+            kids.Add(Band(float.NaN, tabsFill ? 0f : 1f, 1f));
 
             float centerAvail = _availDip.Value;                   // subscribe: re-render when the column is re-measured
             // The interactive island is the INNER box that HUGS its content — never the flexible column, whose empty
@@ -486,7 +493,7 @@ public sealed class TitleBar : Component
                 OnRealized = TemplateParts.Chain<NodeHandle>(h => _centerCol = h, appliedCenter.OnRealized),
             });
 
-            kids.Add(Band(float.NaN, 1f, 1f));
+            kids.Add(Band(float.NaN, tabsFill ? 0f : 1f, 1f));
 
             if (Trailing is { } trailingFunc)
             {

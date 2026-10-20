@@ -498,6 +498,7 @@ public sealed partial class SceneStore : ISceneBackend
         // slot must start from its own estimates, not the freed list's row heights (and the table must not outlive it).
         if (_extents.Count != 0) _extents.Remove(idx);
         if (_hitPassThrough.Count != 0) _hitPassThrough.Remove(idx);
+        if (_hitSlop.Count != 0) _hitSlop.Remove(idx);
         if (_wheelTargets.Count != 0) _wheelTargets.Remove(idx);
         if (_wheelOccludes.Count != 0) _wheelOccludes.Remove(idx);   // only a BoxEl rewrites it: a reused slot must not stay opaque
         // Scroll-linked effect rows are index-keyed: a freed slot must not hand its effects (or its engaged signals) to
@@ -1902,6 +1903,24 @@ public sealed partial class SceneStore : ISceneBackend
 
     public bool TryGetHitTestPassThrough(NodeHandle node, out NodeHandle target)
         => _hitPassThrough.TryGet((int)node.Raw.Index, out target);
+
+    // ── hit slop (Element.HitSlop) ────────────────────────────────────────────────────────────────────
+    // A box's hit rect reaching past its laid-out box, per side (InputDispatcher.Hit). Sparse — O(boxes that set one).
+    private readonly ColdSlab<Edges4> _hitSlop = new();
+
+    public void SetHitSlop(NodeHandle node, Edges4 slop)
+    {
+        if (!IsLive(node)) return;
+        if (slop.Left <= 0f && slop.Top <= 0f && slop.Right <= 0f && slop.Bottom <= 0f) { if (_hitSlop.Count != 0) _hitSlop.Remove((int)node.Raw.Index); }
+        else _hitSlop.GetOrAdd((int)node.Raw.Index) = slop;
+    }
+
+    /// <summary>The box's own hit slop (<see cref="SetHitSlop"/>), false when it set none.</summary>
+    public bool TryGetHitSlop(NodeHandle node, out Edges4 slop)
+    {
+        if (_hitSlop.Count == 0) { slop = default; return false; }
+        return _hitSlop.TryGet((int)node.Raw.Index, out slop);
+    }
 
     // ── background-scroll occlusion (Element.BlocksBackgroundScroll) ──────────────────────────────
     // A covering modal/popup surface's geometric bounds sit over background content it is not an ancestor of; this

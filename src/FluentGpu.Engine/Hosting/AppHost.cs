@@ -5105,6 +5105,7 @@ public sealed partial class AppHost : IDisposable
         // the window receives the merged list only when it changed (AppHost.WindowDrag.cs).
         WireWindowDragRegions();
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;
+        _inputHooks.SetMinHitSize = size => _dispatcher.MinHitSize = MathF.Max(0f, size);
         _inputHooks.QueueAfterLayout = a => _afterLayout.Add(a);
         var chromeEpoch = new Signal<int>(0);
         _inputHooks.WindowChromeEpoch = chromeEpoch;
