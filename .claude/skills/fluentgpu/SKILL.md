@@ -42,7 +42,7 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
 4. A bind thunk must read `.Value` (subscribes), not `.Peek()`.
 5. Every bindable channel is ONE `Prop<T>` prop taking a value, a `Func<T>` (`Prop.Of` for inline lambdas), or a concrete signal. Bound `Transform`/`Opacity`/`Fill` = compositor-only; bound `Width`/`Height`/`Text` = scoped relayout.
    A bind is wired at mount; a re-render passing a NEW thunk/signal re-wires it (bound→bound — a thunk capturing a
-   render-time width is fine), but a static↔bound FLIP of one channel on a reused node silently loses (`BindContract`).
+   render-time width is fine), and a static↔bound FLIP of one channel on a reused node follows the new form (wired or unwired at the Update seam).
    Prefer a transform bind for hot values. `Visible : Prop<bool>` (on the base `Element`, every kind) is presence, not
    paint — `false` COLLAPSES the node (out of layout flow, paint, hit-test; CSS `display:none`), it does not merely
    fade it — for a visually-hidden-but-still-flowing box, bind `Opacity`/`HoverOpacity` instead.

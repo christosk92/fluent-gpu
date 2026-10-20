@@ -181,7 +181,7 @@ Three things to internalize before editing `Prop.cs`:
 The reconciler's contract: a **bound** channel is wired into ONE effect (a `BindEffect<T>`) **at mount**, and that
 effect lives until unmount — *a re-render that binds the channel again with a different thunk/signal RE-WIRES it*
 (bound→bound: swap the source, re-run once, re-track; an equal payload re-runs nothing — `Reconciler.Rewire.cs`,
-`gate.bind.rewire-*`). A static↔bound flip is never re-wired (the `BindContract` tripwire). A **static** channel is re-asserted on every reconcile **iff `!IsBound`**. This single
+`gate.bind.rewire-*`). A static↔bound flip follows the new form: bound→static unwires and disposes the channel's effect after the static write, static→bound wires it as mount does (`WireGainedBinds`, `Reconciler.Rewire.cs`). A **static** channel is re-asserted on every reconcile **iff `!IsBound`**. This single
 `!IsBound` chokepoint is what fixed the historical bound-value clobbers (Opacity reappearing at `1f`, Fill/TextColor
 overwritten on re-render) by construction. Never use `default(Prop<T>)` to mean "unset" — it is the static `default(T)`.
 

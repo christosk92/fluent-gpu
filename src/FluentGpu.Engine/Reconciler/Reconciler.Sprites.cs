@@ -10,9 +10,9 @@ namespace FluentGpu.Reconciler;
 // (SceneStore.Sprites.cs) and marks the record dirty. Nothing allocates after the first fire.
 public sealed partial class TreeReconciler
 {
-    private void BindSprites(NodeHandle node, SpriteFieldEl sf)
+    private void BindSprites(NodeHandle node, SpriteFieldEl sf, SpriteFieldEl? prev)
     {
-        if (!sf.Instances.IsBound) return;
+        if (!Wire(sf.Instances.IsBound, prev?.Instances.IsBound == true)) return;
         var fx = new BindEffect<SpriteInstances>(Runtime, sf, static e => e is SpriteFieldEl x ? x.Instances : default);
         AddBinding(node, fx.Start(() =>
         {

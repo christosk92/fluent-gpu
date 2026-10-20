@@ -108,9 +108,9 @@ namespace FluentGpu.SourceGen.Engine
         }
 
         // A bindable channel is a FluentGpu.Signals.Prop<T> — the ONE shape whose static-vs-bound state (IsBound) the
-        // BindContract tripwire checks for a static↔bound flip (a bind is created only at mount and re-wired only
-        // bound→bound, so a flip silently loses). Detected structurally (constructed generic named
-        // Prop in FluentGpu.Signals) so the check is generated, never hand-listed per element type.
+        // reconciler's static→bound flip detector (AnyBindGained) and the BindContract cross-check (BoundChannelCount)
+        // read. Detected structurally (constructed generic named Prop in FluentGpu.Signals) so the checks are generated,
+        // never hand-listed per element type.
         private static bool IsPropChannel(ITypeSymbol t)
             => t is INamedTypeSymbol { Name: "Prop", IsGenericType: true } n
                && n.ContainingNamespace?.ToDisplayString() == "FluentGpu.Signals";
@@ -139,27 +139,41 @@ namespace FluentGpu.SourceGen.Engine
                   .Append(i == m.Props.Length - 1 ? ";\n" : "\n");
             }
 
-            // BindContract helper (DEBUG tripwire): the name of the FIRST bindable channel (a Prop<T>) whose bound-vs-
-            // static shape FLIPPED between the two element versions, or null if none did. A bind is created only at mount
-            // and a re-render only RE-WIRES bound→bound, so a static→bound or bound→static flip on a reused node silently
-            // loses; the reconciler reports it. Generated (not hand-listed) so every element type + every Prop<T> channel
-            // is covered mechanically, with no drift.
+            // Static→bound flip detector (reconciler-hooks.md §0bis): does `next` bind a Prop<T> channel that `prev`
+            // carried static? Then the reused node has no effect for it yet and the Update seam wires one (the reverse
+            // flip, bound→static, is found per effect by RewireBinds). Generated (not hand-listed) so every element type
+            // and every Prop<T> channel is covered mechanically, with no drift. Called only inside the RecordChanged gate.
             sb.Append("\n");
-            sb.Append(pad).Append("    /// <summary>The first bindable <c>Prop&lt;T&gt;</c> channel whose <c>IsBound</c> flipped between\n");
-            sb.Append(pad).Append("    /// <paramref name=\"a\"/> and <paramref name=\"b\"/> (binds are created only at mount, re-wired only bound→bound ⇒ a flip silently loses), or null. BindContract tripwire.</summary>\n");
-            sb.Append(pad).Append("    public static string? FirstBoundFlip(").Append(m.FqTypeName).Append(" a, ").Append(m.FqTypeName).Append(" b)\n");
-            sb.Append(pad).Append("    {\n");
+            sb.Append(pad).Append("    /// <summary>True iff <paramref name=\"next\"/> binds a <c>Prop&lt;T&gt;</c> channel that <paramref name=\"prev\"/>\n");
+            sb.Append(pad).Append("    /// carried static (a static→bound flip the reconciler must wire). Two IsBound reads per channel, no allocation.</summary>\n");
+            sb.Append(pad).Append("    public static bool AnyBindGained(").Append(m.FqTypeName).Append(" next, ").Append(m.FqTypeName).Append(" prev)\n");
             bool anyProp = false;
             for (int i = 0; i < m.Props.Length; i++)
             {
                 PropInfo p = m.Props[i];
                 if (!p.IsProp) continue;
+                sb.Append(pad).Append(anyProp ? "        || " : "        => ")
+                  .Append("(next.").Append(p.Name).Append(".IsBound && !prev.").Append(p.Name).Append(".IsBound)\n");
                 anyProp = true;
-                sb.Append(pad).Append("        if (a.").Append(p.Name).Append(".IsBound != b.").Append(p.Name)
-                  .Append(".IsBound) return \"").Append(p.Name).Append("\";\n");
             }
-            if (!anyProp) sb.Append(pad).Append("        _ = a; _ = b;\n");
-            sb.Append(pad).Append("        return null;\n");
+            if (!anyProp) sb.Append(pad).Append("        => false;\n");
+            else { sb.Length--; sb.Append(";\n"); }   // close the expression on its last line
+
+            // DEBUG cross-check (BindContract.Unwired): how many Prop<T> channels of `el` are bound — the number of
+            // BindEffects a node reconciled against `el` must carry.
+            sb.Append("\n");
+            sb.Append(pad).Append("    /// <summary>The number of bound <c>Prop&lt;T&gt;</c> channels on <paramref name=\"el\"/> (BindContract cross-check).</summary>\n");
+            sb.Append(pad).Append("    public static int BoundChannelCount(").Append(m.FqTypeName).Append(" el)\n");
+            sb.Append(pad).Append("    {\n");
+            sb.Append(pad).Append("        int n = 0;\n");
+            for (int i = 0; i < m.Props.Length; i++)
+            {
+                PropInfo p = m.Props[i];
+                if (!p.IsProp) continue;
+                sb.Append(pad).Append("        if (el.").Append(p.Name).Append(".IsBound) n++;\n");
+            }
+            if (!anyProp) sb.Append(pad).Append("        _ = el;\n");
+            sb.Append(pad).Append("        return n;\n");
             sb.Append(pad).Append("    }\n");
 
             sb.Append(pad).Append("}\n");

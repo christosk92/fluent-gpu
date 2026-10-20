@@ -1076,7 +1076,8 @@ public sealed partial class TreeReconciler
         if (newEl is ScrollEl nse)
         {
             WriteColumns(node, nse, isMount: false);
-            RewireBinds(node, nse);   // a re-render that binds Visible with a new thunk/signal re-points the mount bind
+            RewireBinds(node, nse);   // a re-render that binds Visible with a new thunk/signal re-points the mount bind (or unwires it)
+            if (nse.Visible.IsBound && !oldEl.Visible.IsBound) WireGainedBinds(node, nse, oldEl);   // static→bound Visible
             var oldContent = (oldEl as ScrollEl)?.Content;
             var content = _scene.FirstChild(node);
             if (content.IsNull)
@@ -1106,6 +1107,7 @@ public sealed partial class TreeReconciler
         {
             WriteColumns(node, nve, isMount: false);
             RewireBinds(node, nve);
+            if (nve.Visible.IsBound && !oldEl.Visible.IsBound) WireGainedBinds(node, nve, oldEl);   // static→bound Visible
             RealizeWindow(node, nve);
             return;
         }
@@ -1167,43 +1169,23 @@ public sealed partial class TreeReconciler
         // (keeping the BoundsAnimated/FLIP/reflow side-effects correct). Children are EXCLUDED from the diff, so they
         // are ALWAYS reconciled. The FLIP "First" capture runs in the host commit loop over the BoundsAnimated flag
         // (AppHost), independent of this call, so a truly-unchanged node still rides a sibling reflow.
-        // DEBUG-only bind-contract tripwire: a bindable channel that flipped between static and bound on this reused
-        // node silently loses (a bind is wired at mount and only ever RE-WIRED bound→bound — RewireBinds below never
-        // wires a newly-bound channel nor unwires a newly-static one). The CompiledIn const folds this away in release.
-        if (BindContract.CompiledIn && BindContract.Enabled && BindFlip(newEl, oldEl) is { } flipped)
-            BindContract.Flip(newEl.GetType().Name, flipped);
-
         if (RecordChanged(newEl, oldEl))
         {
             if (_renderCensus is not null) _censusWrites++;
             WriteColumns(node, newEl, isMount: false, oldEl);
-            // Bound→bound re-wire (Reconciler.Rewire.cs): a bound channel whose thunk/signal payload changed (a fresh
-            // lambda capturing new render-time values) now evaluates the NEW source. Inside the RecordChanged gate on
-            // purpose — AnyChanged compares every Prop<T> payload with the same equality, so an unchanged element
-            // can never need a re-wire. After WriteColumns, mirroring Mount's WriteColumns-then-BindNode order.
-            RewireBinds(node, newEl);
+            // Bind maintenance (Reconciler.Rewire.cs), after WriteColumns, mirroring Mount's WriteColumns-then-BindNode
+            // order. Inside the RecordChanged gate on purpose: AnyChanged compares every Prop<T> payload with the same
+            // equality (a bound and a static Prop<T> are never equal), so an unchanged element can never need any of it.
+            //   • bound→bound: a channel whose thunk/signal payload changed re-runs on the NEW source;
+            //   • bound→static: the static value WriteColumns just wrote takes; the channel's effect is unlinked + disposed;
+            //   • static→bound: the newly bound channels are wired as Mount wires them and run once now.
+            bool unwired = RewireBinds(node, newEl);
+            bool gained = AnyBindGained(newEl, oldEl);
+            if (gained) WireGainedBinds(node, newEl, oldEl);
+            if (BindContract.CompiledIn && BindContract.Enabled && (unwired || gained)) CheckBindingShape(node, newEl);
         }
         ReconcileChildren(node, ChildrenOf(newEl), ChildrenOf(oldEl));
     }
-
-    /// <summary>DEBUG-only (<see cref="BindContract"/>): the name of the first bindable channel whose bound/static shape
-    /// flipped between the same-type <paramref name="a"/>/<paramref name="b"/> element versions (the generated
-    /// <c>{T}Diff.FirstBoundFlip</c>), or null. A type mismatch is a replace (handled elsewhere), never a flip.</summary>
-    private static string? BindFlip(Element a, Element b) => a switch
-    {
-        BoxEl x => b is BoxEl y ? BoxElDiff.FirstBoundFlip(x, y) : null,
-        TextEl x => b is TextEl y ? TextElDiff.FirstBoundFlip(x, y) : null,
-        GridEl x => b is GridEl y ? GridElDiff.FirstBoundFlip(x, y) : null,
-        ImageEl x => b is ImageEl y ? ImageElDiff.FirstBoundFlip(x, y) : null,
-        IconLayerEl x => b is IconLayerEl y ? IconLayerElDiff.FirstBoundFlip(x, y) : null,
-        SpanTextEl x => b is SpanTextEl y ? SpanTextElDiff.FirstBoundFlip(x, y) : null,
-        ListRowEl x => b is ListRowEl y ? ListRowElDiff.FirstBoundFlip(x, y) : null,
-        PolylineStrokeEl x => b is PolylineStrokeEl y ? PolylineStrokeElDiff.FirstBoundFlip(x, y) : null,
-        PathEl x => b is PathEl y ? PathElDiff.FirstBoundFlip(x, y) : null,
-        SeriesEl x => b is SeriesEl y ? SeriesElDiff.FirstBoundFlip(x, y) : null,
-        SpriteFieldEl x => b is SpriteFieldEl y ? SpriteFieldElDiff.FirstBoundFlip(x, y) : null,
-        _ => null,
-    };
 
     /// <summary>GEN-01 (wired): true unless <paramref name="a"/> and <paramref name="b"/> are the same leaf element
     /// type with EVERY diffable prop unchanged (the generated <c>{T}Diff.AnyChanged</c> — inherited fields included,
@@ -2330,7 +2312,7 @@ public sealed partial class TreeReconciler
     // A bound Prop<T> is either a thunk or a signal-direct payload — the BindEffect body reads whichever the channel
     // carries (one null test per fire; signal-direct means the CALLER allocated no closure). Wired at mount; a NEW
     // thunk/signal supplied on a re-render RE-WIRES the same effect (bound→bound — RewireBinds, Reconciler.Rewire.cs;
-    // locked by gate.bind.rewire-*), while a static↔bound flip still loses (BindContract flags it).
+    // locked by gate.bind.rewire-*); a static↔bound flip unwires (bound→static) or wires (static→bound) the channel.
     /// <summary>Pin <paramref name="imageId"/> for <paramref name="node"/>. <paramref name="priority"/> is the lane the
     /// request was made at: <c>ImageCache.Pin</c> re-prioritizes a still-Pending entry to it, so an Overscan request
     /// stays in the Overscan lane through its pin instead of being force-promoted to Visible by the pin itself.</summary>
@@ -2788,46 +2770,55 @@ public sealed partial class TreeReconciler
     /// companions via <c>fx.El</c> — never mount-captured locals — so <see cref="RewireBinds"/> can re-point the SAME
     /// effect when a re-render binds the channel with a new thunk/signal (bound→bound re-wire; Reconciler.Rewire.cs). The
     /// selector passed to each effect is a static lambda (cached, allocation-free) that reads the same channel off a
-    /// re-rendered element. Mount-only here: <c>OnRealized</c> (fires once per node).</summary>
-    private void BindNode(NodeHandle node, Element el)
+    /// re-rendered element. Mount-only here: <c>OnRealized</c> (fires once per node).
+    /// <para><paramref name="prev"/> (the static→bound flip, <see cref="WireGainedBinds"/>): the element the reused node
+    /// was last reconciled against. Only channels bound on <paramref name="el"/> but STATIC on <paramref name="prev"/> are
+    /// wired (every other bound channel already has its effect), and no mount-only callback (<c>OnRealized</c>) replays.
+    /// Null at mount: every bound channel is wired, exactly as before (one extra null test per bound channel).</para></summary>
+    private void BindNode(NodeHandle node, Element el, Element? prev = null)
     {
-        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Presence); BindPresence(node, el); FluentGpu.Hosting.MountProf.Exit();   // P1: Element.Visible lives on the base type — wire it for EVERY element kind
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Presence); BindPresence(node, el, prev); FluentGpu.Hosting.MountProf.Exit();   // P1: Element.Visible lives on the base type — wire it for EVERY element kind
         // The channel wiring captures `node` in closures, and C# allocates their shared display class on ENTRY of the method
         // that declares them, a bound channel or not: one object per mounted node, 1,600+ on a playlist mount for the few
         // hundred that bind anything. Route an element that binds nothing past it (page-mount RCA, allocations).
         switch (el)
         {
             case BoxEl box:
-                BindBoxCommon(node, box);
-                if (BindsRareChannel(box)) BindChannels(node, el);   // its box branch invokes OnRealized
-                else box.OnRealized?.Invoke(node);
+                BindBoxCommon(node, box, prev as BoxEl);
+                if (BindsRareChannel(box)) BindChannels(node, el, prev);   // its box branch invokes OnRealized (mount only)
+                else if (prev is null) box.OnRealized?.Invoke(node);
                 return;
             case TextEl text:
-                BindTextCommon(node, text);
-                text.OnRealized?.Invoke(node);
+                BindTextCommon(node, text, prev as TextEl);
+                if (prev is null) text.OnRealized?.Invoke(node);
                 return;
         }
-        BindChannels(node, el);
+        BindChannels(node, el, prev);
     }
+
+    /// <summary>Wire this channel? Bound on the element, and — on the static→bound flip pass — static on the previous
+    /// element (a channel bound on both already has its effect). <paramref name="prevBound"/> is false at mount.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private static bool Wire(bool bound, bool prevBound) => bound && !prevBound;
 
     /// <summary>The box channels nearly every bound box uses, wired WITHOUT a closure: each effect carries its node and this
     /// reconciler and runs a static body that calls the channel's Fire* method (page-mount RCA, allocations: one effect object per
     /// binding instead of the effect + a closure + a delegate). The rare channels stay in <see cref="BindChannels"/>.</summary>
-    private void BindBoxCommon(NodeHandle node, BoxEl b)
+    private void BindBoxCommon(NodeHandle node, BoxEl b, BoxEl? p)
     {
-        if (b.Transform.IsBound)
+        if (Wire(b.Transform.IsBound, p?.Transform.IsBound == true))
         {
             var fx = new BindEffect<Affine2D>(Runtime, b, static e => e is BoxEl x ? x.Transform : default);
             // Value-gate: an unchanged matrix must NOT set TransformDirty — that bit alone defeats skip-submit
             // (AppHost maybeUnchanged requires !transformWrote). Quantized EQ/seek land here often with equal values.
             AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxTransform((BindEffect<Affine2D>)f)));
         }
-        if (b.Opacity.IsBound)
+        if (Wire(b.Opacity.IsBound, p?.Opacity.IsBound == true))
         {
             var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.Opacity : default);
             AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxOpacity((BindEffect<float>)f)));
         }
-        if (b.HitTestVisible.IsBound)
+        if (Wire(b.HitTestVisible.IsBound, p?.HitTestVisible.IsBound == true))
         {
             // E15: a resolved false clears NodeFlags.HitTestVisible without a re-render — hit-testing reads the
             // flag straight off the live scene, so the flip needs no PaintDirty/re-record/re-publish at all
@@ -2835,53 +2826,53 @@ public sealed partial class TreeReconciler
             var fx = new BindEffect<bool>(Runtime, b, static e => e is BoxEl x ? x.HitTestVisible : default);
             AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxHitTestVisible((BindEffect<bool>)f)));
         }
-        if (b.Fill.IsBound)
+        if (Wire(b.Fill.IsBound, p?.Fill.IsBound == true))
         {
             var fx = new BindEffect<ColorF>(Runtime, b, static e => e is BoxEl x ? x.Fill : default);
             AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxFill((BindEffect<ColorF>)f)));
         }
-        if (b.HoverFill.IsBound)
+        if (Wire(b.HoverFill.IsBound, p?.HoverFill.IsBound == true))
         {
             // Equality-gated (P3, same shape as Fill above): a re-fire whose resolved color did not move must not
             // mark PaintDirty, or NodeBindingWriteCount over-counts and an equal republish repaints for nothing.
             var fx = new BindEffect<ColorF>(Runtime, b, static e => e is BoxEl x ? x.HoverFill : default);
             AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxHoverFill((BindEffect<ColorF>)f)));
         }
-        if (b.PressedFill.IsBound)
+        if (Wire(b.PressedFill.IsBound, p?.PressedFill.IsBound == true))
         {
             var fx = new BindEffect<ColorF>(Runtime, b, static e => e is BoxEl x ? x.PressedFill : default);
             AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxPressedFill((BindEffect<ColorF>)f)));
         }
-        if (b.BorderColor.IsBound)
+        if (Wire(b.BorderColor.IsBound, p?.BorderColor.IsBound == true))
         {
             var fx = new BindEffect<ColorF>(Runtime, b, static e => e is BoxEl x ? x.BorderColor : default);
             AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxBorderColor((BindEffect<ColorF>)f)));
         }
-        if (b.Corners.IsBound)
+        if (Wire(b.Corners.IsBound, p?.Corners.IsBound == true))
         {
             var fx = new BindEffect<CornerRadius4>(Runtime, b, static e => e is BoxEl x ? x.Corners : default);
             AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxCorners((BindEffect<CornerRadius4>)f)));
         }
-        if (b.Width.IsBound)
+        if (Wire(b.Width.IsBound, p?.Width.IsBound == true))
         {
             var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.Width : default) { WritesLayout = true };
             AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxWidth((BindEffect<float>)f)));
         }
-        if (b.Height.IsBound)
+        if (Wire(b.Height.IsBound, p?.Height.IsBound == true))
         {
             var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.Height : default) { WritesLayout = true };
             AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireBoxHeight((BindEffect<float>)f)));
         }
     }
 
-    private void BindTextCommon(NodeHandle node, TextEl t)
+    private void BindTextCommon(NodeHandle node, TextEl t, TextEl? p)
     {
-        if (t.Text.IsBound)
+        if (Wire(t.Text.IsBound, p?.Text.IsBound == true))
         {
             var fx = new BindEffect<string>(Runtime, t, static e => e is TextEl x ? x.Text : default) { WritesLayout = true };
             AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireTextText((BindEffect<string>)f)));
         }
-        if (t.Color.IsBound)
+        if (Wire(t.Color.IsBound, p?.Color.IsBound == true))
         {
             var fx = new BindEffect<ColorF>(Runtime, t, static e => e is TextEl x ? x.Color : default);
             AddBinding(node, fx.Start(this, node, static f => f.Rec!.FireTextColor((BindEffect<ColorF>)f)));
@@ -3062,11 +3053,12 @@ public sealed partial class TreeReconciler
         => b.RadialGradientCenter.IsBound || b.FeedbackTransform.IsBound || b.FeedbackDecay.IsBound || b.GradientMix.IsBound
            || b.Validation.IsBound;
 
-    private void BindChannels(NodeHandle node, Element el)
+    private void BindChannels(NodeHandle node, Element el, Element? prev)
     {
         if (el is BoxEl b)
         {
-            if (b.RadialGradientCenter.IsBound)
+            var bP = prev as BoxEl;
+            if (Wire(b.RadialGradientCenter.IsBound, bP?.RadialGradientCenter.IsBound == true))
             {
                 var fx = new BindEffect<Point2>(Runtime, b, static e => e is BoxEl x ? x.RadialGradientCenter : default);
                 AddBinding(node, fx.Start(() =>
@@ -3083,7 +3075,7 @@ public sealed partial class TreeReconciler
                     else _scene.ClearRadialGradientCenter(node);
                 }));
             }
-            if (b.FeedbackTransform.IsBound)
+            if (Wire(b.FeedbackTransform.IsBound, bP?.FeedbackTransform.IsBound == true))
             {
                 var fx = new BindEffect<Affine2D>(Runtime, b, static e => e is BoxEl x ? x.FeedbackTransform : default);
                 AddBinding(node, fx.Start(() =>
@@ -3096,7 +3088,7 @@ public sealed partial class TreeReconciler
                     _scene.SetFeedback(node, st with { Warp = warp });
                 }));
             }
-            if (b.FeedbackDecay.IsBound)
+            if (Wire(b.FeedbackDecay.IsBound, bP?.FeedbackDecay.IsBound == true))
             {
                 var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.FeedbackDecay : default);
                 AddBinding(node, fx.Start(() =>
@@ -3109,7 +3101,7 @@ public sealed partial class TreeReconciler
                     _scene.SetFeedback(node, st with { Decay = decay });
                 }));
             }
-            if (b.GradientMix.IsBound)
+            if (Wire(b.GradientMix.IsBound, bP?.GradientMix.IsBound == true))
             {
                 var fx = new BindEffect<float>(Runtime, b, static e => e is BoxEl x ? x.GradientMix : default);
                 AddBinding(node, fx.Start(() =>
@@ -3124,7 +3116,7 @@ public sealed partial class TreeReconciler
                     _scene.SetGradientMix(node, next);
                 }));
             }
-            if (b.Validation.IsBound)
+            if (Wire(b.Validation.IsBound, bP?.Validation.IsBound == true))
             {
                 // form-validation.md: resolve the semantic state → theme critical color on the UI thread (the recorder
                 // stays theme-agnostic), and write the resolved border equality-gated so an unchanged validity marks NO
@@ -3149,19 +3141,20 @@ public sealed partial class TreeReconciler
             // Equality-gate the mark exactly like the Text/Validation bindings above. float.Equals — not == — so NaN
             // (auto) compares equal to NaN and an auto→auto re-fire is a true no-op. The FIRST run always writes+marks
             // (`primed`), keeping mount behaviour byte-identical to the ungated version.
-            b.OnRealized?.Invoke(node);
+            if (prev is null) b.OnRealized?.Invoke(node);   // mount only (never on the static→bound flip pass)
         }
         else if (el is TextEl t)
         {
-            t.OnRealized?.Invoke(node);
+            if (prev is null) t.OnRealized?.Invoke(node);
         }
         else if (el is SpanTextEl st)
         {
-            BindSpanText(node, st);   // Reconciler.Spans.cs — bound Spans : Prop<TextSpans> only (P2)
+            BindSpanText(node, st, prev as SpanTextEl);   // Reconciler.Spans.cs — bound Spans : Prop<TextSpans> only (P2)
         }
         else if (el is ImageEl ime)
         {
-            if (ime.Source.IsBound)
+            var imeP = prev as ImageEl;
+            if (Wire(ime.Source.IsBound, imeP?.Source.IsBound == true))
             {
                 var fx = new BindEffect<string>(Runtime, ime, static e => e is ImageEl x ? x.Source : default);
                 // W2-E3: the slot this ImageEl belongs to, captured at bind time (both null outside a bound realize
@@ -3210,7 +3203,7 @@ public sealed partial class TreeReconciler
                     _scene.Mark(node, NodeFlags.PaintDirty);
                 }));
             }
-            if (ime.Placeholder.IsBound)
+            if (Wire(ime.Placeholder.IsBound, imeP?.Placeholder.IsBound == true))
             {
                 var fx = new BindEffect<ColorF>(Runtime, ime, static e => e is ImageEl x ? x.Placeholder : default);
                 AddBinding(node, fx.Start(() =>
@@ -3229,9 +3222,10 @@ public sealed partial class TreeReconciler
         }
         else if (el is IconLayerEl ile)
         {
+            var ileP = prev as IconLayerEl;
             // The layer TINT rides NodePaint.Fill (VisualKind.IconLayer). A bound Tint (the ThemedIcon role thunk reads
             // Tok) re-fires on RethemeAll → repaints the node with the new ColorF, NO re-raster (the mask is colorless).
-            if (ile.Tint.IsBound)
+            if (Wire(ile.Tint.IsBound, ileP?.Tint.IsBound == true))
             {
                 var fx = new BindEffect<ColorF>(Runtime, ile, static e => e is IconLayerEl x ? x.Tint : default);
                 AddBinding(node, fx.Start(() =>
@@ -3253,19 +3247,19 @@ public sealed partial class TreeReconciler
             // Mirrors BoxEl.OnRealized above (:1972) — BindNode runs at mount only (Mount(), :623), so this fires
             // exactly once, handing the caller the live NodeHandle a draw-on stroke-trim/transform Keyframes loop needs
             // to target (PathEl carries no bindable channels of its own today, so this is BindNode's only PathEl work).
-            pe.OnRealized?.Invoke(node);
+            if (prev is null) pe.OnRealized?.Invoke(node);
         }
         else if (el is SeriesEl se)
         {
-            BindSeriesSamples(node, se);   // Reconciler.Series.cs — the bound sample-source channel
+            BindSeriesSamples(node, se, prev as SeriesEl);   // Reconciler.Series.cs — the bound sample-source channel
         }
         else if (el is SpriteFieldEl sf)
         {
-            BindSprites(node, sf);   // Reconciler.Sprites.cs — the bound instance-buffer channel
+            BindSprites(node, sf, prev as SpriteFieldEl);   // Reconciler.Sprites.cs — the bound instance-buffer channel
         }
         else if (el is ListRowEl lr)
         {
-            BindListRowCells(node, lr);   // Reconciler.ListRow.cs — Cells/Fill/HoverFill/SelectedFill/Placeholder
+            BindListRowCells(node, lr, prev as ListRowEl);   // Reconciler.ListRow.cs — Cells/Fill/HoverFill/SelectedFill/Placeholder
         }
     }
 
@@ -4969,11 +4963,16 @@ public sealed partial class TreeReconciler
             new MotionTarget(), ce.Transition ?? MotionTok.ControlFaster);
 
         // Bound Visible wiring (BindPresence, inside BindNode) is created at mount — mirrors Mount's separate
-        // `WriteColumns(...); BindNode(...);` pair. The reuse branch never re-creates it; it RE-WIRES the existing effect
-        // when the re-rendered embed binds Visible with a new thunk/signal (bound→bound; an equal payload is a no-op, so
-        // this stays allocation-free across repeated parent re-renders — gate.reconcile.componentel.alloc).
+        // `WriteColumns(...); BindNode(...);` pair. The reuse branch RE-WIRES the existing effect when the re-rendered
+        // embed binds Visible with a new thunk/signal (bound→bound; an equal payload is a no-op, so this stays
+        // allocation-free across repeated parent re-renders — gate.reconcile.componentel.alloc), unwires it when Visible
+        // turned static (the static write above already took), and wires it when Visible turned bound (Rewire.cs).
         if (isMount) BindNode(node, ce);
-        else RewireBinds(node, ce);
+        else
+        {
+            RewireBinds(node, ce);
+            if (ce.Visible.IsBound && !old!.Visible.IsBound) WireGainedBinds(node, ce, old);
+        }
     }
 
     /// <summary>Bake an element's declarative <see cref="FluentGpu.Scroll.Effects.ScrollEffectSpec"/>s onto the scene's

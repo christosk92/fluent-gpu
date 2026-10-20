@@ -322,7 +322,7 @@ static class BindRewireChecks
             firesBefore = fires;
             before = GC.GetAllocatedBytesForCurrentThread();
             bool anyRewired = false;
-            for (int i = 0; i < 256; i++) anyRewired |= fx.Rewire(ea2) | fx.Rewire(ea);
+            for (int i = 0; i < 256; i++) anyRewired |= fx.Rewire(ea2) != BindRewire.Unchanged | fx.Rewire(ea) != BindRewire.Unchanged;
             long sameBytes = GC.GetAllocatedBytesForCurrentThread() - before;
             bool sameQuiet = !anyRewired && fires == firesBefore;
 

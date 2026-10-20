@@ -11,9 +11,9 @@ namespace FluentGpu.Reconciler;
 // and marks the record dirty. The thunk's version read is what subscribes it; nothing allocates after the first fire.
 public sealed partial class TreeReconciler
 {
-    private void BindSeriesSamples(NodeHandle node, SeriesEl se)
+    private void BindSeriesSamples(NodeHandle node, SeriesEl se, SeriesEl? prev)
     {
-        if (se.GradientMix.IsBound)
+        if (Wire(se.GradientMix.IsBound, prev?.GradientMix.IsBound == true))
         {
             var mx = new BindEffect<float>(Runtime, se, static e => e is SeriesEl x ? x.GradientMix : default);
             AddBinding(node, mx.Start(() =>
@@ -28,7 +28,7 @@ public sealed partial class TreeReconciler
                 _scene.SetGradientMix(node, next);
             }));
         }
-        if (!se.Samples.IsBound) return;
+        if (!Wire(se.Samples.IsBound, prev?.Samples.IsBound == true)) return;
         var fx = new BindEffect<SeriesSamples>(Runtime, se, static e => e is SeriesEl x ? x.Samples : default);
         AddBinding(node, fx.Start(() =>
         {

@@ -30,13 +30,15 @@ public sealed partial class TreeReconciler
     /// <summary>Bound Visible wiring — called once at mount from <c>BindNode</c> for every element type (the channel
     /// lives on the base <see cref="Element"/>, not a concrete subtype, so this runs unconditionally, unlike the
     /// BoxEl-only channels above it); a re-render that binds a new thunk/signal re-wires the same effect
-    /// (<c>RewireBinds</c>). DEBUG-asserts (BindContract) that a MorphId (shared-element) node never binds
+    /// (<c>RewireBinds</c>), a static re-render unwires it, and a static→bound flip wires it here through
+    /// <c>WireGainedBinds</c>. DEBUG-asserts (BindContract) that a MorphId (shared-element) node never binds
     /// Visible — collapsing a hero participant mid-flight would break ConnectedAnimation capture.</summary>
-    private void BindPresence(NodeHandle node, Element el)
+    private void BindPresence(NodeHandle node, Element el, Element? prev)
     {
         // The wiring below captures `node` in closures, and C# allocates their display class on ENTRY of the method that
         // declares them — bound or not. Nearly every node binds no Visible: test before entering (page-mount RCA, allocations).
-        if (el.Visible.IsBound) BindPresenceCore(node, el);
+        // `prev` (the static→bound flip pass): a Visible already bound on the previous element already has its effect.
+        if (el.Visible.IsBound && (prev is null || !prev.Visible.IsBound)) BindPresenceCore(node, el);
     }
 
     private void BindPresenceCore(NodeHandle node, Element el)

@@ -83,9 +83,9 @@ public sealed partial class TreeReconciler
     /// shape as every other element's bound Prop&lt;T&gt; (Reconciler.cs's BoxEl.Fill block): wired at mount, re-wired in
     /// place when a re-render/recycle binds a new thunk/signal (Reconciler.Rewire.cs). Static companions (the placeholder
     /// color, the click flag, a static Placeholder) are read off <c>fx.El</c> — the element last reconciled — per fire.</summary>
-    private void BindListRowCells(NodeHandle node, ListRowEl lr)
+    private void BindListRowCells(NodeHandle node, ListRowEl lr, ListRowEl? prev)
     {
-        if (lr.Cells.IsBound)
+        if (Wire(lr.Cells.IsBound, prev?.Cells.IsBound == true))
         {
             var fx = new BindEffect<RowCells>(Runtime, lr, static e => e is ListRowEl x ? x.Cells : default);
             AddBinding(node, fx.Start(() =>
@@ -102,7 +102,7 @@ public sealed partial class TreeReconciler
             }));
         }
 
-        if (lr.Fill.IsBound)
+        if (Wire(lr.Fill.IsBound, prev?.Fill.IsBound == true))
         {
             var fx = new BindEffect<ColorF>(Runtime, lr, static e => e is ListRowEl x ? x.Fill : default);
             AddBinding(node, fx.Start(() =>
@@ -118,7 +118,7 @@ public sealed partial class TreeReconciler
                 _scene.Mark(node, NodeFlags.PaintDirty);
             }));
         }
-        if (lr.HoverFill.IsBound)
+        if (Wire(lr.HoverFill.IsBound, prev?.HoverFill.IsBound == true))
         {
             var fx = new BindEffect<ColorF>(Runtime, lr, static e => e is ListRowEl x ? x.HoverFill : default);
             AddBinding(node, fx.Start(() =>
@@ -133,7 +133,7 @@ public sealed partial class TreeReconciler
                 _scene.Mark(node, NodeFlags.PaintDirty);
             }));
         }
-        if (lr.SelectedFill.IsBound)
+        if (Wire(lr.SelectedFill.IsBound, prev?.SelectedFill.IsBound == true))
         {
             // Rides the generic PressedFill channel/state (ListRowEl.SelectedFill doc comment) — a row has no
             // separate pressed visual, so Selected repurposes the third paint-fill slot every element already has.
@@ -150,7 +150,7 @@ public sealed partial class TreeReconciler
                 _scene.Mark(node, NodeFlags.PaintDirty);
             }));
         }
-        if (lr.Placeholder.IsBound)
+        if (Wire(lr.Placeholder.IsBound, prev?.Placeholder.IsBound == true))
         {
             var fx = new BindEffect<bool>(Runtime, lr, static e => e is ListRowEl x ? x.Placeholder : default);
             AddBinding(node, fx.Start(() =>
