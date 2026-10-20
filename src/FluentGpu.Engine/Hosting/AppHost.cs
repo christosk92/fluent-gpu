@@ -6958,7 +6958,9 @@ public sealed partial class AppHost : IDisposable
             // E2 frame freeze: this frame's directive (Capture / Hold / Dissolve / Release), decided HERE with the restore hold and
             // carried by the publication. A frozen frame is also a held one, so the upload cap lifts and the skip gates stay shut.
             Threading.FreezeKind freezeKind = ResolveFreezeDirective(out float dissolveT);
-            bool presentHeld = restoreHeld || freezeKind == Threading.FreezeKind.Hold;
+            // A reveal that waits on the size-to-content fit holds every frame until the fit settles (AppHost.SizeToContent.cs):
+            // the first present is the frame at the fitted size, so the reveal exemption is not spent on one at the initial size.
+            bool presentHeld = restoreHeld || freezeKind == Threading.FreezeKind.Hold || RevealAwaitsFit;
             bool holdOwesPublication = presentHeld || _lastPublishedHeld || freezeKind != Threading.FreezeKind.None || _fzLastPublished != Threading.FreezeKind.None;
             bool maybeUnchanged = !recordOnRender && _everLaidOut && !resized && !keepAlive && _popupWindows.Count == 0
                 && !holdOwesPublication

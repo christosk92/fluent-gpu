@@ -266,8 +266,10 @@ public static class FluentApp
     /// (a window the app hid during mount stays hidden).</summary>
     public static void SetWindowVisible(bool visible)
     {
-        // Before the no-op early-out: hiding a window that is still hidden waiting for its first fit must cancel that show.
+        // Before the no-op early-out: hiding a window that is still hidden waiting for its first fit (or its reveal) must cancel
+        // that show.
         s_host?.CancelShowWhenFitted();
+        if (!visible) s_host?.CancelRevealGate();
         if (s_window is not { IsClosed: false } w || w.IsVisible == visible) return;
         if (visible)
         {
@@ -586,13 +588,10 @@ public static class FluentApp
             s_reveal = new RevealGateOptions { FirstFrameReady = o.FirstFrameReady, TimeoutMs = o.RevealTimeoutMs };
         else if (o.RevealOnFirstPresent)
             Console.Error.WriteLine("[reveal] RevealOnFirstPresent ignored: the window is not composited (a hidden window's presents are stood down)");
-        // SizeToContent (not Manual) owns the first show instead: the window stays hidden until the first fit landed
-        // (AppHost.ShowWhenFitted) so it never flashes at the AppOptions size; with Manual ShowWhenFitted shows at once.
-        if (o.RevealOnFirstPresent && s_reveal is not null && o.SizeToContent != SizeToContent.Manual)
-        {
-            s_reveal = null;
-            Console.Error.WriteLine("[reveal] RevealOnFirstPresent ignored: SizeToContent shows the window after its first fit");
-        }
+        // SizeToContent (not Manual) under the reveal gate: the gate waits for the fit too (AppHost.BeginRevealGate) - measure,
+        // resize the hidden window, present the first frame at that size, then show - so the window neither flashes at the
+        // AppOptions size nor shows an empty or half-themed frame. Without the gate, ShowWhenFitted shows it after the first
+        // fit (at once with Manual).
         if (o.StartHidden) { }
         else if (s_reveal is { } gate) host.BeginRevealGate(gate);
         else host.ShowWhenFitted();
@@ -978,7 +977,8 @@ public sealed record AppOptions
     /// ran, the client area follows the content's natural size (DPI and app zoom included), clamped to
     /// <see cref="MinWidth"/>/<see cref="MinHeight"/> and the monitor work area. <see cref="Width"/>/<see cref="Height"/>
     /// are then only the size the first layout happens at; the window is shown after its first fit (unless
-    /// <see cref="StartHidden"/>), so it never flashes at that size. The user resizing the frame switches it to
+    /// <see cref="StartHidden"/>), so it never flashes at that size. With <see cref="RevealOnFirstPresent"/> the reveal waits for
+    /// the fit: the first frame presented is the one at the fitted size, and the window is shown once it has presented. The user resizing the frame switches it to
     /// <see cref="FluentGpu.Hosting.SizeToContent.Manual"/>; changed live by <see cref="FluentApp.SetSizeToContent"/>.
     /// Default Manual.</summary>
     public SizeToContent SizeToContent { get; init; }

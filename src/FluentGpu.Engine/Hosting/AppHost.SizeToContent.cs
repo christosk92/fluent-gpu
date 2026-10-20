@@ -56,6 +56,13 @@ public sealed partial class AppHost
     private double _fitShowArmedMs;
     // The app took visibility over explicitly (CancelShowWhenFitted): a later ShowWhenFitted does nothing.
     private bool _fitShowCancelled;
+    // The pending fit belongs to the main window's reveal gate (BeginRevealGate with a size-to-content mode on), not to
+    // ShowWhenFitted: the release does not show the window, it lets the reveal go ahead. Until then every publication is
+    // HELD (recorded and submitted, never presented, so the reveal exemption is not spent on a frame at the wrong size).
+    private bool _fitShowViaReveal;
+    // The current reveal arming waits on the fit (cleared when the reveal shows the window or is cancelled): a fit that
+    // has to resize again before the reveal (a DPI change, content that grew) re-enters the wait.
+    private bool _revealFitGated;
     private const int OscillationFrames = 4;
     private const int MaxResizesBeforeShow = 8;   // a show-pending window is shown after this many fits even if not settled
     private const int FitShowMaxFrames = 30;
@@ -72,6 +79,10 @@ public sealed partial class AppHost
     /// <summary>True while the window is hidden waiting for its first size-to-content fit (<see cref="ShowWhenFitted"/>).
     /// Diagnostics / gates.</summary>
     public bool SizeToContentShowPending => _fitShowPending;
+
+    /// <summary>True while the main window's reveal waits for its first size-to-content fit: the frames of that wait are held
+    /// (submitted, not presented), so the first present is a frame at the fitted size.</summary>
+    private bool RevealAwaitsFit => _fitShowPending && _fitShowViaReveal && _revealPending && !_isDetachedChild;
 
     /// <summary>Size the window to its content on the chosen axes (WPF <c>SizeToContent</c>). Applied after every frame
     /// whose layout ran, so content that grows or shrinks resizes the window by itself; the natural size is converted at
@@ -106,6 +117,7 @@ public sealed partial class AppHost
         if (_fitShowCancelled) return;
         if (_sizeToContent == SizeToContent.Manual) { _window.Show(); return; }
         _fitShowPending = true;
+        _fitShowViaReveal = false;
         _fitShowResizes = 0;
         _fitShowFrames = 0;
         _fitShowArmedMs = _timers.NowMs;
@@ -119,12 +131,54 @@ public sealed partial class AppHost
     public void CancelShowWhenFitted()
     {
         _fitShowCancelled = true;
+        if (!_fitShowViaReveal) _fitShowPending = false;   // a fit the reveal gate waits on is the gate's (CancelRevealGate drops it)
+    }
+
+    /// <summary>Reveal gate (UI thread): the gate is armed on a size-to-content window, so it waits for the first fit. Measure,
+    /// resize, then present at the fitted size, then show: the publications before the fit settles are held, the one that
+    /// settles it is the first present, and <see cref="TryRevealMain"/> shows the window once that one has presented.</summary>
+    private void ArmRevealFit()
+    {
+        _revealFitGated = false;
+        if (_sizeToContent == SizeToContent.Manual) return;
+        _revealFitGated = true;
+        ArmFitWait();
+    }
+
+    private void ArmFitWait()
+    {
+        _fitShowPending = true;
+        _fitShowViaReveal = true;
+        _fitShowResizes = 0;
+        _fitShowFrames = 0;
+        _fitShowArmedMs = _timers.NowMs;
+        _needFullLayout = true;   // the fit only runs on frames whose layout ran
+        WakeFrame();
+    }
+
+    /// <summary>The reveal is over (shown, timed out or cancelled): drop the fit it waited on.</summary>
+    private void EndRevealFit()
+    {
+        _revealFitGated = false;
+        if (!_fitShowViaReveal) return;
+        _fitShowViaReveal = false;
         _fitShowPending = false;
     }
 
-    private void ReleaseFitShow()
+    private void ReleaseFitShow(bool force = false)
     {
         if (!_fitShowPending) return;
+        if (_fitShowViaReveal)
+        {
+            // The reveal's frame must also be built with the app's fonts ready (NoteRevealReadiness re-runs the fit at that
+            // edge, since the fonts can change the natural size); only the safety net releases without them.
+            if (!force && !_revealReadySeen) return;
+            _fitShowPending = false;
+            _fitShowViaReveal = false;
+            // This frame's publication is the first one not held: the reveal frame. A safety release has no frame of its own.
+            if (force) RequestFullRepaintOnce();
+            return;
+        }
         _fitShowPending = false;
         _window.Show();
         // A frame presented while the window was hidden may have been stood down (occluded): present one in full now that
@@ -137,7 +191,7 @@ public sealed partial class AppHost
     private void TickFitShowSafety()
     {
         if (!_fitShowPending) return;
-        if (++_fitShowFrames >= FitShowMaxFrames || _timers.NowMs - _fitShowArmedMs >= FitShowMaxMs) ReleaseFitShow();
+        if (++_fitShowFrames >= FitShowMaxFrames || _timers.NowMs - _fitShowArmedMs >= FitShowMaxMs) ReleaseFitShow(force: true);
     }
 
     /// <summary>Shorten an idle wait so a pending show-when-fitted reaches its safety deadline even if nothing else wakes
@@ -244,6 +298,23 @@ public sealed partial class AppHost
         var got = _window.ClientSizePx;   // synchronous on every backend (Win32 WM_SIZE inside SetWindowPos; headless at once)
         _fitIssued = target; _fitIssuedGot = got; _fitIssuedValid = true;
         _frameAfterPaint = true;   // the new size is picked up by the next frame's EnsureSize
+        if (_fitShowViaReveal)
+        {
+            // This frame was laid out at the old size, so it is never the reveal frame: the next frame lays out at the size
+            // the platform gave (it then settles through the issued-target check). Bounded by the safety net.
+            ++_fitShowResizes;
+            return;
+        }
+        // The reveal's fit settled, but the window has to resize again before it is shown (it moved to a monitor with another
+        // DPI, the content grew): wait again, and re-arm the swapchain's reveal exemption so the present at the new size is
+        // the one that reaches the glass (the earlier one may already have spent it).
+        if (_revealFitGated && _revealPending && !_isDetachedChild && !_fitShowPending)
+        {
+            ArmFitWait();
+            _swapchain.ArmRevealExemption();
+            if (_revealReadySeen) _revealReadyPublishSeq = PublishSequence;
+            return;
+        }
         if (_fitShowPending && (got != target || ++_fitShowResizes >= MaxResizesBeforeShow)) ReleaseFitShow();
     }
 

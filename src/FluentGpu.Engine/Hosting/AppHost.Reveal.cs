@@ -54,6 +54,10 @@ public sealed partial class AppHost
     /// (<see cref="RevealGateOptions.TimeoutMs"/>).</item>
     /// <item>Just before <c>Show</c> the host calls <see cref="OnApplyThemeMaterial"/> with the current dark flag, so the OS
     /// material and dark attribute (and anything that changed while hidden) are in place before the window is visible.</item>
+    /// <item>With <see cref="SizeToContent"/> on, the gate also waits for the window's fit: measure, resize the hidden window,
+    /// then present the first frame at the fitted size (and with the fonts ready), then show. The frames before that are held
+    /// (submitted, never presented), so the first present cannot be at the initial size; the fit's own safety net
+    /// (~500 ms / 30 frames) releases a fit that never settles, inside the watchdog.</item>
     /// </list>
     /// Needs a composited swapchain (a non-composited target stands a hidden window's presents down); the Windows entry point
     /// only arms it for one. A pop-out uses <see cref="BeginDetachedReveal"/>.</summary>
@@ -68,7 +72,18 @@ public sealed partial class AppHost
         _revealArmQpc = Stopwatch.GetTimestamp();
         _revealDeadlineQpc = DetachedRevealGate.DeadlineQpc(_revealArmQpc, o.TimeoutMs);
         _swapchain.ArmRevealExemption();
+        ArmRevealFit();             // a size-to-content window: measure, resize, present at that size, then show
         RequestFullRepaintOnce();   // ask for the frame the reveal waits for
+    }
+
+    /// <summary>Main window, UI thread: drop a pending reveal without showing the window (the app hid it while the reveal was
+    /// pending, e.g. during mount, so it stays hidden). A no-op when no reveal is pending.</summary>
+    public void CancelRevealGate()
+    {
+        if (!_revealPending || _isDetachedChild) return;
+        _revealPending = false;
+        _revealFirstFrameReady = null;
+        EndRevealFit();
     }
 
     /// <summary>Frame start (UI thread): note the first frame at which the application's fonts are ready. The reveal must present a
@@ -81,6 +96,7 @@ public sealed partial class AppHost
         _revealReadySeen = true;
         _revealReadyPublishSeq = PublishSequence;
         _revealReadyMs = QpcMs(Stopwatch.GetTimestamp() - _revealArmQpc);
+        if (_fitShowViaReveal) _needFullLayout = true;   // the fonts can move the natural size: fit again with them
         RequestFullRepaintOnce();
     }
 
@@ -90,10 +106,13 @@ public sealed partial class AppHost
     {
         if (!_revealPending || _isDetachedChild) return false;
         long now = Stopwatch.GetTimestamp();
-        bool presented = _revealReadySeen && _swapchain.HasPresentedContent && RenderPresentSeq > _revealReadyPublishSeq;
+        bool presented = _revealReadySeen && !RevealAwaitsFit && _swapchain.HasPresentedContent && RenderPresentSeq > _revealReadyPublishSeq;
         if (!DetachedRevealGate.Due(presented, now, _revealDeadlineQpc)) return false;
+        bool fitTimedOut = RevealAwaitsFit;
         _revealPending = false;
         _revealFirstFrameReady = null;
+        EndRevealFit();   // a fit the watchdog overtook stops holding frames: the next one presents
+        if (fitTimedOut) RequestFullRepaintOnce();
         // Material and dark attribute FIRST: the OS cannot cross-fade its backdrop, and a window shown before the right one is
         // applied flashes the wrong ground for a frame. Idempotent when nothing changed since startup.
         OnApplyThemeMaterial?.Invoke(Tok.Theme == ThemeKind.Dark);
@@ -113,7 +132,7 @@ public sealed partial class AppHost
     /// reveal shows), while a freeze holds presents (its capture frame still presents), and while a restore hold keeps the pre-hide
     /// frame on the glass. Entrances seeded under such frames start their clock on the first frame that is shown.</summary>
     private bool EntrancesUnseen()
-        => (_revealPending && !_isDetachedChild && !_revealReadySeen)
+        => (_revealPending && !_isDetachedChild && (!_revealReadySeen || _fitShowViaReveal))
            || (_fzPhase == FreezePhase.Frozen && !_fzCapturePending)
            || _restoreHoldArmed;
 

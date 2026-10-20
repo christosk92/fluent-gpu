@@ -1105,10 +1105,18 @@ public sealed partial class TreeReconciler
 
         if (newEl is VirtualListEl nve)
         {
+            int countBefore = _scene.TryGetScroll(node, out var scBefore) ? scBefore.ItemCount : -1;
             WriteColumns(node, nve, isMount: false);
             RewireBinds(node, nve);
             if (nve.Visible.IsBound && !oldEl.Visible.IsBound) WireGainedBinds(node, nve, oldEl);   // static→bound Visible
             RealizeWindow(node, nve);
+            // A COUNT CHANGE realizes in THIS frame. The pass above plans against the layout's measured table, which learns the new
+            // count only when the viewport arranges; with nothing else dirty no layout ran, so the post-frame scroll step found the
+            // window short and the new rows mounted a frame later (a list's skeleton gone, then row 1 alone, then the rest). Marking
+            // the viewport sends it through this frame's layout, whose arrange flags the short window and whose realize-after-layout
+            // pass (AppHost.Paint, D1) mounts the rows before the frame presents.
+            if (countBefore >= 0 && countBefore != Math.Max(0, nve.ItemCount))
+                _scene.Mark(node, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
             return;
         }
 
