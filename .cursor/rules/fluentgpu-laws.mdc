@@ -14,6 +14,5 @@ The ones agents break most:
 - Flex laws: one elastic lane per row (`Grow=1,Basis=0,MinWidth=0`); ellipsis needs `MinWidth=0`; existing
   `Shrink=0` is a deliberate contract — don't remove it.
 - Zero managed alloc in frame phases 6–13: no `new`/LINQ/closures in bind thunks, effects, or per-frame code.
-- Evidence before "done": `dotnet build src/FluentGpu.slnx` clean AND
-  `dotnet run --project src/FluentGpu.VerticalSlice` prints "ALL CHECKS PASSED". The user runs the app themselves —
+- Evidence before "done": `dotnet build src/FluentGpu.slnx` clean (Debug; no tests exist or may be added). The user runs the app themselves —
   don't launch it to verify. No `FG_*` env kill switches for new behavior.

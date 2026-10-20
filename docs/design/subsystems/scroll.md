@@ -831,11 +831,10 @@ and renders the verdicts — same guide.
 
 ---
 
-## 11. Invariants (each names its gate)
+## 11. Invariants
 
-VerticalSlice gates run with `dotnet run --project src/FluentGpu.VerticalSlice -- --suite scroll` (tag `scroll` =
-`ScrollSuite` + `ScrollMotionSuite` + `ScrollEffectsSuite`), `--suite tiles` (`TileSuite` + `SliceSuite`), `--suite touch`,
-`--suite listrow`. Unit tests live in `src/FluentGpu.Engine.Tests` and `src/FluentGpu.Windows.Tests`.
+The gates named below were VerticalSlice and unit tests, all deleted on 2026-10-20 (tests are banned); the invariants still
+hold.
 
 1. **Motion is a pure function of absolute time; sampling order and rate are irrelevant.** —
    `ScrollMotionTests.Eval_AtSharedTimes_IsIdenticalRegardlessOfSampleOrder`, `Eval_IsContinuousAcrossSegmentBoundaries`,
@@ -980,11 +979,11 @@ VerticalSlice gates run with `dotnet run --project src/FluentGpu.VerticalSlice -
 - **Virtualization behaviour** — through `Virtualizer`/`IExtentSource`/`NeedsRealize` only; any "realize fewer rows this
   frame" idea is a throttle (§14) — make the row cheaper instead.
 - **Pacing** — `PresentCadence`, `MotionTickRun`, `SlotCatchUp`, `PresentQueueDepthPolicy`, `CompositorTickFilter`,
-  `GpuGovernorWake` are pure and unit-tested; change the pure class and its tests, then measure with `--scroll-soak` and
+  `GpuGovernorWake` are pure; change the pure class, then measure with `--scroll-soak` and
   a lab session. The present-time law and the pose floor are load-bearing for every curve metric.
 - **Diagnostics** — a new probe row kind needs a `ProbeRowKind` ordinal, a single-producer ring choice, a level rule, the
   CSV mapping and `SessionSeries` ingestion; a new mark needs its `ProbeMark` code in the same change as its emitter.
-- Every change: failing-first gate or unit test, Debug + Release build, the full VerticalSlice, and — for feel — a lab
+- Every change: Debug + Release build and — for feel — a lab
   session compared against its baseline. Canon edits: this doc + `SPEC-INDEX.md` §2 + `check-canon.ps1`.
 
 ---

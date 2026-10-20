@@ -50,7 +50,7 @@ namespaces a typical app `using`s are `FluentGpu` (the entry point), `FluentGpu.
 > `FluentGpu.Engine` assembly (`src/FluentGpu.Engine/Foundation/Signals/`), but they are declared in the namespace
 > **`FluentGpu.Signals`** — so you author them with `using FluentGpu.Signals;`. Likewise the batteries-included
 > `FluentApp.Run` is in the **`FluentGpu`** namespace but ships from the `FluentGpu.WindowsApp` app project (see the
-> [Excluded](#excluded-from-api-metadata-the-apps-and-the-verification-harness) note below), so it does not appear in
+> [Excluded](#excluded-from-api-metadata-the-apps-and-the-headless-seams) note below), so it does not appear in
 > this generated reference.
 
 The one entry point, for orientation (`src/FluentGpu.WindowsApp/FluentApp.cs`):
@@ -111,20 +111,16 @@ the hook-deps lowering, the COM vtables, and the `FGCOM*`/`WGPU*` analyzers) and
 they are not in `docfx.json`'s metadata list. Their contracts live in
 [`dsl-aot.md`](../../../design/subsystems/dsl-aot.md) and [`com-interop.md`](../../../design/subsystems/com-interop.md).
 
-## Excluded from API metadata: the apps and the verification harness
+## Excluded from API metadata: the apps and the headless seams
 
 A few projects in the solution are deliberately **not** generated into this reference, because they are applications or
-test-only seams, not library surface:
+headless-only seams, not library surface:
 
-- **`FluentGpu.VerticalSlice`** — the headless golden-check harness (`dotnet run` here prints `ALL CHECKS PASSED`). It
-  is an *app*, not a library, but its source is the most-cited code in the conceptual docs: every engine claim is
-  anchored to a `Check(...)` in `src/FluentGpu.VerticalSlice/Program.cs`. See
-  [Engine contributors → verify with the harness](../engine-contributors/index.md#the-golden-rule-verify-with-the-headless-harness-before-claiming-done).
 - **`FluentGpu.WindowsApp`** — the gallery app (and the home of `FluentApp.Run`). It is where every control's verified,
   copy-pasteable snippet lives, but it is an application, so it carries no API metadata.
 - **The headless seams** — the `FluentGpu.Engine/Headless/Rhi/`, `Headless/Pal/`, and `Headless/Text/` folders inside
-  `FluentGpu.Engine`. These are test/CI backends behind the same seams the real leaves implement; they exist so the
-  harness can record the DrawList and assert *what was drawn* without a GPU or window. No public surface worth
+  `FluentGpu.Engine`. These are headless backends behind the same seams the real leaves implement; they exist so the
+  engine can record the DrawList and expose *what was drawn* without a GPU or window. No public surface worth
   publishing.
 
 Because `FluentApp.Run` ships from the excluded gallery app, the entry point you call first is **documented in the

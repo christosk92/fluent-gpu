@@ -8,7 +8,7 @@ with it — if you want to build an app, start at [Building apps with FluentGpu]
 FluentGpu enforces a strict **single-owner** model: every shared artifact (a signal primitive, an `Element` shape, a
 reconciler path, a scene column, a render opcode, a PAL/RHI/Text seam) is defined in **exactly one place** and
 referenced everywhere else. The #1 review finding on this codebase is the same artifact defined two ways in two files.
-So before you touch anything, the rule is: **find the one owner, change it there, verify against the headless harness.**
+So before you touch anything, the rule is: **find the one owner, change it there, verify with a clean Debug build.**
 
 This page maps subsystem → owning file, walks the consolidated assembly graph, and then gives the precise, file-level
 "where do I change *this*" for each layer, ending with two recipes (adding an `Element` type; the canon gate after
@@ -43,7 +43,6 @@ Each row is **one owner**. Change the artifact there; reference it elsewhere. (P
 | Rounded-rect / border raster | `src/FluentGpu.Engine/Render/SceneRecorder.cs` + `src/FluentGpu.Windows/D3D12/*Pipeline.cs` | the SDF ring + gradient PSOs |
 | Frame loop, scheduling | `src/FluentGpu.Engine/Hosting/AppHost.cs` | `AppHost.RunFrame` / `Paint`, `FrameStats` |
 | Theming tokens / colors | `src/FluentGpu.Engine/Dsl/{Tokens,Theme}.cs` | `Tok`, `TokenSet` |
-| Tests / golden checks | `src/FluentGpu.VerticalSlice/` (`Harness/`, `Suites/`, `Probes/`) | `Gate.Check(...)` |
 
 The cross-cutting **contract** owners (every opcode, RHI method, PAL seam, hook, source generator, scene column,
 assembly → its one authoritative design doc) live in the
@@ -74,7 +73,7 @@ five solution folders. (`FluentGpu.slnx` is the source of truth.) <!-- canon-all
 | `FluentGpu.Engine` (`Hosting/`) | `AppHost` (the frame loop), `FrameStats`, `FrameDiagnostics` |
 | `FluentGpu.Engine` (`Media/`) | the image/video pipeline (decode, residency, mosaic) |
 | `FluentGpu.Engine` (`Seams/Rhi/`, `Seams/Pal/`, `Seams/Text/`) | the abstract platform/GPU/text boundaries (interface-only, no platform code) |
-| `FluentGpu.Engine` (`Headless/Rhi/`, `Headless/Pal/`, `Headless/Text/`) | the GPU/window/font-free fakes the golden-check harness runs against |
+| `FluentGpu.Engine` (`Headless/Rhi/`, `Headless/Pal/`, `Headless/Text/`) | the GPU/window/font-free fakes the headless path runs against |
 
 **Controls-Windowing** — portable control kit and Windows backend:
 
@@ -96,10 +95,9 @@ five solution folders. (`FluentGpu.slnx` is the source of truth.) <!-- canon-all
 
 **Tooling** — Roslyn source generators (netstandard2.0, cannot merge): `FluentGpu.SourceGen`, `FluentGpu.Interop.SourceGen`.
 
-**Apps** — `FluentGpu.VerticalSlice` (the headless golden-check harness — **your verification target**) and
-`FluentGpu.WindowsApp` (the on-screen gallery + `FluentApp.Run`).
+**Apps** — `FluentGpu.WindowsApp` (the on-screen gallery + `FluentApp.Run`).
 
-The invariant the whole graph protects: **Engine never references a Windows backend.** Code flows Engine (seam interfaces) → `FluentGpu.Windows` leaves; the concrete leaf is injected at composition time in `AppHost` (or by the headless harness). Keep it acyclic — if a feature seems to need an Engine → backend reference, the artifact is in the wrong layer.
+The invariant the whole graph protects: **Engine never references a Windows backend.** Code flows Engine (seam interfaces) → `FluentGpu.Windows` leaves; the concrete leaf is injected at composition time in `AppHost` (or by the headless path). Keep it acyclic — if a feature seems to need an Engine → backend reference, the artifact is in the wrong layer.
 
 ---
 
@@ -127,7 +125,7 @@ The contracts that constrain edits here (all observable in the source):
   the paint half allocation-free.
 - **The write path must stay alloc-free.** `NotifySubscribers` iterates the live `_subs` list (no defensive copy);
   `FloatSignal` skips the comparer/boxing indirection entirely so a per-pointer-move scrub write allocates nothing.
-  Keep it that way — a steady-frame allocation here trips the harness's `HotPhaseAllocBytes == 0` assertion.
+  Keep it that way — a steady-frame allocation here shows up as `HotPhaseAllocBytes > 0`.
 - **Memos are pull-based.** `Memo<T>` recomputes lazily on read when `State == Stale` and only notifies *its*
   subscribers when the cached value actually changes; its `RunStale()` is a no-op (it never self-schedules).
 - **Ownership is explicit.** `Computation`'s ctor takes an `owner` and only auto-cascades disposal when one is passed.
@@ -340,41 +338,15 @@ Add a token = a `required` field on `TokenSet`, a value in both `BuildDark()`/`B
 
 ---
 
-## Tests / golden checks — `FluentGpu.VerticalSlice`
+## Verification — build, `FrameStats`, screenshots
 
-The `FluentGpu.VerticalSlice` app is the **single source of truth for "does the engine still work"** — hundreds of
-end-to-end golden checks across every seam (layout, reconcile, signals, scroll, virtualization, images, controls,
-navigation, animation), run entirely on the **headless** backends (no GPU, no window). Layout: thin `Program.cs` +
-`Harness/` + domain `Suites/*Suite.cs` + `Probes/`. Run it:
-
-```bash
-dotnet build src/FluentGpu.VerticalSlice                 # clean build first
-dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
-dotnet run   --project src/FluentGpu.VerticalSlice -- --suite scroll   # local subset (not for CI)
-```
-
-Each check is a one-liner via `Gate.Check`; the harness prints `[PASS]`/`[FAIL]` and exits non-zero if any failed.
-
-Real examples from the suite modules show the style — drive the headless `AppHost`, then assert on `host.Scene` bounds
-or the `HeadlessGpuDevice`'s recorded `LastGlyphs`/`LastRects`:
-
-```csharp
-Check("11. flex-grow splits free space", Near(g0.W, 150) && Near(g1.W, 150) && Near(g1.X, 150), $"w0={g0.W:0.#} x1={g1.X:0.#}");
-Check("17. keyed reconcile reorders, preserving identity", reordered, "[a,b,c] → [c,a,b]");
-Check("22. opacity timeline samples t0, eases & completes (no relayout)", startOk && midOk && doneOk, $"@50ms={op:0.00}");
-```
-
-**Add a check** by writing a `Check("…", condition, detail)` in the owning `Suites/*Suite.cs` and calling it from that
-suite's `Run`. New suite types also need a line in `Harness/SuiteRegistry.All`. If you touched reactivity/layout/render,
-also assert on `FrameStats` for the interaction you changed — `Rendered`, `ComponentsRendered`, and `HotPhaseAllocBytes`
-(which **must be 0** on steady frames). The headless setup (swapping in
+There are no tests (banned 2026-10-20). After any engine change, `dotnet build src/FluentGpu.slnx` must
+be clean (Debug). If you touched reactivity/layout/render, read `FrameStats` for the interaction you changed — `Rendered`,
+`ComponentsRendered`, and `HotPhaseAllocBytes` (which **must be 0** on steady frames). The headless setup (swapping in
 `HeadlessPlatformApp`/`HeadlessWindow`/`HeadlessGpuDevice`/`HeadlessFontSystem`) is shown in
-[getting-started.md → Run headless](../../guide/getting-started.md). GPU pixels are **not** asserted here — that is a
-separate manual "needs-pixels" pass on the real D3D12 path.
-
-> After any engine change: run the harness and confirm `ALL CHECKS PASSED` before claiming success. It is fast
-> (seconds), deterministic, and catches cross-seam regressions a focused test won't. The full validation program
-> (spikes + per-PR gates) is owned by [`validation.md`](../../../design/subsystems/validation.md).
+[getting-started.md → Run headless](../../guide/getting-started.md). GPU pixels are a separate manual "needs-pixels"
+pass on the real D3D12 path (`--screenshot`). The validation program design is owned by
+[`validation.md`](../../../design/subsystems/validation.md).
 
 ---
 
@@ -411,9 +383,8 @@ Walking the existing wiring (above) gives the exact steps. Say you're adding a l
    its children from `ChildrenOf` (add a `MyContainerEl c => c.Children` arm) so `Mount`/`ReconcileChildren` recurse,
    and `Update` must route it if it needs special structural handling (like `ScrollEl`/`VirtualListEl`).
 
-5. **Add a factory + a golden check.** Expose a `Ui.MyLeaf(...)` builder in `Factories.cs`, then add a
-   `Check("…", …)` in the owning `src/FluentGpu.VerticalSlice/Suites/*Suite.cs` that mounts it headlessly and asserts the recorded output (and `FrameStats` if it
-   participates in reactivity). Run the harness.
+5. **Add a factory.** Expose a `Ui.MyLeaf(...)` builder in `Factories.cs`, then mount it in the gallery and read the
+   result (and `FrameStats` if it participates in reactivity).
 
 The source-generator-driven `ElementTypeId` allocation and the keyed reconcile mechanics are specified in
 [`dsl-aot.md`](../../../design/subsystems/dsl-aot.md) and
@@ -440,8 +411,8 @@ intentionally mention a superseded form in live prose (e.g. to explain a correct
 [`SPEC-INDEX.md`](../../../design/SPEC-INDEX.md), add a rule to `check-canon.ps1`, **and** move the old doc to
 `design/archive/`.
 
-> This gate runs only for `design/` edits. Source changes are verified by the headless harness
-> (`dotnet run --project src/FluentGpu.VerticalSlice`), not the canon gate. Most contributions touch one or the other;
+> This gate runs only for `design/` edits. Source changes are verified by a clean Debug build,
+> not the canon gate. Most contributions touch one or the other;
 > a change that edits both runs both.
 
 ---

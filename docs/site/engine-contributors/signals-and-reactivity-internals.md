@@ -3,8 +3,7 @@
 This page is for people **changing the reactive runtime**, not using it. If you are building an app, read
 [Signals, components, and bindings](../app-authors/signals-components-and-bindings.md) and the guide's
 [reactivity page](../../guide/reactivity.md) first — they own the mental model and the authoring surface. This page
-covers how the machine works underneath, where each piece lives in `src/`, and how to prove a change is correct with the
-headless harness.
+covers how the machine works underneath, where each piece lives in `src/`, and what to check after a change.
 
 The whole engine rests on one idea: **a change reaches pixels through a signal.** Reading a signal inside a reactive
 computation subscribes that computation; writing the signal re-runs exactly the computations that read it. A component
@@ -30,7 +29,6 @@ React-style authoring surface — and it is the *as-built* runtime, documented a
 | `Component` (run-once inferred) | `src/FluentGpu.Engine/Hooks/Component.cs` |
 | Reconcile, render-effects, `For`/`Show`, context, bind wiring | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` |
 | The frame loop that calls `Flush` (phase 3) | `src/FluentGpu.Engine/Hosting/AppHost.cs` |
-| Golden checks | `src/FluentGpu.VerticalSlice/Program.cs` |
 
 > Namespace vs assembly: the reactive types are authored from the namespace `FluentGpu.Signals`, but their files live
 > in the **`FluentGpu.Engine`** assembly under `Foundation/Signals/`. Per the module DAG in `reconciler-hooks.md §1`,
@@ -180,8 +178,7 @@ Three things to internalize before editing `Prop.cs`:
 
 The reconciler's contract: a **bound** channel is wired into ONE effect (a `BindEffect<T>`) **at mount**, and that
 effect lives until unmount — *a re-render that binds the channel again with a different thunk/signal RE-WIRES it*
-(bound→bound: swap the source, re-run once, re-track; an equal payload re-runs nothing — `Reconciler.Rewire.cs`,
-`gate.bind.rewire-*`). A static↔bound flip follows the new form: bound→static unwires and disposes the channel's effect after the static write, static→bound wires it as mount does (`WireGainedBinds`, `Reconciler.Rewire.cs`). A **static** channel is re-asserted on every reconcile **iff `!IsBound`**. This single
+(bound→bound: swap the source, re-run once, re-track; an equal payload re-runs nothing — `Reconciler.Rewire.cs`). A static↔bound flip follows the new form: bound→static unwires and disposes the channel's effect after the static write, static→bound wires it as mount does (`WireGainedBinds`, `Reconciler.Rewire.cs`). A **static** channel is re-asserted on every reconcile **iff `!IsBound`**. This single
 `!IsBound` chokepoint is what fixed the historical bound-value clobbers (Opacity reappearing at `1f`, Fill/TextColor
 overwritten on re-render) by construction. Never use `default(Prop<T>)` to mean "unset" — it is the static `default(T)`.
 
@@ -340,8 +337,8 @@ As-built (G1a), `RenderContext` uses this `DepKey`/`GcDepTable` path — deps st
 
 ## Allocation rules (set/notify must stay alloc-free)
 
-The per-frame paint phases (6–13) must do **zero managed allocation** — the harness asserts
-`FrameStats.HotPhaseAllocBytes == 0` on steady frames. Bindings and effects are created **once at mount**; their thunks
+The per-frame paint phases (6–13) must do **zero managed allocation** — `FrameStats.HotPhaseAllocBytes`
+reads 0 on steady frames. Bindings and effects are created **once at mount**; their thunks
 then run on each change without allocating. Concretely, when you touch `ReactiveCore.cs` / `Signal.cs` /
 `Reconciler.cs`:
 
@@ -359,41 +356,24 @@ then run on each change without allocating. Concretely, when you touch `Reactive
 
 ## Verifying
 
-Verify with the **headless harness**, never by eye — it is the source of truth for "does reactivity still work"
-(~60 cross-seam golden checks, no GPU or window):
+`dotnet build src/FluentGpu.slnx` must be clean (Debug). There are no tests. After any change to the core,
+hooks, `Prop<T>`, or the bind-wiring path, the contracts to keep are:
 
-```bash
-dotnet build src/FluentGpu.VerticalSlice                 # clean build first
-dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
-```
+- **Granularity** — a click on a nested component re-renders **only** the owning component: sibling and parent counters
+  are unchanged and `FrameStats.ComponentsRendered == 1`. This is the "granular re-render, not the app" guarantee.
+- **Compositor-only binding** — writing a bound `FloatSignal` (what a slider drag does) moves the thumb's
+  `LocalTransform.Dx`, the owning component does **not** re-render, **and the frame is compositor-only** (`!f.Rendered`).
+  This is the binding tier's reason to exist.
+- **Bound-channel ownership** — for every channel (`Fill`/`Opacity`/`Width`/`Height`/`Transform`/`Text`/`Color`/
+  `Placeholder`), the bound value survives an owner re-render (the static re-assert does not clobber it).
+- **Signal-direct** — a concrete `Signal<T>`/`FloatSignal` assigned straight to a channel drives it with no user
+  closure, and paint-channel writes stay compositor-only.
+- **Bound→bound re-wire** — a reused node re-rendered with a NEW thunk or a NEW signal instance evaluates the new
+  source; the old signal is unsubscribed; an unchanged thunk/signal fires nothing; the swap allocates 0 bytes.
 
-Four check groups in `src/FluentGpu.VerticalSlice/Program.cs` pin the signals contracts — run them after any change to
-the core, hooks, `Prop<T>`, or the bind-wiring path:
-
-- **`GranularityChecks`** (check 59) — mounts nested components, clicks one child, and asserts the click re-renders
-  **only** the owning component: `Gran.Counts[0] == a0 + 1` while the sibling and parent counters are unchanged, and
-  `FrameStats.ComponentsRendered == 1`. This is the "granular re-render, not the app" guarantee.
-- **`SliderSignalChecks`** (check 60) — the slider-tank fix. Writes the bound `FloatSignal` (what a drag does) and
-  asserts the thumb's `LocalTransform.Dx` moved, the owning component did **not** re-render
-  (`SliderSignalProbe.Renders` unchanged), **and the frame was compositor-only** (`!f.Rendered` — no reconcile, no
-  layout). This is the binding tier's reason to exist.
-- **`PropNetClobberChecks`** (the `prop-net.*` checks) — the bound-channel ownership net. For every channel
-  (`Fill`/`Opacity`/`Width`/`Height`/`Transform`/`Text`/`Color`/`Placeholder`), it fires the bound signal once, then
-  forces an **owner re-render**, and asserts the **bound value survives** the re-render (the static re-assert does not
-  clobber it). It also proves the re-render really rewrote static columns on a control node (`BorderWidth`,
-  underline) — so the test can't pass vacuously.
-- **`PropUnionChecks`** (the `prop.signal-direct.*` checks) — signal-direct: a concrete `Signal<T>`/`FloatSignal`
-  assigned straight to a channel drives it with no user closure, and paint-channel writes stay compositor-only
-  (`!st.Rendered`).
-- **`BindRewireChecks`** (`gate.bind.rewire-*`) — the bound→bound re-wire: a reused node re-rendered with a NEW thunk
-  (a fresh closure over a render-time value, no signal change) or a NEW signal instance evaluates the new source
-  (Width/Fill/Opacity/Text, a component anchor's `Visible`, the `ProgressBar.Create` indicator at a re-rendered width);
-  the old signal is unsubscribed; an unchanged thunk/signal fires nothing; the swap allocates 0 bytes. (It replaced
-  `bind.mount-only.stale`, which had locked the opposite.)
-
-When you add a check, assert on `FrameStats` for the interaction you changed: `Rendered` (did reconcile/layout run),
-`ComponentsRendered` (how many `Render()` bodies ran), and `HotPhaseAllocBytes` (**must be 0** on steady frames). GPU
-pixels are not asserted here — that is a separate manual "needs-pixels" pass on the real D3D12 path.
+Read `FrameStats` for the interaction you changed: `Rendered` (did reconcile/layout run), `ComponentsRendered` (how many
+`Render()` bodies ran), and `HotPhaseAllocBytes` (**must be 0** on steady frames). GPU pixels are a separate manual
+"needs-pixels" pass on the real D3D12 path.
 
 ## Canon links
 

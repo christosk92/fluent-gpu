@@ -148,7 +148,7 @@ int cols = GridEl.AutoFillColumnCount(innerW, minColWidth: 232f, colGap: 12f, ma
 ```
 
 `innerW` is the grid's content width (its arranged width minus padding) — feed it the same width the grid will be laid
-out at (e.g. from `UseMeasuredWidth`). Gate: `gate.grid.auto-fill-max-columns`.
+out at (e.g. from `UseMeasuredWidth`).
 
 ## Visuals on a `BoxEl`
 
@@ -165,7 +165,7 @@ when it has one, else its instant `Hovered`/`HoverWithin`/`Pressed` flags — ne
 that only handles `OnPointerPressed`/`OnPointerReleased` (no anim row) still lights its own `HoverFill` children when
 the pointer is on it, and an interactive row container that is merely `HoverWithin` (the pointer is somewhere in the
 row) does not paint every card in it hovered. Want a listener that is *not* a scope (a ToolTip wrapper)? Set
-`HoverScopeTransparent = true` — its subtree keeps reading the enclosing scope. Gate: `gate.record.hover-fill-scope`.
+`HoverScopeTransparent = true` — its subtree keeps reading the enclosing scope.
 
 ### `.Interactive(recipe)` — the one interactive-styling surface (`src/FluentGpu.Controls/Interaction.cs`)
 
@@ -302,7 +302,7 @@ dropped) travel with the draw command and the GPU expands them (`gpu-renderer.md
 ordinary bound channel (a value, a `Prop.Of` thunk or a signal): `SeriesSamples(float[] array, int count, uint version)` is a view
 over YOUR buffer, equal by array **identity + count + version**, so a producer rewrites the buffer and bumps `version` — the bind
 re-fires once, copies the view into a scene-owned pooled array (so refilling the buffer for the next tick never mutates what a
-frame already committed) and re-records just this node. Steady state allocates nothing (`gate.series.bound.zero-alloc`). Fewer
+frame already committed) and re-records just this node. Steady state allocates nothing. Fewer
 than 2 samples (or an empty view) paints nothing and releases the pooled copy.
 
 Three `Shape`s: **`Baseline`** (an area from the baseline up to each sample — the default baseline is the bottom edge),
@@ -426,20 +426,18 @@ band preset sets `(12,0,12,0)` so short pivot words ("All"/"Music"/…) get hori
 via a min-width floor that would also pad an already-wide label. Default zero is today's layout unchanged.
 
 **`SelectorBar` — an optional `SelectorBarStyle` (E28, Wavee Home page-title pivot).** `SelectorBar.Create(items,
-selectedIndex?, onChange?, parts?, icons?, style?)`; `style: null` is the stock WinUI template, byte-identical
-(`gate.selectorbar.style-default-identical`). A style sets the label type (`LabelSize`/`LineHeight`/`FontFamily`/
+selectedIndex?, onChange?, parts?, icons?, style?)`; `style: null` is the stock WinUI template, byte-identical. A style sets the label type (`LabelSize`/`LineHeight`/`FontFamily`/
 `CharSpacing`, and `RestWeight`/`SelectedWeight` — the label weight FOLLOWS selection), the foreground ramp
 (`RestColor`/`SelectedColor`/`HoverColor`/`PressedColor`, null = the stock tokens), an optional hover/press plate
 (`HoverFill`/`PressedFill` on the item's engine-serviced fill ramp — the 83 ms ControlFaster fade, radius 4),
 `ShowPill = false` (no pill AND no reserved pill row), `ItemPadding`/`ItemHeight`/`ItemGap`, and `LeadingInset`
 (a negative left margin on the first item so its TEXT, not its padding, sits on the page edge). Behaviour — roving
-keys, the single tab stop, `onChange`, parts — is identical in every style (`gate.selectorbar.style-title`).
+keys, the single tab stop, `onChange`, parts — is identical in every style.
 
 **Trimmed rich text ends in the cut span's "…" (E29).** A `SpanTextEl` paragraph trimmed with `CharacterEllipsis`
 draws the ellipsis in the style of the span the cut lands in (its face/weight, size and colour) — a 20-px semibold
 title span + a 12-px tertiary subtitle span cut inside the subtitle ends in a small tertiary "…", not a base-size one —
-and the cut reserves that ellipsis's own advance, so measure and render agree (`LineBreaker.FitEllipsisBySpan`,
-`gate.text.span-ellipsis-style`). A glyph in a gap between spans, and plain `TextEl`, keep the base-style "…".
+and the cut reserves that ellipsis's own advance, so measure and render agree (`LineBreaker.FitEllipsisBySpan`). A glyph in a gap between spans, and plain `TextEl`, keep the base-style "…".
 
 **`ProgressBar` — stretch to the parent (E5, Wavee Home redesign).** `ProgressBar.Indeterminate(width: float.NaN)` fills
 whatever width its parent offers instead of a fixed DIP value (the facet-switch busy bar pinned across the content width
@@ -476,7 +474,7 @@ Waveform.Create(new WaveformModel(peaks, 64), progressSignal);                  
 
 Hover never re-renders series geometry (only the small active overlay subscribes to the index); pass your own
 `Signal<int>` as `ActiveIndex` when the active category must persist or drive other UI. Pure maths is `ChartMath`
-(KDE, nice ticks, stacking, curve controls, tick thinning) — gated in `ControlsSuite` (`gate.ctl.charts.*`).
+(KDE, nice ticks, stacking, curve controls, tick thinning).
 
 ### The controlled-input contract (every stateful control)
 
@@ -692,8 +690,7 @@ PagedShelf.Create(items, cardAt: SquareItem, cardHeight: CoverHeight,
 - A span change also re-arranges the strip's viewport itself (`LayoutDirty | VirtualRangeDirty`) — the layout's
   `SetLeadSpan` is a field write, and nothing else would re-query `ItemRect` for cells already realized.
 - `leadMinColumns`, like `snap`/`rows`/`lift`, is frozen mount configuration (it configures the hoisted layout instance);
-  `leadSpan`/`leadCardAt` ride the re-pushed props. Gates: `gate.shelf.lead.*`, `gate.shelf.lead-template-follows-span`,
-  `gate.shelf.lead-min-columns`.
+  `leadSpan`/`leadCardAt` ride the re-pushed props.
 
 **The `SkeletonProxy` idiom** — `PagedShelf`'s `ShelfProxy` above and `SettingsCard.Create`'s proxy
 (`src/FluentGpu.Controls/SettingsCard.cs`) are both the same shape: `SkeletonDeriver` walks the author's real Element
@@ -704,7 +701,7 @@ icon + header + description). The fix is `Embed.Comp(new ResponsiveBox.Props(w =
 tells the reconciler to re-run the deriver over the `ResponsiveBox`'s OWN rendered output (the real content built at
 its measured width) instead of stopping at the boundary, so the shimmer is the real icon/text/card shapes, sized to
 the real slot — never a placeholder that reflows the moment data lands. `SettingsCard.Create`'s proxy hands
-`Build(options, w)` straight through (gate `gate.settingscard.skeleton-proxy`: derives an icon bar + at least two text
+`Build(options, w)` straight through (it derives an icon bar + at least two text
 bars, not one bar); `PagedShelf`'s `ShelfProxy` hands real cards at the fitted width instead of a placeholder.
 
 ## Drag & drop (declare intent, never coordinates)

@@ -54,4 +54,4 @@ Most of this works either way, but not all of it:
 
 ## Verifying
 
-`dotnet build src/FluentGpu.slnx` (Debug **and** Release) plus `dotnet run --project src/FluentGpu.VerticalSlice`. None of these surfaces are covered by the headless gates — they are OS side effects — so the acceptance for each is a **user-run pass**: click the link, press the thumb button, sleep and resume the machine, tether to a phone. When a PAL seam is added or changed, reconcile [`docs/design/subsystems/pal-rhi.md`](../design/subsystems/pal-rhi.md) and run `powershell -File docs/design/check-canon.ps1`.
+`dotnet build src/FluentGpu.slnx` (clean Debug). These surfaces are OS side effects, so the acceptance for each is a **user-run pass**: click the link, press the thumb button, sleep and resume the machine, tether to a phone. When a PAL seam is added or changed, reconcile [`docs/design/subsystems/pal-rhi.md`](../design/subsystems/pal-rhi.md) and run `powershell -File docs/design/check-canon.ps1`.

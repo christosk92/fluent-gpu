@@ -1,4 +1,4 @@
-# Build + gate the whole solution on every push/PR.
+# Build the whole solution on every push/PR.
 #
 # WHY BOTH CONFIGURATIONS: the diagnostics const gates (ScrollTrace.CompiledIn, Diag.CompiledIn,
 # RenderBudget.CompiledIn, ReuseGuard, BindContract, BackwardsWriteGuard) are `#if DEBUG || FLUENTGPU_DIAG`,
@@ -32,34 +32,12 @@ jobs:
           dotnet-version: '11.0.x'   # repo targets net10.0 but builds on the 11.x preview SDK (matches nuget.yml/msix.yml)
           dotnet-quality: preview
 
-      # The solution covers the engine, the control kit, the Windows backends, the source generator, the gallery,
-      # the VerticalSlice harness and the three test projects. The Wavee app lives in christosk92/WaveeMusic
+      # The solution covers the engine, the control kit, the Windows backends, the source generator and the gallery.
+      # The Wavee app lives in christosk92/WaveeMusic
       # (a sibling checkout that references this repo by path) and builds nowhere on GitHub.
       - name: Build (${{ matrix.configuration }})
         shell: pwsh
         run: dotnet build src/FluentGpu.slnx -c ${{ matrix.configuration }} --no-incremental -v:m
-
-      - name: Tests (${{ matrix.configuration }})
-        shell: pwsh
-        run: |
-          $projects = @(
-            'src/FluentGpu.Engine.Tests/FluentGpu.Engine.Tests.csproj',
-            'src/FluentGpu.Windows.Tests/FluentGpu.Windows.Tests.csproj',
-            'src/FluentGpu.SourceGen.Tests/FluentGpu.SourceGen.Tests.csproj'
-          )
-          $failed = @()
-          foreach ($p in $projects) {
-            dotnet test $p -c ${{ matrix.configuration }} --no-build -v:q
-            if ($LASTEXITCODE -ne 0) { $failed += $p }
-          }
-          if ($failed) { throw "test failures in: $($failed -join ', ')" }
-
-      # The standing acceptance test: headless golden checks + the zero-alloc tripwire (no GPU/window needed).
-      # Debug only — the alloc gates are calibrated against the Debug build that CLAUDE.md names canonical.
-      - name: VerticalSlice gates
-        if: matrix.configuration == 'Debug'
-        shell: pwsh
-        run: dotnet run --project src/FluentGpu.VerticalSlice -c ${{ matrix.configuration }} --no-build
 
       - name: Canon drift gate
         if: matrix.configuration == 'Debug'

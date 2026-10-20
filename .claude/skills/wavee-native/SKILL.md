@@ -60,7 +60,6 @@ Branch on `PackageIdentity.IsPackaged`. Sparse / external-location identity stil
 
 ```powershell
 dotnet build src/FluentGpu.slnx
-dotnet build src/FluentGpu.slnx -c Release
 ```
 
-Both configurations — diagnostics const-gates fold differently. Do not launch the app. File map: [where-to-change-what.md](where-to-change-what.md). Traps: [pitfalls.md](pitfalls.md). Wavee keep-awake / metered-quality wiring: [power-network.md](power-network.md).
+A clean Debug build is the bar (Release is for releasing only). Do not launch the app. File map: [where-to-change-what.md](where-to-change-what.md). Traps: [pitfalls.md](pitfalls.md). Wavee keep-awake / metered-quality wiring: [power-network.md](power-network.md).

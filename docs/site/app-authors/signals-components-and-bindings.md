@@ -224,7 +224,7 @@ The `❌` line is the single most common signals-native mistake. When a `Render(
 new TextEl("") { Text = Prop.Of(() => $"{mode.Value}: {Reactive.Untrack(() => count.Peek())}") };
 ```
 
-> Allocation rule: effects (like bindings) are wired **once** and their bodies run on each change. The per-frame paint phases (6–13) must allocate **zero** managed bytes — don't `new`/LINQ/box inside a bind thunk or a hot effect body. The harness asserts `HotPhaseAllocBytes == 0` on steady frames; details in [../../guide/rendering-and-performance.md](../../guide/rendering-and-performance.md).
+> Allocation rule: effects (like bindings) are wired **once** and their bodies run on each change. The per-frame paint phases (6–13) must allocate **zero** managed bytes — don't `new`/LINQ/box inside a bind thunk or a hot effect body. `HotPhaseAllocBytes` reads 0 on steady frames; details in [../../guide/rendering-and-performance.md](../../guide/rendering-and-performance.md).
 
 ## Context (`Ctx.Provide` + `UseContext`; ambient `Viewport.Size` and `FrameDiagnostics.Current`)
 
@@ -289,7 +289,7 @@ Equivalently, push the data down via **context** (`Ctx.Provide` + `UseContext`).
 
 ## Allocation discipline (bindings/effects wired once)
 
-The per-frame paint phases (6–13) must do **zero** managed allocation — the headless harness asserts it. Bindings and effects are created **once at mount**; their thunks then run on each change without allocating. Concretely:
+The per-frame paint phases (6–13) must do **zero** managed allocation. Bindings and effects are created **once at mount**; their thunks then run on each change without allocating. Concretely:
 
 - Don't allocate inside a bind thunk or a hot effect body — no `new`, no LINQ, no boxing, no per-call closures.
 - Capture the signals/objects a thunk needs **once** (the closure is built at mount, not per update).
@@ -299,14 +299,9 @@ This is what makes the binding tier (mechanism 1) genuinely free per frame — a
 
 ## Verify, don't eyeball
 
-After a reactivity change, run the headless cross-seam harness — it exercises every seam and prints PASS/FAIL (no GPU/window):
+After a reactivity change, build Debug clean (`dotnet build src/FluentGpu.slnx`). There are no tests.
 
-```text
-dotnet build src/FluentGpu.VerticalSlice    # clean
-dotnet run   --project src/FluentGpu.VerticalSlice    # must print "ALL CHECKS PASSED"
-```
-
-If you touched a binding/render path, assert the `FrameStats` you expect (`Rendered`, `ComponentsRendered`, `HotPhaseAllocBytes`) — that is how you *prove* a binding stayed compositor-only rather than quietly re-rendering. Evidence before assertions.
+If you touched a binding/render path, read the `FrameStats` you expect (`Rendered`, `ComponentsRendered`, `HotPhaseAllocBytes`) — that is how you *see* a binding stayed compositor-only rather than quietly re-rendering. Evidence before assertions.
 
 ## See also
 

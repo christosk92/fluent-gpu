@@ -55,7 +55,7 @@ The six types worth knowing before your first change — each is one stage of th
   its own subtree** when its state/context changes (granular, never the whole app); a reused component on a parent
   re-render is a no-op (it is autonomous). Fine-grained bindings and reactive control-flow (`ShowEl`/`ForEl`) are
   effects too. The keyed positional+type diff is the structural engine underneath `For`/`Show`. Its
-  `ConsumeReconciled()` / `ConsumeRenderCount()` are how the harness proves granularity.
+  `ConsumeReconciled()` / `ConsumeRenderCount()` report granularity.
 - **`SceneStore`** / `ISceneBackend` (`src/FluentGpu.Engine/Scene/SceneStore.cs`) — the struct-of-arrays retained RenderNode
   tree: one spine (generation + free-list) indexes every parallel column (`LayoutInput`, `NodePaint`, `InteractionInfo`,
   `NodeFlags`, bounds, …). The reconciler's *only* window onto it is `ISceneBackend` — **handle-in / handle-out,
@@ -124,8 +124,8 @@ single-thread-correct first, then flips parallelism on behind a green race gate.
 
 You do **not** need to read the whole corpus before your first change. Take this path:
 
-1. **Get an app on screen and run the harness — 5 minutes.** Even as an engine contributor, build the minimal app from
-   [getting-started.md](../../guide/getting-started.md) and run the verification harness once, so you have a known-green
+1. **Get an app on screen — 5 minutes.** Even as an engine contributor, build the minimal app from
+   [getting-started.md](../../guide/getting-started.md) once, so you have a known-green
    baseline before you change anything.
 2. **Read the one model from below.** [reactivity.md](../../guide/reactivity.md) — signals, the three update
    mechanisms, the one `Component` model (run-once inferred), bindings, `For`/`Show`, context. You are about to edit the machinery
@@ -147,39 +147,26 @@ Building WinUI-faithful controls — matching real WinUI templates, storyboards,
 topic; see [control-fidelity.md](../../guide/control-fidelity.md) and the
 [parity audit](../../guide/winui-control-parity-audit.md) before a control sweep.
 
-## The golden rule: verify with the headless harness before claiming done
+## The golden rule: verify with the build and a render before claiming done
 
-There is one rule that outranks the others: **verify with the headless harness, never by eye.** The
-`FluentGpu.VerticalSlice` is the single source of truth for "does the engine still work" — it runs hundreds of end-to-end
-golden checks across every seam (layout, reconcile, signals, scroll, virtualization, images, controls, navigation,
-animation), with **no GPU and no window**, in seconds, and prints `[PASS]`/`[FAIL]` and `ALL CHECKS PASSED`. Layout:
-thin `Program.cs` + `Harness/` + domain `Suites/` + `Probes/`.
+There is one rule that outranks the others: **verify, never by eye alone.** After **any** engine change,
+`dotnet build src/FluentGpu.slnx` must be clean (Debug). There are no tests: they were all deleted on
+2026-10-20 and the build and pre-commit hook reject new ones. The seam is swappable, so the engine also runs headless: the
+`HeadlessGpuDevice` records the DrawList into inspectable lists (`LastGlyphs`, `LastRects`, `LastGradientStrokes`, …) and
+`host.Scene` exposes post-layout bounds — see
+[getting-started.md → run headless](../../guide/getting-started.md#run-headless-agents) for the exact wiring.
 
-```bash
-dotnet build src/FluentGpu.VerticalSlice                 # clean build first
-dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
-dotnet run   --project src/FluentGpu.VerticalSlice -- --suite scroll   # local subset (not for CI)
-```
-
-After **any** engine change, run it and confirm `ALL CHECKS PASSED` before you claim success. It is fast, deterministic,
-and catches the cross-seam regressions a focused test won't. It runs headless because the seam is swappable: the
-`HeadlessGpuDevice` records the DrawList into inspectable lists (`LastGlyphs`, `LastRects`, `LastGradientStrokes`, …) so
-tests assert *what was drawn* without pixels, and `host.Scene` exposes post-layout bounds — see
-[getting-started.md → run headless](../../guide/getting-started.md#run-headless-tests--ci--agents) for the exact wiring.
-
-**Add a check** for the behavior you changed by writing a `Check("…", condition, detail)` in the owning
-`Suites/*Suite.cs` and calling it from that suite's `Run`. If you touched reactivity, layout, or the renderer,
-assert on `FrameStats` for the interaction you changed:
+If you touched reactivity, layout, or the renderer, read `FrameStats` for the interaction you changed:
 
 - `Rendered` — was there a reconcile/layout this frame? For a slider drag or scroll you bound (the compositor-bypass
   path), you want `Rendered == false`.
 - `ComponentsRendered` — how many component render-effects ran. This is the granularity proof: a leaf state change must
   not re-render the page.
 - `HotPhaseAllocBytes` — managed bytes allocated in the paint half. On a steady frame this **must be 0**; that is the
-  near-zero-allocation guarantee, asserted, not asserted-by-vibes.
+  near-zero-allocation guarantee.
 
-What the harness does **not** assert is on-screen D3D12 pixels — those are a separate, manual "needs-pixels" pass on the
-real Windows path. So "the harness is green" means the logic and the recorded DrawList are correct; it does not by itself
+On-screen D3D12 pixels are a separate, manual "needs-pixels" pass on the real Windows path (`--screenshot`, or the
+`WaveeMusic` headless inspector). A clean build means the code compiles; it does not by itself
 mean a control looks right on screen. Both bars matter; keep them distinct.
 
 ---

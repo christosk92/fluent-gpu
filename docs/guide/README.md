@@ -1,6 +1,6 @@
 # FluentGpu — Developer & Agent Guide
 
-> **✅ Animation engine — signals-first rework landed + verified.** The animation engine is one signals-first model: one POD `AnimValue` slab + one `AnimScheduler`/`CadenceClass` + an analytical closed-form spring + a declarative orchestration layer (`Transition`/`While*`/`Enter`/`Exit`/`Stagger`/`Layout` + `UseSpringValue`/`UseAnimatedValue`; reduced-motion-as-a-value). The scheduler class is still named `AnimEngine`, so `AnimEngine` references in this guide stay valid; the old `AnimTrack`/sub-stepped-Euler engine is gone. Verified: 521 VerticalSlice gates green (zero-alloc on phases 6–13 + dt-determinism) and the gallery renders end-to-end. Design, now implemented: [`../plans/animation-engine-rework-design.md`](../plans/animation-engine-rework-design.md) (research: [`../plans/animation-engine-research-dossier.md`](../plans/animation-engine-research-dossier.md)).
+> **✅ Animation engine — signals-first rework landed + verified.** The animation engine is one signals-first model: one POD `AnimValue` slab + one `AnimScheduler`/`CadenceClass` + an analytical closed-form spring + a declarative orchestration layer (`Transition`/`While*`/`Enter`/`Exit`/`Stagger`/`Layout` + `UseSpringValue`/`UseAnimatedValue`; reduced-motion-as-a-value). The scheduler class is still named `AnimEngine`, so `AnimEngine` references in this guide stay valid; the old `AnimTrack`/sub-stepped-Euler engine is gone. Verified: the gallery renders end-to-end. Design, now implemented: [`../plans/animation-engine-rework-design.md`](../plans/animation-engine-rework-design.md) (research: [`../plans/animation-engine-research-dossier.md`](../plans/animation-engine-research-dossier.md)).
 
 A from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI framework for .NET 10. React/Reactor
 programming model (immutable `Element` records + `Component` + hooks) on a **signals-first** reactive core, over a
@@ -96,9 +96,9 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
    relayout from escaping. Give big containers (cards, panes) explicit `Width`+`Height`+`ClipToBounds` so a deep
    change can't relayout the page. See [rendering-and-performance.md](./rendering-and-performance.md#scoped-relayout).
 9. **Per-frame allocation is forbidden in the paint half (phases 6–13).** Wire bindings/effects once at mount; never
-   allocate in a binding thunk or a hot effect body. The harness asserts `HotPhaseAllocBytes == 0` on steady frames.
-10. **Verify with the headless harness, not by eye:** `dotnet run --project src/FluentGpu.VerticalSlice`. It exercises
-    every seam and prints PASS/FAIL. GPU pixels are not asserted here.
+   allocate in a binding thunk or a hot effect body. `FrameStats.HotPhaseAllocBytes` reports it (0 on steady frames).
+10. **Verify with the build and a render, not by eye alone:** a clean Debug `dotnet build src/FluentGpu.slnx`, then
+    `dotnet run --project src/FluentGpu.WindowsApp -- --screenshot <path>` for pixels. There are no tests.
 
 ## 🤖 AGENT — file & ownership map (where to change what)
 
@@ -120,7 +120,6 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 | Retained scene (SoA tree, columns, dirty flags) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` | handle = `{index, gen}`; side-tables by node index |
 | Record → DrawList (the GPU command walk) | `src/FluentGpu.Engine/Render/SceneRecorder.cs` | composites transform/opacity without re-record |
 | Theming tokens / colors | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` | `Tok.Use(ThemeKind)` re-themes in one pointer write |
-| Tests / golden checks | `src/FluentGpu.VerticalSlice/Program.cs` | add a `Check(...)`; call it from `Main` |
 | Wavee **playback modules** (out-of-process sources: YouTube/Twitch/radio/Spotify) | SDK `src/apps/Wavee.Sdk/**`, host `src/apps/Wavee/Backend/Modules/**`, modules `src/apps/modules/**` | app-level, not engine — the wire, the manifest and the build/publish layout are **[playback-modules.md](https://github.com/christosk92/WaveeMusic/blob/main/docs/guide/playback-modules.md)** |
 
 **Design corpus** (architecture source-of-truth, canon-gated) lives in `docs/design/`. The as-built reactive model is

@@ -43,7 +43,7 @@ The app never touches geometry. It owns payloads, rules, captions and commit sea
 | Task | File |
 |---|---|
 | The one drag kind (`WaveeDragKinds.Resource`), the payload envelope + its factories, `WaveeResourceDrag.Preview` (the single `DragChip.Resolve`), rootlist queries, the deposit/move commit seams (`WaveeResourceDrop.DepositTracksAsync` etc.) | `Features/DragDrop/WaveeResourceDrag.cs` |
-| Engine-free decision tables — kind mapping, `PlaylistDropRefusal` + `PlaylistDropRefusalRules.Evaluate/Accepts`, `TabDropRules` | `Features/DragDrop/WaveeDragRules.cs` (unit-tested in `Wavee.Tests/WaveeDragRulesTests.cs`) |
+| Engine-free decision tables — kind mapping, `PlaylistDropRefusal` + `PlaylistDropRefusalRules.Evaluate/Accepts`, `TabDropRules` | `Features/DragDrop/WaveeDragRules.cs` |
 | Chip data resolution (`WaveeResourceKind`, `WaveeDragChipModel.For`) | `Features/DragDrop/WaveeDragChipModel.cs` |
 | The cards drawn inside the framework-owned insertion gap | `Features/DragDrop/PlaylistInsertionPreview.cs` |
 | The app's ONE `DragPreviewLayer` mount + the scrim clip region + tab drag source (`thresholdMultiplier`) + `TabDropTarget` (deposit arm **and** spring-only arm) + the shell-wide OS file drop | `Features/Shell/WaveeShell.cs` |
@@ -56,7 +56,7 @@ The app never touches geometry. It owns payloads, rules, captions and commit sea
 | Shelf-card and result-row drag sources (home, browse, search, library, artist, concerts, detail trailing) | `Features/{Home,Browse,Search,Library,Concerts}/*.cs`, `Features/Detail/{ArtistPage*,ArtistPopular,DetailTrailing}.cs` |
 | Row identity for per-row UI state next to a draggable row (`RowKey` / `RowKeyMatches`) | `Components/MembershipDiff.cs` |
 
-## Canon + tests
+## Canon
 
 | Task | File |
 |---|---|
@@ -65,5 +65,3 @@ The app never touches geometry. It owns payloads, rules, captions and commit sea
 | Band order + the scrim/`EraseRoundRectCmd` pixels | `docs/design/subsystems/gpu-renderer.md` §7.4 |
 | Precedence + the ownership row for the lift contract | `docs/design/SPEC-INDEX.md` |
 | Developer-facing usage | `docs/guide/components-elements-layout.md` (DnD + `ItemsView` sections) |
-| Gates | `src/FluentGpu.VerticalSlice/Suites/{ControlsSuite,ScrollSuite,TouchSuite}.cs` — see [gates.md](gates.md) |
-| App-rule unit tests | `src/apps/Wavee.Tests/{WaveeDragRules,PlaylistReorderRules,WaveeDragChipModel,MoveRowsConvention,PlaylistMoveOps}Tests.cs` |

@@ -7,7 +7,7 @@ moves 1:1 with WinUI 3. If you are *using* the controls in an app, read the app-
 [Controls cookbook](../app-authors/controls-cookbook.md) and the guide's
 [Elements, layout, controls & theming](../../guide/components-elements-layout.md) first — they own the authoring
 surface. This page covers the rules a control author obeys, where each piece lives in `src/`, and how to prove the
-result is faithful with the harness.
+result is faithful with renders and logs.
 
 Two upstream docs are the source of truth this page operationalizes; keep them open while you work:
 
@@ -269,22 +269,8 @@ text):
 
 ## Step 6 — verify empirically: logs and pixels, not vibes
 
-Evidence before claiming an animation works. Three layers, use all three (from
+Evidence before claiming an animation works. Two layers, use both (from
 [control-fidelity §4](../../guide/control-fidelity.md)):
-
-**Headless golden checks** — the deterministic, log-based truth, in `src/FluentGpu.VerticalSlice/Program.cs`:
-
-```text
-dotnet build src/FluentGpu.VerticalSlice          # must be clean
-dotnet run   --project src/FluentGpu.VerticalSlice # must print "ALL CHECKS PASSED"
-```
-
-These are ~60 cross-seam checks with no GPU/window. The pattern: reconcile the control, run a `new FlexLayout(...).Run`,
-walk to a node with `Child(scene, node, i)`, `engine.Tick(16f)`, and assert
-`scene.Paint(node).Opacity` / `.LocalTransform.M11`. For the **live** path use a real `AppHost` + `ClickNode` and read
-the node after the click frame. **A control animation is not done until a headless check proves the node's
-opacity/scale/trim goes mid-flight → settled** (existing examples: RadioButton checked/pressed glyph sizes, the
-interaction-ramp wiring, the CheckBox checkmark draw-on).
 
 **GPU pixels** — a deterministic `ShotScene` (add per-control shot ids in `src/FluentGpu.WindowsApp/ShotScene.cs`):
 
@@ -297,8 +283,9 @@ frame — a slow draw/grow forces a visibly mid-animation glyph; if it is alread
 the GPU. (Static screenshots can look settled because window init paints/ticks several times before capture.)
 
 **Diagnostics** — `FG_DIAG=1` enables `Diag` (anim seed/retarget events; scene dumps with `FG_DUMP=1`); `FrameStats`
-from `RunFrame()` exposes `Rendered`, `ComponentsRendered`, and `HotPhaseAllocBytes` (must be `0` steady). For the
-broader verification spine see [Frame pipeline and verification harness](./frame-pipeline-and-verification-harness.md)
+from `RunFrame()` exposes `Rendered`, `ComponentsRendered`, and `HotPhaseAllocBytes` (must be `0` steady). A control animation is not
+done until you have seen the node's opacity/scale/trim go mid-flight → settled (slow-motion proof above). For the
+broader picture see [Frame pipeline and headless seams](./frame-pipeline-and-verification-harness.md)
 and [Validation and gates](./validation-and-gates.md).
 
 > **No "known residuals."** Fix every verification finding (warnings too, not just blockers) — including engine
@@ -317,8 +304,7 @@ The process, condensed from [control-fidelity §5](../../guide/control-fidelity.
 4. **Sub-parts & glyphs** — the right Segoe Fluent glyph(s), indicator parts, parts that appear on a state.
 5. **Motion** — hover/press storyboards → the `HoverFade`/`PressFade` slab channels (`BoxEl.{Hover,Pressed}*` targets/specs); authored timelines (stroke trim, reveal,
    FLIP, open/close) → `AnimEngine` keyframes/channels; enter/exit presets only for true insert/remove sub-parts.
-6. **Verify** — a headless `Check()` for behavior + a key motion assertion; a `--shot` capture diffed against WinUI
-   (incl. the slow-motion proof). Save a golden PNG.
+6. **Verify** — a `--shot` capture compared against WinUI (incl. the slow-motion proof).
 
 **The acceptance rule.** Before marking any control 1:1, the PR must list (from
 [the parity audit](../../guide/winui-control-parity-audit.md)):
@@ -328,8 +314,7 @@ The process, condensed from [control-fidelity §5](../../guide/control-fidelity.
 - Exact generated property/template-setting files read, or `Generated: none`.
 - The mapped state matrix: logical state × interaction state × focus/disabled.
 - The mapped motion source: the `BrushFade`/`HoverFade`/`PressFade` channel, an `AnimEngine` storyboard, `TemplateSettings`, an animated-icon segment, or no animation.
-- A headless vertical-slice check for the changed behavior or animation.
-- A live GPU screenshot or slow-motion proof for motion the headless harness cannot prove.
+- A live GPU screenshot or slow-motion proof for the changed behavior or animation.
 
 And the load-bearing escalation: **if a state cannot be represented without one-off control code, stop and add the
 shared engine primitive first.**

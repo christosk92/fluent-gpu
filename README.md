@@ -180,10 +180,6 @@ Needs the **.NET 10 SDK** and **Windows 10 21H2+** (x64/arm64). Publish a single
 ## Running it
 
 ```powershell
-# The verification gate — 800+ cross-seam golden checks on the headless backends (no GPU/window needed),
-# including the zero-managed-allocation tripwires on the hot frame phases:
-dotnet run --project src/FluentGpu.VerticalSlice        # expect: "ALL CHECKS PASSED"
-
 # The gallery — 100+ pages, every control + pattern, live perf readouts:
 dotnet run --project src/FluentGpu.WindowsApp
 
@@ -192,7 +188,7 @@ dotnet run --project src/FluentGpu.WindowsApp -- --screenshot shot.png
 dotnet run --project src/FluentGpu.WindowsApp -- --gallery-audit
 ```
 
-The solution (`src/FluentGpu.slnx`) is **five libraries + tooling + apps + tests**:
+The solution (`src/FluentGpu.slnx`) is **five libraries + tooling + apps**:
 
 | Project | What it is |
 |---|---|
@@ -202,9 +198,7 @@ The solution (`src/FluentGpu.slnx`) is **five libraries + tooling + apps + tests
 | `FluentGpu.WindowsApi` | OS services: notifications, credentials, SMTC, dialogs, shell, power, network, storage. AOT-clean interop, no CsWinRT. |
 | `FluentGpu.GalleryKit` | Showcase scaffolding: `[GalleryPage]`/`[Sample]` attributes, example cards, knobs, perf badges. |
 | `FluentGpu.SourceGen` | The analyzer/generator assembly: `[Props]`, `[Route]`, loc keys, token accessors, glyph tables, sample extraction, FGRP lints. |
-| `FluentGpu.VerticalSlice` | The headless acceptance harness (the 800+ checks + alloc gates). Its transitive closure must stay TerraFX-free. |
 | `FluentGpu.WindowsApp` | The gallery — composition root, screenshot/audit harness. |
-| `*.Tests` ×3 | xUnit projects: engine (incl. media playback), Windows backend, source generators/analyzers. |
 
 `FluentGpu.Package` assembles all of it into the single `FluentGpu` NuGet package. Details: [`src/README.md`](./src/README.md).
 

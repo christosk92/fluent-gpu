@@ -208,8 +208,7 @@ when the Update returns, only if still RUNNING (ordering, never a delta-size thr
 (`TRANSLATION_INERTIA` configured: RUNNING→INERTIA = `ContactRelease.Moving`, RUNNING→READY = `Stopped`; the INERTIA
 viewport is stopped at the next pump — DM never owns the coast). A Present-clock End with a verdict is authored with
 `tLift` = the newest REAL sample and `tNow` = the End stamp (`ScrollHandle.ContactEnd` → `FollowEnd`'s late-lift path).
-Gates: `DmContactStreamTests.*` (Windows.Tests, real per-Update scripts), `FollowEnd_PresentClockMovingRelease_*`,
-`FollowEnd_StoppedRelease_*`, `TouchpadReleaseDispatchTests.*`. Open item: release MAGNITUDE — the ring can read
+Open item: release MAGNITUDE — the ring can read
 50–100k DIP/s on a rapid flick (DM pan gain), 20–40k DIP coasts against WinUI's ~10.8k DIP/s plateau; not capped yet.
 
 ## 21. A reseed is an extent change

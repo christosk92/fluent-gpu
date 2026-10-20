@@ -45,8 +45,8 @@ an `Element` tree built with the `Ui.*` factories you brought in with `using sta
 `Render()` is the one method you must implement — `public abstract Element Render()` on
 `Component` (`src/FluentGpu.Engine/Hooks/Component.cs`).
 
-To run the verification harness or any non-windowed scenario, see
-[Run headless](#running-headless-tests--ci) at the end of this page.
+To run any non-windowed scenario, see
+[Run headless](#running-headless) at the end of this page.
 
 ## The `FluentApp.Run` options
 
@@ -74,11 +74,11 @@ configuration on the `AppOptions` record — pass `null` for all defaults:
 
 `AppOptions` also carries `MicaAlt` (the tabbed Mica variant), `AmbientFps` (idle frame pacing), and
 `Modules` (OS-service modules to register). **Frames and screenshots are not on `AppOptions`** — they
-moved to the test/CI harness: `FluentAppHarness.Run(root, AppOptions?, HarnessOptions { Frames, Screenshot, FrameWaitMs })`.
+moved to the screenshot harness: `FluentAppHarness.Run(root, AppOptions?, HarnessOptions { Frames, Screenshot, FrameWaitMs })`.
 
 A few things worth knowing:
 
-- **`Frames` + `Screenshot` together** are how the test/gallery tooling captures a frame
+- **`Frames` + `Screenshot` together** are how the gallery tooling captures a frame
   deterministically: `FluentAppHarness.Run(() => new App(), null, new HarnessOptions { Frames = 1, Screenshot = "out.png" })`
   renders one frame, writes the PNG, and exits.
 - **`CustomFrame = true`** is an explicit opt-in because it changes window chrome ownership. Don't
@@ -256,11 +256,10 @@ The two you'll lean on most when tuning, straight from [pitfalls](../../guide/pi
 `UseContext(FrameDiagnostics.Current)` — the host only boxes the stats when something is actually
 subscribed.
 
-## Running headless (tests / CI)
+## Running headless
 
 No GPU or window required: swap the `Win32`/`D3D12`/`DirectWrite` seams for their `Headless`
-counterparts and drive `RunFrame()` by hand. This is exactly how the golden-check harness runs, and
-it's the recommended way to verify app logic deterministically:
+counterparts and drive `RunFrame()` by hand. Driving the app this way is deterministic:
 
 ```csharp
 using FluentGpu.Foundation;      // StringTable
@@ -271,7 +270,7 @@ using FluentGpu.Text.Headless;   // HeadlessFontSystem                   (src/Fl
 
 var strings = new StringTable();
 using var app = new HeadlessPlatformApp();
-var window = new HeadlessWindow(new WindowDesc("test", new Size2(1280, 800), 1f));
+var window = new HeadlessWindow(new WindowDesc("headless", new Size2(1280, 800), 1f));
 window.Show();
 var device = new HeadlessGpuDevice();
 var fonts  = new HeadlessFontSystem(strings);
@@ -284,26 +283,16 @@ host.RunFrame();
 ```
 
 The headless device records the DrawList into inspectable lists (`LastGlyphs`, `LastRects`,
-`LastGradientStrokes`, …) so a test can assert *what was drawn* without pixels, and `host.Scene`
-exposes the post-layout tree. The single source of truth for "does the engine still work" is the
-cross-seam harness:
-
-```bash
-dotnet run --project src/FluentGpu.VerticalSlice
-```
-
-It runs ~60 end-to-end golden checks across every seam and prints `ALL CHECKS PASSED`. Add a check
-with a `Check("…", condition, detail)` in `src/FluentGpu.VerticalSlice/Program.cs`. See
-[getting-started](../../guide/getting-started.md#the-verification-harness) for the full harness
-notes. (GPU pixels are *not* asserted here — those are a separate, manual check on the real D3D12
-path.)
+`LastGradientStrokes`, …) so you can read *what was drawn* without pixels, and `host.Scene`
+exposes the post-layout tree. There are no tests: verify with a clean Debug build, and look at a screenshot for
+pixels (a separate, manual check on the real D3D12 path).
 
 ## The project layout (what you touch most)
 
 The solution (`src/FluentGpu.slnx`) is **8 projects**: four libraries (`FluentGpu.Engine`,
 `FluentGpu.Controls`, `FluentGpu.Windows`, `FluentGpu.WindowsApi`), two Roslyn source-generator
-analyzers (`FluentGpu.SourceGen`, `FluentGpu.Interop.SourceGen`), and two app projects
-(`FluentGpu.VerticalSlice` validation harness, `FluentGpu.WindowsApp` gallery). As an app author
+analyzers (`FluentGpu.SourceGen`, `FluentGpu.Interop.SourceGen`), and the
+`FluentGpu.WindowsApp` gallery app. As an app author
 you reference a handful and almost never open the rest:
 
 | Project / folder | What's in it — and when you touch it |
@@ -314,11 +303,11 @@ you reference a handful and almost never open the rest:
 | `FluentGpu.Controls` | Button / IconButton / ToggleButton / Slider / ScrollBar / NavigationView / Repeater / Virtual / Navigator — composition over the DSL, no rendering. |
 | `FluentGpu.Engine` / `Foundation/` | Handles, allocators, `ColorF`/`Affine2D`/geometry, the **Signals reactive core** (`Foundation/Signals/`), `StringTable`. |
 | `FluentGpu.Engine` / `Hosting/` | `AppHost` (the frame loop), `FrameStats`, `FrameDiagnostics` — this page's subject. |
-| `FluentGpu.Windows` | The Windows backend: `Pal/` (Win32 windowing + theme), `D3D12/` (GPU), `DirectWrite/` (text). `FluentGpu.Engine/Headless/` holds the test counterparts. You swap Engine's headless folders for tests; otherwise leave them alone. |
+| `FluentGpu.Windows` | The Windows backend: `Pal/` (Win32 windowing + theme), `D3D12/` (GPU), `DirectWrite/` (text). `FluentGpu.Engine/Headless/` holds the headless counterparts; leave them alone. |
 
 The internals — `FluentGpu.Engine`'s `Reconciler/`, `Layout/`, `Scene/`, `Render/` folders, and
 the seams' real backends in `FluentGpu.Windows` — are *engine* territory. You don't edit them to
-build an app; if you're changing them, the where-to-change map and the verification harness live in
+build an app; if you're changing them, the where-to-change map lives in
 the engine docs and the [design corpus](../../../design/SPEC-INDEX.md).
 
 ## Next steps
@@ -331,5 +320,5 @@ the engine docs and the [design corpus](../../../design/SPEC-INDEX.md).
   compositor bypass, and the zero-alloc hot phases behind `HotPhaseAllocBytes`.
 - **[Pitfalls](../../guide/pitfalls.md)** — symptom → cause → fix for the failure modes above. Read
   it before you debug.
-- **[Getting started](../../guide/getting-started.md)** — the condensed version of this page plus the
-  headless harness in full.
+- **[Getting started](../../guide/getting-started.md)** — the condensed version of this page plus
+  running headless.

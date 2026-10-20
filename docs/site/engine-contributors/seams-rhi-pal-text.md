@@ -1,15 +1,15 @@
 # The RHI, PAL, and Text seams
 
 This page is for engine contributors working **at or below the swap line** — adding a platform backend, changing the
-GPU device contract, extending the text seam, or writing a test against the headless backends. If you are building an
+GPU device contract, extending the text seam, or driving the headless backends. If you are building an
 app, you never touch these interfaces; start at [Building apps with FluentGpu](../app-authors/index.md).
 
 The seams are the line that makes "from-scratch GPU renderer" tractable: **everything above the line sees only POD
 descriptors, generational handles, spans, and an opaque `NativeHandle`; everything below it is OS- and GPU-specific and
 lives in a leaf assembly that nothing but `FluentGpu.Hosting` is allowed to reference.** Swap the leaf — a real Windows
-backend for a headless test double, D3D12 for Metal later — and nothing above the line recompiles. That is not an
-aspiration; it is the property the entire `~60`-check verification harness exploits to run with **no GPU and no
-window** ([the harness](#verifying-textservicesseamchecks-and-the-headless-discipline) at the end).
+backend for a headless double, D3D12 for Metal later — and nothing above the line recompiles. That is not an
+aspiration; it is the property the headless path exploits to run with **no GPU and no
+window** ([verifying](#verifying-and-the-headless-discipline) at the end).
 
 > The architecture authority for these contracts is the design corpus, not this page. The PAL/RHI interface
 > vocabulary and the Win32/D3D12 reference impl are owned by [`subsystems/pal-rhi.md`](../../../design/subsystems/pal-rhi.md);
@@ -32,7 +32,7 @@ are three separate interfaces, each in its own interface-only assembly:
   and the Yoga measure bridge. This is *coupled to DirectWrite and Unicode*, and it is the one seam the layout pass
   calls synchronously during measure.
 
-Splitting them three ways is what lets the **headless** path exist: a test can take the real reconciler, layout, scene,
+Splitting them three ways is what lets the **headless** path exist: a headless driver can take the real reconciler, layout, scene,
 and recorder and run them against `HeadlessPlatformApp` + `HeadlessGpuDevice` + `HeadlessFontSystem` with deterministic
 behavior. It is also the macOS plan — `Pal.Cocoa` / `Rhi.Metal` / `Text.CoreText` implement the *same* interfaces
 ([`macos-debt-ledger.md`](../../../design/macos-debt-ledger.md)).
@@ -40,7 +40,7 @@ behavior. It is also the macOS plan — `Pal.Cocoa` / `Rhi.Metal` / `Text.CoreTe
 The assembly rule is binding and the canon gate enforces it ([`foundations.md` §7](../../../design/foundations.md)):
 
 1. No interface assembly references an impl (`FluentGpu.Engine` (`Render/`) references only seam interfaces, **never** `FluentGpu.Windows`).
-2. Impl assemblies (`*.Windows`, `*.D3D12`, `*.DirectWrite`, and the `*.Headless` test doubles) are **leaves**,
+2. Impl assemblies (`*.Windows`, `*.D3D12`, `*.DirectWrite`, and the `*.Headless` doubles) are **leaves**,
    referenced **only by `FluentGpu.Engine` (`Hosting/`)** — the composition root that binds an impl to each seam.
 3. `FluentGpu.Engine` (`Foundation/`) (handles, allocators, `ColorF`/geometry, `StringTable`, signals) is the root with no deps;
    the seam interfaces depend only on it.
@@ -120,7 +120,7 @@ platform strips the OS caption via `WM_NCCALCSIZE` and answers `WM_NCHITTEST` fr
 
 The single most important PAL decision: **input does not cross the seam as `event Action<InputEvent>`** — it crosses as
 a **host-owned POD ring** the window writes into and the host drains once per frame. This is what keeps the input edge
-allocation-free under the `>1 kHz` `WM_POINTER`/`WM_INPUT` flood and what makes a test able to *synthesize* input
+allocation-free under the `>1 kHz` `WM_POINTER`/`WM_INPUT` flood and what makes a headless driver able to *synthesize* input
 deterministically.
 
 ```csharp
@@ -255,18 +255,18 @@ Windows impl; it is render-thread-confined COM and is covered under [Windows bac
 
 ## The headless backends and the deterministic advance model
 
-The headless leaves are the reason the harness can run anywhere. Each implements its seam with **deterministic,
+The headless leaves are the reason the engine can run anywhere. Each implements its seam with **deterministic,
 inspectable** behavior and **no GPU/window/OS**.
 
 **`HeadlessPlatformApp` / `HeadlessWindow`** (`src/FluentGpu.Engine/Headless/Pal/HeadlessPlatform.cs`) — the synthetic window
-exposes a `QueueInput` test seam that the harness uses to *synthesize* input; `PumpInto` drains the queue into the ring.
-Window state (size, scale, activation, placement) is **settable** so a test can simulate a resize, a per-monitor DPI hop
+exposes a `QueueInput` seam that headless drivers use to *synthesize* input; `PumpInto` drains the queue into the ring.
+Window state (size, scale, activation, placement) is **settable** so a driver can simulate a resize, a per-monitor DPI hop
 (`WM_DPICHANGED`), or a focus change; flipping `IsActive` even emits the matching `WindowFocus`/`WindowBlur` event, and
 `ToggleMaximize` emits `WindowStateChanged`, exactly like the Win32 backend's `WM_ACTIVATE`/`WM_SIZE` transitions. The
 clipboard records text, the IME records the composition lifecycle, and `OpenUri` records the URI instead of launching.
 
 **`HeadlessGpuDevice`** (`src/FluentGpu.Engine/Headless/Rhi/HeadlessGpuDevice.cs`) — the CPU/null backend. It **decodes the POD
-DrawList into reusable per-opcode lists** so a test asserts *what was drawn* without pixels, and it keeps capacity so
+DrawList into reusable per-opcode lists** so you can read *what was drawn* without pixels, and it keeps capacity so
 there is **no per-frame managed allocation once warmed**. The inspectable surface (a sample):
 
 ```csharp
@@ -315,7 +315,7 @@ marks the id resident; `EvictImage` removes it and records the eviction — both
 
 **`HeadlessFontSystem`** and **the deterministic advance model** (`src/FluentGpu.Engine/Headless/Text/HeadlessFontSystem.cs`) —
 this is the keystone that makes text-layout goldens **exact math** instead of font-dependent. It replaces DirectWrite
-with uniform, reproducible metrics. The headless checks are written against these exact constants:
+with uniform, reproducible metrics. Headless text measures to these exact constants:
 
 - **advance per char** = `SizeDip × 0.55` (weight `< 600`) or `SizeDip × 0.62` (weight `≥ 600`), plus
   `SizeDip × CharSpacing / 1000`. Every UTF-16 unit is one cell (spaces and control chars included). The old bool-`Bold`
@@ -326,19 +326,18 @@ with uniform, reproducible metrics. The headless checks are written against thes
 - **wrap** = deterministic greedy word-wrap on `' '` runs, engaged only when the style wraps ∧ `maxWidth` is finite ∧
   the single-line width exceeds it; `MaxLines` caps the count and drops the over-cap remainder (WinUI clips whole lines).
 
-So at `FontSize 14`, advance is `14 × 0.55 = 7.7` DIP/char and line height is `14 × 1.4 = 19.6` DIP — the numbers the
-editor checks assert against literally (see `EditableTextCoreChecks` in the harness:
-`const float Adv = 14f * 0.55f;`). The critical invariant: `Measure`, `HitTestText`, `GetCaret`, and `GetRangeRects` all
+So at `FontSize 14`, advance is `14 × 0.55 = 7.7` DIP/char and line height is `14 × 1.4 = 19.6` DIP — the numbers headless
+text measures to. The critical invariant: `Measure`, `HitTestText`, `GetCaret`, and `GetRangeRects` all
 run the **same** internal line walk (`LayoutLines`), so a headless hit-test agrees with headless layout to the pixel —
 the same "queries come from the layout pipeline" guarantee the real DirectWrite leaf must honor.
 
-Wiring all four into a host is one constructor (this is exactly the harness's setup — see
-[getting-started → run headless](../../guide/getting-started.md#run-headless-tests--ci--agents)):
+Wiring all four into a host is one constructor (see
+[getting-started → run headless](../../guide/getting-started.md#run-headless-agents)):
 
 ```csharp
 var strings = new StringTable();
 using var app = new HeadlessPlatformApp();
-var window   = new HeadlessWindow(new WindowDesc("test", new Size2(1280, 800), 1f));
+var window   = new HeadlessWindow(new WindowDesc("headless", new Size2(1280, 800), 1f));
 window.Show();
 var device   = new HeadlessGpuDevice();
 var fonts    = new HeadlessFontSystem(strings);
@@ -393,79 +392,36 @@ The crucial **build-order** honesty: **v1 ships single-thread-correct first**. T
 the snapshot (`Quarantine = 0`), so "the render thread owns every `ComPtr`" is satisfied trivially by there being one
 thread, and `AppHost.RunFrame()` runs every phase inline. The interfaces and ownership boundaries above are authored so
 the render-thread split is a *thread move, not a redesign*. Nothing on this page requires parallelism to be correct —
-and the harness validates the single-thread topology that ships today. (This is the corpus's "**decoupled, not
+and the single-thread topology is what ships today. (This is the corpus's "**decoupled, not
 invincible**" line: a sustained GPU stall still bounds back to the UI thread.)
 
-## Verifying: `TextServicesSeamChecks` and the headless discipline
+## Verifying and the headless discipline
 
-The rule that outranks the others for engine work: **verify with the headless harness, never by eye.** The
-`FluentGpu.VerticalSlice` is the source of truth — `~60` cross-seam golden checks, no GPU and no window, in seconds:
+`dotnet build src/FluentGpu.slnx` must be clean (Debug). There are no tests. The headless backends substitute
+for the real ones, so you can read the recorded DrawList (`device.LastGlyphs`/`LastRects`/…), the post-layout scene
+(`host.Scene`), and `FrameStats` (`Rendered`, `ComponentsRendered`, and `HotPhaseAllocBytes`, which **must be 0** on
+steady frames) for the interaction you changed.
 
-```bash
-dotnet build src/FluentGpu.VerticalSlice                 # clean build first
-dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
-```
-
-The harness *is* a seam test: every check substitutes the three headless backends for the real ones and asserts on the
-recorded DrawList (`device.LastGlyphs`/`LastRects`/…), the post-layout scene (`host.Scene`), and `FrameStats`. When you
-change a seam, that is where you prove it.
-
-**`TextServicesSeamChecks()`** (`src/FluentGpu.VerticalSlice/Program.cs`, ~line 5229) is the dedicated PAL text-services
-seam test — it exercises `IClipboard` and `IPlatformTextInput` / `ITextInputSink` end-to-end against the headless impls,
-touching no OS. It asserts two things:
-
-```csharp
-static void TextServicesSeamChecks()
-{
-    using var app = new HeadlessPlatformApp();
-    var clip = app.Clipboard;
-    uint seq0 = clip.SequenceNumber;
-    clip.SetText("héllo ✂");
-    bool roundTrip = clip.TryGetText(out var read) && read == "héllo ✂" && clip.SequenceNumber == seq0 + 1;
-    ((HeadlessClipboard)clip).Clear();
-    bool cleared = !clip.TryGetText(out _) && clip.SequenceNumber == seq0 + 2;
-    Check("W0a.1 clipboard seam: unicode round-trip + epoch bumps + clear", roundTrip && cleared, /* … */);
-
-    var window = new HeadlessWindow(new WindowDesc("ime", new Size2(100, 100), 1f));
-    var ti = (HeadlessTextInput)window.TextInput;
-    var sink = new RecordingSink();
-    ti.SetSink(sink);
-    ti.BeginComposition();          // not editable yet → must no-op
-    ti.SetEditable(true);
-    ti.BeginComposition();
-    ti.UpdateComposition("にほ", 2, new ImeClause(0, 2, ImeClauseKind.Input));
-    ti.UpdateComposition("日本", 2, new ImeClause(0, 2, ImeClauseKind.TargetConverted));
-    ti.Commit("日本");
-    // asserts the sink saw exactly: start → upd:にほ → upd:日本 → commit:日本 → end, and cancel-on-blur.
-}
-```
+The headless PAL text-services seam is worth knowing: `IClipboard` and `IPlatformTextInput` / `ITextInputSink` run
+end-to-end against the headless impls, touching no OS.
 
 - **The clipboard seam**: a Unicode round-trip (`SetText` → `TryGetText`) and the `SequenceNumber` OS-epoch bumping on
   each write and on `Clear` — the versioned-external-store idiom a context menu uses to gate its Paste item without
   polling content.
-- **The IME seam**: the composition lifecycle through `ITextInputSink` — that `BeginComposition` **no-ops until
+- **The IME seam**: the composition lifecycle through `ITextInputSink` — `BeginComposition` **no-ops until
   `SetEditable(true)`** (the IME never composes over a button), the full `start → update* → commit → end` sequence with
   clause segmentation, and cancel-on-blur (focus leaving mid-composition emits an empty update + end).
 
-**Adding a seam check.** Write a `Check("…", condition, detail)` in `Program.cs` and call it from `Main`. For a backend
-behavior, assert on the headless impl's recorded state directly (`device.LastRects`, `device.ResidentImages`,
-`window.LastTitleBarRegions`, the `RecordingSink` log). For an interaction you changed, assert on `FrameStats`:
-`Rendered` (did a reconcile/layout run — for a compositor-only path you want `false`), `ComponentsRendered`
-(the granularity proof), and `HotPhaseAllocBytes` (**must be 0** on steady frames — the near-zero-allocation guarantee,
-asserted, not assumed).
+On-screen D3D12 pixels are a separate, manual "needs-pixels" pass on the real Windows path; the recorded DrawList does
+not by itself mean a backend renders correctly on screen. Both bars matter; keep them distinct.
 
-> What the harness does **not** assert is on-screen D3D12 pixels — those are a separate, manual "needs-pixels" pass on
-> the real Windows path. "Harness green" means the logic and the recorded DrawList are correct across the seam; it does
-> not by itself mean a backend renders correctly on screen. Both bars matter; keep them distinct.
-
-**The seam race gate** is the heavier validation that protects the *threading* seam once the render-thread split is
+**The seam race gate** (design-of-record; not built — tests are banned) is the heavier validation that would protect the *threading* seam once the render-thread split is
 wired: a soak build (under the `FGGUARD` define) that pauses the render thread for several publishes and asserts the
 consume-gated quarantine holds — no `SceneStore` slot is reclaimed until `_lastConsumedSeq` advances — sweeping
 channel-capacity and reader-stall as fuzz parameters. It is owned by
 [`validation.md`](../../../design/subsystems/validation.md) and
 [`threading-render-seam.md` §5/§11/§18](../../../design/subsystems/threading-render-seam.md); since the as-built engine
-ships single-thread (`Quarantine = 0`), the gate's relationship-under-stall is the contract it must keep when the split
-lands, not a daily run today.
+ships single-thread (`Quarantine = 0`), the relationship-under-stall is the contract to keep when the split lands.
 
 ## Canon links
 
@@ -487,6 +443,5 @@ lands, not a daily run today.
 
 **Sibling pages:** [Windows backends: D3D12, DirectWrite, Win32](./windows-backends.md) (the real leaves) ·
 [Render pipeline and SceneRecorder](./render-pipeline-and-scenerecorder.md) (what fills the DrawList the RHI consumes) ·
-[Frame pipeline and the verification harness](./frame-pipeline-and-verification-harness.md) (the loop and the full check
-suite) · [getting-started → run headless](../../guide/getting-started.md#run-headless-tests--ci--agents) (the exact
+[Frame pipeline and headless seams](./frame-pipeline-and-verification-harness.md) (the loop) · [getting-started → run headless](../../guide/getting-started.md#run-headless-agents) (the exact
 wiring).

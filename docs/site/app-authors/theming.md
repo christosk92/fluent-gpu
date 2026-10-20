@@ -200,11 +200,10 @@ WinUI default values are used.
 The fill-vs-text split is the reason there are two accent families. `Tok.AccentDefault` is the **fill** (button
 background, selection bar). `Tok.AccentTextPrimary` is the **text** shade used for hyperlink/accent labels —
 distinct, and readability-adjusted. Use the text tokens for accent *text*, the fill tokens for accent
-*surfaces*. (The harness verifies a `HyperlinkButton` uses `AccentTextPrimary`, not `AccentDefault`, and that
+*surfaces*. (A `HyperlinkButton` uses `AccentTextPrimary`, not `AccentDefault`, and
 it tracks an override.)
 
-A self-contained override example, straight from the engine harness
-(`src/FluentGpu.VerticalSlice/Program.cs`):
+A self-contained override example:
 
 ```csharp
 Tok.SetAccent(ColorF.FromRgba(0xE0, 0x40, 0x40));   // developer/OS override (red) — all accent tokens go red
