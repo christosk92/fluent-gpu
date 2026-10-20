@@ -392,6 +392,11 @@ public sealed record BoxEl : Element
     /// <summary>WinUI FocusVisualMargin: negative values push the keyboard-focus ring OUTSIDE the bounds. Null = the
     /// WinUI template default (−3 all around); Slider uses −7,0,−7,0.</summary>
     public Edges4? FocusVisualMargin { get => (_cInput ?? BoxColdInput.Default).FocusVisualMargin; init { if (!EqualityComparer<Edges4?>.Default.Equals((_cInput ?? BoxColdInput.Default).FocusVisualMargin, value)) CInput.FocusVisualMargin = value; } }
+    /// <summary>Hit slop: how far (DIP, per side) this box's HIT rect reaches outside its laid-out box, for a small target that must still be
+    /// easy to press (a 28 glyph button at a touch tier). No effect on layout or paint. The slop is clipped like the box itself: a clipping or
+    /// scrolling ancestor cuts it, and a real hit always wins over a slop hit (a neighbour whose own box holds the point takes it, so slops
+    /// never steal from what is drawn there). Adds to the host's floor (<c>InputDispatcher.MinHitSize</c>). Default none.</summary>
+    public Edges4 HitSlop { get => (_cInput ?? BoxColdInput.Default).HitSlop; init { if (!EqualityComparer<Edges4>.Default.Equals((_cInput ?? BoxColdInput.Default).HitSlop, value)) CInput.HitSlop = value; } }
     /// <summary>Semantic control role (set by the control factories; a button IS a BoxEl). Surfaced to a11y/devtools/tests.</summary>
     public AutomationRole Role { get; init; }
 

@@ -373,6 +373,9 @@ public sealed class InputHooks
     /// <summary>Node → its laid-out absolute rect (window DIP) — host-wired to <c>SceneStore.AbsoluteRect</c>. The
     /// TitleBar control builds its region report from captured part handles in a layout effect.</summary>
     public Func<NodeHandle, RectF>? GetNodeRect;
+    /// <summary>Sets the host's hit floor (<see cref="FluentGpu.Input.InputDispatcher.MinHitSize"/>, DIP): click targets smaller than it take hits
+    /// that far out (an app's touch tier: 40 at a Compact window; 0 = none). Layout and paint never change.</summary>
+    public Action<float>? SetMinHitSize;
     /// <summary>Run <c>action</c> ONCE after the current frame's layout settles: with the 6.5 layout effects when queued
     /// during the main solve (an <see cref="Element.OnBoundsChanged"/> callback), else after the frame's late scoped
     /// relayouts. The seam a control uses to publish something derived from SEVERAL nodes' final rects in the SAME frame a

@@ -148,6 +148,7 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
     public Action<bool>? OnFocusChanged;
     public bool AllowFocusOnInteraction = true;
     public bool HitTestPassThrough;
+    public Edges4 HitSlop;
     public bool? TabStop;
     public Edges4? FocusVisualMargin;
     public bool BlocksDragArm;
@@ -174,6 +175,7 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
             && EqualityComparer<Action<bool>?>.Default.Equals(OnFocusChanged, o.OnFocusChanged)
             && EqualityComparer<bool>.Default.Equals(AllowFocusOnInteraction, o.AllowFocusOnInteraction)
             && EqualityComparer<bool>.Default.Equals(HitTestPassThrough, o.HitTestPassThrough)
+            && EqualityComparer<Edges4>.Default.Equals(HitSlop, o.HitSlop)
             && EqualityComparer<bool?>.Default.Equals(TabStop, o.TabStop)
             && EqualityComparer<Edges4?>.Default.Equals(FocusVisualMargin, o.FocusVisualMargin)
             && EqualityComparer<bool>.Default.Equals(BlocksDragArm, o.BlocksDragArm)

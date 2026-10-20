@@ -5490,6 +5490,7 @@ public sealed partial class TreeReconciler
                 else _scene.SetFeedback(node, null);
                 if (b.EdgeFade is { } bef) _scene.SetEdgeFade(node, bef); else _scene.ClearEdgeFade(node);
                 _scene.SetHitTestPassThrough(node, b.HitTestPassThrough ? node : NodeHandle.Null);   // self = yield to behind, except own children
+                _scene.SetHitSlop(node, b.HitSlop);
                 _scene.SetBlocksBackgroundScroll(node, b.BlocksBackgroundScroll);
 
                 // Transform origin (used by static + animated scale/rotate; default centre). Set unconditionally so an
