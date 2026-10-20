@@ -552,6 +552,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_paint[idx].VisualKind == VisualKind.Sprites) ReleaseSprites(idx);
         if (_dragSources.Count != 0) _dragSources.Remove(idx);
         if (_dropTargets.Count != 0 && _dropTargets.Remove(idx)) _dropTargetsVersion++;
+        ReleaseWindowDrag(idx);   // BoxEl.WindowDrag side table (SceneStore.WindowDrag.cs)
         if (_dropSpotlightRoots.Count != 0) _dropSpotlightRoots.Remove(idx);
         if (_dropSpotlightOver == node) _dropSpotlightOver = NodeHandle.Null;
         if (_gestureSubs.Count != 0) _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)

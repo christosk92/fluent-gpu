@@ -441,6 +441,28 @@ title span + a 12-px tertiary subtitle span cut inside the subtitle ends in a sm
 and the cut reserves that ellipsis's own advance, so measure and render agree (`LineBreaker.FitEllipsisBySpan`,
 `gate.text.span-ellipsis-style`). A glyph in a gap between spans, and plain `TextEl`, keep the base-style "…".
 
+**Text alignment and tabular figures (`TextEl.TextAlign`, `TextEl.FontFeatures`; also on `SpanTextEl`).**
+`TextAlign = TextAlign.Start | Center | End | Justify` places each line inside the text's OWN box, so a right-aligned
+number no longer needs a `BoxEl { Justify = End }` wrapper (which broke for wrapped or stretched text). Give the text a
+box wider than its content (`Width`, `Grow`, or a stretching column). Then:
+
+```csharp
+new TextEl(Prop.Of(() => $"{used.Value:0.0} GB")) { Grow = 1, TextAlign = TextAlign.End,
+    FontFeatures = FontFeatures.TabularFigures }   // right-aligned, digits do not jitter as the value ticks
+```
+
+- A line's width leaves out its trailing spaces, so `"42  "` lines up exactly with `"42"`. A line wider than the box
+  (no-wrap overflow) stays start-aligned and never moves left past the box. A trimmed line aligns by its trimmed
+  width, including the "…".
+- `Justify` spreads the spare width over the gaps between words on every line except the last line and lines that
+  end in a hard break.
+- Selection, caret, hit-testing, underline and strikethrough bars, and hyperlink rects all follow the aligned lines.
+  The seam queries take an `alignWidth` (the node's laid width) for this. Alignment never changes the measured size.
+- There is no paragraph direction yet: `Start` is left and `End` is right, even for RTL text.
+- `FontFeatures` is a `[Flags]` set of OpenType features: `TabularFigures` (`tnum`), `LiningFigures` (`lnum`),
+  `OldStyleFigures` (`onum`), `SlashedZero` (`zero`), and `StylisticSet01`..`StylisticSet20` (`ss01`..`ss20`). They
+  apply to the whole run. A font that lacks a feature ignores it.
+
 **`ProgressBar` — stretch to the parent (E5, Wavee Home redesign).** `ProgressBar.Indeterminate(width: float.NaN)` fills
 whatever width its parent offers instead of a fixed DIP value (the facet-switch busy bar pinned across the content width
 over a dimmed page). The resolved width is measured back from layout (quantum 4) and the sweep re-arms on every parent
@@ -564,6 +586,18 @@ Popup.Create(Button.Standard("Show", () => open.Value = !open.Value), () => body
 // Event-driven sugar (the ContextMenu.Attach precedent): chains OnClick (never clobbers) to open a content flyout.
 var svc = UseContext(Overlay.Service);
 Flyout.Attach(myBoxEl, svc, () => body);   // re-click closes via the light-dismiss scrim (no toggle state)
+```
+
+**Menus from buttons.** `IconButton.Menu(glyph, () => items, placement, toolTip:)` is the icon-only menu button (a "⋯"
+or settings button in a toolbar or a small tool window). The items factory runs at each open (rows read live state); an
+empty or all-disabled result opens nothing; re-click closes; Down/F4/Enter/Space open with the first row focused.
+`DropDownButton.Create(label, items)` is the labelled one. Opening a menu yourself? Pass **`PopupOptions.Menu`**
+(focus trap + light dismiss + `ConstrainToRootBounds = false`): the default options clamp the popup inside the window,
+so a tall menu clips in a small window, while `PopupOptions.Menu` lets it escape into a popup window when it does not fit.
+
+```csharp
+IconButton.Menu(Icons.More, () => [new MenuFlyoutItem("Settings", Icons.Settings, true, OpenSettings)], toolTip: "More");
+svc.Open(() => anchor, () => MenuFlyout.Create(items, () => handle?.Close()), FlyoutPlacement.BottomLeft, PopupOptions.Menu);
 ```
 
 **In-app toasts** live in a top-Z lane every `OverlayHost` auto-mounts (dormant when empty); the static API needs no
@@ -706,6 +740,46 @@ its measured width) instead of stopping at the boundary, so the shimmer is the r
 the real slot — never a placeholder that reflows the moment data lands. `SettingsCard.Create`'s proxy hands
 `Build(options, w)` straight through (gate `gate.settingscard.skeleton-proxy`: derives an icon bar + at least two text
 bars, not one bar); `PagedShelf`'s `ShelfProxy` hands real cards at the fitted width instead of a placeholder.
+
+## Window drag regions (`BoxEl.WindowDrag`)
+
+In a custom-frame window (`AppOptions.CustomFrame = true` / `WindowDesc.CustomFrame`) any box can move the window. Declare
+the role; never capture handles or push rects yourself:
+
+```csharp
+// A borderless overlay: the whole header drags the window; its buttons stay clickable.
+new BoxEl
+{
+    Height = 40f, Padding = new Edges4(12, 0, 4, 0), AlignItems = FlexAlign.Center,
+    WindowDrag = WindowDragRole.Drag,                    // or: header.WindowDragArea()
+    OnContextRequested = e => OpenMyMenu(e),             // optional: right-click gets YOUR menu
+    Children =
+    [
+        Text("Usage") with { Grow = 1f },
+        new BoxEl { Children = [Button.Create("⟳", Refresh)] }.NoWindowDrag(),   // an interactive island
+    ],
+}
+```
+
+- **`Drag`** — the box's *visible* rect is a caption band: press-and-drag runs the OS move loop (Aero Snap included),
+  double-click maximizes when the window is resizable. **`NoDrag`** — an island inside a drag area stays client; islands
+  always beat drag bands. `WindowDragArea()` / `NoWindowDrag()` are the `BoxEl` modifiers (wrap a control in a `BoxEl`
+  to mark it).
+- **Live geometry, no effect of yours.** The host re-collects every declared box at frame phase 7.8 (after the scroll
+  pose, before record): scrolling, resizing, transforms and ancestor clips are followed; a box scrolled out, collapsed
+  (`Visible = false`), not hit-testable, or on a `Flow.KeepAlive`-parked page has no region. Nodes rendered into popup
+  windows are skipped. The window receives a push only when the merged list actually changed.
+- **Right-click.** A right-click on a drag band raises the nearest `OnContextRequested` under the point (the box's own
+  or an ancestor's). With no handler the system menu (Restore / Move / Size / … / Close) still opens. Alt+Space is
+  untouched.
+- **Coexists with `TitleBar`.** App pushes through `InputHooks.SetTitleBarRegions` (the `TitleBar` control) compose with
+  the engine list in first-match order: app islands + caption buttons → engine islands → engine drag bands → the app's
+  catch-all caption band. So caption buttons always win and the title bar's band never shadows your island.
+- **Standard frame:** the regions are ignored (the OS owns the caption); DEBUG builds print one diagnostic. Fullscreen has
+  no non-client hit-test, so regions are inert there too. Regions are DIP and scale with DPI / app zoom automatically.
+
+Gates: `--suite window-drag` (`gate.windowdrag.*` — order, flag, push-on-change, resize, retract, scroll, parked,
+TitleBar coexistence, system-menu fallback, app context menu) and `gate.window.overlay-shape`.
 
 ## Drag & drop (declare intent, never coordinates)
 

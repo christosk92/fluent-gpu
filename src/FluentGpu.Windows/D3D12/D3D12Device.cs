@@ -1614,7 +1614,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         _glyphs.LayoutRun(g.Text, g.Family, text, _strings.Resolve(g.Family), g.FontSize, g.Weight,
                             g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines, g.CharSpacing,
                             g.LineHeight, g.LineStacking, g.LineBounds, g.Color, _frameScale, g.Transform,
-                            g.Opacity, _glyphInsts, g.SpanRunId, g.ForceColor != 0, g.InMotion * (1f / 255f), g.Case);
+                            g.Opacity, _glyphInsts, g.SpanRunId, g.ForceColor != 0, g.InMotion * (1f / 255f), g.Typography);
                         break;
                     }
                     case DrawOp.DrawGlyphRunGradient:
@@ -1626,7 +1626,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             g.Weight, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines,
                             g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Before, g.After,
                             g.Split, g.Softness, g.Lift, _frameScale, g.Transform, g.Opacity,
-                            _gradGlyphInsts, _glyphInsts, g.SpanRunId, g.InMotion * (1f / 255f), g.Case);
+                            _gradGlyphInsts, _glyphInsts, g.SpanRunId, g.InMotion * (1f / 255f), g.Typography);
                         break;
                     }
                     case DrawOp.DrawIconMask:
@@ -2074,7 +2074,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         int before = _glyphInsts.Count;
                         _glyphs!.LayoutRun(g.Text, g.Family, s, _strings.Resolve(g.Family), g.FontSize, g.Weight, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines,
                             g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts,
-                            g.SpanRunId, g.ForceColor != 0, g.InMotion * (1f / 255f), g.Case);
+                            g.SpanRunId, g.ForceColor != 0, g.InMotion * (1f / 255f), g.Typography);
                         _frameGlyphInstanceCount += _glyphInsts.Count - before;
                         NoteGlyphHaloCoverage(before, ink, RepaintCull.GlyphHalo(g.FontSize));
                         if (_glyphInsts.Count > before)
@@ -2102,7 +2102,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         _glyphs!.LayoutRunGradient(g.Text, g.Family, s, _strings.Resolve(g.Family), g.FontSize, g.Weight, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines,
                             g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Before, g.After, g.Split, g.Softness, g.Lift, _frameScale, g.Transform, g.Opacity,
                             _gradGlyphInsts, _glyphInsts,
-                            g.SpanRunId, g.InMotion * (1f / 255f), g.Case);
+                            g.SpanRunId, g.InMotion * (1f / 255f), g.Typography);
                         _frameGlyphInstanceCount += (_gradGlyphInsts.Count - beforeGrad) + (_glyphInsts.Count - beforePlain);
                         NoteGlyphHaloCoverage(beforePlain, ink, RepaintCull.GlyphHalo(g.FontSize, g.Lift));
                         if (_gradGlyphInsts.Count > beforeGrad || _glyphInsts.Count > beforePlain)

@@ -23,7 +23,9 @@ public enum NotifyIconEvent : byte
     Recreated,
     /// <summary>The taskbar's DPI or light/dark changed (<see cref="NotifyIcon.TaskbarDpi"/>,
     /// <see cref="NotifyIcon.TaskbarUsesLightTheme"/> already hold the new values). An icon set with the auto-sized
-    /// <see cref="NotifyIcon.SetIcon(string)"/> has already been reloaded at the new size; pick a light/dark variant here.</summary>
+    /// <see cref="NotifyIcon.SetIcon(string)"/> has already been reloaded at the new size, and one drawn by
+    /// <see cref="NotifyIcon.SetIconSource"/> already redrawn for the new size and theme; pick a light/dark variant of an
+    /// <c>.ico</c> here.</summary>
     ShellChanged,
 }
 

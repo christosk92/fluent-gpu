@@ -204,6 +204,14 @@ The production-pacing policy remains owned by [threading-render-seam.md §11.1](
 
 - **Window class:** `RegisterClassExW` once. Own redraw via DXGI/DComp, so `CS_HREDRAW|CS_VREDRAW`
   are **off** (no `WM_PAINT` storm on resize). `CreateWindowExW`.
+- **Overlay shape (desktop widgets):** `WindowDesc.Topmost` (`WS_EX_TOPMOST`, live via `IPlatformWindow.SetTopmost`),
+  `ToolWindow` (`WS_EX_TOOLWINDOW`: no taskbar button / Alt+Tab; a custom-frame tool window also drops `WS_SYSMENU`,
+  or DWM draws its small close button over the reclaimed caption; the host asks DWM for `DWMWCP_ROUND` so it keeps
+  the Win11 corners) and `Resizable` (false: the thick frame stays for metrics/shadow/corners, `WM_NCHITTEST` maps
+  the sizing edges to `HTBORDER`, no maximize box). `FluentApp` surfaces them as `AppOptions.{Topmost,ToolWindow,
+  Resizable,Acrylic}` plus `SetTopmost` / `SetWindowMaterialAcrylic` / `WindowBoundsPx` / `MoveWindowPx` /
+  `ResizeWindow` (client DIP at the raw DPI scale). `Acrylic` = `DWMSBT_TRANSIENTWINDOW` on the same composited sheet
+  as Mica.
 - **DPI / app zoom:** `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` programmatically (manifest-free, AOT-
   friendly). **`Scale` is the current EFFECTIVE scale = the OS per-monitor DPI scale (dpi/96) × the browser-style
   app zoom.** `WindowDesc.Zoom` (trailing positional, default 1f) seeds the zoom; `IPlatformWindow.Zoom` /

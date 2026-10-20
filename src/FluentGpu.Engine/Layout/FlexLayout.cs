@@ -279,7 +279,7 @@ public sealed partial class FlexLayout
         if (i < (uint)_memo.Length)
         {
             ref MeasureMemo m = ref _memo[i];
-            if (m.PassGen != _measureGen || m.NodeGen != node.Raw.Gen)
+            if (!_naturalProbe && (m.PassGen != _measureGen || m.NodeGen != node.Raw.Gen))
             {
                 m.PassGen = _measureGen; m.NodeGen = node.Raw.Gen;
                 m.PAvailW = availW; m.PW = size.Width; m.PH = size.Height;
@@ -363,6 +363,58 @@ public sealed partial class FlexLayout
         var size = Measure(root);
         Arrange(root, 0f, 0f, size.Width, size.Height);
         VerifyParity(root, float.PositiveInfinity, 0f, 0f, size.Width, size.Height, "Run");
+    }
+
+    // True only inside MeasureNatural: a side-effect-free probe. It skips the cross-pass ring store and the per-pass
+    // "parent offered availW" record (TryResolveSizeStable must keep seeing the REAL layout's offer), and a natural
+    // virtual viewport answers from its last arranged box instead of re-seeding its layout/extent table at the probe width.
+    private bool _naturalProbe;
+    // The probe's own per-node text ring (index-keyed; the entry key is the full (text, style, maxW) pure-function input,
+    // so a recycled index can only ever hit a correct answer). Grown in MeasureNatural only — cold, never per frame.
+    private TextMeasureCache[] _probeText = System.Array.Empty<TextMeasureCache>();
+
+    /// <summary>Text-leaf measure inside the natural probe: a read-only look at the node's real ring, then the probe ring,
+    /// then a PURE shape (<see cref="IFontSystem.Measure(StringId, in TextStyle, float, bool)"/> with no artifact
+    /// publish). Never writes the node's <see cref="TextMeasureCache"/>.</summary>
+    private (float W, float H) MeasureTextProbe(NodeHandle node, in TextMeasureCache mc, StringId text, in TextStyle style, float maxW, int fontEpoch)
+    {
+        if (mc.E0.Matches(text, in style, maxW, fontEpoch)) return (mc.E0.Size.Width, mc.E0.Size.Height);
+        if (mc.E1.Matches(text, in style, maxW, fontEpoch)) return (mc.E1.Size.Width, mc.E1.Size.Height);
+        uint i = node.Raw.Index;
+        bool slot = i < (uint)_probeText.Length;
+        if (slot && _probeText[i].TryGet(text, in style, maxW, out var hit, fontEpoch)) return (hit.Size.Width, hit.Size.Height);
+        TextStyle eff = style;
+        // The same auto-fit gate as the real measure (a NoWrap run fits its one line; a wrapping run needs MaxLines).
+        if (style.MinSizeDip > 0f && style.MinSizeDip < style.SizeDip && !float.IsInfinity(maxW)
+            && (style.Wrap == Foundation.TextWrap.NoWrap || style.MaxLines > 0))
+        {
+            float chosen = FitTextSize(text, style, maxW);
+            if (chosen < style.SizeDip) eff = style with { SizeDip = chosen };
+        }
+        var m = _fonts.Measure(text, in eff, maxW, publishArtifacts: false);
+        if (slot)
+            _probeText[i].Store(new TextMeasureEntry { Valid = true, Text = text, Style = style, MaxW = maxW, Size = m.Size, FontEpoch = fontEpoch });
+        return (m.Size.Width, m.Size.Height);
+    }
+
+    /// <summary>The natural (content) border-box size of <paramref name="root"/> offered <paramref name="availW"/>
+    /// (+Inf = unconstrained, the width it would take with no window around it) — the <c>SizeToContent</c> probe. A pure
+    /// query: it runs one measure pass and then puts every Bounds it scribbled back to its last arranged rect, so the laid
+    /// out frame is untouched. Content that fills its parent (Grow / Stretch / a non-content-sized scroll viewport)
+    /// measures to its minimum (0 when it has none) on that axis.</summary>
+    public Size2 MeasureNatural(NodeHandle root, float availW = float.PositiveInfinity)
+    {
+        if (root.IsNull) return default;
+        BeginMeasurePass();
+        if (_probeText.Length < _scene.Capacity) System.Array.Resize(ref _probeText, _scene.Capacity);
+        Size2 size;
+        _naturalProbe = true;
+        try { size = Measure(root, availW); }
+        finally { _naturalProbe = false; }
+        uint ri = root.Raw.Index;
+        if (ri < (uint)_arranged.Length && _scene.IsArrangedValid(root)) { ref RectF rb = ref _scene.Bounds(root); rb = _arranged[ri]; }
+        RestoreArrangedDescendants(root);
+        return size;
     }
 
     /// <summary>Lay out the root to FILL the window (the conventional top-level behavior) — an auto-sized root takes
@@ -682,7 +734,15 @@ public sealed partial class FlexLayout
             // arranged width, which thrashed a single slot into a miss on every single pass (Scene/Columns.cs).
             ref TextMeasureCache mc = ref _scene.MeasureCacheRef(node);
             int fontEpoch = FluentGpu.Text.FontRegistry.Shared.BodyVersion;   // E9: a body-font change evicts every cached measure
-            if (mc.TryGet(paint.Text, in li.TextStyle, maxW, out var cached, fontEpoch))
+            if (_naturalProbe)
+            {
+                // The SizeToContent probe must not touch text state: read the node's ring WITHOUT TryGet (a hit moves
+                // its "last used" slot — the recorder's fallback), never Store into it (the probe width would evict the
+                // laid width), and shape in the pure mode (no span-artifact republish at the probe width). Repeated
+                // probes hit the layout's own private ring instead (pure-function key ⇒ a recycled index is harmless).
+                (w, h) = MeasureTextProbe(node, in mc, paint.Text, in li.TextStyle, maxW, fontEpoch);
+            }
+            else if (mc.TryGet(paint.Text, in li.TextStyle, maxW, out var cached, fontEpoch))
             {
                 _dTextHit++;
                 w = cached.Size.Width; h = cached.Size.Height;
@@ -716,6 +776,7 @@ public sealed partial class FlexLayout
                     Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h),
                     FitSize = fit, FontEpoch = fontEpoch,
                     UnderlineY = m.UnderlineY, UnderlineThickness = m.UnderlineThickness, StrikeY = m.StrikeY,
+                    FirstLineWidth = m.FirstLineWidth,
                 });
             }
         }
@@ -848,7 +909,7 @@ public sealed partial class FlexLayout
 
         WriteMeasuredBounds(node, w, h);
         var result = new Size2(w, h);
-        StoreRing(node, availW, result);   // P4: always refresh the cross-pass ring — its later read validity is the clean-subtree gate above, not the write.
+        if (!_naturalProbe) StoreRing(node, availW, result);   // P4: always refresh the cross-pass ring — its later read validity is the clean-subtree gate above, not the write.
         return StoreMemo(node, availW, result);
     }
 
@@ -1101,6 +1162,17 @@ public sealed partial class FlexLayout
             if (!horizontal && float.IsNaN(w) && !float.IsInfinity(availW))
                 w = MathF.Max(0f, availW);
 
+            if (_naturalProbe && sc.ItemCount > 0 && li.FlexGrow == 0f)
+            {
+                // MeasureNatural: never re-seed the virtual layout's viewport / measured-extent table at a probe width
+                // (a durable side effect) — answer with the box the real layout last gave it.
+                uint vi = node.Raw.Index;
+                RectF ab = vi < (uint)_arranged.Length && _scene.IsArrangedValid(node) ? _arranged[vi] : default;
+                float pw = Clamp(float.IsNaN(w) ? ab.W : w, li.MinW, li.MaxW);
+                float ph = Clamp(float.IsNaN(h) ? ab.H : h, li.MinH, li.MaxH);
+                WriteMeasuredBounds(node, pw, ph);
+                return new Size2(pw, ph);
+            }
             // D1 — natural-size fallback for NON-FLEXING virtual viewports the parent does not size. WinUI's
             // ItemsView template is a ScrollView over an ItemsRepeater (ItemsView.xaml:19-37, VerticalAlignment=Top):
             // measured unconstrained it reports the repeater's natural extent — it does not collapse to 0 (the
@@ -1568,9 +1640,9 @@ public sealed partial class FlexLayout
         bool Fits(float s)
         {
             var probe = style with { SizeDip = s };
-            float oneLine = _fonts.Measure(text, probe with { Wrap = Foundation.TextWrap.NoWrap, MaxLines = 0, Trim = Foundation.TextTrim.None }, float.PositiveInfinity).Size.Height;
+            float oneLine = _fonts.Measure(text, probe with { Wrap = Foundation.TextWrap.NoWrap, MaxLines = 0, Trim = Foundation.TextTrim.None }, float.PositiveInfinity, publishArtifacts: false).Size.Height;
             if (oneLine <= 0f) return true;
-            float boxH = _fonts.Measure(text, probe with { MaxLines = 0, Trim = Foundation.TextTrim.None }, maxW).Size.Height;
+            float boxH = _fonts.Measure(text, probe with { MaxLines = 0, Trim = Foundation.TextTrim.None }, maxW, publishArtifacts: false).Size.Height;
             int lines = Math.Max(1, (int)MathF.Round(boxH / oneLine));
             return lines <= maxLines;
         }
@@ -1597,7 +1669,7 @@ public sealed partial class FlexLayout
         float LineW(float s) => _fonts.Measure(text, style with
         {
             SizeDip = s, MaxLines = 0, Trim = Foundation.TextTrim.None, MinSizeDip = 0f,
-        }, float.PositiveInfinity).Size.Width;
+        }, float.PositiveInfinity, publishArtifacts: false).Size.Width;
 
         float w = LineW(maxS);
         if (w <= maxW || w <= 0f) return maxS;

@@ -54,10 +54,18 @@ public sealed class HeadlessWindow : IPlatformWindow
         CustomFrame = desc.CustomFrame;
         Composited = desc.Composited;
         MinClientSizeDip = desc.MinClientSizeDip;
+        Topmost = desc.Topmost;
+        ToolWindow = desc.ToolWindow;
+        Resizable = desc.Resizable;
     }
 
     /// <summary>The <see cref="WindowDesc.CustomFrame"/> opt-in, recorded for assertions (no real NC concept headless).</summary>
     public bool CustomFrame { get; }
+    /// <summary>The descriptor's <see cref="WindowDesc.ToolWindow"/> (no taskbar button / Alt+Tab entry), recorded for
+    /// assertions. The created-topmost bit seeds <see cref="Topmost"/>.</summary>
+    public bool ToolWindow { get; }
+    /// <summary>The descriptor's <see cref="WindowDesc.Resizable"/>, recorded for assertions.</summary>
+    public bool Resizable { get; }
     /// <summary>The descriptor's opt-in minimum client size, retained for headless contract assertions.</summary>
     public Size2 MinClientSizeDip { get; }
 
@@ -108,6 +116,37 @@ public sealed class HeadlessWindow : IPlatformWindow
     public Point2 LastMoveToPx { get; private set; }
     public int MoveToCount { get; private set; }
     public void MoveToPx(Point2 outerOriginPx) { LastMoveToPx = outerOriginPx; MoveToCount++; }
+
+    /// <summary>How many times <see cref="SetClientSizePx"/> was called and the last size it asked for (test seam: the
+    /// size-to-content gates assert the target and that a no-op frame issues no resize).</summary>
+    public int SetClientSizeCount { get; private set; }
+    public Size2 LastSetClientSizePx { get; private set; }
+
+    /// <summary>Test seam: the smallest client size the "OS" lets <see cref="SetClientSizePx"/> produce (Win32: USER32's
+    /// default minimum track size / frame rounding clamping a <c>SetWindowPos</c>). Default <c>0×0</c> = no clamp. An
+    /// axis below it is raised to it, so the size the host reads back differs from the one it asked for.</summary>
+    public Size2 MinTrackSizePx { get; set; }
+
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.SetClientSizePx"/>
+    /// <remarks>Headless: the client size changes at once, like Win32's synchronous <c>SetWindowPos</c> + WM_SIZE (clamped
+    /// to <see cref="MinTrackSizePx"/>).</remarks>
+    public void SetClientSizePx(Size2 px)
+    {
+        SetClientSizeCount++;
+        LastSetClientSizePx = px;
+        ClientSizePx = new Size2(MathF.Max(px.Width, MinTrackSizePx.Width), MathF.Max(px.Height, MinTrackSizePx.Height));
+    }
+
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.UserResizeEpoch"/>
+    public long UserResizeEpoch { get; private set; }
+
+    /// <summary>Test seam: the user dragged the frame to <paramref name="px"/> and let go (the WM_EXITSIZEMOVE-with-a-size-change
+    /// edge) — sets the client size and bumps <see cref="UserResizeEpoch"/>.</summary>
+    public void SimulateUserResize(Size2 px)
+    {
+        ClientSizePx = px;
+        UserResizeEpoch++;
+    }
 
     public void QueueInput(in InputEvent e) => _queue.Enqueue(e);
 
@@ -239,7 +278,7 @@ public sealed class HeadlessWindow : IPlatformWindow
     /// <summary>How many times <see cref="Show"/> was called (test seam): the pop-out reveal must show its window exactly once.</summary>
     public int ShowCalls { get; private set; }
 
-    /// <summary>The last <see cref="SetTopmost"/> value (test seam; false until set).</summary>
+    /// <summary>The last <see cref="SetTopmost"/> value (test seam), seeded from <see cref="WindowDesc.Topmost"/>.</summary>
     public bool Topmost { get; private set; }
 
     /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.SetTopmost"/>
@@ -330,7 +369,20 @@ public sealed class HeadlessWindow : IPlatformWindow
 
     /// <summary>The most recent region push (copied), for drag-band/island/button-rect assertions.</summary>
     public TitleBarRegion[] LastTitleBarRegions { get; private set; } = [];
-    public void SetTitleBarRegions(ReadOnlySpan<TitleBarRegion> regions) => LastTitleBarRegions = regions.ToArray();
+    /// <summary>How many region pushes reached the window (test seam): the host pushes only when the merged app + engine
+    /// list changed, so an unchanged frame must leave this alone.</summary>
+    public int TitleBarRegionPushCount { get; private set; }
+    public void SetTitleBarRegions(ReadOnlySpan<TitleBarRegion> regions)
+    {
+        LastTitleBarRegions = regions.ToArray();
+        TitleBarRegionPushCount++;
+    }
+
+    /// <summary>How many times <see cref="ShowSystemMenu"/> ran, and its last screen-px point (test seam for the
+    /// unhandled app-routed caption right-click fallback).</summary>
+    public int ShowSystemMenuCount { get; private set; }
+    public Point2 LastSystemMenuPx { get; private set; }
+    public void ShowSystemMenu(Point2 screenPx) { ShowSystemMenuCount++; LastSystemMenuPx = screenPx; }
 
     public void Dispose() { }
 }

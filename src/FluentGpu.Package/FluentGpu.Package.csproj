@@ -51,10 +51,19 @@
     <PackageReference Include="TerraFX.Interop.Windows" Version="10.0.26100.6" />
   </ItemGroup>
 
-  <!-- Package-level docs/branding (root of the .nupkg). -->
+  <!-- Package-level docs/branding (root of the .nupkg). They live in ops/build/nuget/ (the old ..\..\build\nuget\ path
+       does not exist, so pack could not find the README/icon). -->
   <ItemGroup>
-    <None Include="..\..\build\nuget\README.md" Pack="true" PackagePath="\" />
-    <None Include="..\..\build\nuget\icon.png" Pack="true" PackagePath="\" />
+    <None Include="..\..\ops\build\nuget\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\ops\build\nuget\icon.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <!-- Consumer defaults for a PackageReference: NuGet imports buildTransitive/<PackageId>.props into every project that
+       references the package, directly or transitively (build/ covers clients without buildTransitive support). The
+       ProjectReference-consumer equivalent is FluentGpu.App.props at the repo root. -->
+  <ItemGroup>
+    <None Include="buildTransitive\FluentGpu.props" Pack="true" PackagePath="buildTransitive\FluentGpu.props" />
+    <None Include="buildTransitive\FluentGpu.props" Pack="true" PackagePath="build\FluentGpu.props" />
   </ItemGroup>
 
   <!-- Assemble the payload after Build (so $(OutputPath) holds the copied FluentGpu.* DLLs + XML docs):

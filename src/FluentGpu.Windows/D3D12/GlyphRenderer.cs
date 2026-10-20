@@ -85,17 +85,20 @@ internal struct ShapedRun { public ShapedGlyph[] Glyphs; public ColorF[]? Colors
 internal readonly struct RunKey : IEquatable<RunKey>
 {
     private readonly int _textId, _famId, _sizeQ, _weight, _wrap, _trim, _maxLines, _widthQ, _originXQ, _originYQ, _scaleQ;
-    private readonly int _spacingQ, _lineHQ, _lineFlags, _spanId, _hash;
+    private readonly int _spacingQ, _lineHQ, _lineFlags, _spanId, _typo, _hash;
 
     public int TextId => _textId;
 
+    /// <param name="typo">TextTypography.Pack(align, features, case): features and the case transform change the shaped glyphs
+    /// and align moves each line inside the (already keyed) box width, so two runs differing only in any of them never share
+    /// baked quads.</param>
     public RunKey(int textId, int famId, int sizeQ, int weight, int wrap, int trim, int maxLines, int widthQ, int originXQ, int originYQ, int scaleQ,
-        int spacingQ, int lineHQ, int lineFlags, int spanId)
+        int spacingQ, int lineHQ, int lineFlags, int spanId, int typo = 0)
     {
         _textId = textId; _famId = famId; _sizeQ = sizeQ; _weight = weight; _wrap = wrap; _trim = trim; _maxLines = maxLines;
         _widthQ = widthQ; _originXQ = originXQ; _originYQ = originYQ; _scaleQ = scaleQ; _spacingQ = spacingQ; _lineHQ = lineHQ;
-        _lineFlags = lineFlags; _spanId = spanId;
-        _hash = Hash(textId, famId, sizeQ, weight, wrap, trim, maxLines, widthQ, originXQ, originYQ, scaleQ, spacingQ, lineHQ, lineFlags, spanId);
+        _lineFlags = lineFlags; _spanId = spanId; _typo = typo;
+        _hash = unchecked(Hash(textId, famId, sizeQ, weight, wrap, trim, maxLines, widthQ, originXQ, originYQ, scaleQ, spacingQ, lineHQ, lineFlags, spanId) * 397 ^ typo);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -104,7 +107,8 @@ internal readonly struct RunKey : IEquatable<RunKey>
            && _textId == other._textId && _famId == other._famId && _sizeQ == other._sizeQ && _weight == other._weight
            && _wrap == other._wrap && _trim == other._trim && _maxLines == other._maxLines && _widthQ == other._widthQ
            && _originXQ == other._originXQ && _originYQ == other._originYQ && _scaleQ == other._scaleQ
-           && _spacingQ == other._spacingQ && _lineHQ == other._lineHQ && _lineFlags == other._lineFlags && _spanId == other._spanId;
+           && _spacingQ == other._spacingQ && _lineHQ == other._lineHQ && _lineFlags == other._lineFlags && _spanId == other._spanId
+           && _typo == other._typo;
 
     public override bool Equals(object? obj) => obj is RunKey other && Equals(other);
 
@@ -723,10 +727,10 @@ float4 PSMain(VSOutG i) : SV_Target
     /// the layout engine, so the GPU path lays out exactly like the measure path.</summary>
     public void LayoutRun(StringId textId, StringId familyId, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF color, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList,
-        int spanRunId = 0, bool forceColor = false, float motionSoft = 0f, int textCase = 0)
+        int spanRunId = 0, bool forceColor = false, float motionSoft = 0f, int typography = 0)
     {
         SyncBodyFont();
-        var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId, textCase);
+        var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId, typography);
 
         ref var hit = ref CollectionsMarshal.GetValueRefOrNullRef(_runCache, key);
         if (!Unsafe.IsNullRef(ref hit))
@@ -735,7 +739,7 @@ float4 PSMain(VSOutG i) : SV_Target
             if (_preparing) return;
             _runsCached++;
 #if DEBUG
-            if (VerifyCache) VerifyAgainstReshape(in hit, text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, spanRunId, textCase);
+            if (VerifyCache) VerifyAgainstReshape(in hit, text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, spanRunId, typography);
 #endif
             var quads = hit.Glyphs.AsSpan(0, hit.Count);
             Replay(quads, hit.Colors, forceColor, color, world, opacity, dpiScale, motionSoft, outList);
@@ -754,7 +758,7 @@ float4 PSMain(VSOutG i) : SV_Target
         _colorScratch.Clear();
         bool consistent = ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch,
             spanRun is not null ? spanRun.Spans : default, _colorScratch,
-            spanRun?.OverflowSuffixStart ?? -1, textCase);
+            spanRun?.OverflowSuffixStart ?? -1, typography);
         int n = _scratch.Count;
         var arr = RentQuads(n);
         for (int i = 0; i < n; i++) arr[i] = _scratch[i];
@@ -809,10 +813,10 @@ float4 PSMain(VSOutG i) : SV_Target
     public void LayoutRunGradient(StringId textId, StringId familyId, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF before, ColorF after, float split, float softness, float lift, float dpiScale, Affine2D world, float opacity,
         List<GradGlyphInstance> outList, List<GlyphInstance> plainList,
-        int spanRunId = 0, float motionSoft = 0f, int textCase = 0)
+        int spanRunId = 0, float motionSoft = 0f, int typography = 0)
     {
         SyncBodyFont();
-        var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId, textCase);
+        var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId, typography);
 
         ShapedGlyph[] quadsArr; int count;
         ref var hit = ref CollectionsMarshal.GetValueRefOrNullRef(_runCache, key);
@@ -830,7 +834,7 @@ float4 PSMain(VSOutG i) : SV_Target
             // identical to LayoutRun's shape of the same key (ShapeInto emits layer quads regardless), so the cached
             // run is shared; a LayoutRun hit on a run first shaped HERE replays emoji flat (Colors = null) — accepted.
             bool consistent = ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch,
-                textCase: textCase);
+                typography: typography);
             count = _scratch.Count;
             var arr = RentQuads(count);
             for (int i = 0; i < count; i++) arr[i] = _scratch[i];
@@ -990,7 +994,7 @@ float4 PSMain(VSOutG i) : SV_Target
     // box for, or an ellipsis cut at the wrong width — for as long as the text stayed on screen. A box at rest keeps its
     // exact width, so steady-state hits are unchanged.
     internal static RunKey MakeRunKey(StringId textId, StringId familyId, float size, int weight, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale,
-        float charSpacing, float lineHeight, int lineStacking, int lineBounds, int spanRunId, int textCase = 0)
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, int spanRunId, int typography = 0)
     {
         int widthQ = float.IsInfinity(maxWidth) || maxWidth > 1e9f ? int.MaxValue : ExactKey(maxWidth);
         int lineHQ = float.IsNaN(lineHeight) || lineHeight <= 0f ? 0 : (int)MathF.Round(lineHeight * 10f);   // 0 = font-natural
@@ -998,7 +1002,7 @@ float4 PSMain(VSOutG i) : SV_Target
         // of the same text share ONE baked quad set.
         return new RunKey(textId.Value, familyId.Value, DeviceEmQ(size, dpiScale), weight, wrap, trim, maxLines,
             widthQ, ExactKey(originX), ExactKey(topY), (int)MathF.Round(dpiScale * 100f),
-            (int)MathF.Round(charSpacing * 10f), lineHQ, lineStacking | (lineBounds << 8) | (textCase << 16), spanRunId);
+            (int)MathF.Round(charSpacing * 10f), lineHQ, lineStacking | (lineBounds << 8), spanRunId, typography);
     }
 
     /// <summary>A layout float as an exact key: its IEEE bits, with -0 folded onto +0 (they lay out identically).</summary>
@@ -1152,10 +1156,11 @@ float4 PSMain(VSOutG i) : SV_Target
     /// NOT cache a run for which this returns false, since some of its quads may hold stale-generation UVs.</summary>
     private bool ShapeInto(string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, float dpiScale, List<ShapedGlyph> outList,
-        ReadOnlySpan<SpanStyle> spans = default, List<ColorF>? colorsOut = null, int overflowSuffixStart = -1, int textCase = 0)
+        ReadOnlySpan<SpanStyle> spans = default, List<ColorF>? colorsOut = null, int overflowSuffixStart = -1, int typography = 0)
     {
+        // alignWidth = maxWidth = the glyph op's Bounds.W, the drawn box (the editor queries pass the node's laid width).
         _engine.Layout(text.AsSpan(), family ?? "", weight, size, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight,
-            lineStacking, lineBounds, spans, _liveness, overflowSuffixStart, textCase);
+            lineStacking, lineBounds, spans, _liveness, overflowSuffixStart, typography, maxWidth);
         float inv = 1f / dpiScale;
         // If the atlas generation resets mid-run (PackOrReset), quads already baked this pass hold stale UVs —
         // re-shape the whole run into the fresh generation so a cached run is always generation-consistent.
@@ -1403,12 +1408,12 @@ float4 PSMain(VSOutG i) : SV_Target
 #if DEBUG
     // Re-shape and assert the cached run is byte-identical to a fresh shape — proves the cache is output-preserving.
     private void VerifyAgainstReshape(in ShapedRun cached, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
-        float charSpacing, float lineHeight, int lineStacking, int lineBounds, float dpiScale, int spanRunId = 0, int textCase = 0)
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, float dpiScale, int spanRunId = 0, int typography = 0)
     {
         _scratch.Clear();
         var spanRun = spanRunId != 0 ? SpanRunTable.Shared.Resolve(spanRunId) : null;
         ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch,
-            spanRun is not null ? spanRun.Spans : default, overflowSuffixStart: spanRun?.OverflowSuffixStart ?? -1, textCase: textCase);
+            spanRun is not null ? spanRun.Spans : default, overflowSuffixStart: spanRun?.OverflowSuffixStart ?? -1, typography: typography);
         Debug.Assert(_scratch.Count == cached.Count, $"shaped-run cache count mismatch for \"{text}\": {_scratch.Count} vs {cached.Count}");
         for (int i = 0; i < _scratch.Count && i < cached.Count; i++)
         {

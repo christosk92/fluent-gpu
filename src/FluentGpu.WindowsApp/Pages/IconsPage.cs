@@ -136,11 +136,21 @@ sealed class IconsPage : Component
             },
             CopyRow("Glyph", icon.Glyph, icon.Glyph, mono: false),
             CopyRow("Codepoint", "U+" + icon.Code, icon.Code, mono: true),
-            CopyRow("C#", $"Ui.Icon(\"\\u{icon.Code}\")", $"Ui.Icon(\"\\u{icon.Code}\")", mono: true),
+            CSharpRow(icon),
             CopyRow("XAML entity", $"&#x{icon.Code};", $"&#x{icon.Code};", mono: true),
             TagChips(icon.Tags),
         ],
     };
+
+    // A glyph that has a named constant in glyphs.json copies as Ui.Icon(Icons.Play); any other glyph copies as the
+    // raw "\uXXXX" escape. Runs once per selection change (detail pane), not per tile.
+    static Element CSharpRow(IconInfo icon)
+    {
+        string code = Icons.TryGetName(icon.Glyph, out string? name)
+            ? $"Ui.Icon(Icons.{name})"
+            : $"Ui.Icon(\"\\u{icon.Code}\")";
+        return CopyRow("C#", code, code, mono: true);
+    }
 
     static Element CopyRow(string label, string display, string copyText, bool mono)
     {

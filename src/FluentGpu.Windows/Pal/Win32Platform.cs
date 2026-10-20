@@ -377,7 +377,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                        POINTER_CHANGE_FIFTHBUTTON_DOWN = 9, POINTER_CHANGE_FIFTHBUTTON_UP = 10;
     // Synthetic PointerId for caption events the NC path injects into the client stream — high enough never to collide
     // with a real OS pointer id (and past InputEventRing.IdSlots so it is simply not coalesced against a real contact).
-    private const uint NcSyntheticPointerId = 0xFFFFFFFE;
+    private const uint NcSyntheticPointerId = NonClientInput.SyntheticPointerId;   // shared with InputDispatcher's NC fallback
+    // Private posted message: open the system menu at (x, y) screen px OUTSIDE the frame (IPlatformWindow.ShowSystemMenu
+    // is called from input dispatch; TrackPopupMenu runs a modal loop, so it must not run inside RunFrame). WM_APP range.
+    private const uint WM_FG_SHOWSYSMENU = 0x8000 + 0x0F51;
 
     // `--fg nc` (EngineSwitches.NcDiag): trace custom-frame caption-button non-client input — which WM_NC* messages actually arrive over a
     // button and whether synthesis runs — to stderr. Off by default (zero cost); diagnoses "no hover / clicks don't
@@ -388,6 +391,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
+    private const uint WsMaximizeBox = 0x00010000, WsSysMenu = 0x00080000, WsExTopmost = 0x00000008, WsExToolWindow = 0x00000080;
     private const int GWL_STYLE = -16;
     private const int GWL_EXSTYLE = -20;
     private const uint WM_GETMINMAXINFO = 0x0024;
@@ -631,6 +635,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // redirection bitmap). DWM re-composites that surface at the HWND's new screen position on a pure move, so a composited
     // window needs NO per-step WM_MOVE repaint to track the cursor — the per-step paint is pure overhead/lag there.
     private readonly bool _composited;
+    // WindowDesc.Resizable false: the edge/corner sizing hits answer HTBORDER and the maximize box is dropped. The thick
+    // frame itself stays, so the frame metrics (AdjustForFrame), the DWM shadow and the rounded corners are unchanged.
+    private readonly bool _resizable;
+    // The creation styles: AdjustForFrame's standard-frame branch must match them (a tool window has a shorter caption).
+    private readonly uint _style, _exStyle;
     private TitleBarRegion[] _ncRegions = [];
     private int _ncRegionCount;
     private TitleBarHit _ncHover = TitleBarHit.Client;   // Client = "none of our buttons" sentinel in NC context
@@ -712,6 +721,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _customFrame = desc.CustomFrame;   // must be set BEFORE CreateWindowExW: WM_NCCALCSIZE fires during creation
         _composited = desc.Composited;     // gates the WM_MOVE per-step repaint: DWM relocates the DComp surface on a pure move
         _minClientDip = desc.MinClientSizeDip; // WM_GETMINMAXINFO may run inside CreateWindowExW
+        _resizable = desc.Resizable;       // WM_NCHITTEST may run inside CreateWindowExW
+        _style = desc.Resizable ? WS_OVERLAPPEDWINDOW : WS_OVERLAPPEDWINDOW & ~WsMaximizeBox;
+        // A custom-frame TOOL window keeps no system menu: DWM otherwise draws its small caption close button over the
+        // reclaimed caption strip (the client's top-right corner) — the engine draws all the chrome there is.
+        if (desc.ToolWindow && desc.CustomFrame) _style &= ~WsSysMenu;
+        _exStyle = (desc.Composited ? (uint)WS_EX_NOREDIRECTIONBITMAP : 0u)
+            | (desc.Topmost ? WsExTopmost : 0u) | (desc.ToolWindow ? WsExToolWindow : 0u);
         _self = GCHandle.Alloc(this);
 
         HINSTANCE hinst = GetModuleHandleW(null);
@@ -755,7 +771,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         fixed (char* title = desc.Title)
         {
             _hwnd = CreateWindowExW(
-                desc.Composited ? WS_EX_NOREDIRECTIONBITMAP : 0, cn, title, WS_OVERLAPPEDWINDOW,
+                _exStyle, cn, title, _style,
                 CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
                 HWND.NULL, HMENU.NULL, hinst, (void*)GCHandle.ToIntPtr(_self));
         }
@@ -830,7 +846,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     {
         if (!_customFrame)
         {
-            AdjustWindowRectEx(rc, WS_OVERLAPPEDWINDOW, false, 0);
+            AdjustWindowRectEx(rc, _style, false, _exStyle);
             return;
         }
         uint dpi = _hwnd != HWND.NULL ? GetDpiForWindow(_hwnd) : 96u;
@@ -983,11 +999,50 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     public void SetClientSize(int w, int h)
         => ResizeClientPhysical(w, h);
 
+    /// <summary>Resize the client area to <paramref name="widthDip"/>×<paramref name="heightDip"/> DIP at the RAW DPI scale —
+    /// the startup sizing rule (app zoom never resizes the physical window). Outer position is kept.</summary>
+    public void SetClientSizeDip(float widthDip, float heightDip)
+        => ResizeClientPhysical((int)MathF.Round(MathF.Max(1f, widthDip) * _rawDpiScale),
+            (int)MathF.Round(MathF.Max(1f, heightDip) * _rawDpiScale));
+
+    /// <inheritdoc cref="IPlatformWindow.SetClientSizePx"/>
+    public void SetClientSizePx(Size2 px)
+    {
+        _fitTargetW = Math.Max(1, (int)MathF.Ceiling(px.Width));
+        _fitTargetH = Math.Max(1, (int)MathF.Ceiling(px.Height));
+        ResizeClientPhysical(_fitTargetW, _fitTargetH);
+    }
+
+    /// <inheritdoc cref="IPlatformWindow.MinClientSizeDip"/>
+    public Size2 MinClientSizeDip => _minClientDip;
+
+    /// <inheritdoc cref="IPlatformWindow.UserResizeEpoch"/>
+    public long UserResizeEpoch => _userResizeEpoch;
+    private long _userResizeEpoch;
+    // Client size + raw DPI at WM_ENTERSIZEMOVE: WM_EXITSIZEMOVE bumps the epoch only when the user's loop changed the size.
+    private int _moveLoopStartW, _moveLoopStartH;
+    private float _moveLoopStartDpi;
+    // A size change OUTSIDE the move/size loop the engine did not ask for — a Win+Arrow / Snap-layout snap (keyboard and
+    // flyout snaps run no modal loop) — also counts as the user's resize, once a size-to-content target exists. Excluded:
+    // the engine's own ResizeClientPhysical (_hostResizing — an OS clamp of that request is not the user), a DPI change
+    // (WM_DPICHANGED's suggested rect: the raw DPI moved since the last WM_SIZE), and maximize/minimize/restore edges (a
+    // WM_SIZE whose kind or the previous one's is not SIZE_RESTORED).
+    private int _fitTargetW, _fitTargetH;   // the last SetClientSizePx target (physical px); 0 = never issued
+    private bool _hostResizing;
+    private nuint _lastSizeKind;            // the previous WM_SIZE's wParam (SIZE_RESTORED = 0)
+    private float _lastSizeDpi;             // _rawDpiScale at the previous WM_SIZE
+
+    // A sizing-edge hit (HTLEFT..HTBOTTOMRIGHT) becomes HTBORDER: the frame still shows, it just does not resize.
+    private static LRESULT NoResizeHit(LRESULT hit)
+        => (nint)hit is >= HTLEFT and <= HTBOTTOMRIGHT ? (LRESULT)HTBORDER : hit;
+
     private void ResizeClientPhysical(int w, int h)
     {
         RECT rc = new() { left = 0, top = 0, right = w, bottom = h };
         AdjustForFrame(&rc);
-        SetWindowPos(_hwnd, HWND.NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        _hostResizing = true;   // the WM_SIZE this raises (synchronously) is the engine's, not the user's — see _fitTargetW
+        try { SetWindowPos(_hwnd, HWND.NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE); }
+        finally { _hostResizing = false; }
         RefreshClientSize();
     }
 
@@ -1003,6 +1058,48 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         if (_ncRegions.Length < regions.Length) _ncRegions = new TitleBarRegion[Math.Max(8, regions.Length)];
         regions.CopyTo(_ncRegions);
         _ncRegionCount = regions.Length;
+#if DEBUG
+        // BoxEl.WindowDrag needs a custom frame: a standard frame answers WM_NCHITTEST itself and ignores the regions.
+        if (!_customFrame && !_windowDragNoCustomFrameNoted)
+            foreach (var r in regions)
+                if ((r.Flags & TitleBarRegionFlags.AppContextMenu) != 0)
+                {
+                    _windowDragNoCustomFrameNoted = true;
+                    System.Console.Error.WriteLine("[fluentgpu] BoxEl.WindowDrag has no effect: the window was created without " +
+                        "WindowDesc.CustomFrame (AppOptions.CustomFrame) — a standard frame owns its own caption.");
+                    break;
+                }
+#endif
+    }
+#if DEBUG
+    private bool _windowDragNoCustomFrameNoted;
+#endif
+
+    /// <summary>Open the system menu at <paramref name="screenPx"/> — posted to the window so <c>TrackPopupMenu</c>'s
+    /// modal loop runs from the message pump, never inside the engine frame that dispatched the right-click.</summary>
+    public void ShowSystemMenu(Point2 screenPx)
+    {
+        int x = (int)MathF.Round(screenPx.X), y = (int)MathF.Round(screenPx.Y);
+        PostMessageW(_hwnd, WM_FG_SHOWSYSMENU, 0, (LPARAM)(nint)(((y & 0xFFFF) << 16) | (x & 0xFFFF)));
+    }
+
+    /// <summary>The shell titlebar context menu at (<paramref name="x"/>, <paramref name="y"/>) screen px with
+    /// shell-correct enable states; the chosen command is posted back as WM_SYSCOMMAND. Alt+Space keeps working through
+    /// DefWindowProc (SC_KEYMENU is not intercepted).</summary>
+    private static void ShowSystemMenuCore(HWND hWnd, int x, int y)
+    {
+        HMENU sys = GetSystemMenu(hWnd, false);
+        if (sys == HMENU.NULL) return;
+        bool zoomed = IsZoomed(hWnd);
+        EnableMenuItem(sys, SC_RESTORE, MF_BYCOMMAND | (zoomed ? MF_ENABLED : MF_GRAYED));
+        EnableMenuItem(sys, SC_MOVE, MF_BYCOMMAND | (zoomed ? MF_GRAYED : MF_ENABLED));
+        EnableMenuItem(sys, SC_SIZE, MF_BYCOMMAND | (zoomed ? MF_GRAYED : MF_ENABLED));
+        EnableMenuItem(sys, SC_MAXIMIZE, MF_BYCOMMAND | (zoomed ? MF_GRAYED : MF_ENABLED));
+        EnableMenuItem(sys, SC_MINIMIZE, MF_BYCOMMAND | MF_ENABLED);
+        // No SetMenuDefaultItem: the Win11 shell's RIGHT-CLICK caption menu has no default (bold) item —
+        // only the icon double-click path defaults to Close.
+        int cmd = (int)TrackPopupMenu(sys, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, hWnd, null);
+        if (cmd != 0) PostMessageW(hWnd, WM_SYSCOMMAND, (WPARAM)(nuint)cmd, 0);
     }
 
     public WindowState State
@@ -1183,6 +1280,25 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             };
         }
         return 0;
+    }
+
+    /// <summary>Does the FIRST region matching the NC message's screen point (<paramref name="lp"/>) — the same
+    /// first-match walk WM_NCHITTEST runs — carry <see cref="TitleBarRegionFlags.AppContextMenu"/> on a caption band?
+    /// True routes a caption right-click to the app instead of the system menu.</summary>
+    private bool AppContextMenuRegionAtScreen(HWND hWnd, long lp)
+    {
+        POINT pt = new() { x = (short)(lp & 0xFFFF), y = (short)((lp >> 16) & 0xFFFF) };
+        ScreenToClient(hWnd, &pt);
+        if (IsZoomed(hWnd) && pt.y < 0) pt.y = 0;   // maximized: the caption row sits at negative client y — fold to row 0
+        float s = _scale <= 0f ? 1f : _scale;
+        for (int i = 0; i < _ncRegionCount; i++)
+        {
+            ref readonly TitleBarRegion r = ref _ncRegions[i];
+            RectF rc = r.RectDip;
+            if (pt.x < rc.X * s || pt.x >= (rc.X + rc.W) * s || pt.y < rc.Y * s || pt.y >= (rc.Y + rc.H) * s) continue;
+            return r.Hit == TitleBarHit.Caption && (r.Flags & TitleBarRegionFlags.AppContextMenu) != 0;
+        }
+        return false;
     }
 
     private static TitleBarHit NcHitFromCode(long ht) => ht switch
@@ -1946,9 +2062,21 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             case WM_SIZE:
                 // Iconic size is 0×0 — adopting it would churn a degenerate swapchain resize + full relayout, and the
                 // zoom edge-detect below would mis-fire on the maximized→minimize edge (IsZoomed false while iconic).
-                if ((nuint)wParam == SIZE_MINIMIZED) return true;
+                if ((nuint)wParam == SIZE_MINIMIZED) { _lastSizeKind = SIZE_MINIMIZED; return true; }
                 if (_inMoveSizeLoop) _sizedInMoveSizeLoop = true;
-                _w = (int)(lp & 0xFFFF); _h = (int)((lp >> 16) & 0xFFFF);
+                {
+                    int nw = (int)(lp & 0xFFFF), nh = (int)((lp >> 16) & 0xFFFF);
+                    nuint kind = (nuint)wParam;
+                    // IPlatformWindow.UserResizeEpoch, the no-modal-loop half (see _fitTargetW): a restored→restored size
+                    // change the engine did not request, at an unchanged DPI, that is not the last size-to-content target.
+                    if (!_inMoveSizeLoop && !_hostResizing && !_fullscreen && _fitTargetW > 0
+                        && kind == 0 && _lastSizeKind == 0 && _rawDpiScale == _lastSizeDpi
+                        && (nw != _w || nh != _h) && (nw != _fitTargetW || nh != _fitTargetH))
+                        _userResizeEpoch++;
+                    _lastSizeKind = kind;
+                    _lastSizeDpi = _rawDpiScale;
+                    _w = nw; _h = nh;
+                }
                 if (_customFrame)
                 {
                     // Maximize/restore edge → the custom titlebar re-glyphs max↔restore (and re-reports regions
@@ -2040,6 +2168,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 _moveLoopStartMs = Environment.TickCount64;
                 _moveLoopTicks = 0;
                 _moveLoopPaints = 0;
+                _moveLoopStartW = _w; _moveLoopStartH = _h; _moveLoopStartDpi = _rawDpiScale;
                 SetTimer(hWnd, MoveLoopTimerId, 8, null);
                 return true;
             case WM_EXITSIZEMOVE:
@@ -2047,6 +2176,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 _inMoveSizeLoop = false;
                 bool sized = _sizedInMoveSizeLoop;
                 _sizedInMoveSizeLoop = false;
+                // IPlatformWindow.UserResizeEpoch: the user's frame drag changed the client size. A drag onto a monitor of
+                // another DPI resizes through WM_DPICHANGED's suggested rect, not by the user's hand — not counted.
+                if (sized && (_w != _moveLoopStartW || _h != _moveLoopStartH) && _rawDpiScale == _moveLoopStartDpi)
+                    _userResizeEpoch++;
                 // EVERY loop's end reaches the engine (edge resizes included — consumers filter): the chrome hold taken at
                 // WindowMoveSizeBegan releases here.
                 _queue.Enqueue(new InputEvent(InputKind.WindowMoveSizeEnded, default, 0, 0, TimestampMs: Now()));
@@ -2326,7 +2459,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 if (s_ncDiag && button != 0)
                     System.Console.Error.WriteLine($"[NC] HITTEST button={button} pt=({pt.x},{pt.y}) regions={_ncRegionCount} zoomed={zoomed}");
                 if (button != 0) { result = (LRESULT)button; return true; }
-                if (!zoomed && pt.y >= 0)
+                if (!zoomed && pt.y >= 0 && _resizable)
                 {
                     uint dpi = GetDpiForWindow(hWnd);
                     int rb = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) + GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi);
@@ -2342,8 +2475,15 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 }
                 int hit = HitTestRegions(pt.x, pt.y, buttonsOnly: false);
                 if (hit != 0) { result = (LRESULT)hit; return true; }
-                return false;
+                if (_resizable) return false;
+                result = NoResizeHit(DefWindowProcW(hWnd, msg, wParam, lParam));
+                return true;
             }
+
+            // WindowDesc.Resizable false on the standard frame: same sizing-edge mapping as the custom-frame case above.
+            case WM_NCHITTEST when !_resizable && !_fullscreen:
+                result = NoResizeHit(DefWindowProcW(hWnd, msg, wParam, lParam));
+                return true;
 
             // NC pointer → synthesized engine input: HTMIN/HTMAX/HTCLOSE and HTCAPTION pixels are non-client, so client
             // WM_POINTER* never arrives there. Translating the NC stream into pointer events — at the button's center for
@@ -2424,25 +2564,34 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
             case WM_NCRBUTTONUP when _customFrame && (long)(nuint)wParam == HTCAPTION:
             {
-                // The shell titlebar context menu (right-click the drag band) with shell-correct enable states;
-                // Alt+Space keeps working through DefWindowProc (SC_KEYMENU is not intercepted).
-                HMENU sys = GetSystemMenu(hWnd, false);
-                if (sys != HMENU.NULL)
+                // An engine BoxEl.WindowDrag band (TitleBarRegionFlags.AppContextMenu): route the right-click to the app
+                // as a synthetic right press/release at the click point (the NC synthetic slot); the dispatcher raises the
+                // nearest OnContextRequested and, when nothing handles it, calls ShowSystemMenu — the menu still opens.
+                if (AppContextMenuRegionAtScreen(hWnd, lp))
                 {
-                    bool zoomed = IsZoomed(hWnd);
-                    EnableMenuItem(sys, SC_RESTORE, MF_BYCOMMAND | (zoomed ? MF_ENABLED : MF_GRAYED));
-                    EnableMenuItem(sys, SC_MOVE, MF_BYCOMMAND | (zoomed ? MF_GRAYED : MF_ENABLED));
-                    EnableMenuItem(sys, SC_SIZE, MF_BYCOMMAND | (zoomed ? MF_GRAYED : MF_ENABLED));
-                    EnableMenuItem(sys, SC_MAXIMIZE, MF_BYCOMMAND | (zoomed ? MF_GRAYED : MF_ENABLED));
-                    EnableMenuItem(sys, SC_MINIMIZE, MF_BYCOMMAND | MF_ENABLED);
-                    // No SetMenuDefaultItem: the Win11 shell's RIGHT-CLICK caption menu has no default (bold) item —
-                    // only the icon double-click path defaults to Close.
-                    int cmd = (int)TrackPopupMenu(sys, TPM_RETURNCMD | TPM_RIGHTBUTTON, (short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF), 0, hWnd, null);
-                    if (cmd != 0) PostMessageW(hWnd, WM_SYSCOMMAND, (WPARAM)(nuint)cmd, 0);
+                    // The SAME maximized fold AppContextMenuRegionAtScreen applied (the caption row sits at negative
+                    // client y): without it the synthetic press lands above row 0, the engine hit-test misses the band's
+                    // OnContextRequested and the dispatcher falls back to the system menu.
+                    Point2 at = ScreenLpToDip(lp);
+                    if (IsZoomed(hWnd) && at.Y < 0f) at = new Point2(at.X, 0f);
+                    _queue.Enqueue(new InputEvent(InputKind.PointerDown, at, 1, 0,
+                        Mods: Mods(), TimestampMs: Now(), PointerId: NcSyntheticPointerId));
+                    _queue.Enqueue(new InputEvent(InputKind.PointerUp, at, 1, 0,
+                        Mods: Mods(), TimestampMs: Now(), PointerId: NcSyntheticPointerId));
+                    PaintRequested?.Invoke();
+                    result = 0;
+                    return true;
                 }
+                // Any other caption band: the shell titlebar context menu, as before.
+                ShowSystemMenuCore(hWnd, (short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
                 result = 0;
                 return true;
             }
+
+            case WM_FG_SHOWSYSMENU:   // IPlatformWindow.ShowSystemMenu (posted: runs from the pump, outside the frame)
+                ShowSystemMenuCore(hWnd, (short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
+                result = 0;
+                return true;
 
             case WM_NCACTIVATE when _customFrame:
                 // Track activation for the IsActive pull (WM_ACTIVATE drives the engine focus/blur events); lParam -1

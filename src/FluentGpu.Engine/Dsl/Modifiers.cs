@@ -26,6 +26,15 @@ public static class Modifiers
     public static BoxEl Pad(this BoxEl b, float all) => b with { Padding = Edges4.All(all) };
     public static BoxEl Pad(this BoxEl b, float left, float top, float right, float bottom) => b with { Padding = new Edges4(left, top, right, bottom) };
 
+    // Window chrome (custom-frame windows): declarative non-client regions, collected by the host each frame.
+    /// <summary>Make this box's visible rect drag the window (<see cref="BoxEl.WindowDrag"/> = <see cref="WindowDragRole.Drag"/>):
+    /// the OS move loop, snap, double-click maximize; right-click → the nearest <c>OnContextRequested</c>, else the
+    /// system menu. Mark interactive children <see cref="NoWindowDrag"/>.</summary>
+    public static BoxEl WindowDragArea(this BoxEl b) => b with { WindowDrag = WindowDragRole.Drag };
+    /// <summary>Keep this box client inside an enclosing <see cref="WindowDragArea"/> (<see cref="BoxEl.WindowDrag"/> =
+    /// <see cref="WindowDragRole.NoDrag"/>) — buttons, text boxes, sliders on a drag surface.</summary>
+    public static BoxEl NoWindowDrag(this BoxEl b) => b with { WindowDrag = WindowDragRole.NoDrag };
+
     // Rich paint
     public static BoxEl Shadow(this BoxEl b, ShadowSpec s) => b with { Shadow = s };
     public static BoxEl Elevate(this BoxEl b, ShadowSpec preset) => b with { Shadow = preset };

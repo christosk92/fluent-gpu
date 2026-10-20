@@ -365,8 +365,10 @@ public sealed class InputHooks
     /// <c>AppHost.IsThemeTransactionRunning</c>; null where <see cref="RunThemeTransaction"/> is.</summary>
     public Func<bool>? IsThemeTransactionRunning;
     /// <summary>Push the titlebar drag/button regions (array + count — the caller reuses ONE array across pushes,
-    /// the host forwards <c>regions.AsSpan(0, count)</c> to <c>IPlatformWindow.SetTitleBarRegions</c>; push happens
-    /// on titlebar relayout only, never per frame).</summary>
+    /// the host COPIES <c>regions.AsSpan(0, count)</c> and composes it with the engine's <c>BoxEl.WindowDrag</c> regions
+    /// before <c>IPlatformWindow.SetTitleBarRegions</c> — this push's non-Caption entries first, its Caption entries
+    /// last; the window sees a push only when the merged list changed. Push on titlebar relayout only, never per frame).
+    /// Most content should declare <c>BoxEl.WindowDrag</c> instead of pushing.</summary>
     public Action<TitleBarRegion[], int>? SetTitleBarRegions;
     /// <summary>Node → its laid-out absolute rect (window DIP) — host-wired to <c>SceneStore.AbsoluteRect</c>. The
     /// TitleBar control builds its region report from captured part handles in a layout effect.</summary>

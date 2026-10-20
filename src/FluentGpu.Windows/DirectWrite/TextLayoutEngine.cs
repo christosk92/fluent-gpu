@@ -51,6 +51,12 @@ public struct LaidLine
     public int VisibleBodyEnd, SuffixStart;
     public float Top, Height, Width;
     public int FirstGlyph, GlyphCount;
+    /// <summary>The line's window into <see cref="TextLayoutEngine.Glyphs"/> (the laid glyphs, including a trim
+    /// ellipsis — so <see cref="LaidCount"/> &gt; <see cref="GlyphCount"/> marks an ellipsized line).</summary>
+    public int FirstLaid, LaidCount;
+    /// <summary>The alignment offset applied to the whole line (TextAlign Center/End; 0 for Start and Justify) — the
+    /// caret x of an EMPTY line (a line with no clusters to read the offset from).</summary>
+    public float X;
 }
 
 /// <summary>
@@ -135,7 +141,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     private sealed class ShapeEntry
     {
         public char[] Text = Array.Empty<char>(); public int TextLen;
-        public string Family = ""; public int Weight; public float Size, CharSpacing, LineHeightArg; public int Stacking, LineBounds;
+        public string Family = ""; public int Weight; public float Size, CharSpacing, LineHeightArg; public int Stacking, LineBounds; public uint Features;
         public RunGlyph[] Glyphs = new RunGlyph[16]; public int GlyphCount;
         public BreakOpp[] Breaks = new BreakOpp[16]; public int BreakCount;
         public float Baseline, UnderlineY, UnderlineThickness, StrikeY, LineH;
@@ -157,7 +163,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     /// already-shaped text does NOT bump it, so a resize that re-wraps cached text leaves this flat.</summary>
     public long ShapeCount { get; private set; }
 
-    private static long ShapeHash(ReadOnlySpan<char> text, string? family, int weight, float size, float charSpacing, float lineHeight, int stacking, int lineBounds)
+    private static long ShapeHash(ReadOnlySpan<char> text, string? family, int weight, float size, float charSpacing, float lineHeight, int stacking, int lineBounds, uint features)
     {
         ulong h = 14695981039346656037UL; const ulong P = 1099511628211UL;
         for (int i = 0; i < text.Length; i++) { h ^= text[i]; h *= P; }
@@ -168,14 +174,15 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         h ^= (uint)BitConverter.SingleToInt32Bits(lineHeight); h *= P;
         h ^= (uint)stacking; h *= P;
         h ^= (uint)lineBounds; h *= P;
+        h ^= features; h *= P;   // OpenType features change glyph ids/advances — a shaping input
         return (long)h;
     }
 
     private static bool NanSafeEq(float a, float b) => (float.IsNaN(a) && float.IsNaN(b)) || a == b;
 
-    private static bool ShapeMatches(ShapeEntry e, ReadOnlySpan<char> text, string? family, int weight, float size, float charSpacing, float lineHeight, int stacking, int lineBounds)
+    private static bool ShapeMatches(ShapeEntry e, ReadOnlySpan<char> text, string? family, int weight, float size, float charSpacing, float lineHeight, int stacking, int lineBounds, uint features)
     {
-        if (e.TextLen != text.Length || e.Weight != weight || e.Size != size || e.CharSpacing != charSpacing
+        if (e.TextLen != text.Length || e.Weight != weight || e.Size != size || e.CharSpacing != charSpacing || e.Features != features
             || e.Stacking != stacking || e.LineBounds != lineBounds || !NanSafeEq(e.LineHeightArg, lineHeight)
             || !string.Equals(e.Family, family ?? "", StringComparison.Ordinal))
             return false;
@@ -196,7 +203,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         _textLen = e.TextLen; _ellGid = e.EllGid; _ellAdv = e.EllAdv; _ellFace = e.EllFace; _ellSize = e.EllSize;
     }
 
-    private void StoreShape(long key, ReadOnlySpan<char> text, string? family, int weight, float size, float charSpacing, float lineHeight, int stacking, int lineBounds, float lineH)
+    private void StoreShape(long key, ReadOnlySpan<char> text, string? family, int weight, float size, float charSpacing, float lineHeight, int stacking, int lineBounds, uint features, float lineH)
     {
         if (!_shapeCache.TryGetValue(key, out var e))   // miss (new key) or collision-overwrite (key present but content differed)
         {
@@ -206,7 +213,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         if (e.Text.Length < text.Length) e.Text = new char[Math.Max(text.Length, e.Text.Length * 2)];
         text.CopyTo(e.Text);
         e.TextLen = text.Length; e.Family = family ?? ""; e.Weight = weight; e.Size = size;
-        e.CharSpacing = charSpacing; e.LineHeightArg = lineHeight; e.Stacking = stacking; e.LineBounds = lineBounds;
+        e.CharSpacing = charSpacing; e.LineHeightArg = lineHeight; e.Stacking = stacking; e.LineBounds = lineBounds; e.Features = features;
         if (e.Glyphs.Length < _glyphCount) e.Glyphs = new RunGlyph[Math.Max(_glyphCount, e.Glyphs.Length * 2)];
         Array.Copy(_glyphs, e.Glyphs, _glyphCount); e.GlyphCount = _glyphCount;
         int bc = _breaks.Count;
@@ -276,10 +283,16 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     /// each span resolves its own face/weight/size for its range. <paramref name="names"/> resolves span family ids
     /// (null ⇒ span families fall back to the base family). Line box: the MAX ascent/descent across base + spans —
     /// one uniform line height per paragraph (the per-line LineStackingStrategy=MaxHeight refinement for mixed-size
-    /// lines is future work; uniform-size spans, the overwhelming case, are exact).</para></summary>
+    /// lines is future work; uniform-size spans, the overwhelming case, are exact).</para>
+    /// <para><paramref name="typography"/> is <c>TextTypography.Pack(align, features, case)</c>: the TextCase bits are applied
+    /// to the text before shaping (E19, into a reused buffer); the FontFeatures bits are a
+    /// SHAPING input (they enter the shape cache key and reach both DWrite shaping calls); the TextAlign bits are a
+    /// POSITIONING input applied after wrap against <paramref name="alignWidth"/> — the box width the run is drawn in
+    /// (+Inf ⇒ the widest line). Alignment never changes <see cref="Width"/>/<see cref="Height"/>.</para></summary>
     public void Layout(ReadOnlySpan<char> text, string family, int weight, float size, float maxWidth, int wrap, int trim, int maxLines,
         float charSpacing = 0f, float lineHeight = float.NaN, int stacking = 0, int lineBounds = 0,
-        ReadOnlySpan<SpanStyle> spans = default, StringTable? names = null, int overflowSuffixStart = -1, int textCase = 0)
+        ReadOnlySpan<SpanStyle> spans = default, StringTable? names = null, int overflowSuffixStart = -1,
+        int typography = 0, float alignWidth = float.PositiveInfinity)
     {
         if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
         // E9: a run with no family of its own shapes in the theme's body chain. Key every cache on the CHAIN, not on "", so a
@@ -288,8 +301,12 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         if (string.IsNullOrEmpty(family)) family = _registry.BodyChain;
         // E19: the case transform is applied HERE, at shaping, into a reused buffer - the written text is never rewritten,
         // nothing is allocated per render, and (length preserving) every cluster/caret index is the same.
-        if (textCase != 0) text = _case.Get(text, (TextCase)textCase);
+        TextCase textCase = TextTypography.CaseOf(typography);
+        if (textCase != TextCase.AsWritten) text = _case.Get(text, textCase);
         _glyphCount = 0; _laidCount = 0; _clusterCount = 0; _lineRecCount = 0; _spanEllCount = 0;
+        uint features = (uint)TextTypography.FeaturesOf(typography);
+        _align = TextTypography.AlignOf(typography);
+        _alignWidth = alignWidth;
 
         // Shape cache: a width-only change replays only WrapAndPosition (shaping is width-independent). Plain text only
         // (spanned inline runs re-shape — never the resize hot path). On a hit, restore the shaped state and re-wrap.
@@ -297,9 +314,9 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         long shapeKey = 0;
         if (cacheable)
         {
-            shapeKey = ShapeHash(text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds);
+            shapeKey = ShapeHash(text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features);
             if (_shapeCache.TryGetValue(shapeKey, out var hit)
-                && ShapeMatches(hit, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds))
+                && ShapeMatches(hit, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features))
             {
                 RestoreShape(hit);
                 hit.Tick = ++_shapeTick;
@@ -363,6 +380,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                 StartChar = 0, EndChar = 0, VisibleBodyEnd = -1, SuffixStart = -1,
                 Top = 0f, Height = lineH, Width = 0f, FirstGlyph = 0, GlyphCount = 0,
             };
+            ApplyAlignment();   // an empty Center/End paragraph still places its caret at the aligned x
             return;
         }
 
@@ -417,7 +435,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                     {
                         ResolveRunFace(segFamily, segWeight, segFace, pos, remaining, out IDWriteFontFace* subFace, out int subLen);
                         if (subLen <= 0) subLen = remaining;
-                        var shaped = _shaper.Shape(p, pos, subLen, subFace, segSize, run.ScriptId, run.ScriptShapes, run.IsRightToLeft);
+                        var shaped = _shaper.Shape(p, pos, subLen, subFace, segSize, run.ScriptId, run.ScriptShapes, run.IsRightToLeft, features);
                         EnsureGlyphs(_glyphCount + shaped.Length);
                         foreach (var g in shaped)
                         {
@@ -439,7 +457,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         }
 
         ShapeCount++;   // an actual itemize+shape pass (this was a cache miss); a re-wrap returns above without bumping it
-        if (cacheable) StoreShape(shapeKey, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, lineH);
+        if (cacheable) StoreShape(shapeKey, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features, lineH);
         WrapAndPosition(size, scale, lineH, maxWidth, wrap, trim, maxLines, (nint)face, overflowSuffixStart);
     }
 
@@ -573,6 +591,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             {
                 StartChar = visibleTextEnd, EndChar = visibleTextEnd, VisibleBodyEnd = -1, SuffixStart = -1,
                 Top = line * lineHeight, Height = lineHeight, Width = 0f, FirstGlyph = _clusterCount, GlyphCount = 0,
+                FirstLaid = _laidCount, LaidCount = 0,
             };
             line++;
         }
@@ -590,10 +609,169 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             {
                 StartChar = 0, EndChar = visibleTextEnd, VisibleBodyEnd = -1, SuffixStart = -1,
                 Top = 0f, Height = lineHeight, Width = 0f, FirstGlyph = 0, GlyphCount = 0,
+                FirstLaid = _laidCount, LaidCount = 0,
             };
         }
         for (int li = 0; li + 1 < _lineRecCount; li++) _lines[li].EndChar = _lines[li + 1].StartChar;
         if (!emittedOverflowSuffix) _lines[_lineRecCount - 1].EndChar = visibleTextEnd;
+        ApplyAlignment();
+    }
+
+    // ── Alignment (TextAlign) ─────────────────────────────────────────────────────────────────────────────────────
+    // Positioning only, applied once every line is laid and sealed: a Center/End line shifts BOTH its laid glyphs and
+    // its cluster table by one offset, and Justify widens the line's interior whitespace clusters — so hit-test, caret
+    // and range rects (which read the cluster table) agree with the drawn glyphs by construction.
+    private TextAlign _align;
+    private float _alignWidth = float.PositiveInfinity;
+
+    private void ApplyAlignment()
+    {
+        if (_align == TextAlign.Start) return;
+        float boxW = float.IsFinite(_alignWidth) ? _alignWidth : Width;   // +Inf ⇒ the widest line (measure unchanged)
+        for (int li = 0; li < _lineRecCount; li++)
+        {
+            ref LaidLine line = ref _lines[li];
+            int visEnd = VisibleClusterEnd(in line);
+            float w = VisibleWidth(in line, visEnd);
+            if (_align == TextAlign.Justify)
+            {
+                // Every line except the last and hard-broken ones; never an ellipsized or overflow-suffix line.
+                if (li + 1 < _lineRecCount && !IsHardBrokenLine(li) && line.SuffixStart < 0 && line.LaidCount == line.GlyphCount)
+                    JustifyLine(in line, visEnd, boxW - w);
+                continue;
+            }
+            float dx = TextTypography.LineOffset(_align, boxW, w);
+            if (dx != 0f) ShiftLine(ref line, dx);
+        }
+    }
+
+    /// <summary>The exclusive end (cluster-table index) of the line's VISIBLE clusters: trailing whitespace hangs past
+    /// the box edge (it never triggered the wrap), so it neither counts toward the aligned width nor receives
+    /// justification space; zero-advance terminators/marks at the end are skipped the same way. An ellipsized line ends
+    /// in the "…" — nothing after it trails, so the whole line is visible.</summary>
+    private int VisibleClusterEnd(in LaidLine line)
+    {
+        int end = line.FirstGlyph + line.GlyphCount;
+        if (line.LaidCount > line.GlyphCount) return end;
+        while (end > line.FirstGlyph)
+        {
+            ref readonly var c = ref _clusters[end - 1];
+            bool ws = (uint)c.Cluster < (uint)_breaks.Count && _breaks[c.Cluster].IsWhitespace;
+            if (!ws && c.Advance != 0f) break;
+            end--;
+        }
+        return end;
+    }
+
+    /// <summary>Visible width of a line in its UNALIGNED frame (lines lay from x = 0; an already-shifted line's offset is
+    /// removed via <see cref="LaidLine.X"/>).</summary>
+    private float VisibleWidth(in LaidLine line, int visEnd)
+    {
+        if (line.LaidCount > line.GlyphCount) return line.Width;   // ellipsized: the trimmed width, "…" included
+        if (visEnd <= line.FirstGlyph) return 0f;
+        ref readonly var last = ref _clusters[visEnd - 1];
+        return last.X + last.Advance - line.X;
+    }
+
+    /// <summary>The visible width (trailing hanging whitespace excluded) of line <paramref name="li"/> of the CURRENT
+    /// layout — the width <c>TextTypography.LineOffset</c> aligns. 0 for an out-of-range line.</summary>
+    public float VisibleLineWidth(int li)
+    {
+        if ((uint)li >= (uint)_lineRecCount) return 0f;
+        ref readonly var line = ref _lines[li];
+        return VisibleWidth(in line, VisibleClusterEnd(in line));
+    }
+
+    /// <summary>Justify-at-use geometry (span artifacts are laid unjustified at measure; consumers justify at the drawn
+    /// box): the number of justifiable whitespace clusters <see cref="JustifyLine"/> would widen on line
+    /// <paramref name="li"/> — 0 when the line is never justified (last, hard-broken, overflow-suffix, ellipsized).</summary>
+    public int JustifyGapCount(int li)
+    {
+        if ((uint)li >= (uint)_lineRecCount || li + 1 >= _lineRecCount || IsHardBrokenLine(li)) return 0;
+        ref readonly var line = ref _lines[li];
+        if (line.SuffixStart >= 0 || line.LaidCount != line.GlyphCount) return 0;
+        return JustifyGapsBefore(li, int.MaxValue);
+    }
+
+    /// <summary>The justifiable gaps left of the caret edge <see cref="CaretXOnLine"/> returns for
+    /// <paramref name="charIndex"/> on line <paramref name="li"/> (same scan: the first cluster at-or-after the index,
+    /// else the line's trailing edge) — the count of widened gaps a justified layout shifts that edge by.</summary>
+    public int JustifyGapsBefore(int li, int charIndex)
+    {
+        if ((uint)li >= (uint)_lineRecCount) return 0;
+        ref readonly var line = ref _lines[li];
+        if (line.GlyphCount == 0) return 0;
+        int gEnd = line.FirstGlyph + line.GlyphCount, k = gEnd;
+        for (int i = line.FirstGlyph; i < gEnd; i++)
+            if (_clusters[i].Cluster >= charIndex) { k = i; break; }
+        int stop = Math.Min(k, VisibleClusterEnd(in line)), count = 0;
+        for (int i = line.FirstGlyph; i < stop; i++)
+            if (IsJustifiable(i)) count++;
+        return count;
+    }
+
+    /// <summary>The line whose band contains <paramref name="top"/> (a range rect's Y is its line's Top); clamps to the
+    /// last line.</summary>
+    public int LineIndexAtTop(float top)
+    {
+        for (int i = 0; i < _lineRecCount; i++)
+            if (top < _lines[i].Top + _lines[i].Height) return i;
+        return _lineRecCount - 1;
+    }
+
+    private bool IsHardBrokenLine(int li)
+    {
+        int term = _lines[li].EndChar - 1;
+        return term >= 0 && term < _breaks.Count && _breaks[term].BreakAfter == BreakOpp.MustBreak;
+    }
+
+    private void ShiftLine(ref LaidLine line, float dx)
+    {
+        line.X = dx;
+        for (int k = line.FirstGlyph, e = line.FirstGlyph + line.GlyphCount; k < e; k++)
+        {
+            ref readonly var c = ref _clusters[k];
+            _clusters[k] = new LaidCluster(c.Cluster, c.X + dx, c.Advance, c.Line);
+        }
+        for (int k = line.FirstLaid, e = line.FirstLaid + line.LaidCount; k < e; k++)
+        {
+            ref readonly var g = ref _laid[k];
+            _laid[k] = new LaidGlyph(g.Gid, g.Face, g.X + dx, g.Y, g.Size, g.Span);
+        }
+    }
+
+    /// <summary>Distribute <paramref name="slack"/> equally over the line's interior whitespace clusters (those before
+    /// <paramref name="visEnd"/>): each widens by the share — its advance, so hit-test/caret/range rects see the wider
+    /// gap — and every later glyph moves right by the accumulated shift. Laid glyphs are 1:1 with clusters on a
+    /// non-ellipsized line, in the same order.</summary>
+    private void JustifyLine(in LaidLine line, int visEnd, float slack)
+    {
+        if (!(slack > 0f) || !float.IsFinite(slack)) return;
+        int count = 0;
+        for (int k = line.FirstGlyph; k < visEnd; k++)
+            if (IsJustifiable(k)) count++;
+        if (count == 0) return;
+        float per = slack / count, shift = 0f;
+        int laidEnd = line.FirstLaid + line.LaidCount;
+        for (int k = line.FirstGlyph, e = line.FirstGlyph + line.GlyphCount; k < e; k++)
+        {
+            ref readonly var c = ref _clusters[k];
+            bool grow = k < visEnd && IsJustifiable(k);
+            _clusters[k] = new LaidCluster(c.Cluster, c.X + shift, grow ? c.Advance + per : c.Advance, c.Line);
+            int gi = line.FirstLaid + (k - line.FirstGlyph);
+            if (gi < laidEnd)
+            {
+                ref readonly var g = ref _laid[gi];
+                _laid[gi] = new LaidGlyph(g.Gid, g.Face, g.X + shift, g.Y, g.Size, g.Span);
+            }
+            if (grow) shift += per;
+        }
+    }
+
+    private bool IsJustifiable(int k)
+    {
+        ref readonly var c = ref _clusters[k];
+        return c.Advance > 0f && (uint)c.Cluster < (uint)_breaks.Count && _breaks[c.Cluster].IsWhitespace;
     }
 
     // Emit the final visible body fragment plus an atomic overflow-only suffix. The suffix is shaped as part of the
@@ -618,6 +796,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         int bodyUseEnd = FitOverflowBody(bodyStart, bodyEnd, bodyBudget);
         int visibleBodyEndChar = bodyUseEnd < bodyEnd ? _glyphs[bodyUseEnd].Cluster : suffixStartChar;
         int firstGlyph = _clusterCount;
+        int firstLaid = _laidCount;
         float x = 0f;
         float baselineY = Baseline + lineIndex * lineHeight;
         AppendLogicalRange(bodyStart, bodyUseEnd, lineIndex, baselineY, ref x);
@@ -639,6 +818,8 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             Width = x,
             FirstGlyph = firstGlyph,
             GlyphCount = _clusterCount - firstGlyph,
+            FirstLaid = firstLaid,
+            LaidCount = _laidCount - firstLaid,
         };
     }
 
@@ -743,6 +924,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         EnsureLaid(_laidCount + useLen + 1);
         EnsureClusters(_clusterCount + useLen);
         int firstGlyph = _clusterCount;
+        int firstLaid = _laidCount;
         for (int k = 0; k < useLen; k++)
         {
             ref readonly var g = ref _glyphs[order[k]];
@@ -775,6 +957,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             StartChar = minCluster, EndChar = _textLen, VisibleBodyEnd = -1, SuffixStart = -1,
             Top = lineIndex * lineHeight, Height = lineHeight, Width = x,
             FirstGlyph = firstGlyph, GlyphCount = useLen,
+            FirstLaid = firstLaid, LaidCount = _laidCount - firstLaid,
         };
     }
 
@@ -884,7 +1067,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     private float CaretXOnLine(int li, int charIndex)
     {
         ref readonly var line = ref _lines[li];
-        if (line.GlyphCount == 0) return 0f;
+        if (line.GlyphCount == 0) return line.X;   // an empty line's caret sits at its alignment offset
         int gEnd = line.FirstGlyph + line.GlyphCount;
         for (int i = line.FirstGlyph; i < gEnd; i++)
             if (_clusters[i].Cluster >= charIndex) return _clusters[i].X;

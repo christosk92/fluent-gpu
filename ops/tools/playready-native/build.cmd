@@ -12,14 +12,29 @@ REM and SegmentStore.h's sample-list algorithms - see tests\FeedTests.cpp's own 
 REM a non-zero exit from either the compile or the run fails this build. Its objects land under %OUT%\tests\ so they
 REM never collide with the DLL's own %OUT%\*.obj.
 setlocal
-set VCVARS="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvarsall.bat"
 set HERE=%~dp0
 set ARCH=%~1
 if "%ARCH%"=="" set ARCH=arm64
 set OUT=out\%ARCH%
 
-call %VCVARS% %ARCH% >nul
-if errorlevel 1 ( echo vcvarsall failed & exit /b 1 )
+REM vcvarsall.bat: FG_VCVARSALL if set, else the newest Visual Studio (any edition, previews included) that vswhere
+REM reports, else the owner's VS 18 Community path. vswhere always lives in the Installer folder, so this finds VS 2022
+REM Enterprise on a GitHub windows-latest runner as well as a local VS 18 install. Labels, not if-blocks: the
+REM parentheses in %ProgramFiles(x86)% end a parenthesised block early.
+set VCVARS=
+if defined FG_VCVARSALL set "VCVARS=%FG_VCVARSALL%"
+if defined VCVARS goto :havevcvars
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "%VSWHERE%" goto :fallbackvcvars
+for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -prerelease -products * -property installationPath`) do set "VCVARS=%%i\VC\Auxiliary\Build\vcvarsall.bat"
+if defined VCVARS if exist "%VCVARS%" goto :havevcvars
+:fallbackvcvars
+set "VCVARS=C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvarsall.bat"
+:havevcvars
+if not exist "%VCVARS%" ( echo vcvarsall.bat not found - install the MSVC C++ build tools or set FG_VCVARSALL & exit /b 1 )
+
+call "%VCVARS%" %ARCH% >nul
+if errorlevel 1 ( echo vcvarsall failed: "%VCVARS%" %ARCH% & exit /b 1 )
 
 pushd "%HERE%"
 if not exist %OUT% mkdir %OUT%
