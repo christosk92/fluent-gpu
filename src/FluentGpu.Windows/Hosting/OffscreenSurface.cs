@@ -33,11 +33,13 @@ public sealed record OffscreenSurfaceOptions
 /// activation 30000 px off every monitor (DXGI stands down presents to an invisible or minimized window). It is created on the
 /// calling thread and only this surface pumps its messages. Callers never touch Win32.</para>
 /// <para><b>Headless semantics.</b> <see cref="Window"/> forwards everything to a <see cref="HeadlessWindow"/>
-/// (<see cref="Input"/>): the size and scale it reports, the queued input, scroll and text input, and it reports a
-/// <see cref="NativeHandleKind.Headless"/> handle that carries the HWND. An <see cref="AppHost"/> over it therefore runs
-/// exactly as over a plain headless window (single-thread inline submit, the fixed frame clock, deterministic animation),
-/// except that every <see cref="AppHost.RunFrame"/> really draws and presents. Pair it with a real
-/// <see cref="DirectWriteFontSystem"/> (<see cref="CreateFontSystem"/>) for truthful text metrics.</para>
+/// (<see cref="Input"/>): the size and scale it reports, the queued input, scroll and text input, the window flags a caller
+/// sets on it (<see cref="HeadlessWindow.InModalLoop"/>, <see cref="HeadlessWindow.SizedInModalLoop"/>,
+/// <see cref="HeadlessWindow.Composited"/>), and it reports a <see cref="NativeHandleKind.Headless"/> handle that carries the
+/// HWND. An <see cref="AppHost"/> over it therefore runs exactly as over a plain headless window (single-thread inline
+/// submit, the fixed frame clock, deterministic animation, the modal-resize hold), except that every
+/// <see cref="AppHost.RunFrame"/> really draws and presents. Pair it with a real <see cref="DirectWriteFontSystem"/>
+/// (<see cref="CreateFontSystem"/>) for truthful text metrics.</para>
 /// <para>Thread: create, run frames, capture and dispose on ONE thread (the host's UI thread). Order: dispose the
 /// <see cref="AppHost"/> first (it disposes <see cref="Device"/>), then this surface (it destroys the window).</para>
 /// <para><b>Stack.</b> The scene recorder walks the tree recursively on that thread. On a default 1 MB thread a real app's
@@ -257,9 +259,9 @@ public sealed partial class OffscreenSurface : IDisposable
 
 /// <summary>
 /// The <see cref="IPlatformWindow"/> of an <see cref="OffscreenSurface"/>: a <see cref="HeadlessWindow"/> (<see cref="Inner"/>,
-/// which owns the size, scale, input queue and every test seam) whose handle carries the surface's hidden HWND, so the D3D12
-/// device presents into it while the host keeps headless semantics. Each input pump also drains the hidden window's own
-/// messages, so the OS never sees it as hung.
+/// which owns the size, scale, input queue, the window flags and every test seam) whose handle carries the surface's hidden
+/// HWND, so the D3D12 device presents into it while the host keeps headless semantics. Each input pump also drains the hidden
+/// window's own messages, so the OS never sees it as hung.
 /// </summary>
 public sealed partial class OffscreenWindow : IPlatformWindow
 {
@@ -297,7 +299,14 @@ public sealed partial class OffscreenWindow : IPlatformWindow
     public Action? PaintRequested { get => Inner.PaintRequested; set => Inner.PaintRequested = value; }
     public Action? ModalLoopTick { get => Inner.ModalLoopTick; set => Inner.ModalLoopTick = value; }
     public bool InModalLoop => Inner.InModalLoop;
-    public bool Composited => false;
+
+    /// <summary>The headless model's flag, not the device's: the host reads it for host behaviour only (a composited window
+    /// holds the old layout through a modal edge-drag, and a backdrop material clears transparent), never to pick a swapchain
+    /// (the device was made non-composited). A caller that plays a composited window's edge-drag sets it on <see cref="Inner"/>
+    /// (Wavee's inspector <c>crossing</c> does), so the hold engages here exactly as over a plain <see cref="HeadlessWindow"/>;
+    /// a hard-coded false made such a crossing lay the new tier out at once under the offscreen device.</summary>
+    public bool Composited => Inner.Composited;
+
     public bool SizedInModalLoop => Inner.SizedInModalLoop;
     public void SetCursor(CursorId id) => Inner.SetCursor(id);
     public void SetTitle(StringId title) => Inner.SetTitle(title);
@@ -320,6 +329,26 @@ public sealed partial class OffscreenWindow : IPlatformWindow
     public bool IsClosed => Inner.IsClosed;
     public void SetTopmost(bool topmost) => Inner.SetTopmost(topmost);
     public void MoveToPx(Point2 outerOriginPx) => Inner.MoveToPx(outerOriginPx);
+    public void ShowSystemMenu(Point2 screenPx) => Inner.ShowSystemMenu(screenPx);
+
+    // Size-to-content: the headless model resizes at once and records the user's resizes, so the next frame's EnsureSize resizes
+    // the swapchain like any other size change (the hidden HWND's own size never matters, see TryCreate).
+    public void SetClientSizePx(Size2 px) => Inner.SetClientSizePx(px);
+    public Size2 MinClientSizeDip => Inner.MinClientSizeDip;
+    public long UserResizeEpoch => Inner.UserResizeEpoch;
+
+    // Interface defaults the headless model does not override today, forwarded so a seam it gains later reaches the host here too
+    // (a member left out silently reads the interface default instead). Deliberately NOT forwarded: Handle (the hidden HWND),
+    // WaitForWork (pumps that HWND; the headless model's returns at once) and its typed overload, whose default calls ours.
+    private IPlatformWindow Model => Inner;
+    public IRenderDisplayClock? CreateRenderDisplayClock() => Model.CreateRenderDisplayClock();
+    public void Wake() => Model.Wake();
+    public DisplayClockSample DisplayClock => Model.DisplayClock;
+    public long DisplayRefreshPeriodQpc => Model.DisplayRefreshPeriodQpc;
+    public FluentGpu.Media.SizeI MonitorSizePx => Model.MonitorSizePx;
+    public void SetBoundsPx(RectF outerBoundsPx) => Model.SetBoundsPx(outerBoundsPx);
+    public void SetMinClientSizePx(Size2 px) => Model.SetMinClientSizePx(px);
+    public void SetHasLiveVideo(bool hasLiveVideo) => Model.SetHasLiveVideo(hasLiveVideo);
 
     /// <summary>The host disposes its window on teardown; the hidden HWND stays until <see cref="OffscreenSurface.Dispose"/>.</summary>
     public void Dispose() => Inner.Dispose();
