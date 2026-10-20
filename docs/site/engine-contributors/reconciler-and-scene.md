@@ -190,8 +190,8 @@ Two contracts make this correct, and you must preserve both when you add a chann
    `Update` (behind the DiffProps `RecordChanged` gate) calls `RewireBinds`: a still-bound channel whose thunk/signal
    payload changed swaps the effect's source and re-runs it once (re-tracking); an equal payload re-runs nothing
    (`gate.bind.rewire-*`). So a body must read its source via `fx.Read()` and any static companion via `fx.El` (the
-   element last reconciled) — never a local captured at mount. A static↔bound **flip** is not re-wired
-   (`BindContract` flags it).
+   element last reconciled) — never a local captured at mount. A static↔bound **flip** follows the new form
+   (bound→static unwires the effect, static→bound wires one; `Reconciler.Rewire.cs`).
 2. **The static value is re-asserted on every reconcile only when `!IsBound`.** In `WriteColumns` you will see this
    guard on every bound channel — e.g. `if (!b.Opacity.IsBound) paint.Opacity = b.Opacity.Value;` and
    `if (!b.Width.IsBound) li.Width = b.Width.Value;`. This is the single chokepoint that fixed the historical Opacity

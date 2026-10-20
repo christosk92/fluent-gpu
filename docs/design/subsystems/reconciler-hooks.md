@@ -100,7 +100,7 @@ contracts owned elsewhere:
 >   reference-compare `GcDepTable` upgrade (§3.3) is the **gated** `[EnableHookDepsLowering]` (GEN-02) path — probabilistic
 >   FromRef today, exact if collisions ever bite. See the §3.2 status note (updated).
 > - **`UseRequiredContext<T>`** (throws naming the type if unprovided) + the **`BindContract`** DEBUG tripwire
->   (on whenever compiled in; `--fg no-guards` turns it off, `--fg guards-throw` makes it throw) flagging a bound↔static channel flip at the Update seam (a bind is created only at mount and re-wired only bound→bound, so a flip loses).
+>   (on whenever compiled in; `--fg no-guards` turns it off, `--fg guards-throw` makes it throw). Since 2026-10-20 a bound↔static channel flip is handled at the Update seam (§0bis), so BindContract no longer reports flips; after a flip it cross-checks that the node carries one binding per bound `Prop<T>` channel (`BindContract.Unwired`) and still flags a bound `Visible` on a `MorphId` node.
 > - **Typed keyed `Flow.For<T>` + `UpdateFor` (G2).** `Flow.For<T>(items, keyOf, row)` (thunk or signal-direct source;
 >   **key mandatory**, DEBUG duplicate-key tripwire; `Fill` reads the source ONCE per effect run). `UpdateFor`
 >   **re-points the row/key closures on parent re-render** — fixing the latent `ForEl.Update` no-op where For closures
@@ -215,9 +215,17 @@ contracts owned elsewhere:
   same delegate/signal by `Prop<T>` equality — re-runs nothing; zero managed allocation; a layout channel's re-run that
   wrote is promoted to a layout-shape change, as its static write would be. Before this, wiring was mount-only and a
   fresh thunk capturing new render-time values was silently ignored — `ProgressBar.Create`'s indicator kept its
-  fallback-width product while its static track followed. Gates `gate.bind.rewire-*`). A static↔bound **flip** is not
-  re-wired — the mount effect keeps the channel and the new form silently loses (the `BindContract` tripwire below);
-  the STATIC value is re-asserted on every reconcile **iff `!IsBound`** — the single chokepoint rule that fixed the historical
+  fallback-width product while its static track followed. Gates `gate.bind.rewire-*`). A static↔bound **flip** follows
+  the NEW form (2026-10-20, same seam, same gate): **bound→static** — WriteColumns writes the static value through the
+  normal column write (with its layout-shape promotion) and `RewireBinds` unlinks the channel's effect from the node's
+  chain and disposes it (unsubscribed; a fire already queued for the flush is skipped as disposed; unmount never sees it
+  again); **static→bound** — the generated `{T}Diff.AnyBindGained` finds the channel and `WireGainedBinds` wires it
+  through Mount's own `BindNode` code (filtered to the newly bound channels, no `OnRealized` replay), runs it once inside
+  the render scope and promotes a layout channel's write. Anchors (component/Show/For/KeepAlive/SkelRegion/Provider)
+  and Scroll/VirtualList do the same for `Visible`. An unchanged element costs nothing (the RecordChanged gate); a changed
+  element without a flip pays one generated `IsBound` sweep. Before this, a flip silently lost — Wavee's playlist side
+  column mounted at a static `Width` 0, re-rendered bound to the insights toggle, and stayed 0 (gate `gate.bind.flip-follows`,
+  `BindFlipTests`). The STATIC value is re-asserted on every reconcile **iff `!IsBound`** — the single chokepoint rule that fixed the historical
   Opacity `!= 1f` reappear bug and the Fill/TextColor bound-value clobbers by construction. A bound fire writes ONE
   scene column + marks the matching dirty axis (Transform/Paint → compositor-only; Width/Height/Text → scoped
   relayout). This is the **compositor bypass**: a high-frequency scalar (slider scrub via

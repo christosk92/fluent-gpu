@@ -450,7 +450,7 @@ static class DiagnosticsSuite
                         }
                         // KEY the swapped subtree so a baseline↔heavy swap REMOUNTS it rather than reusing nodes
                         // positionally — otherwise the static-Fill Button and a bound-Fill heavy row collide at the same
-                        // slot (a bound↔static channel flip on a reused node, which the BindContract tripwire flags).
+                        // slot (a bound↔static channel flip on a reused node: handled since 2026-10-20, but a remount is the honest shape here).
                         return new BoxEl
                         {
                             Direction = 1, Width = 320, Height = 480,

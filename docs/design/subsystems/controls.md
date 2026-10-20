@@ -385,7 +385,7 @@ rule that every stateful control obeys:
      `var owned = UseSignal(false); var isOpen = IsOpenSignal ?? owned;` (PopupCore).
    - The **signal instance is a mount-time contract** — swapping the signal requires a re-key (a control's core may
      hold it in hooks/effects wired at mount; the reconciler re-wires only element binds, bound→bound);
-     the `BindContract` DEBUG tripwire (reconciler-hooks §0bis) catches a bound↔static flip. A VerticalSlice gate
+     a bound↔static flip of an element channel is handled by the reconciler (reconciler-hooks §0bis). A VerticalSlice gate
      pins the decoupling contract: **a signal write bypasses render/reconcile** (the whole safety argument for
      controlled-everything, turned into a regression gate — research adjustment #8).
    - **Closed callback-name set** (no `Action<TOld,TNew>` shapes): `onChange` (value), `onClick`/`onInvoked`

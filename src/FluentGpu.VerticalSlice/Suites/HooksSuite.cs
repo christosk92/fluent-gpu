@@ -433,40 +433,36 @@ static class HooksSuite
                 $"threw={unprovidedThrows} named={named} got={got} parked={parked} nullThrows={nullThrows}");
         }
 
-        // gate.bind.contract-flip — a bound↔static flip on a REUSED node trips BindContract; a fresh-thunk re-render does NOT.
+        // gate.bind.flip-follows — a static↔bound flip on a REUSED node follows the NEW form (reconciler-hooks §0bis,
+        // 2026-10-20): static→bound wires the channel and tracks its signal; bound→static takes the static value and drops
+        // the old subscription; neither trips BindContract (its shape cross-check stays clean).
         {
             bool prevEnabled = BindContract.Enabled, prevThrow = BindContract.ThrowOnViolation;
             BindContract.Enabled = true; BindContract.ThrowOnViolation = false;
             try
             {
-                var sig = new Signal<FluentGpu.Foundation.ColorF>(FluentGpu.Foundation.ColorF.Transparent);
-
+                var red = new FluentGpu.Foundation.ColorF(1, 0, 0, 1);
+                var green = new FluentGpu.Foundation.ColorF(0, 1, 0, 1);
+                var blue = new FluentGpu.Foundation.ColorF(0, 0, 1, 1);
+                var sig = new Signal<FluentGpu.Foundation.ColorF>(red);
                 BindContract.Reset();
+
                 var s1 = new SceneStore(); var r1 = new TreeReconciler(s1, strings);
-                var e1 = new BoxEl { Width = 10, Height = 10, Fill = FluentGpu.Foundation.ColorF.Transparent };   // static
-                var e2 = new BoxEl { Width = 10, Height = 10, Fill = sig };                                       // bound
+                var e1 = new BoxEl { Width = 10, Height = 10, Fill = green };   // static
+                var e2 = new BoxEl { Width = 10, Height = 10, Fill = sig };     // bound
                 r1.ReconcileRoot(e1, null); r1.ReconcileRoot(e2, e1);
-                bool staticToBound = BindContract.CompiledIn
-                    ? BindContract.Violations == 1 && BindContract.LastViolation!.Contains("Fill")
-                    : BindContract.Violations == 0 && BindContract.LastViolation is null;
+                bool tookBound = s1.Paint(s1.Root).Fill == red;
+                sig.Value = blue; r1.Runtime.Flush();
+                bool staticToBound = tookBound && s1.Paint(s1.Root).Fill == blue && sig.HasSubscribers;
 
-                BindContract.Reset();
-                var s2 = new SceneStore(); var r2 = new TreeReconciler(s2, strings);
-                var f1 = new BoxEl { Width = 10, Height = 10, Fill = sig };                                       // bound
-                var f2 = new BoxEl { Width = 10, Height = 10, Fill = FluentGpu.Foundation.ColorF.Transparent };   // static
-                r2.ReconcileRoot(f1, null); r2.ReconcileRoot(f2, f1);
-                bool boundToStatic = BindContract.Violations == (BindContract.CompiledIn ? 1 : 0);
+                var e3 = new BoxEl { Width = 10, Height = 10, Fill = green };   // back to static
+                r1.ReconcileRoot(e3, e2);
+                sig.Value = red; r1.Runtime.Flush();
+                bool boundToStatic = s1.Paint(s1.Root).Fill == green && !sig.HasSubscribers && r1.NodeBindingCount == 0;
 
-                BindContract.Reset();
-                var s3 = new SceneStore(); var r3 = new TreeReconciler(s3, strings);
-                var g1 = new BoxEl { Width = 10, Height = 10, Fill = Prop.Of(() => FluentGpu.Foundation.ColorF.Transparent) };   // bound (thunk)
-                var g2 = new BoxEl { Width = 10, Height = 10, Fill = Prop.Of(() => FluentGpu.Foundation.ColorF.Transparent) };   // FRESH thunk, same shape → NOT a flip
-                r3.ReconcileRoot(g1, null); r3.ReconcileRoot(g2, g1);
-                bool thunkQuiet = BindContract.Violations == 0;
-
-                Check("gate.bind.contract-flip bound↔static flip on a reused node trips; a fresh-thunk re-render does not",
-                    staticToBound && boundToStatic && thunkQuiet,
-                    $"staticToBound={staticToBound} boundToStatic={boundToStatic} thunkQuiet={thunkQuiet}");
+                Check("gate.bind.flip-follows a static↔bound flip on a reused node follows the new form, no leaked subscription, no BindContract report",
+                    staticToBound && boundToStatic && BindContract.Violations == 0,
+                    $"staticToBound={staticToBound} boundToStatic={boundToStatic} violations={BindContract.Violations} [{BindContract.LastViolation}]");
             }
             finally { BindContract.Enabled = prevEnabled; BindContract.ThrowOnViolation = prevThrow; }
         }
