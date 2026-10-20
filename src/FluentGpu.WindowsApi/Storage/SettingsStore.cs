@@ -25,13 +25,21 @@ public sealed class SettingsStore
 
     private SettingsStore(AppDataStore store, ReactiveRuntime runtime) { _store = store; _runtime = runtime; }
 
-    /// <summary>A reactive store over <c>HKCU\Software\{publisher}\{product}\Settings</c>. The <paramref name="runtime"/>
-    /// is the host reactive runtime (a component's <c>Context.Runtime</c>) that drives the write-through persist effects.</summary>
+    /// <summary>A reactive store over the <c>\Settings</c> subkey of <c>HKCU\Software\{publisher}\{product}</c> — i.e.
+    /// <c>HKCU\Software\{publisher}\{product}\Settings</c> (see <see cref="RegistryPath"/>). The <paramref name="runtime"/>
+    /// is the host reactive runtime (a component's <c>Context.Runtime</c>) that drives the write-through persist effects.
+    /// <paramref name="publisher"/> and <paramref name="product"/> are validated exactly as by
+    /// <see cref="AppDataStore.ForUnpackaged"/>: each must be ONE segment (no <c>\</c> or <c>/</c>, no leading/trailing
+    /// whitespace), else <see cref="ArgumentException"/> naming the offending parameter.</summary>
     public static SettingsStore ForUnpackaged(string publisher, string product, ReactiveRuntime runtime)
         => new(AppDataStore.ForUnpackaged(publisher, product), runtime ?? throw new ArgumentNullException(nameof(runtime)));
 
     /// <summary>The underlying typed container (one-shot reads/writes, folders, Keys/Clear).</summary>
     public AppDataStore Store => _store;
+
+    /// <summary>The full registry path of the settings container, e.g. <c>HKCU\Software\Contoso\MyApp\Settings</c>
+    /// (same as <see cref="AppDataStore.RegistryPath"/>).</summary>
+    public string RegistryPath => _store.RegistryPath;
 
     /// <summary>A persisted string setting (REG_SZ), seeded from disk or <paramref name="fallback"/>.</summary>
     public Signal<string> String(string key, string fallback = "") => Bind(key, _store.GetString(key, fallback) ?? fallback, v => _store.SetString(key, v));

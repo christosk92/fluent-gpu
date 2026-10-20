@@ -2542,12 +2542,13 @@ internal sealed class SceneRecordingContext
                         dl.DrawGlyphRunGradient(local, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
-                            world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, ink: in ink, textCase: (int)style.Case);
+                            world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, ink: in ink,
+                            typography: TextTypography.Pack(in style));
                     else
                         dl.DrawGlyphRun(local, textColor, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
-                            world, opacity, key, spanRunId, ink: in ink, textCase: (int)style.Case);
+                            world, opacity, key, spanRunId, ink: in ink, typography: TextTypography.Pack(in style));
                 }
 
                 // (b1) span-run decoration bars (per-LINE, per span — the rich-text refinement of (b2) below): the
@@ -2561,7 +2562,10 @@ internal sealed class SceneRecordingContext
                     {
                         if (arts[i].Kind == SpanStyle.LinkBit) continue;   // hit-test bands, not painted
                         ColorF spanColor = spanStyles[arts[i].Span].Color;
-                        dl.FillRoundRect(arts[i].Rect, default, spanColor.A > 0f ? spanColor : textColor, world, opacity, key | 0x8);
+                        // Laid Start-aligned + unjustified at measure: place at THIS box (local.W = the glyph op's
+                        // Bounds.W the renderer aligns/justifies at) — Center/End line offset, Justify gap widening.
+                        RectF bar = TextTypography.PlaceSpanRect(in arts[i], style.Align, local.W);
+                        dl.FillRoundRect(bar, default, spanColor.A > 0f ? spanColor : textColor, world, opacity, key | 0x8);
                     }
                 }
 
@@ -2577,18 +2581,34 @@ internal sealed class SceneRecordingContext
                 {
                     // The measure pass get-or-created this row for every text leaf (mc captured above), so 0-alloc here.
                     float barW = mc.Valid ? MathF.Min(mc.Size.Width, pw) : pw;
+                    // TextAlign Center/End: the bar follows the first line — its visible width (trailing spaces
+                    // excluded), offset by the renderer's line offset inside this box.
+                    float barX = 0f;
+                    if (mc.Valid && style.Align is TextAlign.Center or TextAlign.End)
+                    {
+                        float flw = mc.FirstLineWidth > 0f ? mc.FirstLineWidth : mc.Size.Width;
+                        barX = TextTypography.LineOffset(style.Align, pw, flw);
+                        barW = MathF.Min(flw, pw);
+                    }
+                    else if (mc.Valid && style.Align == TextAlign.Justify)
+                    {
+                        // Justify: a justified first line fills the box the renderer justifies at (the seam reports
+                        // FirstLineWidth +Inf); an unjustified one (single/last/hard-broken line) keeps its natural width.
+                        float flw = mc.FirstLineWidth > 0f ? mc.FirstLineWidth : mc.Size.Width;
+                        barW = float.IsPositiveInfinity(flw) ? pw : MathF.Min(flw, pw);
+                    }
                     // Fallbacks mirror the engine's font-metric conventions for backends that report none (GDI):
                     // thickness max(1, size/14) = TextLayoutEngine.cs:142's own fallback; positions = the headless model.
                     float thick = mc.Valid && mc.UnderlineThickness > 0f ? mc.UnderlineThickness : MathF.Max(1f, effSize / 14f);
                     if ((p.TextDecorations & NodePaint.UnderlineBit) != 0 && barW > 0f)
                     {
                         float y = mc.Valid && mc.UnderlineY > 0f ? mc.UnderlineY : effSize * 1.1f + 1f;
-                        dl.FillRoundRect(new RectF(0f, y, barW, thick), default, textColor, world, opacity, key | 0x8);
+                        dl.FillRoundRect(new RectF(barX, y, barW, thick), default, textColor, world, opacity, key | 0x8);
                     }
                     if ((p.TextDecorations & NodePaint.StrikethroughBit) != 0 && barW > 0f)
                     {
                         float y = mc.Valid && mc.StrikeY > 0f ? mc.StrikeY : effSize * 0.8f;
-                        dl.FillRoundRect(new RectF(0f, y, barW, thick), default, textColor, world, opacity, key | 0x8);
+                        dl.FillRoundRect(new RectF(barX, y, barW, thick), default, textColor, world, opacity, key | 0x8);
                     }
                 }
 
@@ -2606,7 +2626,7 @@ internal sealed class SceneRecordingContext
                         dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
-                            world, opacity, key | 0x1, spanRunId, forceColor: true, textCase: (int)style.Case);
+                            world, opacity, key | 0x1, spanRunId, forceColor: true, typography: TextTypography.Pack(in style));
                         dl.PopClip(key | 0x1);
                     }
 

@@ -49,6 +49,9 @@ public struct TextMeasureEntry
     /// <summary><see cref="FluentGpu.Text.FontRegistry.BodyVersion"/> at measure time (E9): a run with no family of its own
     /// shapes in the theme's body font, which the style key cannot see, so a body-font change makes every entry miss.</summary>
     public int FontEpoch;
+    /// <summary>First line's advance without trailing hanging whitespace (TextMetrics.FirstLineWidth; NaN = not
+    /// reported) — the width and alignment basis of an aligned single-run decoration bar.</summary>
+    public float FirstLineWidth;
 
     public readonly bool Matches(StringId text, in TextStyle style, float maxW, int fontEpoch = 0)
         => Valid && Text == text && MaxW == maxW && FontEpoch == fontEpoch && Style == style;

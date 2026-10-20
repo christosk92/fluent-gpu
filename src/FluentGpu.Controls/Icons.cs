@@ -9,7 +9,15 @@ namespace FluentGpu.Controls;
 /// <c>glyphs.json</c> — the single source of truth (per "improve, don't port: JSON over XML"). Add or change a glyph in
 /// <c>glyphs.json</c>, not here; every name resolves to <c>"\uXXXX"</c> exactly as before. This partial keeps the type
 /// declaration (and its doc); the generated partial supplies the members.</para>
+///
+/// <para><b>Discovering glyphs.</b> Every constant's XML doc names its codepoint (<c>Segoe Fluent Icons glyph "Play"
+/// (U+E768).</c>). <see cref="All"/> lists every (Name, Glyph) pair in <c>glyphs.json</c> order, and
+/// <see cref="TryGetName"/> maps a glyph string back to its constant name.</para>
 /// </summary>
 public static partial class Icons
 {
 }
+
+/// <summary>One entry of <see cref="Icons.All"/>: the <see cref="Icons"/> constant <paramref name="Name"/> (e.g.
+/// <c>"Play"</c>) and its one-character <paramref name="Glyph"/> string (e.g. <c>""</c>).</summary>
+public readonly record struct IconGlyph(string Name, string Glyph);

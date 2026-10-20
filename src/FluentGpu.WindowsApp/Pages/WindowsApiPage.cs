@@ -890,9 +890,14 @@ sealed class NotifyIconCard : Component
 
         static string IconPath() => System.IO.Path.Combine(AppContext.BaseDirectory, "assets", "AppIcon", "appicon.ico");
 
+        // 0 = the .ico file; n > 0 = the drawn glyph (TrayIconArt) carrying badge n — its source redraws itself on every
+        // shell change, so Refresh leaves it alone.
+        var badgeCount = UseRef(0);
+
         void Refresh(NotifyIcon icon)
         {
-            icon.SetIcon(IconPath());   // auto-sized: the frame the taskbar DPI selects, reloaded when it changes
+            if (badgeCount.Value == 0)
+                icon.SetIcon(IconPath());   // auto-sized: the frame the taskbar DPI selects, reloaded when it changes
         }
 
         UseEffect(() =>
@@ -976,6 +981,27 @@ sealed class NotifyIconCard : Component
             statusColor.Value = WinApiUi.Info;
         };
 
+        Action glyphBadge = () =>
+        {
+            if (Ensure() is not { } icon) return;
+            int n = badgeCount.Value = badgeCount.Value % 12 + 1;
+            string badge = n == 12 ? "99+" : n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            // Drawn on the CPU at the taskbar's frame size and ink; redrawn on a DPI / light-dark change or an explorer restart.
+            icon.SetIconSource(r => TrayIconArt.Glyph(r, "\uE715" /* Mail */, badge: badge));
+            bool shown = icon.Show();
+            status.Value = shown ? $"Glyph icon with badge \"{badge}\" — press again to count up." : "The shell refused the icon (retried when explorer restarts).";
+            statusColor.Value = shown ? WinApiUi.Ok : WinApiUi.Warn;
+        };
+
+        Action icoFile = () =>
+        {
+            if (Ensure() is not { } icon) return;
+            badgeCount.Value = 0;
+            Refresh(icon);
+            status.Value = "Back to the .ico file.";
+            statusColor.Value = WinApiUi.Info;
+        };
+
         var form = new BoxEl
         {
             Direction = 1, Gap = 12f,
@@ -990,6 +1016,15 @@ sealed class NotifyIconCard : Component
                         Button.Accent("Show icon", show),
                         Button.Standard("Remove icon", hide),
                         Button.Standard("Hide window to tray", hideWindow),
+                    ],
+                },
+                new BoxEl
+                {
+                    Direction = 0, Gap = 8f, Wrap = true, AlignItems = FlexAlign.Center,
+                    Children =
+                    [
+                        Button.Standard("Glyph + badge", glyphBadge),
+                        Button.Standard("Use .ico file", icoFile),
                     ],
                 },
             ],
@@ -1008,6 +1043,9 @@ sealed class NotifyIconCard : Component
             };
             icon.Show();
             FluentApp.SetWindowVisible(false);          // hidden: the host parks exactly as if minimized
+
+            // Drawn instead of a file: a glyph tinted for the taskbar + a badge, redrawn on DPI / theme changes.
+            icon.SetIconSource(r => TrayIconArt.Glyph(r, "\uE715", badge: "3"));
             """);
     }
 }

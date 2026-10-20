@@ -5620,6 +5620,7 @@ public sealed partial class TreeReconciler
                 if (b.CounterScale) _scene.Mark(node, NodeFlags.CounterScaled); else _scene.Unmark(node, NodeFlags.CounterScaled);
                 _scene.SetBoundsChangedHandler(node, b.OnBoundsChanged);
                 _scene.SetFollowRect(node, b.FollowRect);   // F169: the engine's post-layout follow pass (SceneStore.Follow.cs)
+                _scene.SetWindowDrag(node, b.WindowDrag);   // declarative NC drag region (SceneStore.WindowDrag.cs; host collects at 7.8)
                 if (b.Animate is { } at && Anim is { } anim)
                 {
                     anim.SetTransition(node, at);
@@ -6256,7 +6257,8 @@ public sealed partial class TreeReconciler
                 TextStyle prevStyle = li.TextStyle;
                 li.TextStyle = new TextStyle(famId, t.Size, t.ResolvedWeight, t.Wrap, t.Trim, t.MaxLines,
                     t.CharSpacing, t.LineHeight, t.LineStacking, t.LineBounds,
-                    MinSizeDip: float.IsNaN(t.MinSize) ? 0f : t.MinSize, Case: t.Case);
+                    MinSizeDip: float.IsNaN(t.MinSize) ? 0f : t.MinSize, Case: t.Case,
+                    Align: t.TextAlign, Features: t.FontFeatures);
                 TextFitContract.Check(in prevStyle, in li.TextStyle, t.Text.IsBound ? "(bound)" : t.Text.Value);
                 li.Margin = t.Margin;
                 li.Width = t.Width; li.Height = t.Height;
@@ -6293,7 +6295,8 @@ public sealed partial class TreeReconciler
                 var famId = _strings.Intern(st.FontFamily);
                 if (li.TextStyle.FontFamily != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.FontFamily); }
                 li.TextStyle = new TextStyle(famId, st.Size, st.Weight != 0 ? st.Weight : (ushort)400,
-                    st.Wrap, st.Trim, st.MaxLines, st.CharSpacing, st.LineHeight, st.LineStacking, st.LineBounds, runId);
+                    st.Wrap, st.Trim, st.MaxLines, st.CharSpacing, st.LineHeight, st.LineStacking, st.LineBounds, runId,
+                    Align: st.TextAlign, Features: st.FontFeatures);
                 li.Margin = st.Margin;
                 li.Width = st.Width; li.Height = st.Height;
                 li.MinW = st.MinWidth; li.MinH = st.MinHeight; li.MaxW = st.MaxWidth; li.MaxH = st.MaxHeight;

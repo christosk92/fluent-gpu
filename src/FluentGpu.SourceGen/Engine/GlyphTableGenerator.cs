@@ -12,7 +12,11 @@ namespace FluentGpu.SourceGen.Engine
     /// Control-kit glyph generator — <c>GlyphTableGenerator</c>. Emits the <c>public const string</c> surface of
     /// <c>FluentGpu.Controls.Icons</c> from a <c>glyphs.json</c> AdditionalFile (JSON source of truth, per the
     /// "improve, don't port: JSON over XML" preference). Each entry <c>"Play": "E768"</c> becomes
-    /// <c>public const string Play = "";</c> — the identical surface, so ZERO call sites change.
+    /// <c>public const string Play = "";</c> — the identical surface, so ZERO call sites change. Each constant carries
+    /// an XML doc <c>Segoe Fluent Icons glyph "Play" (U+E768).</c>, and the partial also gets the discoverability table
+    /// <c>Icons.All</c> (<c>IReadOnlyList&lt;IconGlyph&gt;</c> over one static array; <c>IconGlyph</c> is declared by hand
+    /// in <c>Icons.cs</c>) plus the reverse lookup <c>Icons.TryGetName(glyph, out name)</c> (first name wins on a shared
+    /// codepoint).
     ///
     /// <para><b>Dormant-safe.</b> The generator only produces output when a <c>glyphs.json</c> AdditionalFile is present
     /// (marked <c>FluentGpuGlyphs="true"</c> or matching the <c>glyphs.json</c> path convention). Only the Controls
@@ -82,6 +86,7 @@ namespace FluentGpu.SourceGen.Engine
             sb.Append("namespace ").Append(Ns).Append("\n{\n");
             sb.Append("    public static partial class ").Append(ClassName).Append("\n    {\n");
 
+            var emitted = new List<KeyValuePair<string, string>>(pairs.Count);   // (Name, HEX) in declaration order
             foreach (KeyValuePair<string, string> kv in pairs)
             {
                 string name = kv.Key;
@@ -92,9 +97,33 @@ namespace FluentGpu.SourceGen.Engine
                     continue;
                 }
                 string hex = cp.ToUpperInvariant();
-                sb.Append("        /// <summary>Glyph U+").Append(hex).Append(".</summary>\n");
+                emitted.Add(new KeyValuePair<string, string>(name, hex));
+                sb.Append("        /// <summary>Segoe Fluent Icons glyph \"").Append(name).Append("\" (U+").Append(hex).Append(").</summary>\n");
                 sb.Append("        public const string ").Append(name).Append(" = \"\\u").Append(hex).Append("\";\n");
             }
+
+            // Icons.All — every glyph in glyphs.json declaration order; one static array, allocated once.
+            sb.Append("\n        private static readonly global::FluentGpu.Controls.IconGlyph[] s_all = new global::FluentGpu.Controls.IconGlyph[]\n        {\n");
+            foreach (KeyValuePair<string, string> e in emitted)
+                sb.Append("            new global::FluentGpu.Controls.IconGlyph(\"").Append(e.Key).Append("\", ").Append(e.Key).Append("),\n");
+            sb.Append("        };\n\n");
+            sb.Append("        /// <summary>Every generated glyph (").Append(emitted.Count)
+              .Append(" in total) as (Name, Glyph) pairs, in <c>glyphs.json</c> order. Backed by one static array, so reading it never allocates.</summary>\n");
+            sb.Append("        public static global::System.Collections.Generic.IReadOnlyList<global::FluentGpu.Controls.IconGlyph> All => s_all;\n\n");
+
+            // Icons.TryGetName — reverse lookup glyph → constant name. Several names may share a codepoint; the FIRST in
+            // glyphs.json order wins (a stable answer). A string switch: no dictionary, no allocation.
+            sb.Append("        /// <summary>Reverse lookup: the <see cref=\"Icons\"/> constant name for a glyph string (e.g. <c>\"\\uE768\"</c> gives <c>\"Play\"</c>).\n");
+            sb.Append("        /// When several names share a codepoint, the first one in <c>glyphs.json</c> order is returned.</summary>\n");
+            sb.Append("        public static bool TryGetName(string? glyph, [global::System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? name)\n        {\n");
+            sb.Append("            switch (glyph)\n            {\n");
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, string> e in emitted)
+            {
+                if (!seen.Add(e.Value)) continue;   // duplicate codepoint → keep the first name
+                sb.Append("                case \"\\u").Append(e.Value).Append("\": name = \"").Append(e.Key).Append("\"; return true;\n");
+            }
+            sb.Append("                default: name = null; return false;\n            }\n        }\n");
 
             sb.Append("    }\n}\n");
             spc.AddSource(ClassName + ".Glyphs.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));

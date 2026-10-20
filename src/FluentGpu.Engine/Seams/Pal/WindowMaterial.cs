@@ -41,7 +41,8 @@ public static class WindowMaterialPolicy
             TransparentGround: transparent, ExtendGlass: transparent && !customFrame, VideoCapable: composited);
     }
 
-    /// <summary>The material the legacy <c>Mica</c> / <c>MicaAlt</c> options mean: Mica (or MicaAlt) when on, none when off.</summary>
-    public static WindowMaterial FromLegacy(bool mica, bool micaAlt)
-        => mica ? (micaAlt ? WindowMaterial.MicaAlt : WindowMaterial.Mica) : WindowMaterial.None;
+    /// <summary>The material the legacy <c>Mica</c> / <c>MicaAlt</c> / <c>Acrylic</c> options mean: Mica (or MicaAlt, or Acrylic,
+    /// which wins over MicaAlt) when Mica is on, none when off.</summary>
+    public static WindowMaterial FromLegacy(bool mica, bool micaAlt, bool acrylic = false)
+        => mica ? (acrylic ? WindowMaterial.Acrylic : micaAlt ? WindowMaterial.MicaAlt : WindowMaterial.Mica) : WindowMaterial.None;
 }

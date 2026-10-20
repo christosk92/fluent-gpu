@@ -16,6 +16,7 @@ In Wavee that channel is `DeepLinkChannel` and the verbs are `wavee://…`. See 
 |---|---|---|---|
 | **Protocol + single instance** | Links open the app already running, not a second copy | `FluentGpu.WindowsApi/Activation/` — `SingleInstanceGate`, `ProtocolRegistrar`, `ActivationArgs` | [deep-linking](../../.claude/skills/wavee/deep-linking.md), [pitfalls](../../.claude/skills/wavee-native/pitfalls.md) |
 | **Taskbar** | Progress on the taskbar button, a play/pause overlay badge, prev / play-pause / next thumbnail buttons | `Shell/TaskbarManager` | [taskbar](../../.claude/skills/wavee-native/taskbar.md), [bridges](../../.claude/skills/wavee/bridges.md) |
+| **Notification area (tray)** | An icon by the clock — from an `.ico`, raw pixels, or a drawn glyph with a live badge — with a native menu | `Shell/NotifyIcon`, `Shell/TrayIconArt` | [Tray icons](#tray-icons-notifyicon) below |
 | **Jump list** | Right-click the taskbar button: tasks + a "Jump back in" category | `Shell/JumpList` | [where-to-change-what](../../.claude/skills/wavee-native/where-to-change-what.md) |
 | **SMTC** | The system media flyout, lock screen, and hardware media keys | `Media/` | [bridges](../../.claude/skills/wavee/bridges.md) |
 | **Toasts** | Action Center notifications, live-updating progress, and OS-scheduled delivery with the app closed | `Notifications/` — `ToastNotifier`, `ToastBuilder`, `ToastImageCache` | [pitfalls](../../.claude/skills/wavee-native/pitfalls.md), [bridges](../../.claude/skills/wavee/bridges.md) |
@@ -43,6 +44,74 @@ A surface that needs both (the taskbar thumb buttons are *produced* by `WindowsA
 | `PowerSession.Suspending` / `Resumed` | Raised on an OS power-broadcast worker — **hop to the UI thread** before touching playback. |
 | Toast activation | Arrives on a WinRT callback thread — set `ActivationDispatcher` to your UI post so handlers land on the UI thread. |
 | Network cost reads | A dedicated MTA reader thread inside `NetworkStatus`; results are posted back. |
+
+## Tray icons (NotifyIcon)
+
+`Shell/NotifyIcon` is a notification-area icon on its own hidden callback window: create it on the UI thread, and its
+`Activated` events arrive there. It survives explorer restarts (re-added on `TaskbarCreated`) and reports taskbar DPI and
+light/dark changes as `NotifyIconEvent.ShellChanged`. The image comes from one of three sources; the last one set wins.
+
+```csharp
+var tray = new NotifyIcon(Guid.Empty, "My app");   // Guid.Empty = window + id identity (unsigned dev builds)
+
+// 1. An .ico file, loaded at the frame the taskbar DPI selects and reloaded when that size changes.
+tray.SetIcon(icoPath);
+
+// 2. Raw pixels: tightly packed, top-down, PREMULTIPLIED BGRA, width × height × 4 bytes (1–256 px a side).
+tray.SetIcon(pixels, size, size);   // draw at NotifyIcon.SmallIconSizeForDpi(tray.TaskbarDpi) for a crisp frame
+
+// 3. A source: re-run on every DPI / light-dark change (and after an explorer restart that changed either).
+tray.SetIconSource(r => TrayIconArt.Glyph(r, "", badge: unread.ToString()));
+tray.Show();
+```
+
+- **`TrayIconArt.Glyph(request, glyph, ink, badge, badgeFill, fontPath)`** draws a font glyph on the CPU with DirectWrite
+  at `request.SizePx` (clamped to 16–48). The glyph comes from `fontPath` if you pass one, then Segoe Fluent Icons, then
+  Segoe MDL2 Assets on Windows 10. The first face with every character wins. The ink defaults to white on a dark taskbar
+  and `#1B1B1B` on a light one. The glyph is centred on its ink at whole-pixel offsets, so the font's hinting is kept.
+- **The badge** is a rounded pill in the bottom-right corner, 9/16 of the icon tall, holding 1–3 characters (longer text
+  is cut) in condensed semibold digits (Bahnschrift, falling back to Segoe UI). It is cut out of the glyph with a 1 px gap
+  (2 px from 32 px up). The default fill is Fluent "critical" red. The text is white or near-black, whichever contrasts.
+- **A changing badge** means calling `SetIconSource` again with the new value, or `RefreshIconSource()` when the callback
+  reads live state. Each call builds one new `HICON` (a 32bpp DIB plus a 1bpp mask passed to `CreateIconIndirect`). The
+  previous handle is destroyed only after the shell has the new one. This is cheap, but it is a shell round-trip, so do not
+  call it per frame.
+- **Premultiplied means an alpha-0 pixel is colour 0** and no channel exceeds its alpha. DEBUG builds assert this. A span
+  whose length is not `width × height × 4` throws `ArgumentException`. A side outside 1–256 throws
+  `ArgumentOutOfRangeException`. A callback that throws or returns a malformed bitmap is logged, and the previous image stays.
+- On a disposed icon every setter is a no-op (`false`).
+
+The gallery's Windows APIs page ("Notification area icon" card, **Glyph + badge**) is the manual check: the badge counts
+up on each press, and switching the taskbar between light and dark redraws the ink.
+
+## Storage: settings and app-data folders
+
+`FluentGpu.WindowsApi/Storage/` gives an unpackaged app typed per-user settings without package identity. It replaces `ApplicationData.Current.LocalSettings`.
+
+```csharp
+var store = AppDataStore.ForUnpackaged("Contoso", "MyApp");
+store.SetInt("volume", 70);
+int volume = store.GetInt("volume", fallback: 50);
+string cache = store.CacheFolder;            // %LOCALAPPDATA%\Contoso\MyApp\Cache
+Console.WriteLine(store.RegistryPath);       // HKCU\Software\Contoso\MyApp\Settings
+
+// Reactive variant: one write-through Signal<T> per key, bound straight to a control.
+var settings = SettingsStore.ForUnpackaged("Contoso", "MyApp", ctx.Runtime);
+Signal<bool> muted = settings.Bool("muted");
+```
+
+| What | Where |
+|---|---|
+| Setting values | Registry values in the **`\Settings` subkey**: `HKCU\Software\<publisher>\<product>\Settings` (`RegistryPath`). `Clear()` deletes only that subkey, not the product key above it. |
+| `LocalFolder` | `%LOCALAPPDATA%\<publisher>\<product>`, for durable data |
+| `CacheFolder` | `%LOCALAPPDATA%\<publisher>\<product>\Cache`, for data the app can rebuild |
+| `TempFolder` | `%TEMP%\<publisher>\<product>`, for scratch files |
+
+- **Each name is one segment.** `ForUnpackaged` throws `ArgumentException` (with `ParamName` set to `publisher` or `product`) when a name is empty, contains `\` or `/`, has leading or trailing whitespace, or is `.`/`..`. Before this check, such names silently nested or escaped the key and the folders. Inner spaces are fine (`"Contoso Ltd"`).
+- **Types are kept.** string → `REG_SZ`, bool/int → `REG_DWORD`, long/double → `REG_QWORD`, `byte[]` → `REG_BINARY`. A typed `Get*` returns its fallback if the stored value has a different type, so you never get a reinterpreted value.
+- **There is no change watcher.** Writes are atomic per value and the last writer wins. Another process changing a value does not notify this one.
+- **Use one `SettingsStore` per process.** Each instance keeps its persist effects alive for its whole lifetime, so don't create one per component.
+- **Packaged apps** run the same code. Windows transparently virtualizes HKCU and LocalAppData into the package.
 
 ## Packaged vs unpackaged
 

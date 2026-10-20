@@ -117,8 +117,19 @@ public readonly record struct SpanStyle(int Start, int End, ushort Weight, float
 /// <summary>One laid-out rect artifact of a span run (paragraph-node-local DIP): the line-fragment geometry of a
 /// decorated/link span. <see cref="Kind"/> is the single <see cref="SpanStyle"/> flag bit it serves — Link rects are
 /// the FULL line-fragment band (hit-testing, Hand cursor); Underline/Strikethrough rects are the positioned BARS
-/// (the recorder fills them verbatim, no font-seam touch at record time).</summary>
-public readonly record struct SpanRect(RectF Rect, int Span, byte Kind);
+/// (the recorder fills them verbatim, no font-seam touch at record time).
+/// <para>Rects are laid START-aligned (the measure pass does not know the arranged box). <see cref="LineWidth"/> is the
+/// visible width of the rect's line (trailing hanging whitespace excluded; NaN = no shift): a consumer drawing or
+/// hit-testing a Center/End-aligned run shifts the rect by
+/// <c>TextTypography.LineOffset(style.Align, boxWidth, LineWidth)</c> — the same offset the renderer applies to that
+/// line's glyphs. Justified runs are ALSO laid unjustified — the drawn box (Bounds.W) is only known at use, and the
+/// renderer justifies at it: <see cref="JustifyGaps"/> is the line's justifiable whitespace count (0 = the line is
+/// never justified: last / hard-broken / ellipsized / overflow-suffix), <see cref="GapsBefore"/> the gaps left of the
+/// rect's start edge and <see cref="GapsIn"/> the gaps inside it, so the consumer re-derives the justified rect at ANY
+/// box width with one division (each gap widens by (boxWidth − LineWidth) / JustifyGaps — the engines' rule).
+/// Consumers place a rect through <c>TextTypography.PlaceSpanRect</c> (one definition for recorder + input).</para></summary>
+public readonly record struct SpanRect(RectF Rect, int Span, byte Kind, float LineWidth = float.NaN,
+    int JustifyGaps = 0, int GapsBefore = 0, int GapsIn = 0);
 
 /// <summary>An immutable snapshot of a span run's laid-out rect artifacts at one wrap width. Published whole by the
 /// text seam on a measure-cache miss (content/width change) and read lock-free by the recorder (decoration bars) and

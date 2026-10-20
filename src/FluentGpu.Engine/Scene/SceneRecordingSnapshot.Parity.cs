@@ -284,7 +284,8 @@ public sealed partial class SceneRecordingSnapshot
     private static bool EntryEqual(in TextMeasureEntry a, in TextMeasureEntry b)
         => a.Valid == b.Valid && a.Text == b.Text && a.MaxW.Equals(b.MaxW) && a.Style == b.Style
            && a.Size.Width == b.Size.Width && a.Size.Height == b.Size.Height && a.FitSize == b.FitSize
-           && a.UnderlineY == b.UnderlineY && a.UnderlineThickness == b.UnderlineThickness && a.StrikeY == b.StrikeY;
+           && a.UnderlineY == b.UnderlineY && a.UnderlineThickness == b.UnderlineThickness && a.StrikeY == b.StrikeY
+           && a.FirstLineWidth.Equals(b.FirstLineWidth);
 
     private static bool RowCellsEqual(ReadOnlySpan<RowCellRecorded> a, bool aPh, ColorF aPhColor,
         ReadOnlySpan<RowCellRecorded> b, bool bPh, ColorF bPhColor)

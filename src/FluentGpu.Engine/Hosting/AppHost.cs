@@ -4121,6 +4121,7 @@ public sealed partial class AppHost : IDisposable
         w = ClampWaitToOcclusionProbe(w, _lastWaitKind);   // an occluded (not parked) window still wakes to re-probe its target
         w = ClampWaitToCloakDebounce(w, _lastWaitKind);    // a cloaked host wakes when its park debounce ends
         w = ClampWaitToReveal(w, _lastWaitKind);           // an unrevealed pop-out wakes to look for its first present
+        w = ClampWaitToFitShow(w);                         // a show-when-fitted window wakes for its safety deadline (AppHost.SizeToContent.cs)
         w = ClampWaitToRestoreHold(w);                     // an armed restore hold ends on time even if no decode lands to wake the loop
         w = ClampWaitToFreeze(w);                          // E2: the freeze watchdog thaws on time even when nothing else wakes the loop
         w = ClampWaitToSettle(w);                          // E17c: a settle waiting for fonts/images looks again on time
@@ -5100,7 +5101,9 @@ public sealed partial class AppHost : IDisposable
             _inputHooks.ThemeTransactionBusy = _txBusy;
             _inputHooks.IsThemeTransactionRunning = () => IsThemeTransactionRunning;
         }
-        _inputHooks.SetTitleBarRegions = (regions, count) => _window.SetTitleBarRegions(regions.AsSpan(0, count));
+        // App region pushes are stored and COMPOSED with the engine's BoxEl.WindowDrag regions (collected at phase 7.8);
+        // the window receives the merged list only when it changed (AppHost.WindowDrag.cs).
+        WireWindowDragRegions();
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;
         _inputHooks.QueueAfterLayout = a => _afterLayout.Add(a);
         var chromeEpoch = new Signal<int>(0);
@@ -5656,6 +5659,9 @@ public sealed partial class AppHost : IDisposable
             NoteNoPresentTurn();   // closing: no present this turn either (see _lastNoPresentQpc's doc)
             return LastStats;
         }
+        // SizeToContent show-when-fitted safety net (AppHost.SizeToContent.cs): ahead of the device-lost / park / idle gates, so a
+        // window waiting for a fit that never lands (an empty root, a recovering device) is still shown on its deadline.
+        TickFitShowSafety();
 
         ReadOnlySpan<InputEvent> inputEvents = _ring.Drain();
         uint inputKindMask = 0;
@@ -5790,7 +5796,7 @@ public sealed partial class AppHost : IDisposable
         // render thread it shares with the pop-out (a fullscreen pop-out over the primary window, or any other window over either).
         // Sampled after the relay, like the cloak.
         UpdateCoverPark();
-        bool minimized = (windowStatus.Parked && !_revealPending) || _cloakParked || _coverParked;   // "minimized" below means PARKED: minimized, hidden OR cloaked (E2 — identical cost)
+        bool minimized = (windowStatus.Parked && !_revealPending && !_fitShowPending) || _cloakParked || _coverParked;   // "minimized" below means PARKED: minimized, hidden OR cloaked (E2 — identical cost)
         AdvanceHiddenMemory();   // park timer -> Shallow / Deep release, restore edge -> restart + hold + lift + full repaint (parked frames included)
         TickRestoreHold();       // an armed restore hold whose end is due makes this frame publish (the release publication)
         UpdateImageBudget();     // window-relative image budget; the device's measured per-bucket commit
@@ -6076,7 +6082,7 @@ public sealed partial class AppHost : IDisposable
     public bool IsParked => IsOsParked || _cloakParked || _coverParked;
 
     /// <summary>Minimized or hidden — the states whose restore is a window message (unlike a cloak, which raises none).</summary>
-    private bool IsOsParked => !_revealPending && new WindowStatus(_window.State, _window.IsVisible).Parked;
+    private bool IsOsParked => !_revealPending && !_fitShowPending && new WindowStatus(_window.State, _window.IsVisible).Parked;
 
     /// <summary>Any host, UI thread, once per <see cref="RunFrame"/>: re-derive <see cref="_coverParked"/> from the two coverage
     /// causes (F118). (1) The primary host's live detached children: only a FULLSCREEN child is ever measured (a field read), so a
@@ -6608,6 +6614,8 @@ public sealed partial class AppHost : IDisposable
                 _scene.ClearLayoutDirty();
                 DrainLayoutEffects();                          // the rows this pass mounted queued theirs after the 6.5 drain: run them before they paint
             }
+            // 6.6 SizeToContent (AppHost.SizeToContent.cs): only on frames whose layout ran; zero work when Manual.
+            FitWindowToContent(layoutNeeded && !_scene.Root.IsNull, layoutSize);
             long tLayoutEffects = Stopwatch.GetTimestamp();
             _connected.ReducedMotion = Motion.ReducedMotion || _snapDepth > 0;   // 6.5 connected-animation: remember tag rects, seed flies to arrived dests, expire stale
             _connected.Tick65();
@@ -6842,6 +6850,9 @@ public sealed partial class AppHost : IDisposable
             // rebinds a realized row's logical item without ever rewriting its drop-target spec, so the per-move version
             // gate alone left the set stale in place (see DragDropContext.SyncSpotlightBeforeRecord). No-op when idle.
             _dispatcher.DragDrop.SyncSpotlightBeforeRecord();
+            // 7.8 window drag regions (BoxEl.WindowDrag): the same "this frame's posed geometry" point; pushes to the
+            // window only when the merged app + engine list changed. Zero work when nothing declares a role.
+            CollectWindowDragRegions();
 
             var focus = new FocusVisualStyle(Tok.FocusOuter, Tok.FocusInner, Tok.FocusThickness);
             // WinUI text-edit decor brushes: selection = TextControlSelectionHighlightColor (= AccentFillColorSelectedTextBackgroundBrush),

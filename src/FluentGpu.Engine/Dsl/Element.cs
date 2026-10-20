@@ -474,6 +474,16 @@ public sealed record BoxEl : Element
     /// outside any reactive scope (read signals with Peek), must not allocate, and must be the SAME delegate every render
     /// (a fresh closure per render re-diffs the box). The target must not be inside this box's own subtree.</summary>
     public Func<NodeHandle>? FollowRect { get => (_cGesture ?? BoxColdGesture.Default).FollowRect; init { if (!EqualityComparer<Func<NodeHandle>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).FollowRect, value)) CGesture.FollowRect = value; } }
+    /// <summary>Declarative window drag region (custom-frame windows; sugar <c>el.WindowDragArea()</c> /
+    /// <c>el.NoWindowDrag()</c>). <see cref="WindowDragRole.Drag"/>: this box's VISIBLE rect (ancestor clips + scroll /
+    /// transform pose) moves the window — the OS move loop, snap, double-click maximize when resizable; a right-click
+    /// raises the nearest <see cref="OnContextRequested"/> under the point, else the system menu.
+    /// <see cref="WindowDragRole.NoDrag"/>: an interactive island inside a drag area stays client. The host re-collects
+    /// every reachable declared box each frame (phase 7.8 — scroll, resize and parked pages are followed with no effect
+    /// of yours) and pushes the merged region list only when it changed; app <c>InputHooks.SetTitleBarRegions</c>
+    /// pushes (the <c>TitleBar</c> control) compose with it: app islands/buttons first, then engine islands, engine drag
+    /// bands, and the app catch-all caption band last. Does not make the box hit-testable.</summary>
+    public WindowDragRole WindowDrag { get => (_cGesture ?? BoxColdGesture.Default).WindowDrag; init { if ((_cGesture ?? BoxColdGesture.Default).WindowDrag != value) CGesture.WindowDrag = value; } }
 
     public Element[] Children { get; init; } = [];
 
@@ -857,6 +867,14 @@ public sealed record TextEl(Prop<string> Text) : Element
     /// Part of the measure key (<c>TextStyle.Case</c>). Default <see cref="TextCase.AsWritten"/>. For theme-written labels
     /// (Wavee's <c>R.Case.For(LabelKind)</c>); content strings (titles, lyrics, user text) keep the default.</summary>
     public TextCase Case { get => (_cold ?? TextCold.Default).Case; init { if (!EqualityComparer<TextCase>.Default.Equals((_cold ?? TextCold.Default).Case, value)) Cold.Case = value; } }
+    /// <summary>Horizontal alignment of each line inside the text's box (WinUI <c>TextAlignment</c>): Start (default) /
+    /// Center / End / Justify. Works for single-line text in a box wider than the text (Grow / Width / stretch — no
+    /// wrapper <c>BoxEl</c> needed) and per line for wrapped text; trailing spaces never shift an End-aligned line.
+    /// Start = left, End = right (no RTL paragraph direction yet). Selection, caret, hit-test and decorations follow.</summary>
+    public TextAlign TextAlign { get => (_cold ?? TextCold.Default).TextAlign; init { if ((_cold ?? TextCold.Default).TextAlign != value) Cold.TextAlign = value; } }
+    /// <summary>OpenType features for the run — e.g. <c>FontFeatures.TabularFigures</c> so ticking numbers keep a
+    /// fixed width. Fonts without a requested feature ignore it.</summary>
+    public FontFeatures FontFeatures { get => (_cold ?? TextCold.Default).FontFeatures; init { if ((_cold ?? TextCold.Default).FontFeatures != value) Cold.FontFeatures = value; } }
 
     // Leaf layout participation. Text needs the same sizing/flex knobs as other leaves so wrapped runs can be
     // constrained by their container instead of contributing their full single-line width to parent measure.
@@ -928,6 +946,10 @@ public sealed record SpanTextEl(Prop<TextSpans> Spans) : Element
     public TextWrap Wrap { get; init; } = TextWrap.Wrap;
     public TextTrim Trim { get; init; } = TextTrim.None;
     public int MaxLines { get; init; }
+    /// <summary>Per-line horizontal alignment of the paragraph (see <see cref="TextEl.TextAlign"/>).</summary>
+    public TextAlign TextAlign { get; init; }
+    /// <summary>OpenType features for the whole paragraph (see <see cref="TextEl.FontFeatures"/>).</summary>
+    public FontFeatures FontFeatures { get; init; }
 
     /// <summary>Read-only selection (rtb-02): drag selects across the whole paragraph flow, Ctrl+C copies. OPT-IN here
     /// (like WinUI TextBlock, TextBlock.cpp:583); the RichTextBlock control turns it on by default

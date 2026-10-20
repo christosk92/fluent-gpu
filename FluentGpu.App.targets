@@ -1,0 +1,131 @@
+<Project>
+
+  <!-- ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+       FluentGpu.App.targets — the half of the app baseline that needs the csproj body (OutputType). Imported by
+       FluentGpu.App.props through BeforeMicrosoftNETSdkTargets, i.e. after your csproj and before the SDK's targets.
+       Opt-outs (set in the csproj or Directory.Build.props):
+         FluentGpuReferenceEngine=false     no engine ProjectReferences at all (wire them yourself)
+         FluentGpuReferenceWindowsApi=false skip FluentGpu.WindowsApi (toasts, tray, storage, SMTC, pickers, …)
+         FluentGpuReferenceSourceGen=false  skip the FluentGpu.SourceGen analyzer (localization keys, validators)
+         FluentGpuFixVsWhere=false          skip the vswhere PATH fix before the NativeAOT link
+       ──────────────────────────────────────────────────────────────────────────────────────────────────────────────── -->
+
+  <PropertyGroup>
+    <!-- Imported without FluentGpu.App.props: the engine is the checkout this file lives in. -->
+    <FluentGpuEngineRoot Condition="'$(FluentGpuEngineRoot)' == ''">$(MSBuildThisFileDirectory)</FluentGpuEngineRoot>
+    <_FluentGpuIsExecutable Condition="'$(OutputType)' == 'WinExe' or '$(OutputType)' == 'Exe'">true</_FluentGpuIsExecutable>
+  </PropertyGroup>
+
+  <!-- NativeAOT is the publish target of an executable. A class library importing the props gets no PublishAot
+       (NETSDK1207). Build/run stay JIT: ILC only runs at publish. -->
+  <PropertyGroup Condition="'$(_FluentGpuIsExecutable)' == 'true'">
+    <PublishAot Condition="'$(PublishAot)' == ''">true</PublishAot>
+  </PropertyGroup>
+
+  <!-- Publish RID: the SDK's own RID (the architecture `dotnet` itself runs as), never PROCESSOR_ARCHITECTURE — an
+       x64-emulated shell on an ARM64 machine reports AMD64 while the native arm64 SDK builds an arm64 process.
+       An explicit -r / RuntimeIdentifier / PublishRuntimeIdentifier wins. -->
+  <PropertyGroup Condition="'$(PublishAot)' == 'true'
+                            and '$(RuntimeIdentifier)' == '' and '$(PublishRuntimeIdentifier)' == ''
+                            and '$(NETCoreSdkRuntimeIdentifier)' != ''">
+    <PublishRuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</PublishRuntimeIdentifier>
+  </PropertyGroup>
+
+  <!-- Debug skips the trim/AOT/single-file Roslyn analyzers PublishAot switches on (ILLink's analyzer roughly halved an
+       edit-build in Wavee, 2026-10-06). Release keeps them, and the AOT publish's ILC checks everything again.
+       Set here (Configuration is final by now) and before Microsoft.NET.Sdk.Analyzers.targets defaults them. -->
+  <PropertyGroup Condition="'$(Configuration)' != 'Release'">
+    <EnableTrimAnalyzer Condition="'$(EnableTrimAnalyzer)' == ''">false</EnableTrimAnalyzer>
+    <EnableAotAnalyzer Condition="'$(EnableAotAnalyzer)' == ''">false</EnableAotAnalyzer>
+    <EnableSingleFileAnalyzer Condition="'$(EnableSingleFileAnalyzer)' == ''">false</EnableSingleFileAnalyzer>
+  </PropertyGroup>
+
+  <!-- ── Engine references ──────────────────────────────────────────────────────────────────────────────────────── -->
+  <PropertyGroup>
+    <FluentGpuReferenceEngine Condition="'$(FluentGpuReferenceEngine)' == ''">true</FluentGpuReferenceEngine>
+    <FluentGpuReferenceWindowsApi Condition="'$(FluentGpuReferenceWindowsApi)' == ''">true</FluentGpuReferenceWindowsApi>
+    <FluentGpuReferenceSourceGen Condition="'$(FluentGpuReferenceSourceGen)' == ''">true</FluentGpuReferenceSourceGen>
+    <_FluentGpuEngineCsproj>$(FluentGpuEngineRoot)src\FluentGpu.Engine\FluentGpu.Engine.csproj</_FluentGpuEngineCsproj>
+    <_FluentGpuEngineFound Condition="Exists('$(_FluentGpuEngineCsproj)')">true</_FluentGpuEngineFound>
+  </PropertyGroup>
+
+  <!-- Conditioned on the checkout existing, so a wrong EngineRoot fails with the one sentence below instead of a wall
+       of NU1105 / MSB9008. -->
+  <ItemGroup Condition="'$(FluentGpuReferenceEngine)' == 'true' and '$(_FluentGpuEngineFound)' == 'true'">
+    <ProjectReference Include="$(FluentGpuEngineRoot)src\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+    <ProjectReference Include="$(FluentGpuEngineRoot)src\FluentGpu.Controls\FluentGpu.Controls.csproj" />
+    <ProjectReference Include="$(FluentGpuEngineRoot)src\FluentGpu.Windows\FluentGpu.Windows.csproj" />
+    <ProjectReference Include="$(FluentGpuEngineRoot)src\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj"
+                      Condition="'$(FluentGpuReferenceWindowsApi)' == 'true'" />
+  </ItemGroup>
+
+  <!-- The source generators (dormant until opted into): a netstandard2.0 analyzer, never a compile reference. The
+       compiler-visible switches are the ones an APP may set: FluentGpuLocBase on the base-culture JSON, the generated
+       Strings namespace, and the hardcoded-string analyzer opt-in. (FluentGpuLocRegisterNeutral and FluentGpuGlyphs are
+       control-kit only and deliberately not surfaced.) -->
+  <ItemGroup Condition="'$(FluentGpuReferenceEngine)' == 'true' and '$(FluentGpuReferenceSourceGen)' == 'true' and '$(_FluentGpuEngineFound)' == 'true'">
+    <ProjectReference Include="$(FluentGpuEngineRoot)src\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="FluentGpuLocBase" />
+    <CompilerVisibleProperty Include="FluentGpuLocNamespace" />
+    <CompilerVisibleProperty Include="FluentGpuLocHardcodedAssemblies" />
+  </ItemGroup>
+
+  <Target Name="FluentGpuRequireEngineCheckout" BeforeTargets="BeforeBuild;Restore;CollectPackageReferences"
+          Condition="'$(FluentGpuReferenceEngine)' == 'true' and '$(_FluentGpuEngineFound)' != 'true'">
+    <Error Text="FluentGpu engine checkout not found at '$(FluentGpuEngineRoot)' (EngineRoot='$(EngineRoot)'). Clone https://github.com/christosk92/fluent-gpu and point EngineRoot at it (Directory.Build.props, a git-ignored EngineRoot.local.props, or -p:EngineRoot=...)." />
+  </Target>
+
+  <!-- ── NativeAOT link: vswhere on PATH ────────────────────────────────────────────────────────────────────────────
+       ILC finds MSVC through findvcvarsall.bat → vcvarsall.bat in SetupOSSpecificProps (Microsoft.NETCore.Native.
+       Windows.targets), ahead of IlcCompile and LinkNative. Parts of the VS developer-shell scripts call vswhere.exe
+       by NAME, so on a machine where the VS Installer folder is not on PATH (seen on ARM64) the link fails with
+       "Platform linker not found". Prepend the folder to THIS MSBuild process's PATH (the Exec child inherits it) —
+       the msbuild equivalent of WaveeMusic's Add-VsInstallerToPath. No-op when vswhere already resolves, off-Windows,
+       or with IlcUseEnvironmentalTools (the caller already runs inside a developer shell). -->
+  <UsingTask TaskName="FluentGpuEnsureVsWhereOnPath" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <InstallerDirectory ParameterType="System.String" Required="true" />
+      <Prepended ParameterType="System.Boolean" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs"><![CDATA[
+Prepended = false;
+string path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+bool resolvable = false;
+foreach (string raw in path.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+{
+    string dir = raw.Trim().Trim('"');
+    if (dir.Length == 0) continue;
+    try { if (File.Exists(Path.Combine(dir, "vswhere.exe"))) { resolvable = true; break; } }
+    catch (ArgumentException) { }
+}
+if (!resolvable)
+{
+    if (File.Exists(Path.Combine(InstallerDirectory, "vswhere.exe")))
+    {
+        Environment.SetEnvironmentVariable("PATH", InstallerDirectory + ";" + path);
+        Prepended = true;
+        Log.LogMessage(MessageImportance.Normal, "FluentGpu: prepended '" + InstallerDirectory + "' to PATH so the NativeAOT toolchain can resolve vswhere.exe.");
+    }
+    else
+    {
+        Log.LogMessage(MessageImportance.High, "FluentGpu: vswhere.exe is neither on PATH nor in '" + InstallerDirectory + "'; the NativeAOT link needs Visual Studio (or the Build Tools) with the C++ desktop workload.");
+    }
+}
+]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="FluentGpuVsWhereOnPath" BeforeTargets="SetupOSSpecificProps;LinkNative"
+          Condition="'$(OS)' == 'Windows_NT' and '$(PublishAot)' == 'true'
+                     and '$(FluentGpuFixVsWhere)' != 'false' and '$(IlcUseEnvironmentalTools)' != 'true'">
+    <PropertyGroup>
+      <_FluentGpuVsInstallerDir Condition="'$(MSBuildProgramFiles32)' != ''">$(MSBuildProgramFiles32)\Microsoft Visual Studio\Installer</_FluentGpuVsInstallerDir>
+      <_FluentGpuVsInstallerDir Condition="'$(_FluentGpuVsInstallerDir)' == ''">C:\Program Files (x86)\Microsoft Visual Studio\Installer</_FluentGpuVsInstallerDir>
+    </PropertyGroup>
+    <FluentGpuEnsureVsWhereOnPath InstallerDirectory="$(_FluentGpuVsInstallerDir)" />
+  </Target>
+
+</Project>

@@ -1,0 +1,10 @@
+[Bb]in/
+[Oo]bj/
+publish/
+.vs/
+.idea/
+*.user
+*.suo
+
+# Per-machine engine checkout pin (see Directory.Build.props).
+EngineRoot.local.props

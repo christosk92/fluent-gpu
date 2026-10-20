@@ -147,9 +147,14 @@ public static partial class Win32Theme
     /// the desktop wallpaper, the "tabbed window" kind; false = Mica Base (DWMSBT_MAINWINDOW), the neutral "main window"
     /// backdrop. Not a cosmetic pair: on a strongly coloured wallpaper Alt reads as saturated chrome where Base stays
     /// near-neutral. Ignored when mica is false.</param>
-    public static void ApplyWindowMaterial(nint hwnd, bool dark, bool mica = true, bool customFrame = false, bool micaAlt = false)
-        // The legacy flags: Mica on = a composited Mica window; off = the old opaque HWND window (no backdrop, no glass).
-        => ApplyWindowMaterial(hwnd, dark, WindowMaterialPolicy.FromLegacy(mica, micaAlt), composited: mica, customFrame);
+    /// <param name="acrylic">true = the desktop-acrylic system backdrop (DWMSBT_TRANSIENTWINDOW, WinUI
+    /// <c>DesktopAcrylicBackdrop</c>) on the same composited sheet Mica uses: a frosted blur of whatever is behind the window,
+    /// not of the wallpaper — the material for a window that floats over other apps. Wins over <paramref name="micaAlt"/>;
+    /// ignored when mica is false (an opaque window has no transparent pixels for it to show through).</param>
+    public static void ApplyWindowMaterial(nint hwnd, bool dark, bool mica = true, bool customFrame = false, bool micaAlt = false,
+        bool acrylic = false)
+        // The legacy flags: Mica on = a composited Mica (or Acrylic) window; off = the old opaque HWND window (no backdrop, no glass).
+        => ApplyWindowMaterial(hwnd, dark, WindowMaterialPolicy.FromLegacy(mica, micaAlt, acrylic), composited: mica, customFrame);
 
     /// <summary>The material writer (EP9): the dark attribute, <c>DWMWA_SYSTEMBACKDROP_TYPE</c> for <paramref name="material"/> -
     /// <see cref="WindowMaterial.None"/> writes <c>DWMSBT_NONE</c> so a previous backdrop is really removed - and the frame
@@ -187,6 +192,14 @@ public static partial class Win32Theme
             MARGINS m = new() { cxLeftWidth = -1, cxRightWidth = -1, cyTopHeight = -1, cyBottomHeight = -1 };
             DwmExtendFrameIntoClientArea(hwnd, in m);
         }
+    }
+
+    /// <summary>Ask DWM for the standard Win11 rounded window corners. A tool window (WS_EX_TOOLWINDOW) is left square by
+    /// the system default, so an overlay that drops its taskbar button calls this to keep the app-window shape.</summary>
+    public static void ApplyRoundCorners(nint hwnd)
+    {
+        int corner = DWMWCP_ROUND;
+        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, in corner, sizeof(int));
     }
 
     /// <summary>Apply the OS material used by windowed popup HWNDs. WinUI's <c>MenuFlyoutPresenter</c> is a TRANSPARENT

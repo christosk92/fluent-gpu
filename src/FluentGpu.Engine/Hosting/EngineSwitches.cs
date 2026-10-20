@@ -68,6 +68,10 @@ public enum ImageAtlasExperiment : byte
 /// <item><c>test-input</c> — a window accepts the private registered message <c>FluentGpu.TestInput</c> (kind + client px in
 /// wParam/lParam, see <c>Win32TestInput</c>) and turns it into the pointer events <c>WM_POINTER*</c> would, so an out-of-process
 /// e2e driver can hover, click, drag and wheel without the physical mouse (default off).</item>
+/// <item><c>shot-window=PATH</c> — capture the COMPOSED window (Mica/acrylic, the DWM frame, DComp video children: what the
+/// user sees, unlike <c>--screenshot</c>'s swapchain readback) to a PNG at PATH, <c>shot-delay</c> ms (default 1500) after the
+/// first presented frame; <c>shot-delay=MS</c> sets that delay; <c>shot-exit</c> ends the run after the capture. PATH cannot
+/// contain a comma (the list separator). See <c>FluentApp.CaptureWindowPng</c>.</item>
 /// </list>
 /// <item><c>no-partial-raster</c> — every invalid retained tile re-rasters whole (the sub-tile damage A/B arm,
 /// <see cref="FluentGpu.Render.Tiles.TileDamage"/>). <c>damage-validate</c> — the backend re-rasters every partially
@@ -174,6 +178,14 @@ public static class EngineSwitches
     /// <summary>Create the D3D12 device on the WARP software adapter (<c>--fg warp</c>): a validator run off the hardware
     /// driver (is a difference the driver's or ours?). Read once, at device init. Default off.</summary>
     public static bool ForceWarp;
+    /// <summary>Where <c>--fg shot-window=PATH</c> writes the composed-window PNG (null = no capture). Read once, when the
+    /// FluentApp frame loop starts.</summary>
+    public static string? ShotWindowPath;
+    /// <summary>The <c>--fg shot-delay=MS</c> wait after the first presented frame before <see cref="ShotWindowPath"/> is
+    /// captured (default 1500 — long enough for Mica, image decodes and entrance motion to settle).</summary>
+    public static int ShotWindowDelayMs = 1500;
+    /// <summary><c>--fg shot-exit</c>: end the run once <see cref="ShotWindowPath"/> has been captured.</summary>
+    public static bool ShotWindowExit;
 
     /// <summary>Apply every <c>--fg</c> flag in <paramref name="args"/>.</summary>
     public static void Apply(ReadOnlySpan<string> args)
@@ -263,6 +275,12 @@ public static class EngineSwitches
             case "present-structure-diff": FluentGpu.Render.Tiles.TileDamage.PresentStructureDiff = true; return true;
             case "present-validate": FluentGpu.Render.Tiles.TileDamage.PresentValidate = true; return true;
             case "warp": ForceWarp = true; return true;
+            case "shot-window": ShotWindowPath = string.IsNullOrWhiteSpace(value) ? null : value; return ShotWindowPath is not null;
+            case "shot-delay":
+                if (value is null || !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int shotMs) || shotMs < 0) return false;
+                ShotWindowDelayMs = shotMs;
+                return true;
+            case "shot-exit": ShotWindowExit = true; return true;
             case "hidden": return HiddenMemoryBudget.TryApply(value);
             case "img-atlas":
                 switch (value)
