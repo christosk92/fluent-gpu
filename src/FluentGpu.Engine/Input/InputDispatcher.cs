@@ -3487,6 +3487,19 @@ public sealed partial class InputDispatcher
         return li.TextStyle.Wrap != TextWrap.NoWrap ? MathF.Max(1f, _scene.Bounds(node).W) : float.PositiveInfinity;
     }
 
+    /// <summary>The style a text leaf's queries shape under: its laid style at the auto-fit size the measure pass chose
+    /// (TextEl.MinSize), the size the recorder draws the run at, so a press and a selection land on the glyphs drawn.</summary>
+    private TextStyle QueryStyle(NodeHandle node)
+    {
+        TextStyle style = _scene.Layout(node).TextStyle;
+        if (style.MinSizeDip > 0f && _scene.TryGetMeasureCache(node, out TextMeasureCache cache))
+        {
+            TextMeasureEntry fit = cache.ResolveForWidth(_scene.Bounds(node).W);
+            if (fit.Valid && fit.FitSize > 0f) style = style with { SizeDip = fit.FitSize };
+        }
+        return style;
+    }
+
     /// <summary>Press on a selectable text leaf: single click anchors the drag (no selection yet — unless it lands on
     /// a hyperlink span, which keeps the press a clean link click); double-click selects the word under the press;
     /// triple selects all (the RichEdit/WinUI TextSelectionManager click ladder).</summary>
@@ -3497,7 +3510,7 @@ public sealed partial class InputDispatcher
         string text = SelectableTextOf(node);
         if (text.Length == 0) return;
         if (clickCount == 1 && HitLinkSpan(node, local) >= 0) return;   // a link press never starts a selection
-        int idx = fonts.HitTestText(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), local, out _);
+        int idx = fonts.HitTestText(text, QueryStyle(node), QueryMaxWidth(node), local, out _);
         _selText = node;
         switch (clickCount)
         {
@@ -3530,7 +3543,7 @@ public sealed partial class InputDispatcher
         var node = _selText;
         string text = SelectableTextOf(node);
         if (text.Length == 0) return;
-        int idx = fonts.HitTestText(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), local, out _);
+        int idx = fonts.HitTestText(text, QueryStyle(node), QueryMaxWidth(node), local, out _);
         ApplyTextSelection(node, Math.Min(_selAnchor, idx), Math.Max(_selAnchor, idx));
     }
 
@@ -3549,7 +3562,7 @@ public sealed partial class InputDispatcher
         if (end > start && ResolveFonts() is { } fonts)
         {
             string text = SelectableTextOf(node);
-            n = fonts.GetRangeRects(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), start, end, rects);
+            n = fonts.GetRangeRects(text, QueryStyle(node), QueryMaxWidth(node), start, end, rects);
         }
         _scene.SetTextEditRects(node, rects[..n], default);
         _scene.Mark(node, NodeFlags.PaintDirty);

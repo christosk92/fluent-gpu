@@ -669,8 +669,10 @@ public sealed partial class FlexLayout
             // MaxLines/Trim need a finite wrap width even when Wrap=NoWrap — otherwise a long title measures at its
             // natural width, the grid cell's cross-size inflates, and glyphs bleed into the next column.
             bool widthConstrained = !float.IsInfinity(measureW);
+            // Auto-fit (MinSizeDip) needs the column too: a NoWrap run shrinks until its single line fits it.
             bool needsColumnBudget = li.TextStyle.Wrap != Foundation.TextWrap.NoWrap
-                || li.TextStyle.Trim != Foundation.TextTrim.None;
+                || li.TextStyle.Trim != Foundation.TextTrim.None
+                || li.TextStyle.MinSizeDip > 0f;
             float maxW = widthConstrained && needsColumnBudget
                 ? MathF.Max(0f, measureW)
                 : float.PositiveInfinity;
@@ -688,13 +690,15 @@ public sealed partial class FlexLayout
             else
             {
                 _dTextMiss++;
-                // Auto-fit (TextEl.MinSize / TextStyle.MinSizeDip): shrink the font so the run fits MaxLines at maxW.
-                // Opt-in (MinSizeDip>0), so normal text skips this entirely. The chosen size feeds BOTH the measured box
-                // and the recorder (stored as FitSize); 0 ⇒ no shrink (the recorder shapes at the authored SizeDip).
+                // Auto-fit (TextEl.MinSize / TextStyle.MinSizeDip): shrink the font so the run fits at maxW: a wrapping
+                // run fits when it wraps to <= MaxLines, a NoWrap run when its one line is no wider than maxW (MaxLines
+                // is moot there). Opt-in (MinSizeDip>0), so normal text skips this entirely. The chosen size feeds BOTH
+                // the measured box and the recorder (stored as FitSize); 0 => no shrink (the authored SizeDip). Only the
+                // em shrinks: an authored LineHeight stays, so the line box (and everything under it) holds still.
                 float fit = 0f;
                 TextStyle eff = li.TextStyle;
-                if (li.TextStyle.MinSizeDip > 0f && li.TextStyle.MinSizeDip < li.TextStyle.SizeDip
-                    && li.TextStyle.MaxLines > 0 && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && !float.IsInfinity(maxW))
+                if (li.TextStyle.MinSizeDip > 0f && li.TextStyle.MinSizeDip < li.TextStyle.SizeDip && !float.IsInfinity(maxW)
+                    && (li.TextStyle.Wrap == Foundation.TextWrap.NoWrap || li.TextStyle.MaxLines > 0))
                 {
                     float chosen = FitTextSize(paint.Text, li.TextStyle, maxW);
                     if (chosen < li.TextStyle.SizeDip) { fit = chosen; eff = li.TextStyle with { SizeDip = chosen }; }
@@ -1557,6 +1561,7 @@ public sealed partial class FlexLayout
     // opt-in (MinSizeDip>0) text node — never normal text, never a steady frame — so the extra measures are immaterial.
     private float FitTextSize(StringId text, TextStyle style, float maxW)
     {
+        if (style.Wrap == Foundation.TextWrap.NoWrap) return FitSingleLineSize(text, style, maxW);
         int maxLines = style.MaxLines;
         float maxS = style.SizeDip, minS = style.MinSizeDip;
 
@@ -1575,6 +1580,36 @@ public sealed partial class FlexLayout
         float lo = minS, hi = maxS;
         for (int i = 0; i < 6; i++) { float mid = (lo + hi) * 0.5f; if (Fits(mid)) lo = mid; else hi = mid; }
         return lo;
+    }
+
+    // NoWrap auto-fit: the largest size in [MinSizeDip, SizeDip] whose ONE line is no wider than maxW. Advances (and the
+    // CharSpacing tracking, in 1/1000 em) scale with the em, so the width is close to linear in size: solve for the size
+    // directly and correct for the shaper's rounding (hinting, pixel-snapped advances) with a few proportional steps.
+    // A direct solve, not a bisection, so the size follows the column continuously while a window resizes (a 6-step
+    // bisection quantizes it to ~(max-min)/64 steps). The solve aims FitSlack under the column so a shaper rounding the
+    // fitted line a hair over maxW cannot make the Trim cut a run that was sized to fit. Below the floor the run stays
+    // at MinSizeDip and the Trim cuts it.
+    private const float FitSlack = 0.5f;
+
+    private float FitSingleLineSize(StringId text, TextStyle style, float maxW)
+    {
+        float maxS = style.SizeDip, minS = style.MinSizeDip;
+        float LineW(float s) => _fonts.Measure(text, style with
+        {
+            SizeDip = s, MaxLines = 0, Trim = Foundation.TextTrim.None, MinSizeDip = 0f,
+        }, float.PositiveInfinity).Size.Width;
+
+        float w = LineW(maxS);
+        if (w <= maxW || w <= 0f) return maxS;
+        float target = MathF.Max(1f, maxW - FitSlack);
+        float s = maxS * target / w;
+        for (int i = 0; i < 4 && s > minS; i++)
+        {
+            w = LineW(s);
+            if (w <= maxW || w <= 0f) break;
+            s *= target / w;
+        }
+        return MathF.Max(minS, MathF.Min(maxS, s));
     }
 
     // A grid cell's slot holds its MARGIN box (CSS grid; the ArrangeVirtual slot rule): an Auto track and an auto row
