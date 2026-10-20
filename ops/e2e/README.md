@@ -16,7 +16,7 @@ powershell -File ops\e2e\video-e2e.ps1 -Seconds 30 -Switches 20 -Cycles 40
 Each run writes a timestamped folder under `ops/e2e/out/` (git-ignored): `video-e2e.md` (the table), `video-e2e.json` (the same
 metrics plus raw per-sample series), `video-e2e.log` / `stderr.txt` (engine lines such as `[detached] reveal`,
 `[video] stream.size`, `[render.pace]`) and `bear-b.mp4` (a copy of the clip, so a source switch is never a same-URL no-op).
-The clip is `src/FluentGpu.Windows.Tests/Fixtures/video/bear-1280x720-av_frag.mp4`, looped.
+The clip is `ops/e2e/fixtures/video/bear-1280x720-av_frag.mp4`, looped.
 
 **Exit code:** `0` every thresholded metric PASS, `2` at least one FAIL, `1` the run could not complete (a scenario timed out,
 threw, or a metric could not be measured). The report is always written.
