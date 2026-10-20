@@ -158,7 +158,7 @@ public sealed class ComboBox : Component
     internal Func<string, bool>? OnTextSubmitted;
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
     /// <see cref="TemplateParts"/> for the contract.</summary>
-    internal TemplateParts? Parts;
+    public TemplateParts? Parts;
 
     /// <summary>LIVE props re-pushed to the mounted core (<c>Embed.Comp(props, …)</c>): the enabled flag and the geometry a
     /// window tier changes (the size axis, the width — a fill at one tier, a fixed width at another — and the touch row

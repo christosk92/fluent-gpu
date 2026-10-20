@@ -4,7 +4,6 @@ using FluentGpu.Foundation;
 // The §7A/§7B gesture types are canon-internal (the doc spells every struct `internal`); the vertical-slice harness
 // drives them directly as standalone units (gate.arena.* / the FSM unit checks), so it needs internals access. This is
 // the same test-bridge the slice uses for other internal seams — no production surface is widened.
-[assembly: InternalsVisibleTo("FluentGpu.VerticalSlice")]
 
 namespace FluentGpu.Input;
 
@@ -120,12 +119,6 @@ internal sealed class GestureArena
     /// grant hard capture and let that FSM emit its bubble events (§7A.2). No-op by default for standalone tests.</summary>
     public Action<int>? OnMemberWon;
 
-    /// <summary>Opt-in replay recorder (validation.md §12.6 — the L2 arena-determinism gate). When attached, the arena
-    /// logs every open / enroll / vote-transition / resolution-winner / sweep-loser to an ordered ledger the
-    /// determinism gate compares for bit-identity. <c>null</c> in production and every non-determinism check — each
-    /// record site is a <c>_recorder?.X()</c> null-guard (the same shape as the win/reject sinks), so the arbitration
-    /// pays one predictable null-check per mutation and allocates nothing when off. A test/debug seam only.</summary>
-    public GestureArenaRecorder? Recorder;
 
     public int OpenArenaCount { get; private set; }
 
@@ -199,7 +192,6 @@ internal sealed class GestureArena
         a.WinnerSlot = -1;
         a.OpenedUs = openedUs;
         OpenArenaCount++;
-        Recorder?.OnOpen(pointerId);
         return free;
     }
 
@@ -219,7 +211,6 @@ internal sealed class GestureArena
         m.FsmSlot = slot;                  // the member IS its FSM seat in the parallel bank (deterministic, zero-growth)
         m.Priority = (byte)a.MemberLen;    // innermost-first enrollment order; doc-order tiebreak follows route order
         a.MemberLen++;
-        Recorder?.OnEnroll(a.PointerId, slot, kind);
         return slot;
     }
 
@@ -234,7 +225,6 @@ internal sealed class GestureArena
         t.MemberOffset = memberOffset;
         t.MemberLen = memberLen;
         _teamLen[arenaSlot]++;
-        Recorder?.OnTeam(_arenas[arenaSlot].PointerId, captainSlot);
         return _teamLen[arenaSlot] - 1;
     }
 
@@ -245,7 +235,6 @@ internal sealed class GestureArena
         ref GestureArenaState a = ref _arenas[arenaSlot];
         if (a.Closed) return;
         a.Closed = true;
-        Recorder?.OnClose(a.PointerId);
     }
 
     /// <summary>Mark/clear the hold flag (§7A.2 rule 5): a DoubleTap member sets it after the first up to keep the arena
@@ -261,8 +250,6 @@ internal sealed class GestureArena
     public void SetVote(int memberSlot, ArenaVote vote)
     {
         ref ArenaMember m = ref _members[memberSlot];
-        if (Recorder is not null && m.Vote != vote)
-            Recorder.OnVote(_arenas[memberSlot / MaxMembersPerArena].PointerId, memberSlot, m.Kind, vote);
         m.Vote = vote;
     }
 
@@ -384,7 +371,6 @@ internal sealed class GestureArena
     public void CloseAndFree(int arenaSlot)
     {
         if (!_arenaUsed[arenaSlot]) return;
-        Recorder?.OnFree(_arenas[arenaSlot].PointerId);
         _arenaUsed[arenaSlot] = false;
         _teamLen[arenaSlot] = 0;
         _arenas[arenaSlot] = default;
@@ -412,7 +398,6 @@ internal sealed class GestureArena
             if (slot == winner)
             {
                 if (_members[slot].Vote != ArenaVote.EagerAccept) _members[slot].Vote = ArenaVote.Accept;
-                Recorder?.OnWin(a.PointerId, slot, _members[slot].Kind, _members[slot].Vote);
                 OnMemberWon?.Invoke(_members[slot].FsmSlot);
             }
             else if (hasTeams && SameTeam(arenaSlot, winner, slot))
@@ -423,7 +408,6 @@ internal sealed class GestureArena
             else if (_members[slot].Vote != ArenaVote.Reject)
             {
                 _members[slot].Vote = ArenaVote.Reject;     // synthetic GestureRejected
-                Recorder?.OnSweep(a.PointerId, slot, _members[slot].Kind);   // sweep order = enrollment order
                 OnMemberRejected?.Invoke(_members[slot].FsmSlot);
             }
         }

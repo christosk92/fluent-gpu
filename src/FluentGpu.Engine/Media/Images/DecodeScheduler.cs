@@ -140,36 +140,14 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     public void SetCompletionWake(Action? wake) => Volatile.Write(ref _completionWake, wake);
 
     public DecodeScheduler(IImageCodec codec, IImageFetcher fetcher, DecodeOptions? options = null)
-        : this(codec, fetcher, options, startWorkers: true) { }
-
-    /// <summary>Test-only seam: <paramref name="startWorkers"/> false constructs the scheduler with NO worker tasks, so
-    /// a test can drive the claim/cancel interleaving by hand (<see cref="TryClaimForTest"/>) with no sleeps and no
-    /// timing dependence. Production always uses the public constructor.</summary>
-    internal DecodeScheduler(IImageCodec codec, IImageFetcher fetcher, DecodeOptions? options, bool startWorkers)
     {
         _codec = codec;
         _fetcher = fetcher;
         _opt = options ?? new DecodeOptions();
         _pixels = _opt.PixelPool ?? new PixelBufferPool();
         int workers = _opt.MaxConcurrency > 0 ? _opt.MaxConcurrency : Math.Clamp(Environment.ProcessorCount - 2, 2, 6);
-        _workers = new Task[startWorkers ? workers : 0];
+        _workers = new Task[workers];
         for (int i = 0; i < _workers.Length; i++) _workers[i] = Task.Run(WorkerLoop);
-    }
-
-    /// <summary>Test-only hook invoked ONCE on the worker thread between a successful claim and TryClaim's return —
-    /// i.e. exactly inside the window a racing <see cref="Cancel"/> must survive. Null (and free) in production.</summary>
-    internal Action? ClaimBarrier;
-
-    /// <summary>Test-only hook invoked on the calling thread between <see cref="Prioritize"/>'s read of the queued
-    /// request and its write — the window a racing worker claim must not be able to undo. Null (and free) in production.</summary>
-    internal Action? PrioritizeBarrier;
-
-    /// <summary>Test-only: run one <c>TryClaim</c> on the calling thread and report the claimed id.</summary>
-    internal bool TryClaimForTest(out int id)
-    {
-        bool claimed = TryClaim(out var req);
-        id = req.Id;
-        return claimed;
     }
 
     // UI thread: non-blocking enqueue into the priority lane. Visible is never dropped; off-screen lanes drop under load.
@@ -211,7 +189,6 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     {
         if (_reqs.TryGetValue(id, out var r) && priority < r.Priority)   // raise urgency only (lower enum = higher)
         {
-            PrioritizeBarrier?.Invoke();   // test-only: the read/write race window, made deterministic
             // TryUpdate against the value read, never the indexer: a worker may claim the id (TryClaim's TryRemove)
             // between the read and the write, and the indexer would put the claimed request BACK — the promoted lane
             // copy then lets a second worker claim it too, so the image decodes twice and lands two ok completions.
@@ -382,7 +359,6 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
                 if (_reqs.TryRemove(id, out req))
                 {
                     Interlocked.Decrement(ref _queued);
-                    ClaimBarrier?.Invoke();   // test-only: the claim/cancel race window, made deterministic
                     return true;
                 }
                 if (added && _activeIds.TryRemove(id, out _)) _canceled.TryRemove(id, out _);
