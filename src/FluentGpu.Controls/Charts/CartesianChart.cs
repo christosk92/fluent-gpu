@@ -45,6 +45,18 @@ public static class CartesianChart
         public ColorF MarkInk { get; init; }
         /// <summary>Default fill of a <see cref="ChartBand"/> whose colour is unset.</summary>
         public ColorF BandFill { get; init; }
+        /// <summary>The grid lines' and the marks' stroke widths.</summary>
+        public float GridWidth { get; init; } = 1f;
+        public float MarkWidth { get; init; } = 1f;
+        /// <summary>A line point's rim (the ring that lifts the dot off the line) and its width; null = <c>Tok.FillSolidBase</c>.</summary>
+        public ColorF? DotRim { get; init; }
+        public float DotRimWidth { get; init; } = 2f;
+        /// <summary>The hover crosshair's width, and the corners of the active category's wash (bars); null = 3.</summary>
+        public float CrosshairWidth { get; init; } = 1f;
+        public CornerRadius4? ActiveWashCorners { get; init; }
+        /// <summary>The axis captions' and value labels' face and weight; null / 0 = the engine's body face at its normal weight.</summary>
+        public string? AxisFontFamily { get; init; }
+        public ushort AxisFontWeight { get; init; }
     }
 
     public static Style? StyleOverride;
@@ -155,11 +167,11 @@ internal sealed class CartesianChartComponent : Component
         if (geo is not null)
         {
             if (o.Grid && geo.Grid is not null)
-                layers.Add(PathLayer(geo.Grid, plotW, plotH, default, st.GridInk, new StrokeStyle(1f, LineCap.Butt, LineJoin.Miter, 4f, st.GridDashOn, st.GridDashOff)));
+                layers.Add(PathLayer(geo.Grid, plotW, plotH, default, st.GridInk, new StrokeStyle(st.GridWidth, LineCap.Butt, LineJoin.Miter, 4f, st.GridDashOn, st.GridDashOff)));
             if (notes is not null)
             {
                 for (int b = 0; b < notes.BandPaths.Length; b++) layers.Add(PathLayer(notes.BandPaths[b], plotW, plotH, notes.BandColors[b], default, default));
-                for (int m = 0; m < notes.MarkPaths.Length; m++) layers.Add(PathLayer(notes.MarkPaths[m], plotW, plotH, default, notes.MarkColors[m], new StrokeStyle(1f)));
+                for (int m = 0; m < notes.MarkPaths.Length; m++) layers.Add(PathLayer(notes.MarkPaths[m], plotW, plotH, default, notes.MarkColors[m], new StrokeStyle(st.MarkWidth)));
                 if (notes.Labels.Length > 0) layers.Add(AnnotationLabels(notes, frame, st));
             }
             if (p.Kind == CartesianChart.Kind.Bar) layers.Add(Bars(p, frame, geo, st));
@@ -177,7 +189,7 @@ internal sealed class CartesianChartComponent : Component
                     float sw = p.Kind == CartesianChart.Kind.Line ? p.Line?.StrokeWidth ?? 2f : p.Area?.Line == false ? 0f : p.Area?.StrokeWidth ?? 2f;
                     if (sw > 0f && geo.Lines[s] is { } line)
                         layers.Add(PathLayer(line, plotW, plotH, default, color, new StrokeStyle(sw, LineCap.Round, LineJoin.Round)));
-                    if (geo.Dots[s] is { } dots) layers.Add(PathLayer(dots, plotW, plotH, color, Tok.FillSolidBase, new StrokeStyle(2f)));
+                    if (geo.Dots[s] is { } dots) layers.Add(PathLayer(dots, plotW, plotH, color, st.DotRim ?? Tok.FillSolidBase, new StrokeStyle(st.DotRimWidth)));
                 }
                 if (labels && p.Kind == CartesianChart.Kind.Line) layers.Add(LineLabels(p, frame, st));
             }
@@ -292,7 +304,7 @@ internal sealed class CartesianChartComponent : Component
                 posArea = new BoxEl { Height = posLen, Direction = (byte)(stacked ? 1 : 0), Justify = stacked ? FlexJustify.End : FlexJustify.Center, AlignItems = stacked ? FlexAlign.Stretch : FlexAlign.End, Gap = bo.BarGap, Padding = new Edges4(pad, 0f, pad, 0f), MinWidth = 0f, Children = pos.ToArray() };
                 negArea = new BoxEl { Height = negLen, Direction = (byte)(stacked ? 1 : 0), Justify = stacked ? FlexJustify.Start : FlexJustify.Center, AlignItems = stacked ? FlexAlign.Stretch : FlexAlign.Start, Gap = bo.BarGap, Padding = new Edges4(pad, 0f, pad, 0f), MinWidth = 0f, Children = neg.ToArray() };
                 var col = new List<Element>(3);
-                if (bo.Labels) col.Add(new BoxEl { Height = f.TopPad, AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [new TextEl(total.ToString("N0", culture)) { Size = st.LabelFontSize, Color = st.LabelInk, MaxLines = 1 }] });
+                if (bo.Labels) col.Add(new BoxEl { Height = f.TopPad, AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [new TextEl(total.ToString("N0", culture)) { Size = st.LabelFontSize, Color = st.LabelInk, FontFamily = st.AxisFontFamily, Weight = st.AxisFontWeight, MaxLines = 1 }] });
                 col.Add(posArea); col.Add(negArea);
                 slots[i] = new BoxEl { Key = "slot:" + i, Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Justify = FlexJustify.End, Children = col.ToArray() };
             }
@@ -341,7 +353,7 @@ internal sealed class CartesianChartComponent : Component
                 Children = float.IsNaN(y) ? [] :
                 [
                     new BoxEl { Height = MathF.Max(0f, y) },
-                    new TextEl(v.ToString("N0", culture)) { Size = st.LabelFontSize, Color = st.LabelInk, MaxLines = 1 },
+                    new TextEl(v.ToString("N0", culture)) { Size = st.LabelFontSize, Color = st.LabelInk, FontFamily = st.AxisFontFamily, Weight = st.AxisFontWeight, MaxLines = 1 },
                 ],
             };
         }
@@ -370,7 +382,7 @@ internal sealed class CartesianChartComponent : Component
             cells[i] = new BoxEl
             {
                 Grow = 1f, Basis = 0f, MinWidth = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Children = keep[i] ? [new TextEl(labels[i]) { Size = st.AxisFontSize, Color = st.AxisInk, MaxLines = 1 }] : [],
+                Children = keep[i] ? [new TextEl(labels[i]) { Size = st.AxisFontSize, Color = st.AxisInk, FontFamily = st.AxisFontFamily, Weight = st.AxisFontWeight, MaxLines = 1 }] : [],
             };
         return new BoxEl
         {
@@ -391,7 +403,7 @@ internal sealed class CartesianChartComponent : Component
             {
                 Grow = 1f, Basis = 0f, MinHeight = 0f, AlignItems = FlexAlign.End, Justify = FlexJustify.Center,
                 Padding = new Edges4(0f, 0f, 6f, 0f),
-                Children = [new TextEl(label) { Size = st.AxisFontSize, Color = st.AxisInk, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MaxWidth = width - 6f }],
+                Children = [new TextEl(label) { Size = st.AxisFontSize, Color = st.AxisInk, FontFamily = st.AxisFontFamily, Weight = st.AxisFontWeight, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MaxWidth = width - 6f }],
             };
         }
         return new BoxEl { Key = "y-axis", Direction = 1, Width = width, Height = f.PlotH, HitTestVisible = false, Children = cells };
@@ -413,7 +425,7 @@ internal sealed class CartesianChartComponent : Component
                 kids.Add(new BoxEl
                 {
                     Height = half * 2f, AlignItems = FlexAlign.End, Justify = FlexJustify.Center, Padding = new Edges4(0f, 0f, 6f, 0f),
-                    Children = [new TextEl(Format(geo.Ticks[k], ax, culture)) { Size = st.AxisFontSize, Color = st.AxisInk, MaxLines = 1 }],
+                    Children = [new TextEl(Format(geo.Ticks[k], ax, culture)) { Size = st.AxisFontSize, Color = st.AxisInk, FontFamily = st.AxisFontFamily, Weight = st.AxisFontWeight, MaxLines = 1 }],
                 });
                 cursor = y + half;
             }
@@ -436,7 +448,7 @@ internal sealed class CartesianChartComponent : Component
                 float left = Math.Clamp(x - half, 0f, MathF.Max(0f, f.PlotW - w));
                 if (left < cursor) continue;
                 if (left > cursor) kids.Add(new BoxEl { Width = left - cursor });
-                kids.Add(new BoxEl { Width = w, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [new TextEl(text) { Size = st.AxisFontSize, Color = st.AxisInk, MaxLines = 1 }] });
+                kids.Add(new BoxEl { Width = w, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [new TextEl(text) { Size = st.AxisFontSize, Color = st.AxisInk, FontFamily = st.AxisFontFamily, Weight = st.AxisFontWeight, MaxLines = 1 }] });
                 cursor = left + w;
             }
         }
@@ -522,7 +534,7 @@ internal sealed class CartesianChartComponent : Component
                 OffsetX = f.Horizontal ? 2f : at + 3f,
                 OffsetY = f.Horizontal ? at + 2f : 2f,
                 HitTestVisible = false,
-                Children = [new TextEl(label) { Size = st.AxisFontSize, Color = st.LabelInk, MaxLines = 1 }],
+                Children = [new TextEl(label) { Size = st.AxisFontSize, Color = st.LabelInk, FontFamily = st.AxisFontFamily, Weight = st.AxisFontWeight, MaxLines = 1 }],
             };
         }
         return new BoxEl { Key = "annotation-labels", ZStack = true, Width = f.PlotW, Height = f.PlotH, HitTestVisible = false, Children = kids };
@@ -687,12 +699,12 @@ internal sealed class ActiveOverlay : Component
         {
             if (p.Bar?.HighlightActive != false)
                 layers.Add(f.Horizontal
-                    ? Row(0f, new BoxEl { Height = f.Slot, Width = f.PlotW, Fill = st.ActiveWash, Corners = CornerRadius4.All(3f) }, c - f.Slot * 0.5f, vertical: true)
-                    : Row(c - f.Slot * 0.5f, new BoxEl { Width = f.Slot, Height = f.PlotH, Fill = st.ActiveWash, Corners = CornerRadius4.All(3f) }, 0f, vertical: false));
+                    ? Row(0f, new BoxEl { Height = f.Slot, Width = f.PlotW, Fill = st.ActiveWash, Corners = st.ActiveWashCorners ?? CornerRadius4.All(3f) }, c - f.Slot * 0.5f, vertical: true)
+                    : Row(c - f.Slot * 0.5f, new BoxEl { Width = f.Slot, Height = f.PlotH, Fill = st.ActiveWash, Corners = st.ActiveWashCorners ?? CornerRadius4.All(3f) }, 0f, vertical: false));
         }
         else
         {
-            layers.Add(Row(c - 0.5f, new BoxEl { Width = 1f, Height = f.PlotH, Fill = st.CrosshairInk }, 0f, vertical: false));
+            layers.Add(Row(c - st.CrosshairWidth * 0.5f, new BoxEl { Width = st.CrosshairWidth, Height = f.PlotH, Fill = st.CrosshairInk }, 0f, vertical: false));
             // Active markers: one dot per series at this category.
             var src = p.Cumulative ?? p.Data.Values;
             for (int s = 0; s < p.Data.Series.Count; s++)
@@ -703,7 +715,7 @@ internal sealed class ActiveOverlay : Component
                 layers.Add(Row(c - 5f, new BoxEl
                 {
                     Width = 10f, Height = 10f, Corners = CornerRadius4.All(5f), Fill = p.Data.Series[s].Color,
-                    BorderWidth = 2f, BorderColor = Tok.FillSolidBase,
+                    BorderWidth = st.DotRimWidth, BorderColor = st.DotRim ?? Tok.FillSolidBase,
                 }, y - 5f, vertical: false));
             }
         }
