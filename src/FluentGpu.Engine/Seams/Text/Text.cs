@@ -21,7 +21,18 @@ public readonly record struct TextStyle(StringId FontFamily, float SizeDip, usho
     LineStacking Stacking = LineStacking.MaxHeight, TextLineBounds LineBounds = TextLineBounds.Full,
     int SpanRunId = 0, float MinSizeDip = 0f,   // MinSizeDip > 0 ⇒ auto-fit floor (TextEl.MinSize; shrink-to-fit MaxLines)
     TextCase Case = TextCase.AsWritten,         // E19: invariant case transform applied at shaping; part of the key because it can change the glyph run
-    TextAlign Align = TextAlign.Start, FontFeatures Features = FontFeatures.None);   // TextEl.TextAlign / TextEl.FontFeatures
+    TextAlign Align = TextAlign.Start, FontFeatures Features = FontFeatures.None,   // TextEl.TextAlign / TextEl.FontFeatures
+    TextFitMode Fit = TextFitMode.Lines)                                             // TextEl.FitMode: how the MinSizeDip auto-fit picks its size
+{
+    /// <summary>This style at the auto-fit size <paramref name="size"/> the measure pass chose: the em, and under
+    /// <see cref="TextFitMode.OneLineFirst"/> an authored <see cref="LineHeight"/> scaled with it (the line keeps its ratio to the
+    /// em). ONE definition for the measure, the recorder, the input queries and the overflow probe, so all four agree.</summary>
+    public TextStyle AtFitSize(float size) => this with
+    {
+        SizeDip = size,
+        LineHeight = Fit == TextFitMode.OneLineFirst && LineHeight > 0f && SizeDip > 0f ? LineHeight * size / SizeDip : LineHeight,
+    };
+}
 
 /// <summary>Shared alignment/typography math — ONE definition the DirectWrite engine, the headless font system, the
 /// recorder (decoration bars) and the input dispatcher (hyperlink rects) all use, so every consumer places a line at the

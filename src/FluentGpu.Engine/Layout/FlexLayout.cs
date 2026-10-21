@@ -389,7 +389,7 @@ public sealed partial class FlexLayout
             && (style.Wrap == Foundation.TextWrap.NoWrap || style.MaxLines > 0))
         {
             float chosen = FitTextSize(text, style, maxW);
-            if (chosen < style.SizeDip) eff = style with { SizeDip = chosen };
+            if (chosen < style.SizeDip) eff = style.AtFitSize(chosen);
         }
         var m = _fonts.Measure(text, in eff, maxW, publishArtifacts: false);
         if (slot)
@@ -761,7 +761,7 @@ public sealed partial class FlexLayout
                     && (li.TextStyle.Wrap == Foundation.TextWrap.NoWrap || li.TextStyle.MaxLines > 0))
                 {
                     float chosen = FitTextSize(paint.Text, li.TextStyle, maxW);
-                    if (chosen < li.TextStyle.SizeDip) { fit = chosen; eff = li.TextStyle with { SizeDip = chosen }; }
+                    if (chosen < li.TextStyle.SizeDip) { fit = chosen; eff = li.TextStyle.AtFitSize(chosen); }
                 }
                 FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.TextMeasure);
                 // A node's FIRST measure only (a fresh mount): a live re-measure (resize, a text edit) stays off the shared
@@ -1633,7 +1633,10 @@ public sealed partial class FlexLayout
     // opt-in (MinSizeDip>0) text node — never normal text, never a steady frame — so the extra measures are immaterial.
     private float FitTextSize(StringId text, TextStyle style, float maxW)
     {
-        if (style.Wrap == Foundation.TextWrap.NoWrap) return FitSingleLineSize(text, style, maxW);
+        // OneLineFirst: the ONE-line fit, wrapping or not; a run the floor cannot hold on one line is drawn at the floor and wraps
+        // (up to MaxLines, then Trim). A line's width does not depend on the line height, so the one-line solve is exact here too.
+        if (style.Wrap == Foundation.TextWrap.NoWrap || style.Fit == Foundation.TextFitMode.OneLineFirst)
+            return FitSingleLineSize(text, style with { Wrap = Foundation.TextWrap.NoWrap }, maxW);
         int maxLines = style.MaxLines;
         float maxS = style.SizeDip, minS = style.MinSizeDip;
 

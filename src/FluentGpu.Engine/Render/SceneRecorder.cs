@@ -2496,6 +2496,8 @@ internal sealed class SceneRecordingContext
                 // what the pre-ring single slot's "whichever was written last" read always resolved to).
                 TextMeasureEntry mc = scene.ResolveMeasureForWidth(node, b.W);
                 float effSize = mc.Valid && mc.FitSize > 0f ? mc.FitSize : style.SizeDip;
+                // The line box at that size (TextStyle.AtFitSize: a OneLineFirst fit scales an authored LineHeight with the em).
+                float effLine = mc.Valid && mc.FitSize > 0f ? style.AtFitSize(mc.FitSize).LineHeight : style.LineHeight;
 
                 // Text-edit decorations (editor TEXT nodes only — sparse side-table, recorder READS only).
                 // WinUI-exact emit order: selection highlight UNDER the glyphs → base glyph run → per-rect clipped
@@ -2541,13 +2543,13 @@ internal sealed class SceneRecordingContext
                     if (scene.TryGetGlyphWipe(node, out var wipe))   // glyph wipe (lyrics karaoke): per-glyph color + lift from the split
                         dl.DrawGlyphRunGradient(local, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
-                            style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
+                            style.CharSpacing, effLine, (int)style.Stacking, (int)style.LineBounds,
                             world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, ink: in ink,
                             typography: TextTypography.Pack(in style));
                     else
                         dl.DrawGlyphRun(local, textColor, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
-                            style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
+                            style.CharSpacing, effLine, (int)style.Stacking, (int)style.LineBounds,
                             world, opacity, key, spanRunId, ink: in ink, typography: TextTypography.Pack(in style));
                 }
 
@@ -2625,7 +2627,7 @@ internal sealed class SceneRecordingContext
                         // bleed through the selection (WinUI's selected-text recolor).
                         dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
-                            style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
+                            style.CharSpacing, effLine, (int)style.Stacking, (int)style.LineBounds,
                             world, opacity, key | 0x1, spanRunId, forceColor: true, typography: TextTypography.Pack(in style));
                         dl.PopClip(key | 0x1);
                     }

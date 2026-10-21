@@ -53,7 +53,7 @@ public static class TextOverflowQuery
         if (scene.TryGetMeasureCache(node, out TextMeasureCache cache))
         {
             TextMeasureEntry entry = cache.ResolveForWidth(box.Width);
-            if (entry.Valid && entry.FitSize > 0f && entry.FitSize < laid.SizeDip) style = style with { SizeDip = entry.FitSize };
+            if (entry.Valid && entry.FitSize > 0f && entry.FitSize < laid.SizeDip) style = style.AtFitSize(entry.FitSize);
         }
 
         // The uncut run: no trimming, no line cap, and (a span run) no artifacts published at a probe width (restored below).
