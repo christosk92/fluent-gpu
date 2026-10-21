@@ -337,8 +337,9 @@ public sealed class RenderCompositorAnimations
                 if (acc.OpacityMoving || (n == node && acc.OpacityPosed)) continue;
                 op = acc.Acc.Op;
             }
-            if (!float.IsNaN(p.HoverOpacity)) op = MathF.Max(op, p.HoverOpacity);
-            if (!float.IsNaN(p.PressedOpacity)) op = MathF.Max(op, p.PressedOpacity);
+            ref readonly NodePaintCold pc = ref scene.PaintCold(n);
+            if (!float.IsNaN(pc.HoverOpacity)) op = MathF.Max(op, pc.HoverOpacity);
+            if (!float.IsNaN(pc.PressedOpacity)) op = MathF.Max(op, pc.PressedOpacity);
             if (op <= 0f) return false;
         }
         return true;

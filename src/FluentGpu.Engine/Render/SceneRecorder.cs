@@ -1234,8 +1234,9 @@ internal sealed class SceneRecordingContext
             // ...and stay opaque under the pointer: a hover/press opacity (eased by its own or an ancestor's progress, or
             // stepped by the bare Hovered/Pressed flags) or a translucent hover/press fill lets the parent show through.
             // Static props, so the cull never depends on a hover flip that does not re-record this parent.
-            if (cp.HoverOpacity < 1f || cp.PressedOpacity < 1f) continue;   // NaN (unset) compares false
-            if ((cp.HoverFill.A is > 0f and < 1f) || (cp.PressedFill.A is > 0f and < 1f)) continue;
+            ref readonly NodePaintCold cc = ref scene.PaintCold(c);
+            if (cc.HoverOpacity < 1f || cc.PressedOpacity < 1f) continue;   // NaN (unset) compares false
+            if ((cc.HoverFill.A is > 0f and < 1f) || (cc.PressedFill.A is > 0f and < 1f)) continue;
             // Fill is the BrushTransition TARGET: mid-fade the child draws LerpLinear(FillFrom, Fill, T), which is not the
             // opaque cover its target claims — culling the parent then would show a hole for the whole fade.
             if ((cf & NodeFlags.SparsePaint) != 0 && scene.TryGetBrushAnim(c, out var cba)
@@ -1585,6 +1586,9 @@ internal sealed class SceneRecordingContext
 
         ref readonly RectF b = ref scene.Bounds(node);
         ref readonly NodePaint p = ref scene.Paint(node);
+        // The cold half (state colours, hover/press opacity, dash, flare, image focus): the node's row or the shared
+        // default row — a ref, no branch, no copy.
+        ref readonly NodePaintCold pc = ref scene.PaintCold(node);
 
         // ── retained tiles: a TRANSLATION slice root (scroll content / sticky-parallax effect) is cut here ──
         if (!isSliceSelf && stats.Slicing
@@ -1626,7 +1630,7 @@ internal sealed class SceneRecordingContext
         float childScaleX = netScaleX * localT.M11;   // the scale this node imposes on its children
         float childScaleY = netScaleY * localT.M22;
 
-        float opacity = parentOpacity * ResolveOpacity(flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
+        float opacity = parentOpacity * ResolveOpacity(flags, in p, in pc, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
 
         // Presented extent (layout-transition "Reveal"): the node's own fill + its child clip are drawn at PresentedW/H
         // when set (which may exceed the model bounds during a shrink), while layout/hit-test keep the model Bounds.
@@ -1742,7 +1746,7 @@ internal sealed class SceneRecordingContext
         // self-blur, an edge fade over its own paint) spends EffectSliceCap and past it records inline. Inside an inline
         // group layer nothing is cut (see InlineLayerDepth).
         bool distributeFade = isEdgeFade && edgeFade.Mode == EdgeFadeMode.Fade && opacity >= 0.999f
-            && !HasOwnPaint(scene, node, maybeSparsePaint, in p);
+            && !HasOwnPaint(scene, node, maybeSparsePaint, in p, in pc);
         // A slice ROOT that itself needs a group layer — the scene root, a scroll content root, a sticky/parallax root that
         // is (say) a fading scroller — cannot put that layer on its own marker (it IS the slice), and recorded inline it
         // would fold everything below it (nothing is cut inside an inline layer: every scroll of a nested scroller would
@@ -2348,7 +2352,7 @@ internal sealed class SceneRecordingContext
         // an additive bracket (this node's own Blend or an enclosing one in this arena): its children ADD onto its fill.
         // Never under a partial NON-group opacity (its own, e.g. an Enter fade, or inherited): the child then draws at that
         // same alpha, so it no longer overwrites the fill beneath it (a group has already reset `opacity` to 1 here).
-        if (drawSelf && opacity >= 0.999f && p.BorderWidth <= 0f && p.ValidationBorder.A <= 0f && stats.AdditiveDepth == 0
+        if (drawSelf && opacity >= 0.999f && p.BorderWidth <= 0f && pc.ValidationBorder.A <= 0f && stats.AdditiveDepth == 0
             && IsOccludedByOpaqueChild(scene, node, in world, p.ChildShiftX, p.ChildShiftY, in deviceBounds, in recordClip, inMotion,
                 stats.Slicing ? stats.Slices : null))
             drawSelf = false;
@@ -2365,14 +2369,14 @@ internal sealed class SceneRecordingContext
         if (drawSelf)
         switch (p.VisualKind)
         {
-            case VisualKind.Box when p.Fill.A > 0f || p.HoverFill.A > 0f || p.PressedFill.A > 0f || p.BorderWidth > 0f
-                                     || p.ValidationBorder.A > 0f
+            case VisualKind.Box when p.Fill.A > 0f || pc.HoverFill.A > 0f || pc.PressedFill.A > 0f || p.BorderWidth > 0f
+                                     || pc.ValidationBorder.A > 0f
                                      || hasNodeGradient
                                      // A fill fading TO transparent still shows LerpLinear(FillFrom, Fill, T): draw it
                                      // until the BrushTransition lands (the reconciler holds VisualKind.Box for it).
                                      || (maybeSparsePaint && FillFadeVisible(scene, node)):
             {
-                ResolveSurface(scene, node, flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out ColorF fill, out ColorF border);
+                ResolveSurface(scene, node, flags, in p, in pc, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out ColorF fill, out ColorF border);
                 // A frosted surface's authored fill IS its acrylic FallbackColor: the kit paints it (FlyoutSurface on
                 // both shapes it builds, ScrollBar's track, every Acrylic+Fallback pairing) so the surface stays solid
                 // wherever the acrylic LAYER cannot run. Where the layer DID run, that fill is not redundant, it is
@@ -2438,7 +2442,7 @@ internal sealed class SceneRecordingContext
 
                 // ── border ring (SDF band, drawn over the fill edge — inside the bounds, WinUI-style) ── ONE hollow ring
                 // for every border, solid or gradient; the SDF stroke never paints the interior.
-                if (p.ValidationBorder.A > 0f && p.BorderWidth > 0f)
+                if (pc.ValidationBorder.A > 0f && p.BorderWidth > 0f)
                 {
                     // form-validation.md: a validation error forces a SOLID error-colored ring, overriding any resting
                     // gradient (TextBox/ComboBox use the gradient elevation border) or solid border. `border` already
@@ -2466,9 +2470,9 @@ internal sealed class SceneRecordingContext
             }
             case VisualKind.TabShape:
             {
-                ResolveSurface(scene, node, flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out ColorF fill, out _);
+                ResolveSurface(scene, node, flags, in p, in pc, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out ColorF fill, out _);
                 if (fill.A > 0f)
-                    dl.TabShape(local, p.Corners.TopLeft, p.TabFlareRadius, fill, world, opacity, key);
+                    dl.TabShape(local, p.Corners.TopLeft, pc.TabFlareRadius, fill, world, opacity, key);
                 break;
             }
             case VisualKind.Video:
@@ -2488,7 +2492,7 @@ internal sealed class SceneRecordingContext
             case VisualKind.Text:
             {
                 TextStyle style = scene.RecordingTextStyle(node);
-                ColorF textColor = ResolveTextColor(scene, node, flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
+                ColorF textColor = ResolveTextColor(scene, node, flags, in p, in pc, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
                 // Auto-fit: the measure pass may have shrunk the font (TextEl.MinSize) and recorded the chosen size on
                 // the cache. Shape at it so the glyphs match the box the layout sized. 0 ⇒ no fit (authored size).
                 // P4: the measure cache is a 2-ENTRY RING (Scene/Columns.cs) — resolve the entry whose measure width
@@ -2673,7 +2677,7 @@ internal sealed class SceneRecordingContext
                 if (ready && images is not null)
                 {
                     var (srcW, srcH) = images.SizeOf(ih);
-                    (drawRect, uv) = ImageContentFit((ImageFit)p.ImageFit, in local, srcW, srcH, p.ImageFocusX, p.ImageFocusY);
+                    (drawRect, uv) = ImageContentFit((ImageFit)p.ImageFit, in local, srcW, srcH, pc.ImageFocusX, pc.ImageFocusY);
                 }
 
                 ImageMaskSpec mask = effects.Mask;
@@ -2693,7 +2697,7 @@ internal sealed class SceneRecordingContext
                 {
                     var oh = new ImageHandle(effects.SwapOutgoingId);
                     var (outW, outH) = images.SizeOf(oh);
-                    var (outRect, outUv) = ImageContentFit((ImageFit)p.ImageFit, in local, outW, outH, p.ImageFocusX, p.ImageFocusY);
+                    var (outRect, outUv) = ImageContentFit((ImageFit)p.ImageFit, in local, outW, outH, pc.ImageFocusX, pc.ImageFocusY);
                     dl.DrawImage(outRect, p.Corners, oh.Id, true, default, world, opacity, outUv, effects.SwapStartMs,
                         effects.SwapMs, ImageCache.SwapOutgoingEasing, key | 0x1, effects.Overlay, (int)mask.Edges,
                         mask.BandLeft, mask.BandTop, mask.BandRight, mask.BandBottom, (int)mask.Falloff, mask.Intensity,
@@ -2718,8 +2722,8 @@ internal sealed class SceneRecordingContext
                 // resolve, not the Box case's ResolveSurface cross-fade (that helper blends on the POINTER-DOWN
                 // press progress, which is the wrong signal for an app-level "selected" boolean; ListRowEl's hover
                 // wash therefore snaps instead of cross-fading — a documented scope cut for this wave).
-                ColorF rowFill = p.PressedFill.A > 0f ? p.PressedFill
-                    : (p.HoverFill.A > 0f && (flags & (NodeFlags.Hovered | NodeFlags.HoverWithin)) != 0) ? p.HoverFill
+                ColorF rowFill = pc.PressedFill.A > 0f ? pc.PressedFill
+                    : (pc.HoverFill.A > 0f && (flags & (NodeFlags.Hovered | NodeFlags.HoverWithin)) != 0) ? pc.HoverFill
                     : p.Fill;
                 // E20: a theme cross-fade of the row's fill rides BrushAnim(Fill), like every surface tint.
                 if (maybeSparsePaint && scene.TryGetBrushAnim(node, out var rba) && (rba.Channels & BrushAnim.FillBit) != 0)
@@ -3238,7 +3242,7 @@ internal sealed class SceneRecordingContext
                 pendingHasHoverBorderBrush, in pendingPressedBorderBrush, pendingHasPressedBorderBrush,
                 pendingBorderHoverT, pendingBorderPressT, world, opacity, key, in pendingBorderFadeFrom, pendingBorderFadeBack);
         else if (pendingSolidBorder)
-            EmitBorderRing(dl, local, pb, p.Corners, p.BorderWidth, pendingBorder, p.BorderDashOn, p.BorderDashOff, world, opacity, key);
+            EmitBorderRing(dl, local, pb, p.Corners, p.BorderWidth, pendingBorder, pc.BorderDashOn, pc.BorderDashOff, world, opacity, key);
 
         if (acrylicLayer)
         {
@@ -3720,25 +3724,25 @@ internal sealed class SceneRecordingContext
         return false;
     }
 
-    private float ResolveOpacity(NodeFlags flags, in NodePaint p, in InheritedState inherited, bool nodeInteractive,
+    private float ResolveOpacity(NodeFlags flags, in NodePaint p, in NodePaintCold pc, in InheritedState inherited, bool nodeInteractive,
                                         bool hasLocalProgress, float localHoverT, float localPressT)
     {
-        bool hasHover = !float.IsNaN(p.HoverOpacity);
-        bool hasPress = !float.IsNaN(p.PressedOpacity);
+        bool hasHover = !float.IsNaN(pc.HoverOpacity);
+        bool hasPress = !float.IsNaN(pc.PressedOpacity);
         if (!hasHover && !hasPress) return p.Opacity;
 
         float opacity = p.Opacity;
         if (TryResolveInteractionProgress(in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out float hoverT, out float pressT))
         {
             if (hasHover)
-                opacity += (p.HoverOpacity - opacity) * hoverT;
+                opacity += (pc.HoverOpacity - opacity) * hoverT;
             if (hasPress)
-                opacity += (p.PressedOpacity - opacity) * pressT;
+                opacity += (pc.PressedOpacity - opacity) * pressT;
             return opacity;
         }
 
-        if (hasPress && (flags & NodeFlags.Pressed) != 0) return p.PressedOpacity;
-        if (hasHover && (flags & NodeFlags.Hovered) != 0) return p.HoverOpacity;
+        if (hasPress && (flags & NodeFlags.Pressed) != 0) return pc.PressedOpacity;
+        if (hasHover && (flags & NodeFlags.Hovered) != 0) return pc.HoverOpacity;
         return opacity;
     }
 
@@ -3749,7 +3753,7 @@ internal sealed class SceneRecordingContext
         => scene.TryGetBrushAnim(node, out var ba)
            && (ba.Channels & BrushAnim.FillBit) != 0 && ba.FillFrom.A > 0f && ba.T < 1f;
 
-    private void ResolveSurface(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, in NodePaint p, in InheritedState inherited,
+    private void ResolveSurface(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, in NodePaint p, in NodePaintCold pc, in InheritedState inherited,
                                        bool nodeInteractive, bool hasLocalProgress, float localHoverT, float localPressT,
                                        out ColorF fill, out ColorF border)
     {
@@ -3762,39 +3766,39 @@ internal sealed class SceneRecordingContext
             // actual pointer). Local interactive nodes keep the auto-lighten default when HoverFill is unset.
             // Cross-fade in LINEAR light (color canon: linear-blend / premultiplied) — not straight sRGB.
             bool local = hasLocalProgress;
-            if (hoverT > 0.001f && (p.HoverFill.A > 0f || local))
+            if (hoverT > 0.001f && (pc.HoverFill.A > 0f || local))
             {
-                ColorF hov = p.HoverFill.A > 0f ? p.HoverFill : Lighten(p.Fill, 0.08f);
+                ColorF hov = pc.HoverFill.A > 0f ? pc.HoverFill : Lighten(p.Fill, 0.08f);
                 fill = ColorF.LerpLinear(p.Fill, hov, hoverT);
             }
-            if (pressT > 0.001f && (p.PressedFill.A > 0f || local))
+            if (pressT > 0.001f && (pc.PressedFill.A > 0f || local))
             {
-                ColorF prs = p.PressedFill.A > 0f ? p.PressedFill : Darken(p.Fill, 0.12f);
+                ColorF prs = pc.PressedFill.A > 0f ? pc.PressedFill : Darken(p.Fill, 0.12f);
                 fill = ColorF.LerpLinear(fill, prs, pressT);
             }
             // Border eases to its explicit per-state token when set (e.g. CheckBox unchecked-pressed stroke →
             // ControlStrongStrokeColorDisabled), else falls back to a lighten/darken of the resting border —
             // same local-vs-inherited rule as fill (a toast strip's HoverWithin must not wash every card stroke).
-            if (hoverT > 0.001f && (p.HoverBorderColor.A > 0f || local))
+            if (hoverT > 0.001f && (pc.HoverBorderColor.A > 0f || local))
             {
-                ColorF hb = p.HoverBorderColor.A > 0f ? p.HoverBorderColor : Lighten(p.BorderColor, 0.08f);
+                ColorF hb = pc.HoverBorderColor.A > 0f ? pc.HoverBorderColor : Lighten(p.BorderColor, 0.08f);
                 border = ColorF.LerpLinear(p.BorderColor, hb, hoverT);
             }
-            if (pressT > 0.001f && (p.PressedBorderColor.A > 0f || local))
+            if (pressT > 0.001f && (pc.PressedBorderColor.A > 0f || local))
             {
-                ColorF pb = p.PressedBorderColor.A > 0f ? p.PressedBorderColor : Darken(p.BorderColor, 0.12f);
+                ColorF pb = pc.PressedBorderColor.A > 0f ? pc.PressedBorderColor : Darken(p.BorderColor, 0.12f);
                 border = ColorF.LerpLinear(border, pb, pressT);
             }
         }
         else if ((flags & NodeFlags.Pressed) != 0)
         {
-            fill = p.PressedFill.A > 0f ? p.PressedFill : Darken(fill, 0.12f);
-            border = p.PressedBorderColor.A > 0f ? p.PressedBorderColor : Darken(border, 0.12f);
+            fill = pc.PressedFill.A > 0f ? pc.PressedFill : Darken(fill, 0.12f);
+            border = pc.PressedBorderColor.A > 0f ? pc.PressedBorderColor : Darken(border, 0.12f);
         }
         else if ((flags & NodeFlags.Hovered) != 0)
         {
-            fill = p.HoverFill.A > 0f ? p.HoverFill : Lighten(fill, 0.08f);
-            border = p.HoverBorderColor.A > 0f ? p.HoverBorderColor : Lighten(border, 0.08f);
+            fill = pc.HoverFill.A > 0f ? pc.HoverFill : Lighten(fill, 0.08f);
+            border = pc.HoverBorderColor.A > 0f ? pc.HoverBorderColor : Lighten(border, 0.08f);
         }
 
         // Implicit BrushTransition (logical state flip): cross-fade from the previously-displayed color toward the
@@ -3807,53 +3811,53 @@ internal sealed class SceneRecordingContext
 
         // Validation (form-validation.md): an invalid field's resolved error color (already theme-resolved on the UI
         // thread by the reconciler — the recorder stays theme-agnostic) overrides the resting/state border. A==0 ⇒ none.
-        if (p.ValidationBorder.A > 0f) border = p.ValidationBorder;
+        if (pc.ValidationBorder.A > 0f) border = pc.ValidationBorder;
     }
 
     /// <summary>Resolve a text/glyph node's foreground for this frame. Plain text (no state colors) returns instantly.
     /// Otherwise: Disabled wins as a step (self-or-ancestor input-disabled), then Hover/Pressed ease with the nearest
     /// interactive ancestor's progress (falling back to an instant flag-step when that ancestor has no anim row, exactly
     /// like <see cref="ResolveSurface"/> does for the box fill), then Focused as a step, else the resting color.</summary>
-    private ColorF ResolveTextColor(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, in NodePaint p, in InheritedState inherited,
+    private ColorF ResolveTextColor(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, in NodePaint p, in NodePaintCold pc, in InheritedState inherited,
                                            bool nodeInteractive, bool hasLocalProgress, float localHoverT, float localPressT)
     {
-        ColorF resolved = ResolveTextColorCore(flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
+        ColorF resolved = ResolveTextColorCore(flags, in p, in pc, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
         // Implicit BrushTransition on the foreground (logical state flip): cross-fade from the previously-displayed color.
         if (scene.TryGetBrushAnim(node, out var ba) && (ba.Channels & BrushAnim.TextBit) != 0)
             resolved = ColorF.LerpLinear(ba.TextFrom, resolved, ba.T);
         return resolved;
     }
 
-    private ColorF ResolveTextColorCore(NodeFlags flags, in NodePaint p, in InheritedState inherited, bool nodeInteractive,
+    private ColorF ResolveTextColorCore(NodeFlags flags, in NodePaint p, in NodePaintCold pc, in InheritedState inherited, bool nodeInteractive,
                                                bool hasLocalProgress, float localHoverT, float localPressT)
     {
         // Fast path: the overwhelming majority of text has no state ramps (A==0 on every axis).
-        if (p.TextHoverColor.A == 0f && p.TextPressedColor.A == 0f && p.TextDisabledColor.A == 0f && p.TextFocusedColor.A == 0f)
+        if (pc.TextHoverColor.A == 0f && pc.TextPressedColor.A == 0f && pc.TextDisabledColor.A == 0f && pc.TextFocusedColor.A == 0f)
             return p.TextColor;
 
-        if (p.TextDisabledColor.A > 0f && (inherited.Disabled != 0 || (flags & NodeFlags.Disabled) != 0))
-            return p.TextDisabledColor;
+        if (pc.TextDisabledColor.A > 0f && (inherited.Disabled != 0 || (flags & NodeFlags.Disabled) != 0))
+            return pc.TextDisabledColor;
 
-        bool hasHover = p.TextHoverColor.A > 0f;
-        bool hasPress = p.TextPressedColor.A > 0f;
+        bool hasHover = pc.TextHoverColor.A > 0f;
+        bool hasPress = pc.TextPressedColor.A > 0f;
         if (hasHover || hasPress)
         {
             if (TryResolveInteractionProgress(in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out float hoverT, out float pressT)
                 && (hoverT > 0.001f || pressT > 0.001f))
             {
                 ColorF c = p.TextColor;
-                if (hasHover) c = ColorF.LerpLinear(c, p.TextHoverColor, hoverT);   // linear-light cross-fade (color canon)
-                if (hasPress) c = ColorF.LerpLinear(c, p.TextPressedColor, pressT);
+                if (hasHover) c = ColorF.LerpLinear(c, pc.TextHoverColor, hoverT);   // linear-light cross-fade (color canon)
+                if (hasPress) c = ColorF.LerpLinear(c, pc.TextPressedColor, pressT);
                 return c;
             }
             // No progress row on the interactive ancestor → instant step from its hover/press flags.
             NodeFlags istate = nodeInteractive ? flags : inherited.InteractiveFlags;
-            if (hasPress && (istate & NodeFlags.Pressed) != 0) return p.TextPressedColor;
-            if (hasHover && (istate & NodeFlags.Hovered) != 0) return p.TextHoverColor;
+            if (hasPress && (istate & NodeFlags.Pressed) != 0) return pc.TextPressedColor;
+            if (hasHover && (istate & NodeFlags.Hovered) != 0) return pc.TextHoverColor;
         }
 
-        if (p.TextFocusedColor.A > 0f && (flags & NodeFlags.Focused) != 0)
-            return p.TextFocusedColor;
+        if (pc.TextFocusedColor.A > 0f && (flags & NodeFlags.Focused) != 0)
+            return pc.TextFocusedColor;
 
         return p.TextColor;
     }
@@ -4225,13 +4229,13 @@ internal sealed class SceneRecordingContext
     /// distributed as an analytic per-item feather (<see cref="CompositeSliceFlags.DistributeFade"/>); one over its own
     /// paint cannot (that paint overlaps its content inside the band). Conservative: placement re-checks the painted
     /// segments of the slice every turn.</summary>
-    private static bool HasOwnPaint(SceneRecordingSnapshot scene, NodeHandle node, bool maybeSparsePaint, in NodePaint p)
+    private static bool HasOwnPaint(SceneRecordingSnapshot scene, NodeHandle node, bool maybeSparsePaint, in NodePaint p, in NodePaintCold pc)
     {
         switch (p.VisualKind)
         {
             case VisualKind.None: break;
             case VisualKind.Box:
-                if (p.Fill.A > 0f || p.HoverFill.A > 0f || p.PressedFill.A > 0f || p.BorderWidth > 0f || p.ValidationBorder.A > 0f) return true;
+                if (p.Fill.A > 0f || pc.HoverFill.A > 0f || pc.PressedFill.A > 0f || p.BorderWidth > 0f || pc.ValidationBorder.A > 0f) return true;
                 if (maybeSparsePaint && scene.TryGetGradient(node, out var g) && g.Stops is { Length: > 0 }) return true;
                 break;
             default: return true;

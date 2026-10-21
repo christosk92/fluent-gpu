@@ -160,7 +160,11 @@ public sealed partial class SceneRecordingSnapshot
         if (_firstChild[i] != other._firstChild[i]) return Fail(out mismatch, $"n#{i} FirstChild");
         if (_nextSibling[i] != other._nextSibling[i]) return Fail(out mismatch, $"n#{i} NextSibling");
         if (_bounds[i] != other._bounds[i]) return Fail(out mismatch, $"n#{i} Bounds {_bounds[i]} vs {other._bounds[i]}");
-        if (!PaintEqual(in _paint[i], in other._paint[i])) return Fail(out mismatch, $"n#{i} NodePaint");
+        if (!_paint[i].HotEquals(in other._paint[i])) return Fail(out mismatch, $"n#{i} NodePaint");
+        // The cold row by VALUE and by presence (row ids are snapshot-local; a capture copies a row exactly when the store
+        // holds one, and the store holds one exactly when the value is not the default).
+        if ((_paint[i].ColdRef != 0) != (other._paint[i].ColdRef != 0)) return Fail(out mismatch, $"n#{i} NodePaintCold presence");
+        if (!_paintCold[_paint[i].ColdRef].Equals(other._paintCold[other._paint[i].ColdRef])) return Fail(out mismatch, $"n#{i} NodePaintCold");
         if (!_interaction[i].Equals(other._interaction[i])) return Fail(out mismatch, $"n#{i} InteractionInfo");
         if (_flags[i] != other._flags[i]) return Fail(out mismatch, $"n#{i} NodeFlags {_flags[i]} vs {other._flags[i]}");
         if (_dirty[i] != other._dirty[i]) return Fail(out mismatch, $"n#{i} recordDirty {_dirty[i]} vs {other._dirty[i]}");
@@ -276,7 +280,6 @@ public sealed partial class SceneRecordingSnapshot
         return true;
     }
 
-    private static bool PaintEqual(in NodePaint a, in NodePaint b) => a.Equals(b);
 
     private static bool MeasureEqual(in TextMeasureCache a, in TextMeasureCache b)
         => EntryEqual(in a.E0, in b.E0) && EntryEqual(in a.E1, in b.E1);

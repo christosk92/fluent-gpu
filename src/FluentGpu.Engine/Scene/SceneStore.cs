@@ -101,6 +101,9 @@ public sealed partial class SceneStore : ISceneBackend
     private LayoutInput[] _layout;
     private RectF[] _bounds;          // LOCAL
     private NodePaint[] _paint;
+    // The cold half of the paint column (scene-memory.md §2.6): one row per node with a non-default NodePaintCold,
+    // referenced by NodePaint.ColdRef. Rows are owned here and recycled on SetPaintCold-to-default and on free.
+    private readonly PaintColdRows _paintCold = new(64);
     private DynamicTextKind[] _dynamicText;
     private int _dynamicTextCount;
     private InteractionInfo[] _interaction;
@@ -392,6 +395,7 @@ public sealed partial class SceneStore : ISceneBackend
         _elementTypeId[idx] = elementTypeId;
         _layout[idx] = LayoutInput.Default;
         _bounds[idx] = default;
+        FreePaintCold(idx);   // a free slot holds no cold row (FreeSubtreeCore dropped it); defensive for any other path
         _paint[idx] = NodePaint.Default;
         ClearDynamicText(idx);
         _interaction[idx] = default;
@@ -551,6 +555,7 @@ public sealed partial class SceneStore : ISceneBackend
             ReleaseRowCells(idx);
         if (_paint[idx].VisualKind == VisualKind.Series && _seriesSamples.Count != 0) _seriesSamples.Remove(idx);
         if (_paint[idx].VisualKind == VisualKind.Sprites) ReleaseSprites(idx);
+        FreePaintCold(idx);
         if (_dragSources.Count != 0) _dragSources.Remove(idx);
         if (_dropTargets.Count != 0 && _dropTargets.Remove(idx)) _dropTargetsVersion++;
         ReleaseWindowDrag(idx);   // BoxEl.WindowDrag side table (SceneStore.WindowDrag.cs)
@@ -906,6 +911,47 @@ public sealed partial class SceneStore : ISceneBackend
     public ref LayoutInput Layout(NodeHandle h) => ref _layout[h.Raw.Index];
     public ref RectF Bounds(NodeHandle h) => ref _bounds[h.Raw.Index];
     public ref NodePaint Paint(NodeHandle h) => ref _paint[h.Raw.Index];
+    /// <summary>The node's cold paint (<see cref="NodePaintCold"/>): its own row, or the shared default when it has none.
+    /// Read-only: write through <see cref="SetPaintCold"/>, which owns the row's lifetime.</summary>
+    public ref readonly NodePaintCold PaintCold(NodeHandle h) => ref _paintCold[_paint[h.Raw.Index].ColdRef];
+
+    /// <summary>Replace the node's cold paint. A value equal to the current one is a no-op (returns false); a value equal
+    /// to <see cref="NodePaintCold.Default"/> releases the node's row, so only nodes that actually carry a cold field hold
+    /// one. Notes the capture ledger on a change (the snapshot copies the row with the node). Callers still mark
+    /// PaintDirty exactly as they do for a hot <see cref="Paint"/> write.</summary>
+    public bool SetPaintCold(NodeHandle h, in NodePaintCold value)
+    {
+        int idx = (int)h.Raw.Index;
+        int r = _paint[idx].ColdRef;
+        if (_paintCold[r].Equals(value)) return false;
+        if (value.Equals(NodePaintCold.Default))
+        {
+            _paintCold.Free(r);   // r != 0 here: the default row equals Default
+            _paint[idx].ColdRef = 0;
+        }
+        else
+        {
+            if (r == 0) _paint[idx].ColdRef = r = _paintCold.Alloc();
+            _paintCold.Mutable(r) = value;
+        }
+        NoteCaptureChanged(idx);
+        return true;
+    }
+
+    /// <summary>The store's cold row <paramref name="coldRef"/> (a <see cref="NodePaint.ColdRef"/> read off this store's
+    /// paint column) — the capture's copy source.</summary>
+    internal ref readonly NodePaintCold PaintColdRow(int coldRef) => ref _paintCold[coldRef];
+
+    /// <summary>Nodes that carry a cold paint row (diagnostics).</summary>
+    public int PaintColdRowCount => _paintCold.LiveCount;
+
+    private void FreePaintCold(int idx)
+    {
+        int r = _paint[idx].ColdRef;
+        if (r == 0) return;
+        _paintCold.Free(r);
+        _paint[idx].ColdRef = 0;
+    }
     public ref InteractionInfo Interaction(NodeHandle h) => ref _interaction[h.Raw.Index];
     /// <summary>Read a node's flag word. By VALUE, deliberately: a mutable <c>ref</c> here would let any of ~300 call
     /// sites write a captured column invisibly, which the P8 capture ledger cannot survive. Writers use
