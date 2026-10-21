@@ -296,7 +296,7 @@ public sealed class ScrollHandle
         // A write is a new plan, and a new plan owes a frame (PlanSlots.Bump wakes the host), so writing the same plan on every
         // extent sync kept the host awake for as long as the latch could not resolve: forever, for a BringIntoView whose margin
         // reaches past the end of a strip that fits (a TabStrip in Scroll overflow with its last tab selected repainted every frame).
-        if (!authored && !geometryChanged && bounded) return;
+        if (!authored && !geometryChanged && bounded && prev.RubberC == next.RubberC) return;   // a retuned RubberBandC still writes
         _slots.Write(Vp, in next);
     }
 
