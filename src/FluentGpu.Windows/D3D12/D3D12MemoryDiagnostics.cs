@@ -131,6 +131,8 @@ internal static unsafe class D3D12MemoryDiagnostics
     private static readonly Dictionary<string, long> ClassLive = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, long> ClassAtPeak = new(StringComparer.Ordinal);
     private static ulong _peakLiveBytes;
+    private static long _peakAtMs;   // ms since the ledger's first use when the peak was set: lines it up with the log's events
+    private static readonly long s_t0 = Environment.TickCount64;
 
     private static void ClassAdd(string name, long delta)
     {
@@ -144,7 +146,7 @@ internal static unsafe class D3D12MemoryDiagnostics
     {
         lock (Gate)
         {
-            var sb = new System.Text.StringBuilder(160).Append("peak=").Append(MibOneDecimal(_peakLiveBytes)).Append(" {");
+            var sb = new System.Text.StringBuilder(160).Append("peak=").Append(MibOneDecimal(_peakLiveBytes)).Append(" at=").Append(_peakAtMs).Append("ms {");
             int i = 0;
             foreach (var kv in ClassAtPeak.OrderByDescending(k => k.Value))
             {
@@ -173,6 +175,7 @@ internal static unsafe class D3D12MemoryDiagnostics
             if (_liveBytes > _peakLiveBytes)
             {
                 _peakLiveBytes = _liveBytes;
+                _peakAtMs = Environment.TickCount64 - s_t0;
                 ClassAtPeak.Clear();
                 foreach (var kv in ClassLive) ClassAtPeak[kv.Key] = kv.Value;
             }

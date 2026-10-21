@@ -133,7 +133,7 @@ public delegate void ImageCompleteHandler(int id, bool ok, int w, int h, ImageFa
 /// (UnpinImageNode → Cancel) and remounted in an Overscan lane that is full, or any pinned re-Begin the scheduler
 /// dropped, would otherwise paint its placeholder forever — neither Ready, Pending nor Failed-with-a-reason.
 /// </summary>
-public sealed class ImageCache
+public sealed partial class ImageCache
 {
     /// <summary>Dedup key: (source, target size) as a value type — a cache HIT allocates nothing (no `$"{src}@{w}x{h}"`
     /// string per request, which mattered: every realized image row calls <see cref="Request"/>).</summary>
