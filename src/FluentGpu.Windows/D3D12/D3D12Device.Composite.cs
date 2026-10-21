@@ -858,6 +858,7 @@ public sealed unsafe partial class D3D12Device
         int r = RowOf(it.SliceId);
         if (r < 0) return;
         ref readonly SliceRow row = ref frame.Slices[r];
+        if (InlineDirect(in it) && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) return;   // drawn inline: nothing to prepare
         bool blur = it.BlurSigma > 0f;
         if (it.IsFeedback && !blur && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) { PrepareFeedback(in frame, i, in row); return; }
         if (it.LowResDown > 1 && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0)
@@ -1345,6 +1346,11 @@ public sealed unsafe partial class D3D12Device
         {
             case CompositeKind.Direct:
             {
+                if (InlineDirect(in it) && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0)
+                {
+                    PixelRect f = InlineFoot(in frame, in it);
+                    return !f.IsEmpty && Overlaps(in f, in region);
+                }
                 if (_itemSurface[k] >= 0) return Overlaps(in _itemRegion[k], in region);
                 int end = _itemChunkStart[k] + _itemChunkCount[k];
                 for (int c = _itemChunkStart[k]; c < end; c++)
@@ -1461,6 +1467,7 @@ public sealed unsafe partial class D3D12Device
                     break;
                 }
                 case CompositeKind.Direct:
+                    if (InlineDirect(in it) && !allDirect) { DrawInline(in frame, in it, ox, oy, tw, th); break; }
                     DrawSurfaceItem(in it, i, ox, oy, feathers);
                     break;
                 case CompositeKind.Image:

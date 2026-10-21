@@ -116,6 +116,12 @@ public sealed unsafe partial class D3D12Device
             }
             case CompositeKind.Direct:
             {
+                if (InlineDirect(in it) && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0)
+                {
+                    // an inline segment always draws its opaque fill (no residency to check): the whole pixels inside it
+                    occ = Clamp(new PixelRect((int)MathF.Ceiling(o.X), (int)MathF.Ceiling(o.Y), (int)MathF.Floor(o.Right), (int)MathF.Floor(o.Bottom)), in sci);
+                    return !occ.IsEmpty;
+                }
                 if (it.LowResDown <= 1 || _itemSurface[j] < 0 || _itemDown[j] != it.LowResDown) return false;
                 int d = it.LowResDown;
                 PixelRect reg = _itemRegion[j];
@@ -170,6 +176,11 @@ public sealed unsafe partial class D3D12Device
                 goto case CompositeKind.Direct;
             case CompositeKind.Direct:
             {
+                if (InlineDirect(in it) && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0)
+                {
+                    foot = Clamp(InlineFoot(in frame, in it), in sci);
+                    return !foot.IsEmpty;
+                }
                 if (_itemSurface[k] >= 0) foot = _itemRegion[k];
                 int end = _itemChunkStart[k] + _itemChunkCount[k];
                 for (int c = _itemChunkStart[k]; c < end; c++) { PixelRect cr = _chunks[c].Rect; foot = Union(in foot, in cr); }

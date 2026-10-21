@@ -312,7 +312,9 @@ public sealed unsafe partial class D3D12Device
                 }
                 default:
                 {
-                    // a prepared surface (group, self-blur, degraded / low-resolution segment): its region or its chunks
+                    // a prepared surface (group, self-blur, degraded / low-resolution segment): its region or its chunks;
+                    // an inline segment: its clip ∩ painted bounds (it prepared nothing)
+                    if (InlineDirect(in it) && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) foot = PpIntersect(InlineFoot(in frame, in it), in sci);
                     if (_itemSurface[i] >= 0) foot = PpIntersect(in _itemRegion[i], in sci);
                     int end = _itemChunkStart[i] + _itemChunkCount[i];
                     for (int c = _itemChunkStart[i]; c < end; c++) foot = PpUnion(in foot, PpIntersect(_chunks[c].Rect, in sci));
