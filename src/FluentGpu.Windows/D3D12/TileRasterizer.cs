@@ -61,6 +61,7 @@ public sealed unsafe partial class D3D12Device
     {
         TallyPass(site, line);
         EndPassIfOpen();
+        _passDraws0 = GpuDrawCount.Frame;
         D3D12_RENDER_PASS_RENDER_TARGET_DESC rt = default;
         rt.cpuDescriptor = rtv;
         rt.BeginningAccess.Type = load switch
@@ -90,6 +91,9 @@ public sealed unsafe partial class D3D12Device
     private void EndPassIfOpen()
     {
         if (!_inRenderPass) return;
+        int draws = GpuDrawCount.Frame - _passDraws0;
+        if (draws > _framePassDrawsMax) _framePassDrawsMax = draws;
+        if (draws > DriverBinningDraws) _framePassesOverBinning++;
         Gen.ID3D12GraphicsCommandList4Vtbl.EndRenderPass(_list4);
         Rec(RecordedOp.RenderPassEnd);
         _inRenderPass = false;
@@ -102,6 +106,12 @@ public sealed unsafe partial class D3D12Device
     private readonly string?[] _passSite = new string?[24];
     private readonly int[] _passLine = new int[24], _passN = new int[24];
     private int _passSites;
+    // Draw calls per render pass. The Adreno X1 driver keeps a large per-pass buffer for every pass in flight once a pass
+    // issues more than ~80 draw calls (d3dprobe 2026-10-21: 16 passes x 75 draws grew nothing, x 90 grew +288 MB, kept
+    // for the life of the process); below it the pass costs the driver nothing. Diagnostics: the frame's largest pass and
+    // how many passed the threshold.
+    internal const int DriverBinningDraws = 80;
+    private int _passDraws0, _framePassDrawsMax, _framePassesOverBinning;
     private readonly int[] _frameInlineByKind = new int[8];   // inline layers this frame by LayerKind (diagnostics)
     private int _frameInlineBlurred;                          // ...of which needed a blur halo (extra blur passes)
     private void TallyPass(string site, int line)
