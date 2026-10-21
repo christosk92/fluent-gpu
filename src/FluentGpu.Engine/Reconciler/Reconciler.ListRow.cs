@@ -126,9 +126,10 @@ public sealed partial class TreeReconciler
                 NodeBindingFireCount++;
                 if (!_scene.IsLive(node)) return;
                 ColorF next = fx.Read();
-                ref var paint = ref _scene.Paint(node);
-                if (paint.HoverFill == next) return;
-                paint.HoverFill = next;
+                NodePaintCold cold = _scene.PaintCold(node);
+                if (cold.HoverFill == next) return;
+                cold.HoverFill = next;
+                _scene.SetPaintCold(node, in cold);
                 NodeBindingWriteCount++;
                 _scene.Mark(node, NodeFlags.PaintDirty);
             }));
@@ -143,9 +144,10 @@ public sealed partial class TreeReconciler
                 NodeBindingFireCount++;
                 if (!_scene.IsLive(node)) return;
                 ColorF next = fx.Read();
-                ref var paint = ref _scene.Paint(node);
-                if (paint.PressedFill == next) return;
-                paint.PressedFill = next;
+                NodePaintCold cold = _scene.PaintCold(node);
+                if (cold.PressedFill == next) return;
+                cold.PressedFill = next;
+                _scene.SetPaintCold(node, in cold);
                 NodeBindingWriteCount++;
                 _scene.Mark(node, NodeFlags.PaintDirty);
             }));

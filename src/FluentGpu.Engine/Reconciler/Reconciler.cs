@@ -2946,9 +2946,10 @@ public sealed partial class TreeReconciler
         NodeBindingFireCount++;
         if (!_scene.IsLive(node)) return;
         ColorF next = fx.Read();
-        ref NodePaint paint = ref _scene.Paint(node);
-        if (paint.HoverFill == next) return;
-        paint.HoverFill = next;
+        NodePaintCold cold = _scene.PaintCold(node);
+        if (cold.HoverFill == next) return;
+        cold.HoverFill = next;
+        _scene.SetPaintCold(node, in cold);
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.PaintDirty);
     }
@@ -2959,9 +2960,10 @@ public sealed partial class TreeReconciler
         NodeBindingFireCount++;
         if (!_scene.IsLive(node)) return;
         ColorF next = fx.Read();
-        ref NodePaint paint = ref _scene.Paint(node);
-        if (paint.PressedFill == next) return;
-        paint.PressedFill = next;
+        NodePaintCold cold = _scene.PaintCold(node);
+        if (cold.PressedFill == next) return;
+        cold.PressedFill = next;
+        _scene.SetPaintCold(node, in cold);
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.PaintDirty);
     }
@@ -3136,9 +3138,10 @@ public sealed partial class TreeReconciler
                     if (!_scene.IsLive(node)) return;
                     ValidationState st = fx.Read();
                     ColorF col = st == ValidationState.Error ? Tok.SystemFillCritical : default;
-                    ref var paint = ref _scene.Paint(node);
-                    if (paint.ValidationBorder == col) return;
-                    paint.ValidationBorder = col;
+                    NodePaintCold cold = _scene.PaintCold(node);
+                    if (cold.ValidationBorder == col) return;
+                    cold.ValidationBorder = col;
+                    _scene.SetPaintCold(node, in cold);
                     NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
                 }));
@@ -5400,6 +5403,9 @@ public sealed partial class TreeReconciler
             case BoxEl b:
             {
                 ref NodePaint paint = ref _scene.Paint(node);
+                // The cold half (NodePaintCold) is edited as a local and committed once below (SetPaintCold): a node whose
+                // cold fields all stay at their defaults never gets a row.
+                NodePaintCold cold = _scene.PaintCold(node);
                 bool hasSurface = b.TabShape || b.Fill.IsBound || b.Fill.Value.A > 0f
                                   || b.HoverFill.IsBound || b.HoverFill.Value.A > 0f
                                   || b.PressedFill.IsBound || b.PressedFill.Value.A > 0f
@@ -5444,18 +5450,18 @@ public sealed partial class TreeReconciler
                 // down to alpha 0. The row retires at T≥1 (SceneStore.SetBrushAnimT); the first reconcile after that drops
                 // the node back to None, and until then the recorder draws nothing for the settled transparent box.
                 if (paint.VisualKind == VisualKind.None && FillFadeInFlight(node)) paint.VisualKind = VisualKind.Box;
-                if (!b.HoverFill.IsBound) paint.HoverFill = b.HoverFill.Value;
-                if (!b.PressedFill.IsBound) paint.PressedFill = b.PressedFill.Value;
+                if (!b.HoverFill.IsBound) cold.HoverFill = b.HoverFill.Value;
+                if (!b.PressedFill.IsBound) cold.PressedFill = b.PressedFill.Value;
                 if (borderOwned) paint.BorderColor = b.BorderColor.Value;
-                paint.HoverBorderColor = b.HoverBorderColor;
-                paint.PressedBorderColor = b.PressedBorderColor;
+                cold.HoverBorderColor = b.HoverBorderColor;
+                cold.PressedBorderColor = b.PressedBorderColor;
                 // Static (unbound) Validation: a bound channel owns paint.ValidationBorder via its effect, so only the
                 // static form asserts here (guarded like Fill above) — the common unbound case resets it to none.
-                if (!b.Validation.IsBound) paint.ValidationBorder = b.Validation.Value == ValidationState.Error ? Tok.SystemFillCritical : default;
+                if (!b.Validation.IsBound) cold.ValidationBorder = b.Validation.Value == ValidationState.Error ? Tok.SystemFillCritical : default;
                 paint.BorderWidth = b.BorderWidth;
-                paint.BorderDashOn = b.BorderDashOn;
-                paint.BorderDashOff = b.BorderDashOff;
-                paint.TabFlareRadius = b.TabFlareRadius <= 0f ? 4f : b.TabFlareRadius;
+                cold.BorderDashOn = b.BorderDashOn;
+                cold.BorderDashOff = b.BorderDashOff;
+                cold.TabFlareRadius = b.TabFlareRadius <= 0f ? 4f : b.TabFlareRadius;
                 // Like Fill/Opacity: a bound corner set is owned by its bind effect — the static write must not clobber it.
                 if (!b.Corners.IsBound) paint.Corners = b.Corners.Value;
 
@@ -5539,8 +5545,9 @@ public sealed partial class TreeReconciler
                 // Re-assert unconditionally (like Width/Fill): gating on != 1f made an Opacity 0→1 update a no-op,
                 // so a node hidden by a prior render could never be shown again (the ProgressRing IsActive flip).
                 if (!b.Opacity.IsBound) paint.Opacity = b.Opacity.Value;
-                paint.HoverOpacity = b.HoverOpacity;
-                paint.PressedOpacity = b.PressedOpacity;
+                cold.HoverOpacity = b.HoverOpacity;
+                cold.PressedOpacity = b.PressedOpacity;
+                _scene.SetPaintCold(node, in cold);   // the box's last cold write: commit the row (or none)
                 paint.OpacityGroup = b.OpacityGroup;
                 paint.BlurSigma = b.Blur;   // self-blur (Expressive Motion Kit); phase-7 AnimChannel.Blur overrides for animated nodes
 
@@ -6121,8 +6128,10 @@ public sealed partial class TreeReconciler
                     if (paint.Fill != lr.Fill.Value) StaticThemeFade(node, isMount, BrushAnim.FillBit);   // E20
                     paint.Fill = lr.Fill.Value;
                 }
-                if (!lr.HoverFill.IsBound) paint.HoverFill = lr.HoverFill.Value;
-                if (!lr.SelectedFill.IsBound) paint.PressedFill = lr.SelectedFill.Value;
+                NodePaintCold cold = _scene.PaintCold(node);
+                if (!lr.HoverFill.IsBound) cold.HoverFill = lr.HoverFill.Value;
+                if (!lr.SelectedFill.IsBound) cold.PressedFill = lr.SelectedFill.Value;
+                _scene.SetPaintCold(node, in cold);
 
                 bool hasClick = lr.OnCellClick is not null;
                 _scene.SetRowCellClickHandler(node, lr.OnCellClick);   // mount-static; rewritten unconditionally, cheap
@@ -6153,8 +6162,10 @@ public sealed partial class TreeReconciler
                 }
                 paint.Corners = im.Corners;
                 paint.ImageFit = (byte)im.Fit;
-                paint.ImageFocusX = Math.Clamp(im.FocusX, 0f, 1f);
-                paint.ImageFocusY = Math.Clamp(im.FocusY, 0f, 1f);
+                NodePaintCold cold = _scene.PaintCold(node);
+                cold.ImageFocusX = Math.Clamp(im.FocusX, 0f, 1f);
+                cold.ImageFocusY = Math.Clamp(im.FocusY, 0f, 1f);
+                _scene.SetPaintCold(node, in cold);
 
                 // Decode-target size: explicit Width/Height when set; otherwise the DecodePx hint (a fluid/aspect image's
                 // real box size isn't known until layout), deriving the cross dimension from AspectRatio when possible.
@@ -6242,10 +6253,12 @@ public sealed partial class TreeReconciler
                 // Guarded like Text below: a bound color is owned by its effect (EditableText's doc-vs-placeholder
                 // ColorBind was clobbered back to the static by any re-render between signal fires).
                 if (colorOwned) paint.TextColor = t.Color.Value;
-                paint.TextHoverColor = t.HoverColor;
-                paint.TextPressedColor = t.PressedColor;
-                paint.TextDisabledColor = t.DisabledColor;
-                paint.TextFocusedColor = t.FocusedColor;
+                NodePaintCold cold = _scene.PaintCold(node);
+                cold.TextHoverColor = t.HoverColor;
+                cold.TextPressedColor = t.PressedColor;
+                cold.TextDisabledColor = t.DisabledColor;
+                cold.TextFocusedColor = t.FocusedColor;
+                _scene.SetPaintCold(node, in cold);
                 // Glyph wipe (general text-reveal; the lyrics karaoke uses it): a SPARSE side-table, not the hot paint
                 // struct. Mark dirty when it changes so the wiped line re-records as the split advances (reshape-free).
                 if (!Nullable.Equals(_scene.TryGetGlyphWipe(node, out var prevWipe) ? prevWipe : (GlyphWipe?)null, t.Wipe))

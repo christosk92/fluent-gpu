@@ -19,6 +19,10 @@ public sealed partial class SceneRecordingSnapshot
     private readonly SnapshotColumn<TextStyle> _textStyle = new(reserveRemovals: true);
     private RectF[] _bounds = [];
     private NodePaint[] _paint = [];
+    // The snapshot's OWN cold paint rows (scene-memory.md §2.6): a captured row's NodePaint.ColdRef names a row here, never
+    // the store's. Invariant: a slot's ColdRef is nonzero only while that slot owns the row — CaptureNode reuses or
+    // releases it on every copy, and a slot that stops being reachable releases it (CaptureCore), so no stale ref survives.
+    private readonly PaintColdRows _paintCold = new(64);
     private InteractionInfo[] _interaction = [];
     private NodeFlags[] _flags = [];
     private byte[] _dirty = [], _dirtySelf = [], _dirtyDescendant = [];
@@ -320,6 +324,7 @@ public sealed partial class SceneRecordingSnapshot
             if (_capturedEpoch[index] == epoch) continue;
             _handles[index] = NodeHandle.Null;
             _parent[index] = _firstChild[index] = _nextSibling[index] = NodeHandle.Null;
+            ReleasePaintCold(index);   // both modes: the cold rows are kept across full captures (see _paintCold)
             if (incremental) ClearSparseRows(index);
         }
 
@@ -520,7 +525,16 @@ public sealed partial class SceneRecordingSnapshot
         _firstChild[index] = source.FirstChild(node);
         _nextSibling[index] = source.NextSibling(node);
         _bounds[index] = source.Bounds(node);
+        int ownCold = _paint[index].ColdRef;   // this slot's own row (or 0), per the _paintCold invariant
         _paint[index] = source.Paint(node);
+        int sourceCold = _paint[index].ColdRef;   // the STORE's row id: remap it into this snapshot's rows
+        if (sourceCold != 0)
+        {
+            int r = ownCold != 0 ? ownCold : _paintCold.Alloc();
+            _paintCold.Mutable(r) = source.PaintColdRow(sourceCold);
+            _paint[index].ColdRef = r;
+        }
+        else if (ownCold != 0) _paintCold.Free(ownCold);
         _interaction[index] = source.Interaction(node);
         NodeFlags flags = sourceFlags;
         _flags[index] = flags;
@@ -653,6 +667,17 @@ public sealed partial class SceneRecordingSnapshot
         return ref (slot >= 0 && (_overlayRows[slot].Have & HavePaint) != 0
             ? ref _overlayRows[slot].Paint
             : ref _paint[node.Raw.Index]);
+    }
+    /// <summary>The node's cold paint (<see cref="NodePaintCold"/>) as captured: its row, or the shared default. Never posed
+    /// by the compositor (no animation channel drives a cold field), so it reads the authored row directly.</summary>
+    public ref readonly NodePaintCold PaintCold(NodeHandle node) => ref _paintCold[_paint[node.Raw.Index].ColdRef];
+
+    private void ReleasePaintCold(int index)
+    {
+        int r = _paint[index].ColdRef;
+        if (r == 0) return;
+        _paintCold.Free(r);
+        _paint[index].ColdRef = 0;
     }
     public ref readonly InteractionInfo Interaction(NodeHandle node) => ref _interaction[node.Raw.Index];
     // §13.1: the SELF epoch, not the trail. SceneRecorder reads TransformDirty here to emit a repaint band over the
