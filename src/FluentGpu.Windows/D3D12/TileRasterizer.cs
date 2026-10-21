@@ -56,8 +56,10 @@ public sealed unsafe partial class D3D12Device
 
     /// <summary>Open a render pass on <paramref name="rtv"/> (the resource must already be in RENDER_TARGET): CLEAR (to
     /// <paramref name="clear"/>), DISCARD or PRESERVE on entry, PRESERVE (store) on exit. Any open pass ends first.</summary>
-    private void BeginPass(D3D12_CPU_DESCRIPTOR_HANDLE rtv, int w, int h, PassLoad load, in ColorF clear = default)
+    private void BeginPass(D3D12_CPU_DESCRIPTOR_HANDLE rtv, int w, int h, PassLoad load, in ColorF clear = default,
+        [CallerFilePath] string site = "", [CallerLineNumber] int line = 0)
     {
+        TallyPass(site, line);
         EndPassIfOpen();
         D3D12_RENDER_PASS_RENDER_TARGET_DESC rt = default;
         rt.cpuDescriptor = rtv;
@@ -95,6 +97,26 @@ public sealed unsafe partial class D3D12Device
 
     /// <summary>Re-open a pass on the last pass's target, keeping its contents (after a suspension for a barrier, an
     /// upload or a legacy-bound stencil scope).</summary>
+    // Per-frame render passes by call site (diagnostics: the untracked-growth line names them). Fixed table, no allocation:
+    // the site string is the caller's compile-time literal.
+    private readonly string?[] _passSite = new string?[24];
+    private readonly int[] _passLine = new int[24], _passN = new int[24];
+    private int _passSites;
+    private void TallyPass(string site, int line)
+    {
+        for (int i = 0; i < _passSites; i++)
+            if (_passLine[i] == line && ReferenceEquals(_passSite[i], site)) { _passN[i]++; return; }
+        if (_passSites == _passSite.Length) return;
+        _passSite[_passSites] = site; _passLine[_passSites] = line; _passN[_passSites] = 1; _passSites++;
+    }
+    private string PassSitesLine()
+    {
+        var sb = new System.Text.StringBuilder(128);
+        for (int i = 0; i < _passSites; i++)
+            sb.Append(i == 0 ? "" : ",").Append(System.IO.Path.GetFileNameWithoutExtension(_passSite[i])).Append(':').Append(_passLine[i]).Append('x').Append(_passN[i]);
+        return sb.ToString();
+    }
+
     private void ResumePass() { _frameResumes++; BeginPass(_passRtv, _passRtvW, _passRtvH, PassLoad.Preserve); }
 
     private bool _inRenderPass;

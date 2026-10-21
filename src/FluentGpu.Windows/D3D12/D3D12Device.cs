@@ -3770,7 +3770,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         long untracked = localUsage - D3D12MemoryDiagnostics.LiveTotals().bytes;
         if (_lastUntracked != long.MinValue && untracked - _lastUntracked > (8L << 20))
             Diag.Line($"[d3d12.untracked] +{(untracked - _lastUntracked) / 1048576.0:0.0} MiB now {untracked / 1048576.0:0.0} MiB" +
-                $" tilesRastered={_frameTilesRastered} passes={_frameRenderPasses} segments={_frameSegments} inlineItems={_frameInlineItems} inlineReopens={_frameInlineReopens} resumes={_frameResumes} inlineGroups={_frameInlineGroups} directRegions={_frameDirectRegions}");
+                $" tilesRastered={_frameTilesRastered} passes={_frameRenderPasses} segments={_frameSegments} inlineItems={_frameInlineItems} inlineReopens={_frameInlineReopens} resumes={_frameResumes} inlineGroups={_frameInlineGroups} directRegions={_frameDirectRegions} sites={PassSitesLine()}");
         _lastUntracked = untracked;
     }
 
