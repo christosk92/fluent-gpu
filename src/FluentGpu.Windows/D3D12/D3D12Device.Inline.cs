@@ -19,7 +19,7 @@ namespace FluentGpu.Rhi.D3D12;
 public sealed unsafe partial class D3D12Device
 {
     /// <summary>Items drawn inline this frame, and the commands they replayed.</summary>
-    private int _frameInlineItems;
+    private int _frameInlineItems, _frameInlineReopens, _frameResumes;
 
     /// <summary>A Direct item whose composite is a plain source-over copy of its commands' output.</summary>
     private static bool InlineDirect(in CompositeItem it)
@@ -74,7 +74,7 @@ public sealed unsafe partial class D3D12Device
         ReplaySegment(in frame, in row, dx, dy, tw, th, target, cull, clamp: true, damage: cut);
         // the replay leaves the pass open or suspended (an inline group layer it closed resumed its own target): put the
         // composite target back and the compositor's bindings with it
-        if (!_inRenderPass || _passRtv.ptr != target.ptr) BeginPass(target, pw, ph, PassLoad.Preserve);
+        if (!_inRenderPass || _passRtv.ptr != target.ptr) { _frameInlineReopens++; BeginPass(target, pw, ph, PassLoad.Preserve); }
         BindCompositor(tw, th);
         _frameInlineItems++;
     }

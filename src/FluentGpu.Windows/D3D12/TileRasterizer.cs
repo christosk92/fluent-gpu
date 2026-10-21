@@ -95,7 +95,7 @@ public sealed unsafe partial class D3D12Device
 
     /// <summary>Re-open a pass on the last pass's target, keeping its contents (after a suspension for a barrier, an
     /// upload or a legacy-bound stencil scope).</summary>
-    private void ResumePass() => BeginPass(_passRtv, _passRtvW, _passRtvH, PassLoad.Preserve);
+    private void ResumePass() { _frameResumes++; BeginPass(_passRtv, _passRtvW, _passRtvH, PassLoad.Preserve); }
 
     private bool _inRenderPass;
     private D3D12_CPU_DESCRIPTOR_HANDLE _passRtv;
