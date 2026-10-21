@@ -146,7 +146,7 @@ public sealed class AutoSuggestBox : Component
     /// <summary>True while an async suggestion fetch is in flight: the popup shows an indeterminate bar at the top and
     /// KEEPS the prior results (instead of flashing "No results found") until the fresh set lands.</summary>
     public IReadSignal<bool>? LoadingSignal;
-    public Prop<string> Placeholder = Loc.Bind(Strings.AutoSuggest.Search);   // culture-reactive default; a plain string overrides
+    public Prop<string> Placeholder = Loc.Bind(Strings.AutoSuggest.Search);   // culture-reactive default; a plain string overrides, a bound one stays live
     public float Width = 280f;
     /// <summary>Flex-fill factor. When &gt; 0 the field fills its parent's WIDTH on its own — no wrapper, no external
     /// <see cref="WidthSignal"/>: the root drops its explicit <see cref="Width"/> (so a COLUMN parent cross-stretches it
@@ -199,9 +199,13 @@ public sealed class AutoSuggestBox : Component
     /// the live document.</summary>
     public IReadSignal<string>? Completion;
 
+    /// <summary>The factory. Its scalar arguments are read once, at mount (a propless component), except the live ones: the
+    /// <c>*Signal</c> arguments, <paramref name="text"/>, <paramref name="completion"/> and a BOUND <paramref name="placeholder"/>
+    /// (<c>Prop.Of(() =&gt; ...)</c> or a signal), which the editor reads on every change, so a placeholder that depends on a window
+    /// tier or a culture follows it without a remount. A plain string is fixed; null is the culture-reactive "Search".</summary>
     public static Element Create(
         IReadOnlyList<string> suggestions,
-        string? placeholder = null,
+        Prop<string>? placeholder = null,
         float width = 280f,
         Signal<string>? text = null,
         Action<string>? onChange = null,
@@ -230,7 +234,7 @@ public sealed class AutoSuggestBox : Component
         => Embed.Comp(() => new AutoSuggestBox
         {
             Suggestions = suggestions, SuggestionsSignal = suggestionsSignal, LoadingSignal = loadingSignal,
-            Placeholder = placeholder is null ? Loc.Bind(Strings.AutoSuggest.Search) : (Prop<string>)placeholder,
+            Placeholder = placeholder is { } p && (p.IsBound || p.Value is not null) ? p : Loc.Bind(Strings.AutoSuggest.Search),
             Width = width, Grow = grow, MaxFillWidth = maxFillWidth,
             WidthSignal = widthSignal, Text = text,
             OnTextChanged = onChange, OnSuggestionChosen = onSuggestionChosen,
