@@ -66,6 +66,8 @@ public sealed unsafe partial class D3D12Device
     /// <summary>Self-blurs / acrylic backdrops the last composite re-drew from a retained result instead of recomputing.</summary>
     public int LastBlurCacheHits => _frameBlurCacheHits;
     public long TileSurfaceBytes => _surfaces?.TileBytes ?? 0L;
+    /// <summary>The surface pool's census (diagnostics, render thread): see <c>SurfacePool.SurfaceCensus</c>.</summary>
+    public string SurfaceCensus() => _surfaces?.SurfaceCensus() ?? "surface-census: no surface pool";
 
     // ── always-on per-kind offscreen split (plain fields; the scroll bench's diagnosis line) ──
     private int _offGroupN, _offGroupHits, _offBlurN, _offBlurHits, _offBackdropN, _offBackdropHits, _offDirectN, _offInlineN, _groupRenders;

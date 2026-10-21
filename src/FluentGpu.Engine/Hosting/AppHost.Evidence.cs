@@ -32,6 +32,11 @@ public sealed partial class AppHost
     private SliceRecorder EvidenceSlices => _renderThread is null && _parentRenderThread is null ? _uiSlices : _renderSlices;
     private SliceTable? EvidenceTiles => _renderThread is null && _parentRenderThread is null ? _uiTiles : _renderTiles;
 
+    /// <summary>The tile memory census of the table that composites (<see cref="SliceTable.MemoryCensus"/>). Call it on
+    /// that table's thread: the presenting thread via <see cref="QueueBeforePresent"/> in async mode.</summary>
+    public string TileMemoryCensus()
+        => EvidenceTiles is { } t ? t.MemoryCensus((int)_window.ClientSizePx.Width, (int)_window.ClientSizePx.Height) : "tile-census: no slice table";
+
     /// <summary>Constructor tail: the ledgers live on the pair that composites.</summary>
     private void EnableEvidence() => EvidenceSlices.EnableEvidence();
 

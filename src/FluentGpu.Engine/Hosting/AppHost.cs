@@ -5308,10 +5308,10 @@ public sealed partial class AppHost : IDisposable
                     // PixelBufferPool (also the scheduler's DecodeOptions.PixelPool). Any other caller — the blur-hash LQIP
                     // upload (ImageCache scratch), FakeImageDecoder's `new byte[]` scratch, a non-scheduler decoder — offers a
                     // span it still owns, so it is copied into a pool rental exactly as before.
-                    if (!FluentGpu.Media.DecodeScheduler.TryTakeDecodeBuffer(px, out byte[]? buf))
+                    if (!FluentGpu.Media.DecodeScheduler.TryTakeDecodeBuffer(px, out FluentGpu.Media.PixelBlock? buf))
                     {
                         buf = _pixelPool.Rent(px.Length);
-                        px.CopyTo(buf);
+                        px.CopyTo(buf.Span);
                     }
                     q.EnqueueUpload(id, buf, w, h, px.Length);
                     return FluentGpu.Scene.ImageUploadResult.Accepted;   // optimistic; a real rejection returns via the reject ring next Pump

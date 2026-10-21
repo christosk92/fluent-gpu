@@ -24,7 +24,7 @@ namespace FluentGpu.Media;
 public sealed class DecodeScheduler : IImageDecoder, IDisposable
 {
     private readonly record struct Req(int Id, string Src, int W, int H, ImagePriority Priority);
-    private struct Done { public int Id; public bool Ok; public int W, H; public ImageFailureKind Failure; public int Attempts; public byte[]? Buffer; public int ByteLen; public long Sequence; }
+    private struct Done { public int Id; public bool Ok; public int W, H; public ImageFailureKind Failure; public int Attempts; public PixelBlock? Buffer; public int ByteLen; public long Sequence; }
 
     private readonly IImageCodec _codec;
     private readonly IImageFetcher _fetcher;
@@ -93,7 +93,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // ImageReadyHandler → ImageCache → ImageUploadAttemptHandler chain, and a span cannot name its array. The slots
     // are written immediately before and cleared immediately after the synchronous callback (finally-guarded), so a
     // loan never outlives one apply, never crosses threads, and a stale loan can never be taken by a later frame.
-    [ThreadStatic] private static byte[]? t_loanBuffer;
+    [ThreadStatic] private static PixelBlock? t_loanBuffer;
     [ThreadStatic] private static int t_loanByteLen;
     [ThreadStatic] private static bool t_loanTaken;
 
@@ -105,11 +105,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     /// only the first <c>pixels.Length</c> bytes are pixels) and MUST return it exactly once to the scheduler's
     /// <see cref="PixelBufferPool"/> (<see cref="DecodeOptions.PixelPool"/>) — the pool drops foreign sizes, never
     /// throws. Zero-alloc; a second call for the same apply returns false.</summary>
-    public static bool TryTakeDecodeBuffer(ReadOnlySpan<byte> pixels, [NotNullWhen(true)] out byte[]? buffer)
+    public static bool TryTakeDecodeBuffer(ReadOnlySpan<byte> pixels, [NotNullWhen(true)] out PixelBlock? buffer)
     {
-        byte[]? loan = t_loanBuffer;
-        if (loan is not null && !t_loanTaken && pixels.Length == t_loanByteLen && pixels.Length > 0
-            && Unsafe.AreSame(ref MemoryMarshal.GetReference(pixels), ref MemoryMarshal.GetArrayDataReference(loan)))
+        PixelBlock? loan = t_loanBuffer;
+        if (loan is not null && !t_loanTaken && pixels.Length == t_loanByteLen && pixels.Length > 0 && loan.StartsAt(pixels))
         {
             t_loanTaken = true;
             buffer = loan;
@@ -410,7 +409,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, attempts, null, 0); return; }
 
             int cap = req.W * req.H * 4;
-            byte[] dst = _pixels.Rent(cap);                          // bounded pixel pool decode buffer (returned in Pump after upload, or by the sink that took it — TryTakeDecodeBuffer)
+            PixelBlock dst = _pixels.Rent(cap);                          // bounded pixel pool decode buffer (returned in Pump after upload, or by the sink that took it — TryTakeDecodeBuffer)
             bool ok; int dw = req.W, dh = req.H;
             try { ok = _codec.DecodeConstrained(fetch.Span, req.W, req.H, dst.AsSpan(0, cap), out dw, out dh); }
             catch { ok = false; }
@@ -425,7 +424,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         }
     }
 
-    private void Complete(int id, bool ok, int w, int h, ImageFailureKind failure, int attempts, byte[]? buffer, int byteLen)
+    private void Complete(int id, bool ok, int w, int h, ImageFailureKind failure, int attempts, PixelBlock? buffer, int byteLen)
     {
         var done = new Done
         {

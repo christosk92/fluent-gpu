@@ -460,6 +460,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             // thumbnail packing working at all" — fell off the end of a 4-row list every time.
             string top = D3D12MemoryDiagnostics.TopClassesLine(8);
             if (top.Length > 0) sb.Append(" top=").Append(top);
+            sb.Append(' ').Append(D3D12MemoryDiagnostics.PeakLine(6));
 
             // vram — the closing entry of the GPU book, and on UMA the only honest one. QueryVideoMemoryInfo has been
             // sampled every ~10 presents since the VRAM-pressure work; nothing ever printed it. LocalCurrentUsage is

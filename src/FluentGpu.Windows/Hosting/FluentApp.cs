@@ -898,6 +898,18 @@ public static class FluentApp
     /// D3D12 runtime still holds, split into tracked / leaked / untracked with exact sizes. Runs on the presenting thread
     /// before the next present and hands the report to <paramref name="done"/> there. Needs <see cref="AppOptions.D3D12DebugLayer"/>;
     /// without it the report says so. False when no window or no D3D12 device is up. Diagnostics only.</summary>
+    /// <summary>The retained-tile memory census (<see cref="AppHost.TileMemoryCensus"/>: every resident tile by slice, the
+    /// empty ones, how much of each one is painted) and the surface pool's (<see cref="D3D12Device.SurfaceCensus"/>: tile
+    /// textures by size, scratch leased / retained / idle). Runs on the presenting thread, hands the report to
+    /// <paramref name="done"/> there. Works without the debug layer. Diagnostics only.</summary>
+    public static bool RequestTileCensus(Action<string> done)
+    {
+        if (s_host is not { } host) return false;
+        var gpu = s_gpuDevice;
+        host.QueueBeforePresent(() => done(host.TileMemoryCensus() + (gpu?.SurfaceCensus() ?? "")));
+        return true;
+    }
+
     public static bool RequestGpuLiveCensus(Action<string> done)
     {
         if (s_host is not { } host || s_gpuDevice is not { } gpu) return false;

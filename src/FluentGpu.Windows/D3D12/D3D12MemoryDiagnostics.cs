@@ -124,16 +124,58 @@ internal static unsafe class D3D12MemoryDiagnostics
         lock (Gate) return Live.ContainsKey(key);
     }
 
+    // The high-water mark. On a UMA driver that keeps freed GPU memory in its own pool (the Adreno X1's, measured
+    // 2026-10-21: released textures are zero-filled and stay committed in the process, even past device destruction),
+    // the process's private bytes follow the PEAK of what was ever live here, not what is live now. So the peak is
+    // tracked with its composition: per class, what was live at the moment the total last rose to a new maximum.
+    private static readonly Dictionary<string, long> ClassLive = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, long> ClassAtPeak = new(StringComparer.Ordinal);
+    private static ulong _peakLiveBytes;
+
+    private static void ClassAdd(string name, long delta)
+    {
+        string k = NameKey(name);
+        long v = ClassLive.GetValueOrDefault(k) + delta;
+        if (v <= 0) ClassLive.Remove(k); else ClassLive[k] = v;
+    }
+
+    /// <summary>The tracked high-water mark and what made it: "peak=X MiB {class:MiB,...}" (largest first).</summary>
+    internal static string PeakLine(int maxRows)
+    {
+        lock (Gate)
+        {
+            var sb = new System.Text.StringBuilder(160).Append("peak=").Append(MibOneDecimal(_peakLiveBytes)).Append(" {");
+            int i = 0;
+            foreach (var kv in ClassAtPeak.OrderByDescending(k => k.Value))
+            {
+                if (i++ >= maxRows) break;
+                if (i > 1) sb.Append(',');
+                sb.Append(kv.Key).Append(':').Append(MibOneDecimal((ulong)kv.Value));
+            }
+            return sb.Append('}').ToString();
+        }
+    }
+
     private static void TrackPtr(nuint key, string name, ulong bytes)
     {
         if (key == 0) return;
         lock (Gate)
         {
             if (Live.TryGetValue(key, out var old))
+            {
                 _liveBytes = SubtractSaturating(_liveBytes, old.Bytes);
+                ClassAdd(old.Name, -(long)old.Bytes);
+            }
 
             Live[key] = new Entry(name, bytes);
             _liveBytes += bytes;
+            ClassAdd(name, (long)bytes);
+            if (_liveBytes > _peakLiveBytes)
+            {
+                _peakLiveBytes = _liveBytes;
+                ClassAtPeak.Clear();
+                foreach (var kv in ClassLive) ClassAtPeak[kv.Key] = kv.Value;
+            }
             _createdBytes += bytes;
             _createCount++;
             Log($"create {name} bytes={Format(bytes)} live={Format(_liveBytes)} creates={_createCount} releases={_releaseCount}");
@@ -163,6 +205,7 @@ internal static unsafe class D3D12MemoryDiagnostics
             if (Live.Remove(key, out var entry))
             {
                 _liveBytes = SubtractSaturating(_liveBytes, entry.Bytes);
+                ClassAdd(entry.Name, -(long)entry.Bytes);
                 _releasedBytes += entry.Bytes;
                 _releaseCount++;
                 Log($"release {entry.Name} bytes={Format(entry.Bytes)} live={Format(_liveBytes)} creates={_createCount} releases={_releaseCount}");
