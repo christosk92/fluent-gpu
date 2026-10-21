@@ -894,6 +894,17 @@ public static class FluentApp
     /// verbatim. Null headless or before the window is up.</summary>
     public static string? GpuCensusLine() => s_gpuDevice?.DiagGpuCensusLine;
 
+    /// <summary>The byte-exact live-object census (<see cref="D3D12Device.LiveObjectCensus"/>): every resource and heap the
+    /// D3D12 runtime still holds, split into tracked / leaked / untracked with exact sizes. Runs on the presenting thread
+    /// before the next present and hands the report to <paramref name="done"/> there. Needs <see cref="AppOptions.D3D12DebugLayer"/>;
+    /// without it the report says so. False when no window or no D3D12 device is up. Diagnostics only.</summary>
+    public static bool RequestGpuLiveCensus(Action<string> done)
+    {
+        if (s_host is not { } host || s_gpuDevice is not { } gpu) return false;
+        host.QueueBeforePresent(() => done(gpu.LiveObjectCensus()));
+        return true;
+    }
+
 
     /// <summary>One best-effort delete of the engine's legacy default image cache (<c>%TEMP%\fluent-gpu\imgcache</c>),
     /// run only when the app supplied its own <see cref="AppOptions.ImageCacheDirectory"/>. An app that moved its cache

@@ -118,6 +118,12 @@ internal static unsafe class D3D12MemoryDiagnostics
         fixed (char* p = name) _ = heap->SetName(p);
     }
 
+    /// <summary>Whether the ledger holds <paramref name="key"/> (the live-object census, <c>D3D12Device.LiveObjectCensus</c>).</summary>
+    internal static bool IsTracked(nuint key)
+    {
+        lock (Gate) return Live.ContainsKey(key);
+    }
+
     private static void TrackPtr(nuint key, string name, ulong bytes)
     {
         if (key == 0) return;

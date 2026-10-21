@@ -44,6 +44,13 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // for a whole homepage scroll and then popped it in afterwards.
     private readonly ConcurrentQueue<Done> _pixelOut = new();
     private readonly ConcurrentQueue<Done> _largePixelOut = new();
+    // Each lane's head, taken out of its queue by the pump (the one consumer, UI thread) and held here until it is applied
+    // or the byte budget stops the frame. NEVER ConcurrentQueue.TryPeek: a peek marks the queue's segment "preserved for
+    // observation", and from then on TryDequeue no longer clears the slots it leaves, so the segment kept the last Done of
+    // every slot (32 per lane) and with it that decode's pixel buffer — 1-4 MiB covers the pool had long returned or
+    // trimmed, rooted for the life of the process (2026-10-21, real-profile heap dump: ~12 MB of byte[] pinned this way).
+    private Done _smallHead, _largeHead;
+    private bool _hasSmallHead, _hasLargeHead;
     // Claimed ids remain active until their terminal completion is consumed by Pump. This lets a late recycle cancel a
     // decode that has already published pixels but has not uploaded yet, without creating unbounded unknown tombstones.
     private readonly ConcurrentDictionary<int, byte> _activeIds = new();
@@ -134,7 +141,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // IImageDecoder census passthroughs (MemCensus reads these through ImageCache).
     int IImageDecoder.DiagInflight => Volatile.Read(ref _inflight);
     int IImageDecoder.DiagCanceledPending => _canceled.Count;
-    public bool HasReadyCompletions => !_controlOut.IsEmpty || !_pixelOut.IsEmpty || !_largePixelOut.IsEmpty;
+    public bool HasReadyCompletions => !_controlOut.IsEmpty || _hasSmallHead || _hasLargeHead || !_pixelOut.IsEmpty || !_largePixelOut.IsEmpty;
 
     /// <inheritdoc/>
     public void SetCompletionWake(Action? wake) => Volatile.Write(ref _completionWake, wake);
@@ -245,7 +252,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             if (!meter.TryAdmit(next.ByteLen)) break;
             if (!TryDequeuePixels(large, out var d)) continue;
             // UI-thread callers normally serialize Cancel and Pump, but retain the final check for another-thread
-            // cancellation between TryPeek and TryDequeue.
+            // cancellation between the peek and the take.
             if (_canceled.ContainsKey(d.Id))
             {
                 Finish(d.Id);
@@ -289,27 +296,40 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // hide work from the pump.
     private bool TryPeekPixels(out Done done, out bool large)
     {
-        bool hasSmall = _pixelOut.TryPeek(out var small);
-        bool hasLarge = _largePixelOut.TryPeek(out var big);
-        if (!hasSmall)
+        if (!_hasSmallHead) _hasSmallHead = _pixelOut.TryDequeue(out _smallHead);
+        if (!_hasLargeHead) _hasLargeHead = _largePixelOut.TryDequeue(out _largeHead);
+        if (!_hasSmallHead)
         {
-            large = hasLarge;
-            done = big;
-            return hasLarge;
+            large = _hasLargeHead;
+            done = _largeHead;
+            return _hasLargeHead;
         }
-        if (!hasLarge || small.Sequence <= big.Sequence)
+        if (!_hasLargeHead || _smallHead.Sequence <= _largeHead.Sequence)
         {
             large = false;
-            done = small;
+            done = _smallHead;
             return true;
         }
         large = true;
-        done = big;
+        done = _largeHead;
         return true;
     }
 
+    /// <summary>Take the lane's held head (filled by <see cref="TryPeekPixels"/>); the field lets go of its buffer.</summary>
     private bool TryDequeuePixels(bool large, out Done done)
-        => (large ? _largePixelOut : _pixelOut).TryDequeue(out done);
+    {
+        if (large)
+        {
+            done = _largeHead;
+            bool had = _hasLargeHead;
+            _largeHead = default; _hasLargeHead = false;
+            return had;
+        }
+        done = _smallHead;
+        bool hadSmall = _hasSmallHead;
+        _smallHead = default; _hasSmallHead = false;
+        return hadSmall;
+    }
 
     private async Task WorkerLoop()
     {
