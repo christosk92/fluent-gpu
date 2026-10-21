@@ -100,6 +100,7 @@ public sealed partial class AnimEngine
     private bool _anyDueNow;
     private int _displayRateLoopCount;
     private int _loopCount;
+    private int _activeNonLoopCount;
 
     // NextDueMs takes the HOST's clock (AppHost passes _timers.NowMs — wall ms since start), while rows advance on
     // AnimClock.NowMs (a sum of clamped/injected quanta: a different origin, and it deliberately drifts from wall
@@ -167,13 +168,14 @@ public sealed partial class AnimEngine
         double now = _clock.NowMs;
         double minDue = double.PositiveInfinity;
         bool dueNow = false;
-        int drLoops = 0, loops = 0;
+        int drLoops = 0, loops = 0, nonLoops = 0;
         for (int nodeIndex = _slab.FirstActiveNode; nodeIndex >= 0; nodeIndex = _slab.NextActiveNode(nodeIndex))
             for (int s = _slab.HeadOnNode(nodeIndex); s >= 0; s = _slab.At(s).NextOnNode)
             {
                 AnimFlags f = _slab.At(s).Flags;
                 bool loop = (f & AnimFlags.Loop) != 0;
                 if (loop) loops++;
+                else if ((f & AnimFlags.Parked) == 0) nonLoops++;
                 // Parked/Done/Driven rows are never TIMER-due: parked is quiesced, done retires this tick, driven is
                 // event-woken by its signal write (that was the whole point — a paused playhead costs zero frames).
                 // A PAUSED row (SetPaused) neither moves nor ages, so it owes no frame either, and a HELD one (SetHeld) only
@@ -202,6 +204,7 @@ public sealed partial class AnimEngine
         _anyDueNow = dueNow;
         _displayRateLoopCount = drLoops;
         _loopCount = loops;
+        _activeNonLoopCount = nonLoops;
         _extAnchorValid = false;
     }
 
@@ -232,6 +235,12 @@ public sealed partial class AnimEngine
     /// frame class from it any more (that was the deleted <c>AnimIsAmbient</c>). Memoized with
     /// <see cref="NextDueMs"/>.</summary>
     public int LoopCount { get { RefreshCensus(); return _loopCount; } }
+
+    /// <summary>Live rows that are NOT loops and not parked: the animations that end. 0 while <see cref="HasActive"/> holds means
+    /// every row that keeps the clock running is a loop (a marquee, a looping indicator), motion that never ends by design: what
+    /// a "wait until nothing moves" settle (the app's inspector) must not wait for. Census/diagnostics only, like
+    /// <see cref="LoopCount"/>; memoized with <see cref="NextDueMs"/>.</summary>
+    public int ActiveNonLoopCount { get { RefreshCensus(); return _activeNonLoopCount; } }
 
     /// <summary>Live per-node layout-transition specs — O(1).</summary>
     public int TransitionCount => _transitions.Count;

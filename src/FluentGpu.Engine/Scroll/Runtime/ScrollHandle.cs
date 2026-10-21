@@ -243,10 +243,12 @@ public sealed class ScrollHandle
         ScrollPlan prev = Plan;
         // The plan's bounds are content facts: re-assert them whenever they disagree (a frame shift moved Max with a
         // correction the extent has not confirmed, or a nudge through ShiftFrame that grew no content).
-        if (!geometryChanged && !_restore.Pending && prev.Min == 0.0 && prev.Max == max && prev.ViewportExtent == viewport) return;
+        bool bounded = prev.Min == 0.0 && prev.Max == max && prev.ViewportExtent == viewport;
+        if (!geometryChanged && !_restore.Pending && bounded) return;
         MotionFeel feel = ScrollTunables.Current;
         ScrollPlan next = prev with { Min = 0.0, Max = max, ViewportExtent = viewport, RubberC = feel.RubberBandC };
         bool glide = _restore.Glide;   // read before TryResolve clears the latch
+        bool authored = true;          // false only on the arm below that leaves the plan as it is
         if (_restore.TryResolve(extent, viewport, out double restored))
             next = glide ? PlanAuthor.Glide(in next, AnchorAt(_nowSec()), restored, feel) : PlanAuthor.Immediate(in next, _nowSec(), restored);
         else if (_restore.Pending && _restore.Target > max && prev.Kind is MotionKind.Idle or MotionKind.Programmatic)
@@ -256,12 +258,14 @@ public sealed class ScrollHandle
                 // A ScrollTo/BringIntoView glide past the end already heads for today's clamp: it is re-aimed (velocity-
                 // continuous, from what is shown) only when the end grew past its destination — never cut to a jump.
                 if (prev.Dest < max - 0.5) next = PlanAuthor.Glide(in next, AnchorAt(_nowSec()), max, feel);
+                else authored = false;
             }
             else
             {
                 // A latched restore still past the (grown) extent chases the end: hold at the new max until it can resolve.
                 double p = prev.Eval(_nowSec(), out _, out _);
                 if (p < max - 0.5) next = PlanAuthor.Immediate(in next, _nowSec(), max);
+                else authored = false;
             }
         }
         else if (prev.Kind == MotionKind.Idle && prev.Count > 0)
@@ -282,8 +286,17 @@ public sealed class ScrollHandle
             // (measured against the clamped destination) never rests. A structurally settled tail rests there already.
             double t = AnchorAt(_nowSec());
             next.Eval(t, out _, out bool settled);
-            if (!settled) next = PlanAuthor.Reaim(in next, t, in feel);
+            if (!settled)
+            {
+                next = PlanAuthor.Reaim(in next, t, in feel);
+                authored = true;
+            }
         }
+        // A latch still waiting for content it cannot hold yet, over the same geometry and bounds, changes nothing: no write.
+        // A write is a new plan, and a new plan owes a frame (PlanSlots.Bump wakes the host), so writing the same plan on every
+        // extent sync kept the host awake for as long as the latch could not resolve: forever, for a BringIntoView whose margin
+        // reaches past the end of a strip that fits (a TabStrip in Scroll overflow with its last tab selected repainted every frame).
+        if (!authored && !geometryChanged && bounded && prev.RubberC == next.RubberC) return;   // a retuned RubberBandC still writes
         _slots.Write(Vp, in next);
     }
 

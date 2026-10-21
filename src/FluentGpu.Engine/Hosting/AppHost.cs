@@ -3169,6 +3169,10 @@ public sealed partial class AppHost : IDisposable
 
     public SceneStore Scene => _scene;
     public AnimEngine Animation => _anim;
+    /// <summary>A connected-animation (shared-element) flight is live: a fly in flight, a snapshot waiting for its dest, or a
+    /// detached snapshot still drawing. It raises <see cref="WakeReasons.Anim"/> with no animation row of its own, so a caller
+    /// that reads <see cref="Animation"/> alone (the inspector's settle) cannot see it.</summary>
+    public bool HasConnectedFlight => _connected.HasActive;
     /// <summary>The host-owned video-surface intent buffer (published on <c>VideoCompositor.Current</c>). A media player
     /// façade writes surface rect/visibility/handle here; the host drains it into the render-thread presenter at phase 11.</summary>
     public FluentGpu.Media.VideoSurfaceRegistry VideoSurfaces => _videoSurfaces;
