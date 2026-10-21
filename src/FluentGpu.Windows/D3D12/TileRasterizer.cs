@@ -102,6 +102,8 @@ public sealed unsafe partial class D3D12Device
     private readonly string?[] _passSite = new string?[24];
     private readonly int[] _passLine = new int[24], _passN = new int[24];
     private int _passSites;
+    private readonly int[] _frameInlineByKind = new int[8];   // inline layers this frame by LayerKind (diagnostics)
+    private int _frameInlineBlurred;                          // ...of which needed a blur halo (extra blur passes)
     private void TallyPass(string site, int line)
     {
         for (int i = 0; i < _passSites; i++)
@@ -392,6 +394,8 @@ public sealed unsafe partial class D3D12Device
         int scratch = _surfaces!.AcquireScratch(gw, gh, _fenceValue + 1);
         if (scratch < 0) { _inlineGroups.Add(new InlineGroup { L = L, Scratch = -1 }); return; }
         _frameInlineGroups++;
+        if ((uint)L.Kind < (uint)_frameInlineByKind.Length) _frameInlineByKind[L.Kind]++;
+        if (halo > 0) _frameInlineBlurred++;
         var g = new InlineGroup
         {
             L = L, Scratch = scratch, Halo = halo,

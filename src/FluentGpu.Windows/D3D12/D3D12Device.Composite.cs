@@ -152,7 +152,7 @@ public sealed unsafe partial class D3D12Device
         PrepareCompositeGlyphs(in frame);
         BeginRecording(sc, f, slot, isPrimaryTarget: true);
         ResetFrameCounters();
-        _frameFeatherItems = 0; _frameFeatherPx = 0; _frameBlurCacheHits = 0; _frameTilesRastered = 0; _frameRenderPasses = 0; _frameInlineGroups = 0; _frameDirectRegions = 0; _frameInlineItems = 0; _frameInlineReopens = 0; _frameResumes = 0; _passSites = 0;
+        _frameFeatherItems = 0; _frameFeatherPx = 0; _frameBlurCacheHits = 0; _frameTilesRastered = 0; _frameRenderPasses = 0; _frameInlineGroups = 0; _frameDirectRegions = 0; _frameInlineItems = 0; _frameInlineReopens = 0; _frameResumes = 0; _passSites = 0; Array.Clear(_frameInlineByKind); _frameInlineBlurred = 0;
         _frameLostPlacements = 0;
         ResetOffscreenSplit();
         BeginPipesFrame(slot);
