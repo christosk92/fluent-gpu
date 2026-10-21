@@ -6267,7 +6267,7 @@ public sealed partial class TreeReconciler
                 li.TextStyle = new TextStyle(famId, t.Size, t.ResolvedWeight, t.Wrap, t.Trim, t.MaxLines,
                     t.CharSpacing, t.LineHeight, t.LineStacking, t.LineBounds,
                     MinSizeDip: float.IsNaN(t.MinSize) ? 0f : t.MinSize, Case: t.Case,
-                    Align: t.TextAlign, Features: t.FontFeatures);
+                    Align: t.TextAlign, Features: t.FontFeatures, Fit: t.FitMode);
                 TextFitContract.Check(in prevStyle, in li.TextStyle, t.Text.IsBound ? "(bound)" : t.Text.Value);
                 li.Margin = t.Margin;
                 li.Width = t.Width; li.Height = t.Height;

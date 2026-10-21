@@ -867,6 +867,11 @@ public sealed record TextEl(Prop<string> Text) : Element
     /// <see cref="Trim"/> ellipsis applies at the floor. Use a font-natural line height (leave <see cref="LineHeight"/>
     /// unset) so the chosen size's spacing scales with it. NaN = off (no auto-fit; the default).</summary>
     public float MinSize { get => (_cold ?? TextCold.Default).MinSize; init { if (!EqualityComparer<float>.Default.Equals((_cold ?? TextCold.Default).MinSize, value)) Cold.MinSize = value; } }
+    /// <summary>How <see cref="MinSize"/> picks its size (<see cref="TextFitMode"/>). <see cref="TextFitMode.Lines"/> (the default): the
+    /// largest size that fits <see cref="MaxLines"/>. <see cref="TextFitMode.OneLineFirst"/>: the largest size that fits ONE line; a run
+    /// that does not fit one line even at the floor wraps at the floor over up to <see cref="MaxLines"/> lines, then trims, and an
+    /// authored <see cref="LineHeight"/> scales with the size chosen. For a display title that should shrink before it wraps.</summary>
+    public TextFitMode FitMode { get => (_cold ?? TextCold.Default).FitMode; init { if ((_cold ?? TextCold.Default).FitMode != value) Cold.FitMode = value; } }
     /// <summary>Case transform applied at SHAPING (E19), culture-invariantly and length-preserving: the string is stored and
     /// interned as written, the glyph run is shaped from its lower/upper-cased form, and no string is allocated per render.
     /// Part of the measure key (<c>TextStyle.Case</c>). Default <see cref="TextCase.AsWritten"/>. For theme-written labels

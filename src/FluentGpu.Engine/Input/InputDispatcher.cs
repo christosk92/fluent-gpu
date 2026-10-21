@@ -3513,7 +3513,7 @@ public sealed partial class InputDispatcher
         if (style.MinSizeDip > 0f && _scene.TryGetMeasureCache(node, out TextMeasureCache cache))
         {
             TextMeasureEntry fit = cache.ResolveForWidth(_scene.Bounds(node).W);
-            if (fit.Valid && fit.FitSize > 0f) style = style with { SizeDip = fit.FitSize };
+            if (fit.Valid && fit.FitSize > 0f) style = style.AtFitSize(fit.FitSize);
         }
         return style;
     }
