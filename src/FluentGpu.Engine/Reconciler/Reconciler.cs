@@ -519,11 +519,31 @@ public sealed partial class TreeReconciler
                                   ISignalSource? cause = null, byte causeTag = 0)
     {
         if (_renderCensus is null) return;   // census off (the steady/shipping case) — no GetType().Name work below
-        string typeName = comp.GetType().Name;
+        string typeName = CensusName(comp.GetType());
         _renderCensus.TryGetValue(typeName, out var e);
         e.Count++; e.RenderTicks += renderTicks; e.ReconcileTicks += reconcileTicks; e.Bytes += bytes;
         e.Cause = cause; e.CauseTag = causeTag;
         _renderCensus[typeName] = e;
+    }
+
+    // A census type name, cached per type: a generic component carries its type arguments ("ViewSlotBodyA<QueuePanelProps>"), so the
+    // one host type behind every theme view slot says WHICH view re-rendered (as "ViewSlotBodyA`1" the busiest re-render line named none).
+    private readonly Dictionary<Type, string> _censusNames = new();
+
+    private string CensusName(Type t)
+    {
+        if (_censusNames.TryGetValue(t, out var name)) return name;
+        name = t.Name;
+        if (t.IsGenericType)
+        {
+            int tick = name.IndexOf('`');
+            var args = t.GetGenericArguments();
+            var sb = new StringBuilder(tick > 0 ? name[..tick] : name).Append('<');
+            for (int i = 0; i < args.Length; i++) sb.Append(i > 0 ? "," : "").Append(args[i].Name);
+            name = sb.Append('>').ToString();
+        }
+        _censusNames[t] = name;
+        return name;
     }
 
     /// <summary>The census's <c>by=</c> text for one entry (report time only; allocates).</summary>

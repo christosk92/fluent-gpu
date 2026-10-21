@@ -1515,9 +1515,20 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         // DirectManipulation (§7): feed every message to ProcessInput BEFORE dispatch. When DM owns an active touchpad
         // contact it consumes the packet so it never reaches the WndProc wheel fallback.
         if (_dm is { Enabled: true } dm && dm.ProcessInput(msg)) return;
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp(), loopBefore = _moveLoopStartMs;
         TranslateMessage(msg);
         DispatchMessageW(msg);
+        long ticks = System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+        // Always-on, one line per SLOW dispatch (never per message): the frame ledger's `pumpMs` only says the UI thread sat in
+        // message dispatch (a 1.18 s pump stall in a real-data bench, 2026-10-21), not WHICH message. A modal move/size or menu
+        // loop runs inside its own dispatch by design; `modal` marks a dispatch that entered one, so a reader can set those aside.
+        if (ticks > SlowDispatchTicks)
+            Diag.Line($"[window.msg.slow] msg=0x{msg->message:X4} wParam=0x{(nuint)msg->wParam:X} ms={ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency:0.0} " +
+                      $"modal={(_moveLoopStartMs != loopBefore ? 1 : 0)} own={(msg->hwnd == _hwnd ? 1 : 0)}");
     }
+
+    /// <summary>A message dispatch longer than this (25 ms: three 120 Hz frames) is logged as <c>[window.msg.slow]</c>.</summary>
+    private static readonly long SlowDispatchTicks = System.Diagnostics.Stopwatch.Frequency / 40;
 
     /// <summary>The device stamp for a wheel packet, and the ONE place that records how good it is.
     ///
