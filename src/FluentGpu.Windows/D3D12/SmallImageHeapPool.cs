@@ -57,7 +57,14 @@ internal sealed class SmallImagePageState
 /// </summary>
 internal sealed unsafe class SmallImageHeapPool : IDisposable
 {
-    internal const ulong FirstPageBytes = 128 * 1024, GrowthPageBytes = 1024 * 1024, MaxHeapBytes = 16 * 1024 * 1024;
+    // MaxHeapBytes matches the image cache's own UMA budget (GpuMemoryBudgets, 64 MB): a thumbnail this pool cannot place takes
+    // the committed fallback, which on the Adreno X1 charges a 128x128 texture 128 KiB against the ~66 KiB of a placed slot —
+    // so a cap BELOW what the cache admits only moved the overflow onto the path that costs twice as much (2026-10-21: a
+    // 28-page real-profile tour held 90 MiB of 256/128 px covers, the overflow past 16 MB of slots in 2x fallbacks).
+    internal const ulong FirstPageBytes = 128 * 1024, GrowthPageBytes = 1024 * 1024, MaxHeapBytes = 64 * 1024 * 1024;
+    /// <summary>When a bucket's free slots (ready or still activating) fall below this many after an acquire, its next page is
+    /// created right away, so a page of covers arriving together finds slots instead of committed fallbacks.</summary>
+    internal const int LowWaterSlots = 8;
     internal sealed class Page
     {
         internal ID3D12Heap* Heap;
@@ -116,6 +123,7 @@ internal sealed unsafe class SmallImageHeapPool : IDisposable
             if (page.State.TryAcquire(out int index, out int generation))
             {
                 lease = new(page, index, generation); _occupiedBytes += page.RequiredEach;
+                KeepHeadroom(bucket, b);
                 return true;
             }
         }
@@ -123,6 +131,31 @@ internal sealed unsafe class SmallImageHeapPool : IDisposable
         ulong bytes = hasPage ? GrowthPageBytes : FirstPageBytes;
         if (!pending && CanReserve(_heapBytes, bytes)) CreatePage(bucket, b, bytes);
         return false;
+    }
+
+    /// <summary>Create the bucket's next page while it still has slots to give (see <see cref="LowWaterSlots"/>): the
+    /// miss-driven growth below only created a page AFTER a thumbnail had already fallen back, and so did the rest of the
+    /// burst it arrived with while that page activated.</summary>
+    private void KeepHeadroom(int bucket, int b)
+    {
+        int free = 0;
+        foreach (var page in _pages)
+        {
+            if (page.Bucket != bucket) continue;
+            free += page.State.Capacity - page.State.LiveCount;   // an activating page's slots count: they are coming
+            if (free >= LowWaterSlots) return;
+        }
+        if (CanReserve(_heapBytes, GrowthPageBytes)) CreatePage(bucket, b, GrowthPageBytes);
+    }
+
+    /// <summary>What one placed slot of <paramref name="bucket"/> (64 / 128) commits, from the driver's own allocation info;
+    /// 0 when the bucket cannot be placed. The charge a thumbnail of that size really carries.</summary>
+    internal ulong SlotBytes(int bucket)
+    {
+        int b = bucket == 64 ? 0 : bucket == 128 ? 1 : -1;
+        if (b < 0 || _disabled[b]) return 0;
+        if (!_queried[b] && !Query(bucket, b)) return 0;
+        return _required[b];
     }
 
     private bool Query(int bucket, int b)

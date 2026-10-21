@@ -3751,12 +3751,27 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _vramUsedBytes = (long)local.CurrentUsage;
         _vramBudgetBytes = (long)local.Budget;
         _vramSampled = true;
+        NoteUntrackedGrowth((long)local.CurrentUsage);
         D3D12MemoryDiagnostics.PublishVideoMemory(
             local.CurrentUsage, local.Budget,
             nonLocal.CurrentUsage, nonLocal.Budget,
             _imageTextures?.AtlasImageCount ?? 0,
             _imageTextures?.AtlasPageCount ?? 0,
             _glyphs?.CachedGlyphCount ?? 0);
+    }
+
+    // ── untracked growth: what the driver allocates for itself (command allocators, pipelines, descriptor and query heaps) ──
+    // The adapter's LOCAL usage minus every resource and heap this device tracks. On a UMA driver that keeps freed GPU memory
+    // it only ratchets, so the moment it jumps is the one to name: a log line per jump of more than 8 MiB between samples,
+    // with what the device did in that frame.
+    private long _lastUntracked = long.MinValue;
+    private void NoteUntrackedGrowth(long localUsage)
+    {
+        long untracked = localUsage - D3D12MemoryDiagnostics.LiveTotals().bytes;
+        if (_lastUntracked != long.MinValue && untracked - _lastUntracked > (8L << 20))
+            Diag.Line($"[d3d12.untracked] +{(untracked - _lastUntracked) / 1048576.0:0.0} MiB now {untracked / 1048576.0:0.0} MiB" +
+                $" tilesRastered={_frameTilesRastered} passes={_frameRenderPasses} segments={_frameSegments} inline={_frameInlineItems} directRegions={_frameDirectRegions}");
+        _lastUntracked = untracked;
     }
 
     // DXGI_STATUS_OCCLUDED — Present succeeded but the window is fully occluded (HWND flip-model). Not reliably returned
