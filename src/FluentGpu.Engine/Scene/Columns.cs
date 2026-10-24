@@ -812,6 +812,9 @@ public struct InteractionInfo
                                                     // drag, so this bit STOPS that walk at itself. Discriminator only:
                                                     // never a hit/press/focus target, deliberately outside
                                                     // AnyInteractiveMask. Clear as `~BlocksDragArmBit`.
+    public const uint FocusRingHostBit = 1u << 22;          // BoxEl.FocusRingHost: paints its nearest focused ancestor's keyboard-focus ring on its
+                                                            // own rect (the recorder's ring emission looks for it). Paint-only discriminator: never a
+                                                            // hit-test or handler bit.
     public const uint HoverScopeTransparentBit = 1u << 20; // BoxEl.HoverScopeTransparent: a pointer LISTENER that is not
                                                     // an interaction scope (the ToolTip wrapper). The hover cascade,
                                                     // the lazy-mount hover seed and the un-hover re-resolve skip it and

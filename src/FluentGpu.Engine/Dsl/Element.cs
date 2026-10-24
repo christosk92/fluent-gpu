@@ -534,6 +534,12 @@ public sealed record BoxEl : Element
     /// the un-hover re-resolve look THROUGH it to the nearest real interactive ancestor. A card's hover then still
     /// reveals a wrapped play FAB. Hit-testing and handler delivery are unchanged.</summary>
     public bool HoverScopeTransparent { get => (_cInput ?? BoxColdInput.Default).HoverScopeTransparent; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).HoverScopeTransparent, value)) CInput.HoverScopeTransparent = value; } }
+    /// <summary>This box HOSTS the keyboard-focus ring of its nearest focused ancestor: where the focused node is a wide container (a virtual list's
+    /// slot root spanning the whole viewport) and only part of it is the item the user sees (a row standing between inset spacers), the ring is drawn
+    /// on this box's rect instead of the focused node's, with the focused node's <see cref="FocusVisualMargin"/>. The first host found under the focused
+    /// node wins (a shallow search, at most a few levels down); none found: the focused node's own ring, as before. Paint only: focus, hit-testing and
+    /// navigation are unchanged.</summary>
+    public bool FocusRingHost { get => (_cInput ?? BoxColdInput.Default).FocusRingHost; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).FocusRingHost, value)) CInput.FocusRingHost = value; } }
 
     /// <summary>Clip-ESCAPE root for a hover-elevated descendant (pairs with <see cref="HoverElevatePaint"/>): set on a
     /// clipping viewport (a shelf's paged strip) to let the hovered card's lift + halo paint OUTSIDE this clip. The

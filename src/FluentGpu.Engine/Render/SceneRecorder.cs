@@ -3261,7 +3261,11 @@ internal sealed class SceneRecordingContext
         // control (a TextBox field) must not scissor its own ring away. Ancestor clips still apply (correct).
         if (focus.Enabled && (flags & NodeFlags.FocusVisual) != 0 && overlapsRecordClip)
         {
-            EmitFocusRing(dl, b, p.Corners, interaction.FocusVisualMargin, world, opacity, in focus, key | 0x10);
+            // A descendant that hosts the ring (BoxEl.FocusRingHost) takes it: the focused node's own rect is wider than what the user sees as the item.
+            if (FocusRingHostRect(scene, node, out var hostRect, out var hostCorners))
+                EmitFocusRing(dl, hostRect, hostCorners, interaction.FocusVisualMargin, world, opacity, in focus, key | 0x10, hostRect.X, hostRect.Y);
+            else
+                EmitFocusRing(dl, b, p.Corners, interaction.FocusVisualMargin, world, opacity, in focus, key | 0x10);
             // The ring sits OUTSIDE the bounds (negative FocusVisualMargin) — union EmitFocusRing's own focus rect into
             // the subtree bounds, same superset rationale as the shadow halo above.
             var fvm = interaction.FocusVisualMargin;
@@ -4029,20 +4033,59 @@ internal sealed class SceneRecordingContext
         dl.GradientStroke(new DrawGradientStrokeCmd(ring, InsetCorners(corners, bw * 0.5f), start, end, (int)g.Shape, n, c0, c1, c2, c3, o0, o1, o2, o3, bw, world, opacity), key);
     }
 
+    /// <summary>The first descendant of the focused <paramref name="owner"/> that hosts its ring (<see cref="InteractionInfo.FocusRingHostBit"/>), at most
+    /// <see cref="FocusRingHostDepth"/> levels down, as a rect in the owner's local space (its laid-out offset; transforms between them are not folded:
+    /// a host is laid out inside its owner) with the host's corners. One focused node per frame, a bounded walk, no allocation.</summary>
+    private static bool FocusRingHostRect(SceneRecordingSnapshot scene, NodeHandle owner, out RectF rect, out CornerRadius4 corners)
+    {
+        rect = default;
+        corners = default;
+        var c = scene.FirstChild(owner);
+        int depth = 1;
+        while (!c.IsNull && depth > 0)
+        {
+            if ((scene.Interaction(c).HandlerMask & InteractionInfo.FocusRingHostBit) != 0 && (scene.Flags(c) & NodeFlags.Visible) != 0)
+            {
+                // Layout bounds are in the parent's content space: the host's offset in the owner is the sum along the path.
+                float x = 0f, y = 0f;
+                for (var n = c; !n.IsNull && n != owner; n = scene.Parent(n)) { x += scene.Bounds(n).X; y += scene.Bounds(n).Y; }
+                ref readonly RectF hb = ref scene.Bounds(c);
+                rect = new RectF(x, y, hb.W, hb.H);
+                corners = scene.Paint(c).Corners;
+                return true;
+            }
+            var first = depth < FocusRingHostDepth ? scene.FirstChild(c) : NodeHandle.Null;
+            if (!first.IsNull) { c = first; depth++; continue; }
+            while (!c.IsNull && depth > 0)
+            {
+                var next = scene.NextSibling(c);
+                if (!next.IsNull) { c = next; break; }
+                c = scene.Parent(c);
+                depth--;
+                if (c == owner) { depth = 0; break; }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>How deep <see cref="FocusRingHostRect"/> looks under the focused node.</summary>
+    private const int FocusRingHostDepth = 6;
+
     /// <summary>WinUI dual focus visual, margin-aware: the focus rect is the bounds expanded by −FocusVisualMargin
     /// (templates use −3 ⇒ 3px out; Slider −7,0,−7,0). The 2px PRIMARY (outer) stroke hugs the inside of the focus
     /// rect's edge; the 1px SECONDARY (inner) stroke sits immediately inside it — with the default margin the pair
     /// lands exactly on the control edge (edge → 1px inner → 2px outer). Centerline SDF strokes, so each rect insets
     /// by half its thickness; corner radii grow with the expansion to stay concentric.</summary>
-    private void EmitFocusRing(DrawList dl, in RectF b, in CornerRadius4 corners, in Edges4 margin, in Affine2D world, float opacity, in FocusVisualStyle f, ulong key)
+    private void EmitFocusRing(DrawList dl, in RectF b, in CornerRadius4 corners, in Edges4 margin, in Affine2D world, float opacity, in FocusVisualStyle f, ulong key,
+        float originX = 0f, float originY = 0f)
     {
         // Per-side expansion (negative WinUI margin = grow outward). Clamp ≥ 0 — a positive margin never shrinks inside.
         float eL = MathF.Max(0f, -margin.Left), eT = MathF.Max(0f, -margin.Top);
         float eR = MathF.Max(0f, -margin.Right), eB = MathF.Max(0f, -margin.Bottom);
         float tP = MathF.Max(1f, f.Thickness);   // primary (outer) thickness — WinUI FocusVisualPrimaryThickness = 2
 
-        // The focus rect in node-local space.
-        var fr = new RectF(-eL, -eT, b.W + eL + eR, b.H + eT + eB);
+        // The focus rect in node-local space (a ring host's rect sits at its offset inside the focused node: originX / originY).
+        var fr = new RectF(originX - eL, originY - eT, b.W + eL + eR, b.H + eT + eB);
         // Corner radius grows by the smaller adjacent expansion so the arc stays concentric with the control corner.
         var fc = new CornerRadius4(
             corners.TopLeft + MathF.Min(eL, eT), corners.TopRight + MathF.Min(eR, eT),

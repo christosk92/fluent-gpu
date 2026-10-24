@@ -153,6 +153,7 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
     public Edges4? FocusVisualMargin;
     public bool BlocksDragArm;
     public bool HoverScopeTransparent;
+    public bool FocusRingHost;
 
     public BoxColdInput CloneFor(BoxEl owner)
     {
@@ -179,7 +180,8 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
             && EqualityComparer<bool?>.Default.Equals(TabStop, o.TabStop)
             && EqualityComparer<Edges4?>.Default.Equals(FocusVisualMargin, o.FocusVisualMargin)
             && EqualityComparer<bool>.Default.Equals(BlocksDragArm, o.BlocksDragArm)
-            && EqualityComparer<bool>.Default.Equals(HoverScopeTransparent, o.HoverScopeTransparent);
+            && EqualityComparer<bool>.Default.Equals(HoverScopeTransparent, o.HoverScopeTransparent)
+            && EqualityComparer<bool>.Default.Equals(FocusRingHost, o.FocusRingHost);
     }
 
     public override bool Equals(object? obj) => Equals(obj as BoxColdInput);

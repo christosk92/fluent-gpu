@@ -5770,6 +5770,10 @@ public sealed partial class TreeReconciler
                 if (b.HoverScopeTransparent) ii.HandlerMask |= InteractionInfo.HoverScopeTransparentBit;
                 else ii.HandlerMask &= ~InteractionInfo.HoverScopeTransparentBit;
 
+                // BoxEl.FocusRingHost: the focused ancestor's ring is painted on this box (SceneRecorder.FocusRingHostRect). Paint-only discriminator.
+                if (b.FocusRingHost) ii.HandlerMask |= InteractionInfo.FocusRingHostBit;
+                else ii.HandlerMask &= ~InteractionInfo.FocusRingHostBit;
+
                 if (b.OnKeyDown is not null) { ii.HandlerMask |= InteractionInfo.KeyBit; _scene.SetKeyHandler(node, b.OnKeyDown); }
                 else { ii.HandlerMask &= ~(uint)InteractionInfo.KeyBit; _scene.SetKeyHandler(node, null); }
 
