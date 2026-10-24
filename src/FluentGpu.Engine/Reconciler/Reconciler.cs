@@ -686,6 +686,11 @@ public sealed partial class TreeReconciler
     /// keyed on it (an in-flight drag's source, keyboard focus) must let go here — the IsLive prunes never fire for it.
     /// Hot scroll path: the host handler is O(1) unless a drag is armed or active, or focus is held (one parent walk).</summary>
     public Action<NodeHandle>? OnSlotRebound { get; set; }
+    /// <summary>Set by the host; called for a REUSED node that gains a bounds transition (<c>Animate</c>, or a declarative
+    /// <c>Layout</c>) in this reconcile. The commit's FLIP "first" capture ran before the reconcile and only took nodes that
+    /// were already animated, so without this the change the same render brings had no "before" and landed at once. The
+    /// node's Bounds and transform are still the pre-commit ones here (layout has not run): the host captures them.</summary>
+    public Action<NodeHandle>? OnBoundsTransitionGained { get; set; }
     /// <summary>Set by the host; called when a component context's passive/layout effect queue transitions 0→1.</summary>
     public Action<RenderContext, bool>? RegisterPendingEffectContext { get; set; }
     /// <summary>Set by the host; called for each node as a subtree is parked/un-parked by KeepAlive so the animation +
@@ -1520,15 +1525,18 @@ public sealed partial class TreeReconciler
         // margined root).
         a.FlexBasis = float.IsNaN(c.FlexBasis) || (mH == 0f && mV == 0f) ? c.FlexBasis
             : c.FlexBasis + (FlexParentIsRow(anchor) ? mH : mV);
-        // NEVER snapshot an ACTIVELY ANIMATED size. A SizeMode.Reflow track writes the eased extent straight into the
-        // child's LayoutInput.Width/Height each tick; mirroring THAT onto the transparent anchor freezes a mid-flight
-        // number as a hard declared size, and nothing ever undoes it — SettleRestore restores only the animated node,
-        // and MountComponent never writes an anchor's LayoutInput. Mirror the DECLARED value the track will restore
-        // (normally NaN/auto) so the anchor stays genuinely transparent and measures the eased child naturally.
+        // An ACTIVELY ANIMATED size. A SizeMode.Reflow track writes the eased extent straight into the child's
+        // LayoutInput.Width/Height each tick. Toward an AUTO size (declared NaN, the row restores NaN) the anchor mirrors
+        // auto and measures the eased child naturally. Toward a DECLARED size (a template root whose Height steps per tier
+        // and eases through real layout: a play bar's slot) the anchor mirrors the child's LIVE extent, the row's interp:
+        // mirroring the declared value instead handed the parent the NEW size on the commit frame while the root eased
+        // inside it, so the page beside the root jumped. The live value is never left behind as a stale declared size:
+        // the row re-mirrors the anchors above it on every write and on its settle restore (AnimEngine.ReflowSizeWritten
+        // -> FollowReflowSize), the last of which hands the anchor the declared value.
         if (Anim is { } mpAnim)
         {
-            float mirroredW = OutsetByMargin(!child.IsNull && mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutW, out float mpW) ? mpW : c.Width, mH);
-            float mirroredH = OutsetByMargin(!child.IsNull && mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutH, out float mpH) ? mpH : c.Height, mV);
+            float mirroredW = OutsetByMargin(!child.IsNull && mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutW, out float mpW) && float.IsNaN(mpW) ? mpW : c.Width, mH);
+            float mirroredH = OutsetByMargin(!child.IsNull && mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutH, out float mpH) && float.IsNaN(mpH) ? mpH : c.Height, mV);
             // The SAME hazard one level up, with the roles swapped: the ANCHOR itself may be the reflow node. A
             // SkelRegionEl with SmoothResize puts the SizeMode.Reflow track on the BOUNDARY (MountSkeletonRegion marks
             // the region BoundsAnimated), and ReconcileSkeletonRegion then mirrors its branch onto it on every flush —
@@ -1572,6 +1580,23 @@ public sealed partial class TreeReconciler
             if (parent.IsNull || !_mirroredChild.TryGetValue((int)parent.Raw.Index, out var mirrored) || mirrored != node) return;
             MirrorParticipation(parent, node);
             node = parent;
+        }
+    }
+
+    /// <summary>A reflow row wrote <paramref name="node"/>'s layout size (<see cref="AnimEngine.ReflowSizeWritten"/>: a tick, a seed's
+    /// start, a shift, the settle restore). When the node is an anchor's rendered root, re-mirror the anchors above it and dirty each, so
+    /// the boundary-scoped re-solve after the tick lays the parent out at the root's eased size. One dictionary probe for every other
+    /// node; allocation-free.</summary>
+    internal void FollowReflowSize(NodeHandle node)
+    {
+        if (_mirroredChild.Count == 0 || !_scene.IsLive(node)) return;
+        for (var child = node; ;)
+        {
+            var parent = _scene.Parent(child);
+            if (parent.IsNull || !_mirroredChild.TryGetValue((int)parent.Raw.Index, out var mirrored) || mirrored != child) return;
+            MirrorParticipation(parent, child);
+            _scene.Mark(parent, NodeFlags.LayoutDirty);
+            child = parent;
         }
     }
 
@@ -4983,12 +5008,12 @@ public sealed partial class TreeReconciler
 
         // Declarative Enter/Exit/Layout: a ComponentEl carries no legacy BoxEl.Animate, so — unlike the BoxEl case in
         // WriteColumns, which only takes this branch when Animate is unset — the declarative path is unconditional here.
+        bool anchorWasAnimated = (_scene.Flags(node) & NodeFlags.BoundsAnimated) != 0, anchorAnimated = false;
         Anim?.ClearTransition(node);
-        _scene.Unmark(node, NodeFlags.BoundsAnimated);
         if (Anim is { } danim && SynthesizeDeclarative(node, ce) is { } dt)
         {
             danim.SetTransition(node, dt);
-            if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
+            if ((dt.Channels & TransitionChannels.Bounds) != 0) { _scene.Mark(node, NodeFlags.BoundsAnimated); anchorAnimated = true; }
             if (isMount && dt.Enter.Active && !SnapMotion && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
             {
                 danim.SeedEnter(node, dt.Enter, dt);
@@ -4998,6 +5023,9 @@ public sealed partial class TreeReconciler
                 else if (dt.Size == SizeMode.FlowReveal) danim.PendingEnterReveal.Add(node);
             }
         }
+        // Unmarked only when it no longer animates (an unmark before every re-mark re-registered the node in the FLIP list per render).
+        if (!anchorAnimated) _scene.Unmark(node, NodeFlags.BoundsAnimated);
+        else if (!anchorWasAnimated && !isMount) OnBoundsTransitionGained?.Invoke(node);
 
         // Gesture-state targets (WhileHover/WhilePressed/WhileFocus): the anchor has no authored OffsetX/ScaleX/Rotation/
         // Opacity/Blur of its own (those are BoxEl-only), so its rest pose is the identity delta — `new MotionTarget()`,
@@ -5670,12 +5698,14 @@ public sealed partial class TreeReconciler
                 _scene.SetBoundsChangedHandler(node, b.OnBoundsChanged);
                 _scene.SetFollowRect(node, b.FollowRect);   // F169: the engine's post-layout follow pass (SceneStore.Follow.cs)
                 _scene.SetWindowDrag(node, b.WindowDrag);   // declarative NC drag region (SceneStore.WindowDrag.cs; host collects at 7.8)
+                bool wasAnimated = (_scene.Flags(node) & NodeFlags.BoundsAnimated) != 0, animated = false;
                 if (b.Animate is { } at && Anim is { } anim)
                 {
                     anim.SetTransition(node, at);
                     anim.SetRestTransform(node, restTf);
                     anim.SetRestPose(node, EnterRestOf(b));
                     _scene.Mark(node, NodeFlags.BoundsAnimated);
+                    animated = true;
                     if (isMount && at.Enter.Active && !SnapMotion && (at.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         anim.SeedEnterOver(node, at.Enter, at, EnterRestOf(b));
@@ -5686,7 +5716,7 @@ public sealed partial class TreeReconciler
                         else if (at.Size == SizeMode.FlowReveal) anim.PendingEnterReveal.Add(node);
                     }
                 }
-                else { Anim?.ClearTransition(node); _scene.Unmark(node, NodeFlags.BoundsAnimated); }
+                else Anim?.ClearTransition(node);
                 // NEW declarative Enter/Exit/Layout (the base-Element authoring fields): when the author used the new
                 // surface instead of `Animate`, synthesize a LayoutTransition and route through the PROVEN seed/orphan/
                 // reclaim lifecycle — the mount-Enter seed here + the unmount-Exit path read the stashed spec. Guarded by
@@ -5696,7 +5726,7 @@ public sealed partial class TreeReconciler
                     danim.SetTransition(node, dt);
                     danim.SetRestTransform(node, restTf);
                     danim.SetRestPose(node, EnterRestOf(b));
-                    if ((dt.Channels & TransitionChannels.Bounds) != 0) _scene.Mark(node, NodeFlags.BoundsAnimated);
+                    if ((dt.Channels & TransitionChannels.Bounds) != 0) { _scene.Mark(node, NodeFlags.BoundsAnimated); animated = true; }
                     if (isMount && dt.Enter.Active && !SnapMotion && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         danim.SeedEnterOver(node, dt.Enter, dt, EnterRestOf(b));
@@ -5704,6 +5734,12 @@ public sealed partial class TreeReconciler
                         else if (dt.Size == SizeMode.FlowReveal) danim.PendingEnterReveal.Add(node);
                     }
                 }
+                // Unmarked only when it no longer animates (an unmark before every re-mark re-registered the node in the FLIP list per render).
+                // A reused node that GAINS a bounds transition this render was not in the commit's FLIP "first" capture (it ran before the
+                // reconcile): the host captures it now, from the rect it still holds, so the change this render brings eases like any other
+                // (`Animate = focused ? X : null` used to snap its first flip).
+                if (!animated) _scene.Unmark(node, NodeFlags.BoundsAnimated);
+                else if (!wasAnimated && !isMount) OnBoundsTransitionGained?.Invoke(node);
                 // NEW declarative gesture-state targets (WhileHover/WhilePressed/WhileFocus): stashed for the
                 // InteractionState priority resolver, which springs them on the input edge (AppHost wires
                 // ApplyInteractionEdge). All-null clears the row, so it's inert for nodes that don't use While*.
@@ -6198,6 +6234,8 @@ public sealed partial class TreeReconciler
                 NodePaintCold cold = _scene.PaintCold(node);
                 cold.ImageFocusX = Math.Clamp(im.FocusX, 0f, 1f);
                 cold.ImageFocusY = Math.Clamp(im.FocusY, 0f, 1f);
+                cold.ImageFrameX = Math.Clamp(im.FocusFrameX, 0f, 1f);
+                cold.ImageFrameY = Math.Clamp(im.FocusFrameY, 0f, 1f);
                 _scene.SetPaintCold(node, in cold);
 
                 // Decode-target size: explicit Width/Height when set; otherwise the DecodePx hint (a fluid/aspect image's

@@ -159,8 +159,10 @@ public sealed class TabStrip : Component
     /// <summary>The lane and row height this strip lives in; null reads <see cref="HostContext"/> (a two-row
     /// <see cref="TitleBar"/> provides it), else a free-standing strip (48 row, no lane).</summary>
     public TabStripHost? Host;
-    /// <summary>Chrome appearance: the tab plate height (WinUI 32; the two-row title bar's tabs are 36). MOUNT-TIME.</summary>
-    public float TabHeight = 32f;
+    /// <summary>Chrome appearance: the tab plate height (WinUI 32; the two-row title bar's tabs are 36). Read at EVERY render, so a thunk over
+    /// the app's tier record re-sizes the plates in place (a touch tier's 40 row) and the tabs keep their nodes across that crossing; the plate,
+    /// its selected silhouette and the close button ease to the new height (<see cref="PlateHeightMotion"/>).</summary>
+    public Prop<float> TabHeight = 32f;
 
     /// <summary>The host row a <see cref="TabStrip"/> reads when <see cref="Host"/> is unset (see <see cref="TabStripHost"/>).</summary>
     public static readonly Context<TabStripHost?> HostContext = new(null);
@@ -400,6 +402,7 @@ public sealed class TabStrip : Component
     {
         bool formed = !float.IsNaN(cellW);
         float tabW = formed ? cellW : Math.Clamp(TabWidth, MinTabWidth, MaxTabWidth);
+        float tabH = TabHeight.Current();   // live: a tier that changes it re-sizes the plates in place
         if (iconOnly) closeVisible = false;
         var main = new List<Element>(2);
         if (formed && item.IconContent is { } iconContent)
@@ -495,7 +498,8 @@ public sealed class TabStrip : Component
         var plate = new BoxEl
         {
             Direction = 0,
-            Height = TabHeight,
+            Height = tabH,
+            Animate = PlateHeightMotion,
             AlignItems = FlexAlign.Center,
             Padding = iconOnly ? new Edges4(0f, 3f, 0f, 3f) : closeVisible ? new Edges4(8f, 3f, 4f, 3f) : new Edges4(8f, 3f, 8f, 3f),
             Corners = Radii.OverlayTop,
@@ -561,7 +565,8 @@ public sealed class TabStrip : Component
                         Grow = formed ? 1f : 0f,
                         Basis = formed ? 0f : float.NaN,
                         Margin = formed ? new Edges4(-5f, 0f, -5f, 0f) : default,
-                        Height = TabHeight + 1f,
+                        Height = tabH + 1f,
+                        Animate = PlateHeightMotion,
                         OffsetX = formed ? 0f : -5f,
                         AlignSelf = FlexAlign.End,
                         TabShape = true,
@@ -588,7 +593,8 @@ public sealed class TabStrip : Component
                         Grow = formed ? 1f : 0f,
                         Basis = formed ? 0f : float.NaN,
                         Margin = formed ? new Edges4(-4f, 0f, -4f, 0f) : default,
-                        Height = TabHeight,
+                        Height = tabH,
+                        Animate = PlateHeightMotion,
                         OffsetX = formed ? 0f : -4f,
                         AlignSelf = FlexAlign.End,
                         TabShape = true,
@@ -670,6 +676,13 @@ public sealed class TabStrip : Component
     /// motion snap it, as every projection.</summary>
     internal static readonly LayoutTransition FormWidthMotion = new(TransitionChannels.Size,
         TransitionDynamics.Tween(Motion.ControlFast, Easing.FluentDecelerate), Size: SizeMode.Reflow, Axes: SizeAxes.Width,
+        ReflowUnclipped: true);
+
+    /// <summary>A tab plate's height change (<see cref="TabHeight"/> re-read on a tier crossing: a touch tier's taller row): the plate, the selected
+    /// tab's silhouette and its plate ease their height through real layout over <see cref="Motion.ControlFast"/>, so the cell and the rail under
+    /// them follow frame by frame. Unclipped (the selected plate overhangs the cell by its flares). A live resize and reduced motion snap it.</summary>
+    internal static readonly LayoutTransition PlateHeightMotion = new(TransitionChannels.Size,
+        TransitionDynamics.Tween(Motion.ControlFast, Easing.FluentDecelerate), Size: SizeMode.Reflow, Axes: SizeAxes.Height,
         ReflowUnclipped: true);
 
     /// <summary>The Chrome strip's fixed, non-tab chrome: the 8-DIP lead padding, the 6-DIP seamed lead, the optional
@@ -1104,11 +1117,14 @@ public sealed class TabStrip : Component
         Element plateContent = item.IsPinned ? ToolTip.Wrap(plate, item.Header) : plate;
 
         // Content-hug between the MinTabWidth floor and the MaxTabWidth cap (no fixed Width — that is the Chrome
-        // grammar). OnBoundsChanged on the WRAPPER is what feeds the underline.
+        // grammar). OnBoundsChanged on the WRAPPER is what feeds the underline. Its width EASES when the hug changes (a
+        // host's cap moving at a tier crossing, a title that changes length) through real layout, as a formed cell does, so the
+        // tabs after it and the underline glide instead of stepping.
         return new BoxEl
         {
             Key = item.Key ?? "tab#" + index,
             ZStack = true,
+            Animate = FormWidthMotion,
             Width = item.IsPinned ? PinnedTabWidth : float.NaN,
             MinWidth = item.IsPinned ? PinnedTabWidth : MinTabWidth,
             MaxWidth = item.IsPinned ? PinnedTabWidth : MaxTabWidth,

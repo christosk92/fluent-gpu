@@ -1455,11 +1455,13 @@ static weak-tier cadence cap (`TierCadenceCap`, `HostWaitKind.TierPaced`). None 
   render motion through the same `Pause`/`Resume` the minimize edge uses; the occlusion probe still forces one full repaint every
   `OcclusionProbeIntervalMs`, so the un-occlusion is heard and the mirror clears. `IsActive` is not read by any pacing path
   (gates `gate.motion.no-focus-throttle`, `gate.motion.occlusion-mirrors-to-render`).
-- **Marquees glide.** The row takes the display cadence (null) and sub-pixel samples, like every other row — no 30/60 Hz cadence,
-  no device-pixel snap (the audit's `PixelSnap` variant was dropped by the owner on 2026-10-05 and the feature deleted). A marquee
-  parks (glides home) only while its window is covered or cloaked (`Marquee.Style.ParkWhenOccluded`, reads
-  `InputHooks.WindowOccluded`; a hover-driven scroll is never parked); `Style.SyncCycle` gives sibling ping-pong rows one cycle
-  length. Wavee scrolls the player-bar title and artist line with `Trigger = Always` on every tier and beside a video.
+- **Marquees glide, a bounded number of times.** A pass is one one-shot keyframe row at the display cadence (null) with sub-pixel
+  samples — no 30/60 Hz cadence, no device-pixel snap (the audit's `PixelSnap` variant was dropped by the owner on 2026-10-05). The
+  line rests at its start, passes twice after its text or identity changes (and while hovered), and the pauses between are host
+  timers, so a resting or pausing marquee holds no row and no frame (audit B11, 2026-10-24: the endless ping-pong on a shared 14 s
+  cycle parked a short overflow at its tail for most of the cycle). It goes home and holds its passes while unseen: a covered,
+  cloaked or minimised window (`InputHooks.WindowOccluded`), an inactive (parked or collapsed) subtree, an `allowed` gate, a line
+  scrolled out of the window. A `Marquee.Group` keeps a surface's lines (the bar's title and artists) from moving at once.
 - **The GPU governor is the one GPU-based throttle, and it measures the main window alone.** Its engage/release thresholds are
   the fixed 10 / 8 ms on the host's own whole-frame GPU execution sample; a live video surface, a pop-out or the GPU tier never
   move them (the audit's period-relative, weak-tier-with-video pair, F250, was withdrawn: video must never lower the main

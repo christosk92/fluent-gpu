@@ -577,6 +577,13 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // subscribes it and re-fits the hoisted layout; the strip, its cards and its page are the same instances throughout.
     readonly Signal<int> _fitRev = new(0);
     int _appliedFitRev;
+    // The page count the header (pager, controller) last showed from a MEASURED fit, and whether a live band push is waiting for the shelf to be
+    // measured at its new band. A band push lands in the render before the crossing's relayout, so the render's fit reads the width measured
+    // under the OLD band (a Compact chart's 488 against a Small band whose page is 472 wide): its page count is a guess for one frame. The header
+    // holds the last measured count over that frame instead of showing the guess (a pager dropping to one page and back remounted its pips).
+    int _shownPageCount = -1;
+    bool _fitUnmeasured;
+    readonly Signal<int> _fitMeasuredRev = new(0);   // bumped once the held band has been laid out (Render subscribes it)
 
     /// <summary>Takes a pushed band onto the fields every fit read uses (normalized exactly as the constructor normalizes them). True
     /// when anything moved. The card height is replaced only between two non-null functions (null-ness decides the strip's gating,
@@ -1026,9 +1033,12 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         int leadSpan = _leadSpanSig.Value;              // subscribe (E7) — a live span push re-renders us: pageCount,
                                                         // the controller/pips, and _layout.SetLeadSpan below all follow
         int fitRev = _fitRev.Value;                     // subscribe — a live band push (ShelfFit) re-fits below
+        _ = _fitMeasuredRev.Value;                      // subscribe — the held band's layout re-renders the header at its measured fit
         if (fitRev != _appliedFitRev)
         {
             _appliedFitRev = fitRev;
+            // The fit below reads the width measured under the old band: hold the header's count until this band has been laid out.
+            _fitUnmeasured = _shownPageCount > 0 && w > 0f;
             // Re-fit the hoisted layout in place and mark the strip's viewport in THIS reconcile (it runs before this frame's layout
             // pass), so a crossing frame lays the cards out at the new band in one move: the strip, its cards and its page survive.
             if (_layout is { } refit && (refit.SetFit(_minCardW, _maxCardW, _gap, _fixedCardW, _maxColumns, _leadMinColumns) | refit.SetRows(_rows))
@@ -1047,10 +1057,23 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         int maxPage = pageCount - 1;
         int p = Math.Clamp(page, 0, maxPage);
         bool canPrev = p > 0, canNext = p < maxPage;
-        // Publish to the external controller (E4), if any — the SAME four values this render's own header would have
-        // shown, so an app header reading the controller never disagrees with a shelf-drawn one. SetIfChanged-gated
-        // inside Publish: a steady render (nothing moved) notifies nobody and allocates nothing.
-        _controller?.Publish(p, pageCount, canPrev, canNext);
+        // The header's four values: this render's, or (while a band push waits for its layout, see _fitUnmeasured) the last measured count's.
+        // The layout effect releases the hold in the same frame, after the layout pass has measured the new band (OnBoundsChanged runs inside
+        // it), and the release re-renders the header at the measured fit on the next frame.
+        int headerCount = _fitUnmeasured ? _shownPageCount : pageCount;
+        if (!_fitUnmeasured) _shownPageCount = pageCount;
+        int hp = Math.Clamp(page, 0, headerCount - 1);
+        bool headerPrev = hp > 0, headerNext = hp < headerCount - 1;
+        UseLayoutEffect(() =>
+        {
+            if (!_fitUnmeasured) return;
+            _fitUnmeasured = false;
+            _fitMeasuredRev.Value = _fitMeasuredRev.Peek() + 1;
+        }, DepKey.From(fitRev));
+        // Publish to the external controller (E4), if any — the SAME four values this render's own header shows, so an app header reading the
+        // controller never disagrees with a shelf-drawn one. SetIfChanged-gated inside Publish: a steady render (nothing moved) notifies nobody
+        // and allocates nothing.
+        _controller?.Publish(hp, headerCount, headerPrev, headerNext);
         // E21 — publish the EFFECTIVE span the same way (the one point where the fit's column count and the raw
         // request are both in hand): the lead slot reads it to pick its template + width hint. SetIfChanged-gated,
         // never read by this render (no read+write in one run), and identity (1) for a plain shelf — a steady render
@@ -1291,7 +1314,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             });
 
         // ── header (title + chevrons/pips/custom) ────────────────────────────────────────────────────────
-        Element? headerEl = BuildHeader(p, pageCount, canPrev, canNext);
+        Element? headerEl = BuildHeader(hp, headerCount, headerPrev, headerNext);
 
         Element[] children = headerEl is null ? [ body with { Key = "body" } ]
             : [ headerEl with { Key = "header" }, body with { Key = "body" } ];

@@ -84,8 +84,9 @@ public static class SceneRecorder
         => scene.Recording.RectOverVideoHole(in worldRect, minCoveredFraction);
 
 
-    public static (RectF DrawRect, RectF Uv) ImageContentFit(ImageFit fit, in RectF box, int srcW, int srcH, float focusX = 0.5f, float focusY = 0.5f)
-        => SceneRecordingContext.ImageContentFit(fit, in box, srcW, srcH, focusX, focusY);
+    public static (RectF DrawRect, RectF Uv) ImageContentFit(ImageFit fit, in RectF box, int srcW, int srcH, float focusX = 0.5f, float focusY = 0.5f,
+                                                             float frameX = 0.5f, float frameY = 0.5f)
+        => SceneRecordingContext.ImageContentFit(fit, in box, srcW, srcH, focusX, focusY, frameX, frameY);
 
     /// <summary>Record <paramref name="scene"/> into its slice arenas (<paramref name="slices"/>, or the scene's own
     /// recorder) and FLATTEN the result into <paramref name="dl"/> at the scene's current poses — the one painter-ordered
@@ -2677,7 +2678,7 @@ internal sealed class SceneRecordingContext
                 if (ready && images is not null)
                 {
                     var (srcW, srcH) = images.SizeOf(ih);
-                    (drawRect, uv) = ImageContentFit((ImageFit)p.ImageFit, in local, srcW, srcH, pc.ImageFocusX, pc.ImageFocusY);
+                    (drawRect, uv) = ImageContentFit((ImageFit)p.ImageFit, in local, srcW, srcH, pc.ImageFocusX, pc.ImageFocusY, pc.ImageFrameX, pc.ImageFrameY);
                 }
 
                 ImageMaskSpec mask = effects.Mask;
@@ -2697,7 +2698,7 @@ internal sealed class SceneRecordingContext
                 {
                     var oh = new ImageHandle(effects.SwapOutgoingId);
                     var (outW, outH) = images.SizeOf(oh);
-                    var (outRect, outUv) = ImageContentFit((ImageFit)p.ImageFit, in local, outW, outH, pc.ImageFocusX, pc.ImageFocusY);
+                    var (outRect, outUv) = ImageContentFit((ImageFit)p.ImageFit, in local, outW, outH, pc.ImageFocusX, pc.ImageFocusY, pc.ImageFrameX, pc.ImageFrameY);
                     dl.DrawImage(outRect, p.Corners, oh.Id, true, default, world, opacity, outUv, effects.SwapStartMs,
                         effects.SwapMs, ImageCache.SwapOutgoingEasing, key | 0x1, effects.Overlay, (int)mask.Edges,
                         mask.BandLeft, mask.BandTop, mask.BandRight, mask.BandBottom, (int)mask.Falloff, mask.Intensity,
@@ -3865,8 +3866,11 @@ internal sealed class SceneRecordingContext
     /// <summary>Map a decoded source (<paramref name="srcW"/>×<paramref name="srcH"/> px) into <paramref name="box"/>
     /// per <paramref name="fit"/> — returns the draw quad (node-local) and the 0..1 source UV sub-rect. <c>Cover</c>
     /// crops via a centered UV inset (quad = box); <c>Contain</c>/<c>None</c> shrink the quad and center it; <c>Fill</c>
-    /// (and unknown / zero source) keeps the whole texture stretched to the box. Pure — also the golden-test entry point.</summary>
-    public static (RectF DrawRect, RectF Uv) ImageContentFit(ImageFit fit, in RectF box, int srcW, int srcH, float focusX = 0.5f, float focusY = 0.5f)
+    /// (and unknown / zero source) keeps the whole texture stretched to the box. A <c>Cover</c> crop places the source point
+    /// (<paramref name="focusX"/>, <paramref name="focusY"/>) at the box point (<paramref name="frameX"/>, <paramref name="frameY"/>), clamped so the
+    /// texture always covers the box (the frame point's default, the centre, is the plain centred-focus crop). Pure.</summary>
+    public static (RectF DrawRect, RectF Uv) ImageContentFit(ImageFit fit, in RectF box, int srcW, int srcH, float focusX = 0.5f, float focusY = 0.5f,
+                                                             float frameX = 0.5f, float frameY = 0.5f)
     {
         RectF drawRect = box;
         RectF uv = new RectF(0f, 0f, 1f, 1f);
@@ -3881,13 +3885,13 @@ internal sealed class SceneRecordingContext
                 if (boxAR > srcAR)
                 {
                     float uh = srcAR / boxAR;
-                    float uy = Math.Clamp(focusY - uh * 0.5f, 0f, 1f - uh);
+                    float uy = Math.Clamp(focusY - uh * Math.Clamp(frameY, 0f, 1f), 0f, 1f - uh);
                     uv = new RectF(0f, uy, 1f, uh);
                 }
                 else if (boxAR < srcAR)
                 {
                     float uw = boxAR / srcAR;
-                    float ux = Math.Clamp(focusX - uw * 0.5f, 0f, 1f - uw);
+                    float ux = Math.Clamp(focusX - uw * Math.Clamp(frameX, 0f, 1f), 0f, 1f - uw);
                     uv = new RectF(ux, 0f, uw, 1f);
                 }
                 break;

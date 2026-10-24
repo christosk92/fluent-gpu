@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
 
@@ -292,7 +293,13 @@ public sealed partial class AnimEngine
     /// <summary>FLIP a moved node from its captured rect to its new laid-out rect, seeding/retargeting the requested
     /// channels. Position is velocity-continuous; Size uses Reveal (presented extent) or ScaleCorrect (GPU scale→1).
     /// Relayout re-solves the subtree each tick (live re-wrap); Reflow runs through the host's boundary worklist.</summary>
-    public void AnimateBounds(NodeHandle node, in RectF fromAbs, in RectF toAbs, in LayoutTransition spec)
+    public void AnimateBounds(NodeHandle node, in RectF fromAbs, in RectF toAbs, in LayoutTransition spec) => AnimateBounds(node, fromAbs, toAbs, spec, followLive: false);
+
+    /// <summary><see cref="AnimateBounds(NodeHandle, in RectF, in RectF, in LayoutTransition)"/> for a commit inside a container a live reflow is
+    /// resizing (<paramref name="followLive"/>): a SizeMode.Relayout row already in flight is re-aimed at the new size over the time it has left (its
+    /// remaining delay kept) instead of restarting, so a target the live layout moves every commit (a column whose share follows a page easing
+    /// beside a docking pane) is followed by one motion, not restarted into a resize that never begins.</summary>
+    internal void AnimateBounds(NodeHandle node, in RectF fromAbs, in RectF toAbs, in LayoutTransition spec, bool followLive)
     {
         bool contracts = ((spec.Axes & SizeAxes.Width) != 0 && toAbs.W < fromAbs.W - 0.5f)
                       || ((spec.Axes & SizeAxes.Height) != 0 && toAbs.H < fromAbs.H - 0.5f);
@@ -317,8 +324,8 @@ public sealed partial class AnimEngine
                     if (height) RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
                     break;
                 case SizeMode.Relayout:   // re-solve the subtree at the interpolated size each tick (live re-wrap)
-                    if (width) RelayoutSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
-                    if (height) RelayoutSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
+                    if (width) RelayoutSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs, followLive);
+                    if (height) RelayoutSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs, followLive);
                     _scene.Mark(node, NodeFlags.Relayouting);
                     break;
                 case SizeMode.ScaleCorrect:
@@ -473,15 +480,66 @@ public sealed partial class AnimEngine
     // re-reading the column as the "declared" size stashed the interp as RestoreTo, which SettleRestore then wrote back
     // as the node's permanent size. Mirror ReflowSize: an echo of our own interp keeps flying, and a genuine retarget
     // carries the declared value stashed at the row's creation (a re-render refreshes it through RecordDeclaredSize).
-    private void RelayoutSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn, float delayMs)
+    private void RelayoutSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn, float delayMs, bool followLive = false)
     {
         int ex = Find(node, ch);
         bool live = ex >= 0 && _slab.At(ex).Has(AnimFlags.RestoreLayout);
         if (live && MathF.Abs(_slab.At(ex).Position - toSize) < 0.5f) return;   // echo: layout still holds our own interp
         float declared = live ? _slab.At(ex).RestoreTo
             : ch == AnimChannel.SizeW ? _scene.Layout(node).Width : _scene.Layout(node).Height;
+        // Under a live reflow the commit only moved the target: follow it over the row's own clock.
+        if (followLive && live && RetargetRelayout(node, ch, toSize)) { MarkRestoreLayout(node, ch, declared); return; }
         RevealSize(node, ch, fromSize, toSize, dyn, delayMs);
         MarkRestoreLayout(node, ch, declared);
+    }
+
+    /// <summary>Re-aim a live SizeMode.Relayout row (<paramref name="ch"/> SizeW / SizeH) at <paramref name="to"/>, departing from where it is: a
+    /// tween over the time it has left (its remaining start delay kept), a spring by retarget. The row keeps its RestoreLayout stash and keeps
+    /// moving (the seed-frame hold is dropped). False when no such row flies or the target has not moved. Allocates nothing beyond the
+    /// re-seed's keyframes (as every retarget).</summary>
+    internal bool RetargetRelayout(NodeHandle node, AnimChannel ch, float to)
+    {
+        int ex = Find(node, ch);
+        if (ex < 0 || !_slab.At(ex).Has(AnimFlags.RestoreLayout) || _slab.At(ex).Has(AnimFlags.Done)) return false;
+        AnimValue cur = _slab.At(ex);   // copy: Animate/Spring may grow the slab's backing array
+        if (MathF.Abs(cur.To - to) < 0.5f) return false;
+        if (cur.Has(AnimFlags.Driven) || cur.Has(AnimFlags.Additive)) return false;
+        float restore = cur.RestoreTo;
+        float uiBase = cur.Position;
+        if (!TryGetTransition(node, out var spec)) spec = default;
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if (cur.Kind == GenKind.Spring)
+            Spring(node, ch, to, SpringParams.FromResponse(dyn.Kind == DynamicsKind.Spring ? dyn.Response : 0.30f,
+                dyn.Kind == DynamicsKind.Spring ? dyn.DampingRatio : 1f), initial: uiBase);
+        else if (cur.Kind is GenKind.Eased or GenKind.Keyframes)
+            Animate(node, ch, uiBase, to, MathF.Max(1f, cur.Gen.DurationMs - cur.ElapsedMs), dyn.Easing, delayMs: cur.DelayRemainingMs);
+        else return false;
+        int s = Find(node, ch);
+        if (s < 0) return false;
+        ref AnimValue r = ref _slab.At(s);
+        r.RestoreTo = restore;
+        r.Flags |= AnimFlags.RestoreLayout;
+        r.Flags &= ~AnimFlags.JustSeeded;   // a re-aim keeps moving (as ReframePosition's retarget)
+        MarkSeedRelative(s, uiBase);
+        return true;
+    }
+
+    /// <summary>A live SizeMode.Relayout row: its node, axis (SizeW / SizeH), target and the declared value its settle restores (NaN: auto).</summary>
+    internal readonly record struct LiveRelayout(NodeHandle Node, AnimChannel Channel, float To, float RestoreTo);
+
+    /// <summary>Fill <paramref name="dst"/> (cleared first) with the live SizeMode.Relayout rows: the host's per-tick worklist for re-aiming the ones the
+    /// live layout moves (AppHost.FollowStretchedRelayouts). Settled and parked rows are skipped. Allocation-free with a pre-sized list.</summary>
+    internal void CollectLiveRelayouts(List<LiveRelayout> dst)
+    {
+        dst.Clear();
+        for (int n = _slab.FirstActiveNode; n >= 0; n = _slab.NextActiveNode(n))
+            for (int s = _slab.HeadOnNode(n); s >= 0; s = _slab.At(s).NextOnNode)
+            {
+                ref readonly AnimValue r = ref _slab.At(s);
+                if (r.Channel is not (AnimChannel.SizeW or AnimChannel.SizeH) || !r.Has(AnimFlags.RestoreLayout)) continue;
+                if (r.Has(AnimFlags.Done) || r.Has(AnimFlags.Parked)) continue;
+                dst.Add(new LiveRelayout(r.Node, r.Channel, r.To, r.RestoreTo));
+            }
     }
 
     // ScaleCorrect: spring a scale channel old/new → 1 (recorder composites about centre; opted-in children counter-scale).
