@@ -5945,6 +5945,13 @@ public sealed partial class AppHost : IDisposable
                     float warmDtMs = _frameTime.NextDeltaMs();
                     if (_isHeadless) _frameClockMs += warmDtMs;
                 }
+                else if (_isHeadless && _timers.Count > 0)
+                {
+                    // Likewise an idle headless turn with a timer armed lets one step pass, as the wall clock does under a real window
+                    // while it waits for that timer: else a timer armed at rest (a marquee's start pause, a tooltip's show delay) never
+                    // comes due headless, since nothing else paints to move the clock.
+                    _frameClockMs += _frameTime.NextDeltaMs();
+                }
                 LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
                 // Genuinely idle — no active work, no completed image (the deep-idle case: streak/idleAgo in the
                 // [wake] census). Nothing was owed a present during this stretch; stamp so the NEXT present (the
