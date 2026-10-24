@@ -149,7 +149,10 @@ public sealed unsafe partial class D3D12Device
         EnsureCompositeResources(maxSurface);
         if (_compositeOwner == 0) _compositeOwner = frame.OwnerToken;
         MapRows(in frame);
+        RcBeginSubmit();
+        long rcGlyph0 = Stopwatch.GetTimestamp();
         PrepareCompositeGlyphs(in frame);
+        _rcGlyphTicks += Stopwatch.GetTimestamp() - rcGlyph0;
         BeginRecording(sc, f, slot, isPrimaryTarget: true);
         ResetFrameCounters();
         _frameFeatherItems = 0; _frameFeatherPx = 0; _frameBlurCacheHits = 0; _frameTilesRastered = 0; _frameRenderPasses = 0; _frameInlineGroups = 0; _frameDirectRegions = 0; _frameInlineItems = 0; _frameInlineReopens = 0; _frameResumes = 0; _passSites = 0; _framePassDrawsMax = 0; _framePassesOverBinning = 0; Array.Clear(_frameInlineByKind); _frameInlineBlurred = 0;
@@ -213,6 +216,7 @@ public sealed unsafe partial class D3D12Device
         Diag.Set("d3d12", "inlineGroups", _frameInlineGroups);
         Diag.Set("d3d12", "directRegions", _frameDirectRegions);
         Diag.Set("d3d12", "blurCacheHits", _frameBlurCacheHits);
+        RcEndSubmit();
         EndRecording(sc, f, slot, RepaintRoute.Composite, _frameBackBufferTransitions);
     }
 
@@ -347,6 +351,7 @@ public sealed unsafe partial class D3D12Device
         if (rasters.Length == 0) return;
         // ForceFullDirect (knockout): nothing is retained — every segment is drawn direct, every tile stays invalid.
         if ((_frameKnockouts & GpuKnockouts.ForceFullDirect) != 0) return;
+        long rc0 = RcRasterBegin();
         ulong fence = _fenceValue + 1;
         if (_tileBarriers.Length < rasters.Length) _tileBarriers = new D3D12_RESOURCE_BARRIER[rasters.Length * 2];
         int nb = 0;
@@ -414,6 +419,7 @@ public sealed unsafe partial class D3D12Device
             EndImageRecord();
             _surfaces.NoteTileWrite(tr.Surface, partial, damage);
             NoteRasterCensus(partial, damage, tr.W, tr.H);
+            RcRaster(partial, partial ? AreaOf(in damage) : (long)tr.W * tr.H);
             if (beyondPlan && i < frame.RasterFlags.Length) frame.RasterFlags[i] |= CompositeFrameFlags.RasterBeyondPlan;
             _frameTilesRastered++;
             // Faithful only when nothing was dropped, every image it drew was resident and the glyph atlas owes no deferred
@@ -444,6 +450,7 @@ public sealed unsafe partial class D3D12Device
         }
         FlushBarriers(nb);
         InvalidateCmdState();
+        RcRasterEnd(rc0);
     }
 
     /// <summary>Whether one tile raster painted exactly what its segment says: no instance or glyph-bank drop while it

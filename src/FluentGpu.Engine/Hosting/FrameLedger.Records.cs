@@ -173,6 +173,10 @@ public struct LedgerRenderTurn
     public byte Kind, Outcome, Flags, FullReason;
     /// <summary>The render thread's cumulative CPU time at the turn's end (GetThreadTimes, 100 ns; 0 = no platform source).</summary>
     public long CpuTimeTotal;
+    /// <summary>The composite plan's build (ms, BuildComposite) and the submit's raster cost (<see cref="Rhi.RasterCost"/>,
+    /// audit PERF r3 RASTER): the work drivers a per-turn cost model is fitted over.</summary>
+    public float BuildMs;
+    public Rhi.RasterCost Raster;
 }
 
 /// <summary>One retired whole-frame GPU timestamp pair of the owning host's swapchain, with the pass timeline of the same

@@ -186,7 +186,7 @@ public static class FrameLedgerCsv
     public static string Render(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Render.Length * 200);
-        sb.AppendLine("seq,waitStartMs,startMs,slotOpenMs,doneMs,endMs,turnMs,slotWaitMs,workMs,tickSeq,tickMs,kind,outcome,flags,publishSeq,submitSeq,cpuMs,allocBytes,stageMs,recMs,subMs,fenceMs,latMs,presMs,videoMs,damageCoverage,fullReason,tilesRastered,missedTicks,cpuTimeMs");
+        sb.AppendLine("seq,waitStartMs,startMs,slotOpenMs,doneMs,endMs,turnMs,slotWaitMs,workMs,tickSeq,tickMs,kind,outcome,flags,publishSeq,submitSeq,cpuMs,allocBytes,stageMs,recMs,subMs,fenceMs,latMs,presMs,videoMs,damageCoverage,fullReason,tilesRastered,missedTicks,cpuTimeMs,buildMs,glyphPrepMs,rasterMs,rasters,partialRasters,rasterPasses,rasterPx,rasterOps,opsRect,opsGlyph,opsImage,opsPath,opsSeries,opsScope,spansSkipped,glyphInsts,rasterDraws,submitOps");
         foreach (ref readonly var r in s.Render.AsSpan())
         {
             sb.Append(r.Seq).Append(',');
@@ -200,7 +200,13 @@ public static class FrameLedgerCsv
             T(sb, r.StageMs); T(sb, r.RecordMs); T(sb, r.SubmitMs); T(sb, r.FenceMs); T(sb, r.LatencyMs); T(sb, r.PresentMs); T(sb, r.VideoMs);
             T(sb, r.DamageCoverage);
             sb.Append(((Rhi.RepaintFullReason)r.FullReason).ToString()).Append(',').Append(r.TilesRastered).Append(',').Append(r.MissedTicks).Append(',');
-            T(sb, r.CpuTimeTotal / 10_000.0, last: true);
+            T(sb, r.CpuTimeTotal / 10_000.0);
+            var rc = r.Raster;
+            T(sb, r.BuildMs); T(sb, rc.GlyphPrepMs); T(sb, rc.RasterMs);
+            sb.Append(rc.Rasters).Append(',').Append(rc.Partial).Append(',').Append(rc.Passes).Append(',').Append(rc.Px).Append(',')
+              .Append(rc.Ops).Append(',').Append(rc.Rects).Append(',').Append(rc.Glyphs).Append(',').Append(rc.Images).Append(',')
+              .Append(rc.Paths).Append(',').Append(rc.Series).Append(',').Append(rc.Scopes).Append(',').Append(rc.SpansSkipped).Append(',')
+              .Append(rc.GlyphInstances).Append(',').Append(rc.Draws).Append(',').Append(rc.SubmitOps);
             sb.AppendLine();
         }
         return sb.ToString();

@@ -33,6 +33,8 @@ public sealed partial class AppHost
     private float _ledgerTurnCoverage;
     private RepaintFullReason _ledgerTurnFull;
     private int _ledgerTurnTiles;
+    private long _ledgerTurnBuildTicks;
+    private Rhi.RasterCost _ledgerTurnRaster;
     private bool _ledgerTurnPresented;
     private ulong _ledgerGpuSampleSeq, _ledgerPassSeq;
 
@@ -146,6 +148,10 @@ public sealed partial class AppHost
         _ledgerTurnCoverage = 0f;
         _ledgerTurnFull = RepaintFullReason.None;
         _ledgerTurnTiles = 0;
+        long buildTicks = _ledgerTurnBuildTicks;
+        var raster = _ledgerTurnRaster;
+        _ledgerTurnBuildTicks = 0;
+        _ledgerTurnRaster = default;
         _ledgerTurnPresented = false;
         if (!FrameLedger.IsOwner(this)) return;
         bool hasSample = _swapchain.TryGetGpuRenderSample(out GpuRenderSample g);
@@ -168,6 +174,7 @@ public sealed partial class AppHost
             LatencyMs = (float)split.LatencyMs, PresentMs = (float)split.PresentMs, VideoMs = (float)split.VideoMs,
             DamageCoverage = coverage, TilesRastered = tiles, MissedTicks = f.MissedTicks,
             Kind = (byte)f.Kind, Outcome = (byte)outcome, Flags = (byte)flags, FullReason = (byte)full,
+            BuildMs = (float)(buildTicks * 1000.0 / Stopwatch.Frequency), Raster = raster,
         };
         FrameLedger.RecordRender(ref r);
 

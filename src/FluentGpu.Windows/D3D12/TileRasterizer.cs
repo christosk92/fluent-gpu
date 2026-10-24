@@ -330,6 +330,7 @@ public sealed unsafe partial class D3D12Device
                     if (!en.HasMarker && en.ByteLength > 0 && !en.Bounds.Overlaps(cullRelOrigin))
                     {
                         pos = en.ByteStart + en.ByteLength;
+                        _rcSpansSkippedTally++;
                         skipped = true;
                         break;
                     }
@@ -340,6 +341,7 @@ public sealed unsafe partial class D3D12Device
             var op = (DrawOp)MemoryMarshal.Read<int>(stream[pos..]);
             if (!RepaintStreamSafety.TryBodySize(op, out int body) || pos + sizeof(int) + body > stream.Length) break;
             ReadOnlySpan<byte> payload = stream.Slice(pos + sizeof(int), body);
+            RcOp(op);
             switch (op)
             {
                 case DrawOp.PushClip:
