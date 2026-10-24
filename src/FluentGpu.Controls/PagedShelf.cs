@@ -459,6 +459,9 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // viewport shifted −Bleed cancels); the fitted cardW still uses the shelf width (Fit is fed the un-widened _w).
     // NOTE the gutter shows scrolled-out neighbor content ATTENUATED BY THE EDGE FADE at non-page-aligned rests, so a
     // shelf that enables the bleed should carry an edge fade ≥ the bleed (the fade is what keeps the gutter soft).
+    // ONLY a shelf that lifts its cards gets the gutter (single-row or measured, `_bleed`): a multi-row grid is a dense
+    // chart with no lift and no halo, and there the gutter only showed the next page's first column (a rank numeral cut
+    // to a sliver) at every page-aligned rest. Its clip is the shelf's own edge.
     const float HaloBleed = 12f;
     // Probe-lock granularity: two measured values this close are the SAME lock (see _measuredH/_measuredForCardW). Used
     // by both the re-probe predicate (Render) and the signals' equality comparer, so they can never disagree.
@@ -828,6 +831,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     ShelfPager _pager;                            // live (ApplyFit)
     float _minCardW, _maxCardW, _gap;             // live (ApplyFit)
     int _rows;                                    // live between two multi-row counts (ApplyFit, LiveRowsFor)
+    readonly float _bleed;                        // the main-axis halo gutter: HaloBleed for a lifting shelf, 0 for a multi-row grid (frozen at mount)
     readonly int _perPageOverride;
     int _maxColumns;                              // live (ApplyFit)
     float _fixedCardW;                            // live (ApplyFit)
@@ -968,6 +972,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         _cardHeight = cardHeight; _measured = measured;
         _pager = pager; _minCardW = minCardW; _maxCardW = maxCardW; _gap = gap;
         _rows = Math.Max(1, rows); _perPageOverride = perPageOverride; _fixedCardW = fixedCardW;
+        _bleed = measured || _rows == 1 ? HaloBleed : 0f;   // rows stays multi-row or single for the mount's life (see _rows)
         _headerGap = headerGap; _edgeFade = edgeFade; _prevGlyph = prevGlyph; _nextGlyph = nextGlyph;
         _parts = parts; _overscan = overscan;
         _cardWidthAgnostic = cardWidthAgnostic;
@@ -1814,9 +1819,9 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     {
         if (_liveStrip is { } cached) return cached;
         // The SAME stateful layout instance the engine drives via SetViewport; hoisted so its fit cache survives renders.
-        // Lead/Trail = HaloBleed carve the halo gutters INSIDE the viewport (widened below by the same amount).
+        // Lead/Trail = the halo gutters INSIDE the viewport (widened below by the same amount; none on a multi-row grid).
         var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, _rows, _perPageOverride, _fixedCardW, _maxColumns,
-            leadInset: HaloBleed, trailInset: HaloBleed, leadMinColumns: _leadMinColumns);
+            leadInset: _bleed, trailInset: _bleed, leadMinColumns: _leadMinColumns);
         // ItemsView is an Embed.Comp → its template closure FREEZES at first mount (when width was 0 ⇒ cardW=min). Read
         // the layout's LIVE fitted width at realize time (the engine sets it via SetViewport every arrange) so the card
         // always matches its cell — otherwise cards stay min-width inside full-width cells (huge gaps + short cards).
@@ -1880,7 +1885,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             // horizontal margin on a cross-STRETCH child resolves to width = availCross − crossMargin (= _w + 2·Bleed)
             // at x = −Bleed (FlexLayout arrange). The ItemsView (grow:1) fills it, so SetViewport is fed _w+2·Bleed and
             // the layout subtracts the gutters back to _w for the fit — cards keep their width and rest positions.
-            Margin = new Edges4(-HaloBleed, 0f, -HaloBleed, 0f),
+            Margin = new Edges4(-_bleed, 0f, -_bleed, 0f),
             Children = [ items ],
         });
     }
