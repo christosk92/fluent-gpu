@@ -369,6 +369,9 @@ public sealed partial class SceneStore : ISceneBackend
     }
 
     public int LiveCount { get; private set; }
+    /// <summary>Nodes ever created / freed (monotonic): a frame's node churn is the difference of two reads (frame ledger).</summary>
+    public long NodesCreatedTotal { get; private set; }
+    public long NodesFreedTotal { get; private set; }
 
     /// <summary>SoA column length (the high-water spine allocation) — O(1) census of the slab size, not the live count.</summary>
     public int Capacity => _gen.Length;
@@ -431,6 +434,7 @@ public sealed partial class SceneStore : ISceneBackend
         _dragCompleted[idx] = null;
         _dragCanceled[idx] = null;
         LiveCount++;
+        NodesCreatedTotal++;
         unchecked { CapacityRevision++; }
         return new NodeHandle(new Handle((uint)idx, _gen[idx]));
     }
@@ -577,6 +581,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_gen[idx] == 0) _gen[idx] = 1;
         PushFree(idx);
         LiveCount--;
+        NodesFreedTotal++;
         unchecked { CapacityRevision++; }
     }
 

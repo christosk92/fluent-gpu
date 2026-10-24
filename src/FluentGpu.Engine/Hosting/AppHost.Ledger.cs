@@ -24,6 +24,9 @@ public sealed partial class AppHost
     private uint _ledgerWake;
     private long _ledgerPumpQpc;
     private LedgerPaintStamps _ledgerPaint;
+    /// <summary>Paint's UI-thread allocation counter at the same six points as <see cref="_ledgerPaint"/> (ledger on only).</summary>
+    private struct LedgerPaintAlloc { public long Start, Flush, Layout, Anim, Record, Submit; }
+    private LedgerPaintAlloc _ledgerAlloc;
     private long _ledgerWaitStart, _ledgerWaitEnd;
     private int _ledgerWaitMs;
     private HostWaitKind _ledgerWaitKind;
@@ -59,10 +62,12 @@ public sealed partial class AppHost
     private FrameStats RunFrameLedgered()
     {
         long allocStart = GC.GetAllocatedBytesForCurrentThread();
+        long createdStart = _scene.NodesCreatedTotal, freedStart = _scene.NodesFreedTotal, mountedStart = _reconciler.ComponentsMountedTotal;
         ulong cyclesStart = ThreadCycles.Read();
         long start = Stopwatch.GetTimestamp();
         _ledgerPumpQpc = 0;
         _ledgerPaint = default;
+        _ledgerAlloc = default;
         FrameStats s = RunFrameCore();
         long end = Stopwatch.GetTimestamp();
         ulong cycles = ThreadCycles.Read();
@@ -98,6 +103,24 @@ public sealed partial class AppHost
             PresentedTotal = (long)PresentedSequence, MissedVsyncsTotal = Interlocked.Read(ref _missedVsyncsTotal),
             WakeMask = _ledgerWake, UiCpuTimeTotal = cpuTime,
         };
+        if (painted)
+        {
+            ref readonly var a = ref _ledgerAlloc;
+            r.AllocFlush = a.Flush - a.Start; r.AllocLayout = a.Layout - a.Flush; r.AllocAnim = a.Anim - a.Layout;
+            r.AllocRecord = a.Record - a.Anim; r.AllocSubmit = a.Submit - a.Record;
+            r.Measures = s.MeasureCount; r.Arranges = s.ArrangeCount; r.TextShapes = s.TextShapes; r.TextShapeMisses = s.TextShapeMisses;
+            r.ReactiveUnits = s.ReactiveUnits; r.BindFires = s.BindingFires; r.BindWrites = s.BindingWrites;
+            r.ScopedRelayouts = s.ScopedRelayoutMarks; r.RootEscapes = s.RootRelayoutEscapes;
+            if (s.Presented && OwningRenderThread is not null)
+            {
+                r.CaptureReachable = _renderSeam.LastCaptureReachableCount; r.CaptureCopied = _renderSeam.LastCapturedNodeCount;
+                r.CaptureMs = (float)s.SubmitCaptureMs; r.CaptureFull = (byte)_renderSeam.LastCaptureFullReason;
+                r.CaptureParity = _renderSeam.LastCaptureParityVerified ? (byte)1 : (byte)0;
+            }
+        }
+        r.NodesCreated = (int)(_scene.NodesCreatedTotal - createdStart);
+        r.NodesFreed = (int)(_scene.NodesFreedTotal - freedStart);
+        r.ComponentsMounted = (int)(_reconciler.ComponentsMountedTotal - mountedStart);
         FrameLedger.RecordUi(ref r);
         _ledgerWaitStart = _ledgerWaitEnd = 0;
         _ledgerWaitMs = 0;

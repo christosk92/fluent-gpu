@@ -6279,6 +6279,7 @@ public sealed partial class AppHost : IDisposable
             DeliverPendingPlatformEvents(includeSystemColors: true);
 
             long frameStart = Stopwatch.GetTimestamp();
+            if (FrameLedger.Enabled) _ledgerAlloc = new LedgerPaintAlloc { Start = GC.GetAllocatedBytesForCurrentThread() };
             MountProf.FrameBegin();
             GapPaintStart(frameStart);                         // close + classify the UI gap since the last Paint (AppHost.UiGap.cs)
             long shapeCountAtFrameStart = _fonts.ShapeCount;   // P0: FrameStats.TextShapes reads the delta across this Paint
@@ -6588,6 +6589,7 @@ public sealed partial class AppHost : IDisposable
             if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
             long tFlush = Stopwatch.GetTimestamp();   // always-on segment timing (FrameStats.*Ms) — see below
+            if (FrameLedger.Enabled) _ledgerAlloc.Flush = GC.GetAllocatedBytesForCurrentThread();
             // Spike-gated type roster (RenderCensus): one line when the flush alone exceeded the panel's refresh interval
             // or comps are high; carried on FrameStats.Census. Peek render count WITHOUT consuming it (ConsumeRenderCount
             // runs later when assembling LastStats).
@@ -6715,6 +6717,7 @@ public sealed partial class AppHost : IDisposable
             if (reconciled) DumpSceneOnce(layoutSize);
             if (diagTick) { layoutMs0 = ElapsedMs(segStart); }   // flush/reconcile/relayout/layout-effects span (--fg resize)
             long tLayout = Stopwatch.GetTimestamp();
+            if (FrameLedger.Enabled) _ledgerAlloc.Layout = GC.GetAllocatedBytesForCurrentThread();
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             if (capturedProjections) ApplyProjections(layoutSize, keepAliveSuppressed);   // FLIP "Last+Invert+Play"
@@ -6808,6 +6811,7 @@ public sealed partial class AppHost : IDisposable
             }
             _dispatcher.TickGestureArenas(dtMs);               // 7 §7A arena timer tick (Hold long-press promotion on idle-held frames)
             long tAnim = Stopwatch.GetTimestamp();
+            if (FrameLedger.Enabled) _ledgerAlloc.Anim = GC.GetAllocatedBytesForCurrentThread();
             MountProf.Exit(); MountProf.Enter(MountProf.ImagePump);
             if (s_allocDiag) { db = Probe(SegAnim, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             // Reveal starts are stamped at the CURRENT active wall time before applying incoming textures. Never
@@ -6984,6 +6988,7 @@ public sealed partial class AppHost : IDisposable
             }
             if (!recordOnRender) _scene.ClearRecordDirty();
             long tRecord = Stopwatch.GetTimestamp();
+            if (FrameLedger.Enabled) _ledgerAlloc.Record = GC.GetAllocatedBytesForCurrentThread();
             MountProf.Exit();
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             // Modal-loop repaint (WM_EXITSIZEMOVE settle): present at SyncInterval 0 + skip the latency waitable so the
@@ -7252,6 +7257,7 @@ public sealed partial class AppHost : IDisposable
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmit = Stopwatch.GetTimestamp();
             }
+            if (FrameLedger.Enabled) _ledgerAlloc.Submit = GC.GetAllocatedBytesForCurrentThread();
             if (s_allocDiag) { db = Probe(SegSubmit, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             // 11.5 — flush queued video-surface intents into the composited presenter (render thread; the hole-punch

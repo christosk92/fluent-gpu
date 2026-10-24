@@ -424,6 +424,8 @@ public sealed partial class TreeReconciler
     // left set by a writer running OUTSIDE a render scope (the host's ReRealizeVirtuals) is inert, never a false mark.
     private bool _layoutShapeMutated;
     private int _renderCount;   // component render-effects that ran since the last frame (granularity metric)
+    /// <summary>Components ever mounted (monotonic; the frame ledger reads its per-frame difference).</summary>
+    public long ComponentsMountedTotal { get; private set; }
     private int _keepAliveLayoutSuppressionFrames;   // activation commit + first bounds-measure correction
     private int _keepAliveSuppressionAge;               // paint frames since the window was armed (it spans TIME, not just laying-out frames)
     private float _themeTransitionMs = float.NaN;        // live-re-theme cross-fade duration; armed only during a RethemeAll flush
@@ -1325,6 +1327,7 @@ public sealed partial class TreeReconciler
     private void MountComponent(NodeHandle node, ComponentEl ce)
     {
         FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.CompSetup);
+        ComponentsMountedTotal++;
         var comp = ce.Factory();
         InjectContext(comp.Context, node);
         comp.Context.Owner = comp;   // diagnostic identity for the hook computations this context will create (Computation.DiagOwner)

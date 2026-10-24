@@ -279,12 +279,15 @@ public sealed class SceneFramePublisher
         bool previousSkipped = _pendingRepaintSeq != 0 && Volatile.Read(ref _lastConsumedSeq) < _pendingRepaintSeq;
         if (!previousSkipped) _carriedSceneDamageCount = 0;
         CarrySceneDamage(damage);
+        int parityBefore = frame.Scene.ParityVerifications;
         frame.Capture(scene, images, strings, options, skip, reuseBlock,
             _carriedSceneDamage.AsSpan(0, _carriedSceneDamageCount), detached, popups, animation, seq,
             _sceneCaptureSeq[slot]);
         _sceneCaptureSeq[slot] = seq;
         _capacityPolicy[slot].Observe(frame.Scene.Capacity, frame.Scene.RequiredNodeCapacity, Environment.TickCount64);
         LastCapturedNodeCount = frame.Scene.CopiedNodeCount;
+        LastCaptureReachableCount = frame.Scene.CapturedNodeCount;
+        LastCaptureParityVerified = frame.Scene.ParityVerifications != parityBefore;
         LastCaptureWasIncremental = frame.Scene.LastCaptureWasIncremental;
         LastCaptureFullReason = frame.Scene.LastCaptureWasIncremental ? CaptureFullReason.None : frame.Scene.LastCaptureFullReason;
         LastCaptureSplit = (frame.DiagSceneMs, frame.DiagConfigMs, frame.DiagImagesMs, frame.DiagAnimMs);
@@ -329,6 +332,12 @@ public sealed class SceneFramePublisher
     /// (<c>SceneRecordingSnapshot.CopiedNodeCount</c>) - every reachable node on a full capture, only the changed ones
     /// on an incremental one. Surfaced into <c>FrameStats.CapturedNodes</c>.</summary>
     internal int LastCapturedNodeCount { get; private set; }
+
+    /// <summary>Nodes the most recent capture reached (its reachability walk: every captured node, copied or kept).</summary>
+    internal int LastCaptureReachableCount { get; private set; }
+
+    /// <summary>Whether the DEBUG parity self-check re-derived the most recent capture (always false in Release).</summary>
+    internal bool LastCaptureParityVerified { get; private set; }
 
     /// <summary>Whether the most recent <see cref="PublishScene"/> took the P8 incremental path (diagnostics).</summary>
     internal bool LastCaptureWasIncremental { get; private set; }
