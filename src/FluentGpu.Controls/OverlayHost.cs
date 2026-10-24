@@ -90,6 +90,10 @@ public sealed record PopupPlate
 
     /// <summary>The built-in card: the WinUI flyout plate. Reads the live <c>Tok</c> on every call.</summary>
     public static PopupPlate Fluent() => new();
+
+    /// <summary>The built-in card of a generic <see cref="PopupChrome.Popup"/> flyout: <see cref="Fluent"/> with no presenter padding (its content
+    /// brings the 16,15,16,17 card). A theme replaces it through <see cref="ControlStyles.PopupPlateStyle"/>.</summary>
+    public static PopupPlate FluentPopup() => new() { Padding = default };
 }
 
 /// <summary>Optional popup behavior. <see cref="FocusTrap"/> keeps Tab/Shift-Tab inside the overlay subtree (modal-style).</summary>
@@ -1768,13 +1772,14 @@ internal sealed class FlyoutSurface : Component
     internal static CornerRadius4 CornersFor(OverlayEntry e) => CornersFor(e.CornerJoin, e.PlateStyle?.Radius ?? Radii.Overlay);
 
     /// <summary>The card a frosted <paramref name="chrome"/> draws, resolved now (at render): the menu plate from
-    /// <see cref="MenuFlyout.Style.Plate"/>, the dropdown plate from <see cref="ComboBox.Style.DropdownPlate"/>, the stock card
-    /// otherwise (a generic <see cref="PopupChrome.Popup"/> flyout has no presenter padding: its content brings the 16,15,16,17 card).</summary>
+    /// <see cref="MenuFlyout.Style.Plate"/>, the dropdown plate from <see cref="ComboBox.Style.DropdownPlate"/>, a generic
+    /// <see cref="PopupChrome.Popup"/> flyout's from <see cref="ControlStyles.PopupPlateStyle"/> (no presenter padding: its content brings the
+    /// 16,15,16,17 card), the stock card otherwise.</summary>
     internal static PopupPlate PlateFor(PopupChrome chrome) => chrome switch
     {
         PopupChrome.Flyout => MenuFlyout.DefaultStyle.Plate,
         PopupChrome.Dropdown => ComboBox.DefaultStyle.DropdownPlate,
-        PopupChrome.Popup => PopupPlate.Fluent() with { Padding = default },
+        PopupChrome.Popup => ControlStyles.Resolve(ControlStyles.PopupPlateStyle, PopupPlate.FluentPopup),
         _ => PopupPlate.Fluent(),
     };
 
