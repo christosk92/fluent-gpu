@@ -30,6 +30,19 @@ public static class Slots
             new ViewSlotArgs<TProps>(key, props), static () => new ViewSlotHost<TProps>());
         return callerKey is null ? el : el with { Key = ViewIds.SlotKey(key.Id, callerKey) };
     }
+
+    /// <summary>
+    /// <see cref="View{TProps}"/> for a slot a LOADING REGION may derive: a <c>Skel.Region</c> whose content (or seed) holds this slot shimmers the
+    /// template's rendered output over the props (the component mounts in the pending tree and the deriver turns each output it renders into bars,
+    /// <see cref="ComponentEl.DeriveRenderedOutput"/>), so the section shimmers at its real size; a plain slot is an opaque component the deriver can
+    /// only draw as one default bar (a 160 x 10 stripe in place of a chapter list). Only for a template that is PURE for its props: it draws, and
+    /// publishes, registers or starts nothing.
+    /// </summary>
+    public static Element DerivableView<TProps>(ViewKey<TProps> key, TProps props, string? callerKey = null) where TProps : class
+    {
+        var el = (ComponentEl)View(key, props, callerKey);
+        return el with { SkeletonProxy = () => el with { DeriveRenderedOutput = true } };
+    }
 }
 
 /// <summary>Reports a slot that could not be resolved, once per key (per registry), through the always-on
@@ -108,9 +121,12 @@ internal sealed class ViewSlotHost<TProps> : Component, IViewSlotHost where TPro
         _lastTemplateId = templateId;
 
         var body = new ViewSlotBodyArgs<TProps>(args, template, registry);
-        return _flip
+        var el = (ComponentEl)(_flip
             ? Embed.Comp<ViewSlotBodyB<TProps>, ViewSlotBodyArgs<TProps>>(body, static () => new ViewSlotBodyB<TProps>())
-            : Embed.Comp<ViewSlotBodyA<TProps>, ViewSlotBodyArgs<TProps>>(body, static () => new ViewSlotBodyA<TProps>());
+            : Embed.Comp<ViewSlotBodyA<TProps>, ViewSlotBodyArgs<TProps>>(body, static () => new ViewSlotBodyA<TProps>()));
+        // A host DERIVED in a loading region (Slots.DerivableView) derives its body too: the body mounts and the template's output is what the
+        // deriver turns into bars. Unread for a host that is not derived.
+        return el with { SkeletonProxy = () => el with { DeriveRenderedOutput = true } };
     }
 }
 
