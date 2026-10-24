@@ -2132,36 +2132,47 @@ public sealed partial class ImageCache
 }
 
 /// <summary>Deterministic headless/offline decoder: completes on the NEXT <see cref="ImageCache.Pump"/> (the +1-frame
-/// latency contract), reporting the requested target size and synthesizing a stable per-id BGRA pattern so the GPU
-/// upload + sample path is exercisable without real codecs or network. Proves the residency/state logic.</summary>
+/// latency contract), reporting the requested target size and synthesizing a stable per-source BGRA pattern so the GPU
+/// upload + sample path is exercisable without real codecs or network. Proves the residency/state logic. The pattern's hue
+/// follows the SOURCE string, not the cache id (ids are handed out in request order, which differs between runs), so two
+/// processes paint one image the same.</summary>
 public sealed class FakeImageDecoder : IImageDecoder
 {
-    private readonly Queue<(int id, int w, int h)> _pending = new();
+    private readonly Queue<(int id, uint seed, int w, int h)> _pending = new();
     private byte[] _scratch = System.Array.Empty<byte>();
 
     public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
     {
-        _pending.Enqueue((id, targetW <= 0 ? 1 : targetW, targetH <= 0 ? 1 : targetH));
+        _pending.Enqueue((id, SeedOf(source), targetW <= 0 ? 1 : targetW, targetH <= 0 ? 1 : targetH));
         return true;
+    }
+
+    /// <summary>A stable hash of <paramref name="source"/> (FNV-1a over its chars): the same image paints the same in every run.</summary>
+    private static uint SeedOf(string? source)
+    {
+        uint h = 2166136261u;
+        if (source is not null)
+            foreach (char c in source) h = unchecked((h ^ c) * 16777619u);
+        return h;
     }
 
     public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
     {
         while (_pending.Count > 0)
         {
-            var (id, w, h) = _pending.Dequeue();
+            var (id, seed, w, h) = _pending.Dequeue();
             int bytes = w * h * 4;
             if (_scratch.Length < bytes) _scratch = new byte[bytes];
-            FillPattern(_scratch, id, w, h);
+            FillPattern(_scratch, seed, w, h);
             onPixels(id, _scratch.AsSpan(0, bytes), w, h);   // premultiplied BGRA (opaque ⇒ premul == straight)
             onComplete(id, true, w, h, ImageFailureKind.None, 1);
         }
     }
 
-    // A stable per-id diagonal gradient with an id-derived hue so each decoded tile looks distinct on screen.
-    private static void FillPattern(byte[] buf, int id, int w, int h)
+    // A stable per-source diagonal gradient with a source-derived hue so each decoded tile looks distinct on screen.
+    private static void FillPattern(byte[] buf, uint seed, int w, int h)
     {
-        uint s = unchecked((uint)id * 2654435761u);
+        uint s = unchecked(seed * 2654435761u);
         byte br = (byte)(80 + (s & 0x7F)), bg = (byte)(80 + ((s >> 7) & 0x7F)), bb = (byte)(80 + ((s >> 14) & 0x7F));
         for (int y = 0; y < h; y++)
         {

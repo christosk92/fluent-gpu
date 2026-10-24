@@ -46,6 +46,9 @@ public sealed class ViewRegistry
     /// <summary>Every registered view id (with its <c>@version</c>).</summary>
     public IReadOnlyCollection<string> ViewKeyIds => _views.Keys;
 
+    /// <summary>Every registered style key id (a style carries no template id: the id is the key).</summary>
+    public IReadOnlyCollection<string> StyleKeyIds => _styles.Keys;
+
     public bool Contains(string viewId) => _views.ContainsKey(viewId);
 
     internal IEnumerable<KeyValuePair<string, ViewEntry>> ViewEntries => _views;
