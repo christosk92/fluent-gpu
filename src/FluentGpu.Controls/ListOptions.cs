@@ -190,6 +190,10 @@ public sealed record ScrollOptions
     /// <see cref="ListOptions.PersistentPrefixCount"/>. Persistent prefix items (for example a hero + sticky chrome)
     /// remain unclipped. The recorder applies one shared band clip without per-row paint writes; NaN disables it.</summary>
     public float ItemClipTopInset { get; init; } = float.NaN;
+    /// <summary>A LIVE <see cref="ItemClipTopInset"/>: where set, the view reads it on every render (a change re-renders the view, which re-writes the
+    /// band), so an inset that changes after mount (a pinned head that measures later, a chrome row that arrives) stays authoritative instead of being
+    /// overwritten by the frozen <see cref="ItemClipTopInset"/> on the view's next reconcile. NaN disables the band, as the static value does.</summary>
+    public IReadSignal<float>? ItemClipTopInsetSource { get; init; }
     /// <summary>Optional top alpha-feather, in DIP, applied to the same recyclable suffix as
     /// <see cref="ItemClipTopInset"/>. The hard inset remains authoritative for paint and input; this only softens the
     /// visible edge immediately below pinned prefix chrome. Zero (default) disables it.</summary>

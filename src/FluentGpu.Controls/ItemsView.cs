@@ -660,6 +660,8 @@ public sealed class ItemsView : Component, IPropsHost
     /// <summary>Viewport-space top clip applied as one shared band to recyclable items after
     /// <see cref="PersistentPrefixCount"/>. NaN disables it.</summary>
     public float ItemClipTopInset = float.NaN;
+    /// <summary>The live <see cref="ItemClipTopInset"/> (<see cref="ScrollOptions.ItemClipTopInsetSource"/>): read on every render when set.</summary>
+    public IReadSignal<float>? ItemClipTopInsetSource;
     /// <summary>Top alpha-feather for the recyclable item band. Zero disables it.</summary>
     public float ItemClipTopFadeBand;
     /// <summary>Viewport-hydration hook forwarded onto the built VirtualListEl (see <c>VirtualListEl.OnVisibleRange</c>):
@@ -722,6 +724,7 @@ public sealed class ItemsView : Component, IPropsHost
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
             ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
+            ItemClipTopInsetSource = o.Scroll?.ItemClipTopInsetSource,
             ItemClipTopFadeBand = o.Scroll?.ItemClipTopFadeBand ?? 0f,
             EdgeCues = o.Scroll?.EdgeCues ?? ScrollEdgeCues.Auto,
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
@@ -787,6 +790,7 @@ public sealed class ItemsView : Component, IPropsHost
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
             ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
+            ItemClipTopInsetSource = o.Scroll?.ItemClipTopInsetSource,
             ItemClipTopFadeBand = o.Scroll?.ItemClipTopFadeBand ?? 0f,
             EdgeCues = o.Scroll?.EdgeCues ?? ScrollEdgeCues.Auto,
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
@@ -2156,7 +2160,7 @@ public sealed class ItemsView : Component, IPropsHost
                 ScrollKey = ScrollKey,
                 Handle = Handle ?? ownHandle,
                 ScrollLineDip = lineDip,
-                ItemClipTopInset = ItemClipTopInset,
+                ItemClipTopInset = ItemClipTopInsetSource?.Value ?? ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnVisibleRange = OnVisibleRange,   // viewport-driven hydration (realized-window change)
                 Snap = Snap,
@@ -2182,7 +2186,7 @@ public sealed class ItemsView : Component, IPropsHost
                 ScrollKey = ScrollKey,
                 Handle = Handle ?? ownHandle,
                 ScrollLineDip = lineDip,
-                ItemClipTopInset = ItemClipTopInset,
+                ItemClipTopInset = ItemClipTopInsetSource?.Value ?? ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnVisibleRange = OnVisibleRange,   // viewport-driven hydration (realized-window change)
                 Snap = Snap,

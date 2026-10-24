@@ -72,8 +72,11 @@ public sealed class LayoutInvalidator
     private bool IsHardScrollBoundary(NodeHandle node, in LayoutInput s)
     {
         if (!_scene.TryGetScroll(node, out var sc)) return false;
-        if (sc.ContentSized) return true;                                  // popup presenters own their clamped extent
         bool explicitMain = sc.Orientation == 1 ? !float.IsNaN(s.Width) : !float.IsNaN(s.Height);
+        // A CONTENT-SIZED viewport measures to its content, so a change inside it can change its own size: it firewalls only where its main-axis extent
+        // is owned elsewhere (explicit or growing) or clamped (a finite max: the popup presenters own their clamped extent). An auto, unclamped one
+        // passes the walk to its parent, which re-measures it (a scroller that only scrolls once its parent bounds it: the detail hero's identity column).
+        if (sc.ContentSized) return s.FlexGrow != 0f || explicitMain || float.IsFinite(sc.Orientation == 1 ? s.MaxW : s.MaxH);
         return s.FlexGrow != 0f || explicitMain;
     }
 
