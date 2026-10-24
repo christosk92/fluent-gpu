@@ -457,11 +457,14 @@ public sealed class LazyGrid : Component
         var cells = new Element[Math.Max(0, end - start)];
         for (int idx = start; idx < end; idx++)
         {
+            // The refit transition stays on every cell, refit or not: set only on the render whose column count changed, a second render in the same
+            // frame (the grid re-measures its width after the commit's layout) cleared it before the commit's FLIPs were applied, so a tier crossing
+            // that re-fit the grid moved every cell at once.
             cells[idx - start] = new BoxEl
             {
                 Key = "lazy-cell:" + idx,
                 Direction = 1,
-                Animate = animateRefit ? MotionRecipes.CardRefit : null,
+                Animate = MotionRecipes.CardRefit,
                 Children = [_cell(idx, cellW)],
             };
         }
