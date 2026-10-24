@@ -56,6 +56,13 @@ public sealed partial class AnimEngine
     /// boundary-scoped re-solve before record. Self-clearing.</summary>
     public bool ConsumeReflowWrites() { bool w = _reflowWrote; _reflowWrote = false; return w; }
 
+    /// <summary>Raised with the node each time a reflow row writes its LAYOUT size: a tick, a seed's start
+    /// (<see cref="PresentReflowStart"/>), a shift (<see cref="ShiftReflow"/>) and the settle restore. A component's (or a view's)
+    /// transparent anchor copies its rendered root's size (<c>Reconciler.MirrorParticipation</c>); the host hands this to the
+    /// reconciler, which re-mirrors the anchors above the node, so a template ROOT that eases its size through real layout moves its
+    /// parent frame by frame like any other box instead of the parent taking the new declared size at once. Allocation-free per call.</summary>
+    public Action<NodeHandle>? ReflowSizeWritten { get; set; }
+
     /// <summary>A node mounted with a SizeMode.Reflow enter eases its MAIN-axis LAYOUT size 0 → its solved size so
     /// neighbours reflow as it reveals. Host-called after layout (the natural size isn't known pre-layout).
     /// <para>The seeded row is flagged <see cref="AnimFlags.NaturalTarget"/>: an ENTER reflow targets the node's
@@ -464,6 +471,7 @@ public sealed partial class AnimEngine
         ref LayoutInput li = ref _scene.Layout(node);
         if (ch == AnimChannel.LayoutW) li.Width = from; else li.Height = from;
         MarkReflowLayoutDirty(node);
+        ReflowSizeWritten?.Invoke(node);
         return true;
     }
 
@@ -477,7 +485,7 @@ public sealed partial class AnimEngine
         if (s >= 0) { _scene.Layout(node).Width = _slab.At(s).Position; wrote = true; }
         s = Find(node, AnimChannel.LayoutH);
         if (s >= 0) { _scene.Layout(node).Height = _slab.At(s).Position; wrote = true; }
-        if (wrote) MarkReflowLayoutDirty(node);
+        if (wrote) { MarkReflowLayoutDirty(node); ReflowSizeWritten?.Invoke(node); }
         return wrote;
     }
 
@@ -536,6 +544,7 @@ public sealed partial class AnimEngine
             MarkReflowLayoutDirty(node);
             _scene.Mark(node, NodeFlags.PaintDirty);
             _reflowWrote = true;
+            ReflowSizeWritten?.Invoke(node);   // the anchors above take the declared size back (the row is still found: freed after this)
             return;
         }
 

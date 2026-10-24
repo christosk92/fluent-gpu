@@ -5264,6 +5264,8 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.AnimatePopupClose = AnimatePopupCloseWindow;
 
         _reconciler.Anim = _anim;
+        _anim.ReflowSizeWritten = _reconciler.FollowReflowSize;   // an easing template root moves its parent (the anchors mirror it live)
+        _reconciler.OnBoundsTransitionGained = CaptureGainedProjection;   // `Animate = cond ? X : null`: the first flip eases too
         _reconciler.Connected = _connected;   // shared-element (connected-animation) participant registry, fed by Element.MorphId
         _reconciler.RequestFrame = WakeFrame;      // wake-only seam: mutate retained scene state, wake, DON'T re-render
         // KeepAlive park/un-park → quiesce/resume the parked subtree's animation + scroll tickers so a backgrounded tab's
@@ -6370,11 +6372,13 @@ public sealed partial class AppHost : IDisposable
             bool capturedProjections = false;
             long db = 0, dt0 = 0;
             if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt0 = Stopwatch.GetTimestamp(); }
+            _projectionCaptureOpen = false;
             if (willReconcile && _everLaidOut && !_scene.Root.IsNull && !resized)
             {
                 _projectBefore.Clear();
                 CaptureProjections();
                 capturedProjections = _projectBefore.Count > 0;
+                _projectionCaptureOpen = true;   // a node the reconcile below gives a transition is captured as it gains it
             }
             else if (resized && _everLaidOut && !_scene.Root.IsNull)
             {
@@ -6548,6 +6552,8 @@ public sealed partial class AppHost : IDisposable
                 _frameAfterPaint = _runtime.HasPending;
             }
             finally { if (themeChanged) _reconciler.SetThemeTransition(float.NaN); }
+            // The capture window closes before layout; a node that gained a transition in the flush counts as captured.
+            if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
             long tFlush = Stopwatch.GetTimestamp();   // always-on segment timing (FrameStats.*Ms) — see below
             // Spike-gated type roster (RenderCensus): one line when the flush alone exceeded the panel's refresh interval
@@ -7799,14 +7805,29 @@ public sealed partial class AppHost : IDisposable
             NodeHandle n = nodes[i];
             if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
             nodes[w++] = n;
-            // FLIP relativeTarget: capture relative to the resolved shared-layout anchor (if any) instead of the parent,
-            // so the node rides the anchor's motion coherently (its anchor-relative rect is unchanged ⇒ no re-FLIP).
-            NodeHandle anchor = _reconciler.ResolveRelativeTarget(n);
-            _projectBefore[n] = anchor.IsNull
-                ? new ProjCapture(RelRect(n), _scene.Parent(n))
-                : new ProjCapture(RelRectIn(n, anchor), anchor);
+            CaptureProjection(n);
         }
         if (w < nodes.Count) nodes.RemoveRange(w, nodes.Count - w);
+    }
+
+    private void CaptureProjection(NodeHandle n)
+    {
+        // FLIP relativeTarget: capture relative to the resolved shared-layout anchor (if any) instead of the parent,
+        // so the node rides the anchor's motion coherently (its anchor-relative rect is unchanged ⇒ no re-FLIP).
+        NodeHandle anchor = _reconciler.ResolveRelativeTarget(n);
+        _projectBefore[n] = anchor.IsNull
+            ? new ProjCapture(RelRect(n), _scene.Parent(n))
+            : new ProjCapture(RelRectIn(n, anchor), anchor);
+    }
+
+    /// <summary>Open between the commit's FLIP capture and the end of its flush: a reused node the reconcile gives a bounds transition
+    /// (<see cref="TreeReconciler.OnBoundsTransitionGained"/>) is captured from the rect it still holds, as if it had been animated before.</summary>
+    private bool _projectionCaptureOpen;
+
+    private void CaptureGainedProjection(NodeHandle n)
+    {
+        if (!_projectionCaptureOpen || !_scene.IsLive(n) || _projectBefore.ContainsKey(n)) return;
+        CaptureProjection(n);
     }
 
     // --fg motion per-node line (one word of OUTCOME + the captured/live rects). Static → zero capture, and only ever
