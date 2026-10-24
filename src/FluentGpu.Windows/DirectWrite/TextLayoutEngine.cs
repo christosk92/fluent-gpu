@@ -1299,6 +1299,48 @@ public sealed unsafe class TextLayoutEngine : IDisposable
 
     private static void Check(HRESULT hr, string what) { if ((int)hr < 0) throw new InvalidOperationException($"{what} failed: 0x{(uint)hr:X8}"); }
 
+    /// <summary>The union of the current layout's glyph black boxes (each glyph's design metrics at its own face and size,
+    /// placed at its laid origin: <see cref="LaidGlyph.Y"/> is its line's baseline), in the layout's top-down DIP frame. This
+    /// is the run's INK: the caps sit well below the line top (the ascent includes the face's internal leading) and a run
+    /// without descenders draws nothing under its baseline. False when no laid glyph has ink (empty text, only spaces).
+    /// Cold path (one design-metrics call per glyph): inspection and lint, never per frame.</summary>
+    public bool TryInkBounds(out RectF ink)
+    {
+        float left = float.PositiveInfinity, top = float.PositiveInfinity, right = float.NegativeInfinity, bottom = float.NegativeInfinity;
+        nint lastFace = 0;
+        float em = 0f;
+        foreach (LaidGlyph g in Glyphs)
+        {
+            if (g.Face == 0) continue;
+            var face = (IDWriteFontFace*)g.Face;
+            if (g.Face != lastFace)
+            {
+                DWRITE_FONT_METRICS fm;
+                face->GetMetrics(&fm);
+                em = fm.designUnitsPerEm;
+                lastFace = g.Face;
+            }
+            if (em <= 0f) continue;
+            ushort gid = g.Gid;
+            DWRITE_GLYPH_METRICS gm;
+            if ((int)face->GetDesignGlyphMetrics(&gid, 1, &gm, BOOL.FALSE) < 0) continue;
+            float s = g.Size / em;
+            // Design space is y-up from the baseline: the black box top is verticalOriginY - topSideBearing above it, its bottom
+            // advanceHeight - bottomSideBearing - verticalOriginY below it (dwrite.h DWRITE_GLYPH_METRICS).
+            float above = (gm.verticalOriginY - gm.topSideBearing) * s;
+            float below = ((float)gm.advanceHeight - gm.bottomSideBearing - gm.verticalOriginY) * s;
+            float l = gm.leftSideBearing * s, r = ((float)gm.advanceWidth - gm.rightSideBearing) * s;
+            if (r - l <= 0f || above + below <= 0f) continue;   // a space or an empty glyph draws no ink
+            left = MathF.Min(left, g.X + l);
+            right = MathF.Max(right, g.X + r);
+            top = MathF.Min(top, g.Y - above);
+            bottom = MathF.Max(bottom, g.Y + below);
+        }
+        if (!(right > left && bottom > top)) { ink = default; return false; }
+        ink = new RectF(left, top, right - left, bottom - top);
+        return true;
+    }
+
     public void Dispose()
     {
         // Faces belong to the shared FontRegistry (one cache for every consumer); an engine never releases them.

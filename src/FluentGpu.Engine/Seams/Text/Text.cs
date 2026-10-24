@@ -164,4 +164,16 @@ public interface IFontSystem
     int GetRangeRects(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, int start, int end, Span<RectF> rects,
         float alignWidth = float.PositiveInfinity)
         => throw new NotSupportedException($"{GetType().Name} does not implement selection geometry.");
+
+    /// <summary>The INK of the run laid out as <see cref="Measure(StringId, in TextStyle, float)"/> lays it: the union of its
+    /// glyphs' black boxes (the font's own glyph outlines' extents, not the line box), in DIP, relative to the top-left of
+    /// the measured box (Start-aligned; a trimmed or line-capped run counts only the glyphs it shows). The line box has
+    /// leading above the caps and descent under the baseline that no glyph may fill, so a clip that cuts only those cuts
+    /// nothing. False when the backend has no glyph metrics (the headless model) or the run draws no ink (spaces).
+    /// Cold path: inspection and lint only, never per frame (it lays the run out again).</summary>
+    bool TryMeasureInk(StringId text, in TextStyle style, float maxWidth, out RectF ink)
+    {
+        ink = default;
+        return false;
+    }
 }

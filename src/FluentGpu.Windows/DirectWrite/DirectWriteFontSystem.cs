@@ -102,6 +102,14 @@ public sealed class DirectWriteFontSystem : IFontSystem, IDisposable
         run.PublishRects(new SpanRunRects(maxWidth, _artifactScratch.ToArray()));
     }
 
+    /// <inheritdoc/>
+    public bool TryMeasureInk(StringId text, in TextStyle style, float maxWidth, out RectF ink)
+    {
+        string s = _strings.Resolve(text);
+        LayoutFor(s.AsSpan(), in style, maxWidth, float.PositiveInfinity, measure: true);
+        return _engine.TryInkBounds(out ink);
+    }
+
     public int HitTestText(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, Point2 point, out bool trailing,
         float alignWidth = float.PositiveInfinity)
     {
