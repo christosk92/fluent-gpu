@@ -589,6 +589,9 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // holds the last measured count over that frame instead of showing the guess (a pager dropping to one page and back remounted its pips).
     int _shownPageCount = -1;
     bool _fitUnmeasured;
+    // The page and the items per page a multi-row band push started from (ApplyFit), until the layout effect re-resolves the kept page at
+    // the measured width; -1 when nothing waits.
+    int _keepPage = -1, _keepOldPerPage;
     readonly Signal<int> _fitMeasuredRev = new(0);   // bumped once the held band has been laid out (Render subscribes it)
 
     /// <summary>Takes a pushed band onto the fields every fit read uses (normalized exactly as the constructor normalizes them). True
@@ -615,7 +618,11 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                 changed = true;
                 if (multiRow && w > 1f)
                 {
+                    // `w` was measured under the OLD band, so the new page size is a guess until this band has been laid out (the same
+                    // stale width the header's page count holds over, see _fitUnmeasured): keep the guess for the push's own render, and
+                    // re-resolve the page from the old page's first item once the layout has measured the band (the render's layout effect).
                     int page = _page.Peek(), kept = FillRowVirtualLayout.PageKeepingFirstItem(page, oldPerPage, PerPageItemsAt(w));
+                    _keepPage = page; _keepOldPerPage = oldPerPage;
                     if (kept != page) _page.Value = kept;   // ApplyProps runs before this push's render; the clamp effect bounds it there
                 }
             }
@@ -1074,6 +1081,13 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         bool headerPrev = hp > 0, headerNext = hp < headerCount - 1;
         UseLayoutEffect(() =>
         {
+            if (_keepPage >= 0)
+            {
+                // The band is laid out: the page that holds the old page's first item, at the MEASURED width (ApplyFit's was a guess).
+                int kept = FillRowVirtualLayout.PageKeepingFirstItem(_keepPage, _keepOldPerPage, PerPageItemsAt(_w.Peek()));
+                _keepPage = -1;
+                if (kept != _page.Peek()) _page.Value = kept;
+            }
             if (!_fitUnmeasured) return;
             _fitUnmeasured = false;
             _fitMeasuredRev.Value = _fitMeasuredRev.Peek() + 1;
