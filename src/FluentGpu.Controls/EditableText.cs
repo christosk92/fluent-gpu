@@ -115,6 +115,10 @@ public sealed class EditableText : Component
     /// <summary>The width a composer RE-PUSHES on every render (<c>Embed.Comp(new LiveWidth(w), () => new EditableText { ... })</c>), so the
     /// field follows its prop instead of the value it mounted with (<see cref="TextBox.Create"/>: a field whose width a tier or a page changes).</summary>
     public sealed record LiveWidth(float Width);
+
+    /// <summary>How the field's box eases when its width changes (a size <see cref="LayoutTransition"/>, <c>SizeMode.Reflow</c> for a field whose row
+    /// rides it); null: the new width lands at once. The content row, the underline and the focus bar fill the root, so they follow its eased width.</summary>
+    public LayoutTransition? WidthTransition;
     public float Height = 32f;
     public float FontSize = 14f;
     private ColorF? _foreground;
@@ -439,10 +443,10 @@ public sealed class EditableText : Component
             rowChildren.Add(DeleteButton());
         }
 
+        // The content row, the underline and the focus bar FILL the root (a ZStack child fills it unless sized): they follow its eased width.
         var content = new BoxEl
         {
             Direction = 0,
-            Width = width,
             Height = Height,
             AlignItems = FlexAlign.Stretch,
             Children = rowChildren.ToArray(),
@@ -455,7 +459,7 @@ public sealed class EditableText : Component
         if (!Chromeless && fs.UnderlineThickness > 0f && !(focused && IsEnabled && fs.FocusBarThickness > 0f))
             children.Add(new BoxEl
             {
-                Width = width, Height = fs.UnderlineThickness, AlignSelf = FlexAlign.End,   // laid out on the bottom edge
+                Height = fs.UnderlineThickness, AlignSelf = FlexAlign.End,   // laid out on the bottom edge
                 Fill = fs.Underline, Corners = CornerRadius4.All(0f), HitTestVisible = false,
             });
         // WinUI focus affordance is BorderThickness 1,1,1,2 — the 1px stroke stays all around (below) and a 2px accent
@@ -465,7 +469,7 @@ public sealed class EditableText : Component
         if (focused && IsEnabled && !Chromeless && fs.FocusBarThickness > 0f)
             children.Add(new BoxEl
             {
-                Width = width, Height = fs.FocusBarThickness, OffsetY = Height - fs.FocusBarThickness,
+                Height = fs.FocusBarThickness, OffsetY = Height - fs.FocusBarThickness,
                 Fill = fs.FocusBar, Corners = CornerRadius4.All(0f),
             });
 
@@ -475,6 +479,7 @@ public sealed class EditableText : Component
         {
             ZStack = true,
             Width = width,
+            Animate = WidthTransition,
             Height = Height,
             // Chromeless (editable-ComboBox part): square — the composer's outer box rounds + clips (ClipToBounds
             // follows the rounded corners, so the interaction fills below stay inside the shared shape).
