@@ -968,15 +968,27 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     // F118: per-window occlusion. The process-wide win-event hooks (Win32WindowOcclusion) are installed on the first read of
     // OcclusionEpoch (the host reads it every frame, on the UI thread, which pumps the messages the hooks are delivered through)
-    // and released with the last window. 0 = not asked yet, 1 = installed, 2 = unavailable (the host then never parks for a cover).
+    // and released with the last window. 0 = not asked yet (or released while minimized / hidden), 1 = installed, 2 = unavailable
+    // (the host then never parks for a cover).
     private Action? _occlusionWake;
     private int _occlusionHooks;
 
     /// <inheritdoc cref="IPlatformWindow.OcclusionEpoch"/>
+    /// <remarks>A MINIMIZED or HIDDEN window holds no hooks (0, untracked): it is parked by its own state, can never be
+    /// cover-parked, presents nothing, and its restore or show arrives as a message of its own. Holding them, every top-level
+    /// window event on the desktop (a window moving, reordering, showing, taking the foreground) was delivered to this thread
+    /// and woke its parked loop, which then re-armed the wake by reading the epoch: ~20-50 empty loop iterations a second
+    /// for as long as the window stayed minimized while the user worked elsewhere (audit PERF r2). The first read on screen
+    /// re-acquires them and returns a fresh epoch, so the cover test runs again on the un-park frame.</remarks>
     public long OcclusionEpoch
     {
         get
         {
+            if (IsIconic(_hwnd) || IsWindowVisible(_hwnd) == 0)
+            {
+                if (_occlusionHooks == 1) { Win32WindowOcclusion.Release(_occlusionWake!); _occlusionHooks = 0; }
+                return 0;
+            }
             if (_occlusionHooks == 0)
             {
                 _occlusionWake ??= Wake;
