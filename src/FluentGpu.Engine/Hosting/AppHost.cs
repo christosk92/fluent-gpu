@@ -5571,8 +5571,10 @@ public sealed partial class AppHost : IDisposable
         //    minutes was still drained WHOLE in one frame. Capping the slice turns a pathological backlog into a bounded
         //    per-frame cost; the remainder re-arms _frameNeeded below so the loop keeps producing frames until it drains.
         int budget = Math.Min(_uiPosts.Count, MaxUiPostsPerDrain);
+        bool parked = _wasParked;
         while (budget-- > 0 && _uiPosts.TryDequeue(out var a))
         {
+            _wakeDiag?.NotePost(a, parked);
             // A posted action must never take down the frame — but a swallowed exception must never be SILENT either:
             // until 2026-09-25 this catch was empty, and an app-level fault posted to the UI thread vanished without a
             // trace (Wavee's `--crash-probe throw` ran for 90 s "healthy"). Route it to the diagnostic sink the host
