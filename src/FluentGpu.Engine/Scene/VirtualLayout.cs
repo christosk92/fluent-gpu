@@ -497,13 +497,48 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
         if (min == MinCardW && max == MaxCardW && g == Gap && fixedW == FixedCardW && cols == MaxColumns && leadMin == LeadMinColumns)
             return false;
         MinCardW = min; MaxCardW = max; Gap = g; FixedCardW = fixedW; MaxColumns = cols; LeadMinColumns = leadMin;
-        if (_main > 0f)
-        {
-            float inner = MathF.Max(0f, _main - LeadInset - TrailInset);
-            (_perPage, _cardW) = Fit(inner, MinCardW, MaxCardW, Gap, PerPageOverride, FixedCardW, MaxColumns);
-        }
-        else _cardW = MinCardW;
+        Refit();
         return true;
+    }
+
+    /// <summary>The columns per page the HOST decided (a paged shelf's render, from the width it measured), or 0 for the live fit. While held,
+    /// every viewport the engine feeds only re-sizes the cards for these columns: a width that crosses a column threshold BETWEEN two renders
+    /// (a docking panel's reservation easing, re-solved after the animation tick with no commit) cannot re-break the strip there, where no
+    /// transition sees it, and the next render re-fits it on a commit instead, where the cards' own resize and the shelf's re-fit glide are
+    /// measured. Ignored by the override and fixed-width fits. False when unchanged; the caller marks its viewport layout-dirty on true.</summary>
+    public int HeldColumns { get; private set; }
+
+    /// <summary>A card width held with <see cref="HeldColumns"/> (0: the cards fill the viewport at the held columns). A host holds it for
+    /// the frame in which a re-fit is coming but cannot be laid out yet (a raised column cap the measured width does not fit), so the cells
+    /// stay as drawn through that frame's re-solve instead of widening once before they re-fit.</summary>
+    public float HeldCardW { get; private set; }
+
+    /// <inheritdoc cref="HeldColumns"/>
+    public bool HoldColumns(int columns, float cardW = 0f)
+    {
+        int c = Math.Max(0, columns);
+        float w = c > 0 && cardW > 0f ? cardW : 0f;
+        if (c == HeldColumns && w == HeldCardW) return false;
+        HeldColumns = c;
+        HeldCardW = w;
+        Refit();
+        return true;
+    }
+
+    /// <summary>Re-derive the fit from the last viewport the engine fed (the band, or the held columns, moved).</summary>
+    private void Refit()
+    {
+        if (_main > 0f) (_perPage, _cardW) = FitInner(MathF.Max(0f, _main - LeadInset - TrailInset));
+        else _cardW = MinCardW;
+    }
+
+    /// <summary>The fit at an inner (gutter-free) width: the held columns when the host holds them, else <see cref="Fit"/>.</summary>
+    private (int PerPage, float CardW) FitInner(float inner)
+    {
+        if (HeldColumns <= 0 || PerPageOverride > 0 || FixedCardW > 0f || inner <= 1f)
+            return Fit(inner, MinCardW, MaxCardW, Gap, PerPageOverride, FixedCardW, MaxColumns);
+        int cols = HeldColumns;
+        return (cols, HeldCardW > 0f ? HeldCardW : MathF.Max(1f, (inner - (cols - 1) * Gap) / cols));
     }
 
     /// <summary>Re-fit this mounted layout to a new row count (a host's tier crossing: a chart of five rows per column that takes four
@@ -602,8 +637,7 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
         _main = mainExtent; _cross = crossSize;
         // The fed viewport is widened by the halo-bleed gutters; fit cards to the INNER (shelf) width so the fitted
         // cardW is unchanged by the insets — the gutters are pure paint headroom, not card space.
-        float inner = MathF.Max(0f, mainExtent - LeadInset - TrailInset);
-        (_perPage, _cardW) = Fit(inner, MinCardW, MaxCardW, Gap, PerPageOverride, FixedCardW, MaxColumns);
+        (_perPage, _cardW) = FitInner(MathF.Max(0f, mainExtent - LeadInset - TrailInset));
     }
 
     /// <summary>The viewport→(perPage, cardW) fit — COUNT-INDEPENDENT, cardW capped at <paramref name="maxCardW"/>.
@@ -665,25 +699,46 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
         if (last < first) last = first;
     }
 
-    public RectF ItemRect(int i, float cross)
+    public RectF ItemRect(int i, float cross) => RectOf(i, Rows, _cardW, Gap, RowHeight(cross), LeadInset, EffectiveLeadSpan);
+
+    /// <summary>The geometry this layout lays its items out at, as a value: what a host keeps to know where an item WAS once the fit moves
+    /// on (a re-fit glide measures each item's old rect from it). Valid after the engine's first <see cref="SetViewport"/>.</summary>
+    public FillRowGeometry Geometry => new(Rows, _perPage, _cardW, Gap, RowHeight(_cross), LeadInset, EffectiveLeadSpan);
+
+    /// <summary>Item <paramref name="i"/>'s content-space rect: the ONE place the fill-row placement lives (<see cref="ItemRect"/> and
+    /// <see cref="FillRowGeometry.ItemRect"/>). A single row packs item 0 over <paramref name="leadSpan"/> cells and every later item one
+    /// cell after it; several rows fill each column top to bottom before the next. Pure, allocation-free.</summary>
+    public static RectF RectOf(int i, int rows, float cardW, float gap, float rowH, float leadInset, int leadSpan)
     {
-        float rh = RowHeight(cross);
-        if (Rows == 1)
+        float stride = cardW + gap;
+        if (rows <= 1)
         {
-            int s = EffectiveLeadSpan;
-            if (s > 1)
-            {
-                // Item 0 spans s cells from the lead inset; every later item i sits at cell (i + s - 1) — see
-                // CellsOf/FirstItemOfPage. s == 1 never reaches this branch (falls through to the identical formula
-                // below), so a plain shelf's geometry is byte-for-byte unchanged.
-                if (i <= 0) return new RectF(LeadInset, 0f, s * _cardW + (s - 1) * Gap, rh);
-                return new RectF(LeadInset + (i + s - 1) * ColStride, 0f, _cardW, rh);
-            }
-            return new RectF(LeadInset + i * ColStride, 0f, _cardW, rh);
+            // Item 0 spans s cells from the lead inset; every later item i sits at cell (i + s - 1) — see CellsOf/FirstItemOfPage. s == 1 is
+            // the plain shelf: item i at cell i.
+            int s = Math.Max(1, leadSpan);
+            if (s > 1 && i <= 0) return new RectF(leadInset, 0f, s * cardW + (s - 1) * gap, rowH);
+            return new RectF(leadInset + (i + s - 1) * stride, 0f, cardW, rowH);
         }
-        int col = i / Rows, row = i % Rows;
-        return new RectF(LeadInset + col * ColStride, row * (rh + Gap), _cardW, rh);
+        int col = i / rows, row = i % rows;
+        return new RectF(leadInset + col * stride, row * (rowH + gap), cardW, rowH);
     }
+}
+
+/// <summary>A <see cref="FillRowVirtualLayout"/>'s geometry as a value (<see cref="FillRowVirtualLayout.Geometry"/>): rows, columns per page,
+/// card width, gap, row height, the lead inset and the effective lead span. <see cref="ItemRect"/> answers exactly what the layout answered
+/// while it held this geometry.</summary>
+public readonly record struct FillRowGeometry(int Rows, int PerPage, float CardW, float Gap, float RowH, float LeadInset, int LeadSpan)
+{
+    /// <summary>A geometry was taken from a fitted layout (a default value is none).</summary>
+    public bool IsSet => PerPage > 0 && CardW > 0f;
+
+    /// <summary>Item <paramref name="i"/>'s content-space rect at this geometry.</summary>
+    public RectF ItemRect(int i) => FillRowVirtualLayout.RectOf(i, Rows, CardW, Gap, RowH, LeadInset, LeadSpan);
+
+    /// <summary>The same placement: only the card width, the row height or the gap differ, so a host whose items keep their columns, rows and
+    /// pages follows the layout without a re-fit.</summary>
+    public bool SamePlacement(in FillRowGeometry other)
+        => Rows == other.Rows && PerPage == other.PerPage && LeadSpan == other.LeadSpan;
 }
 
 /// <summary>

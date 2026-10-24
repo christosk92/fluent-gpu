@@ -241,6 +241,36 @@ public sealed class SelectionModel
         }
     }
 
+    /// <summary>Remap the selection after the backing items were REORDERED (the same items at other indices), preserving selected ITEM
+    /// identity: <paramref name="newIndexOf"/> answers an old index with the item's new index, or -1 for an item that is gone (its
+    /// selection drops). The anchor follows its item too. Cold path (a data edge): it allocates the remapped ranges only when something
+    /// is selected, and notifies only when the selection actually moved.</summary>
+    public void Remap(Func<int, int> newIndexOf)
+    {
+        ArgumentNullException.ThrowIfNull(newIndexOf);
+        int oldAnchor = AnchorIndex;
+        if (AnchorIndex >= 0) AnchorIndex = newIndexOf(AnchorIndex);
+        if (AnchorIndex >= _itemCount) AnchorIndex = -1;
+        if (_ranges.Count == 0) return;
+        var mapped = new List<(int Start, int End)>(_ranges.Count);
+        for (int i = 0; i < _ranges.Count; i++)
+        {
+            var (s, e) = _ranges[i];
+            for (int index = s; index <= e; index++)
+            {
+                int to = newIndexOf(index);
+                if ((uint)to < (uint)_itemCount) mapped.Add((to, to));
+            }
+        }
+        NormalizeMapped(mapped);
+        if (AnchorIndex != oldAnchor || !SameRanges(mapped))
+        {
+            _ranges.Clear();
+            _ranges.AddRange(mapped);
+            Notify();
+        }
+    }
+
     // ── WinUI interaction semantics (the ItemsView selector trio, verbatim) ───────────────────────────
 
     /// <summary>Pointer tap / Space / Enter on item <paramref name="index"/> with the live modifier chord.</summary>

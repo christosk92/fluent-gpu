@@ -1460,6 +1460,8 @@ public sealed partial class AppHost : IDisposable
     // InputHooks.QueueAfterLayout: one-shot post-layout callbacks (a keyed TitleBar child re-pushing the NC regions in the
     // frame it moved). Double-buffered so a callback that queues another one lands in the NEXT drain, never re-entrantly.
     private List<Action> _afterLayout = new(), _afterLayoutDrain = new();
+    // InputHooks.QueueAfterFrameLayout: one-shot callbacks run once the frame's LAST layout pass is done (7.06, after the reflow re-solve).
+    private List<Action> _afterFrameLayout = new(), _afterFrameLayoutDrain = new();
 
     /// <summary>FLIP "First" snapshot of a BoundsAnimated node, in PARENT-RELATIVE presented space (its own layout
     /// origin + in-flight LocalTransform). Parent-relative is what makes projections respond only to LOCAL movement:
@@ -5132,6 +5134,7 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;
         _inputHooks.SetMinHitSize = size => _dispatcher.MinHitSize = MathF.Max(0f, size);
         _inputHooks.QueueAfterLayout = a => _afterLayout.Add(a);
+        _inputHooks.QueueAfterFrameLayout = a => _afterFrameLayout.Add(a);
         var chromeEpoch = new Signal<int>(0);
         _inputHooks.WindowChromeEpoch = chromeEpoch;
         _inputHooks.WindowOccluded = _windowOccluded;
@@ -6728,6 +6731,7 @@ public sealed partial class AppHost : IDisposable
             RunFlowPass(layoutSize);
             _layout.DeferOffsetClamp = false;
             DrainAfterLayout();                                // 7.06 rects moved by the late scoped relayouts above publish this frame too
+            DrainAfterFrameLayout();                           // 7.06 motion seeded against the layout this frame presents
             // 7.15 follow-rect (F169): a node that must cover ANOTHER node's rect this frame (the docked video overlay over its
             // hollow reservation) takes size and position from the target's PAINTED rect here: after layout AND the animation
             // tick (so a paint-only slide of the target is already in its transform), before the video geometry scan and
@@ -8897,6 +8901,16 @@ public sealed partial class AppHost : IDisposable
         (_afterLayout, _afterLayoutDrain) = (_afterLayoutDrain, _afterLayout);
         for (int i = 0; i < _afterLayoutDrain.Count; i++) _afterLayoutDrain[i]();
         _afterLayoutDrain.Clear();
+    }
+
+    /// <summary>Run the <see cref="InputHooks.QueueAfterFrameLayout"/> callbacks: after the frame's last layout pass (the commit's, the
+    /// reflow re-solve, the presented flow), so they read the geometry this frame presents.</summary>
+    private void DrainAfterFrameLayout()
+    {
+        if (_afterFrameLayout.Count == 0) return;
+        (_afterFrameLayout, _afterFrameLayoutDrain) = (_afterFrameLayoutDrain, _afterFrameLayout);
+        for (int i = 0; i < _afterFrameLayoutDrain.Count; i++) _afterFrameLayoutDrain[i]();
+        _afterFrameLayoutDrain.Clear();
     }
 
     private void DrainPassiveEffects()
