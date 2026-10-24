@@ -2290,6 +2290,9 @@ public sealed partial class AppHost : IDisposable
                 else
                 {
                     PathRealizationCache.Shared.NextFrame();   // the slab's only compaction point: before a record, never between it and its encode
+                    // A later record of a publication already recorded (a motion turn) sees only its own poses as dirty: the UI's
+                    // dirt of this publication went into that first record (SceneRecordingSnapshot.ConsumeUiDirt).
+                    if (!fresh) sceneFrame.Scene.ConsumeUiDirt();
                     stats = sceneFrame.Record(_renderCommands, _renderSpans, direct ? null : _renderSlices, publicationGap);
                     _lastRecordedScene = rf.PublishSeq;
                 }

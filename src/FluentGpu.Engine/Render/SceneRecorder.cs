@@ -156,7 +156,7 @@ public static class SceneRecorder
 }
 
 /// <summary>One recording target's mutable scratch. Never shared with another target or recording thread.</summary>
-internal sealed class SceneRecordingContext
+internal sealed partial class SceneRecordingContext
 {
     internal bool PopupPresented;
     internal void CopyConfigurationFrom(SceneRecordingContext source)
@@ -565,7 +565,7 @@ internal sealed class SceneRecordingContext
     // outright: every glyph run now records crisp (DrawGlyphRunCmd.InMotion at its default, 0) regardless of speed —
     // see gate.record.textCrispDuringFastScroll (AnimSuite.cs) for the bit-identical-at-any-speed proof.
 
-    private readonly struct InheritedState
+    internal readonly struct InheritedState
     {
         public readonly float HoverT;
         public readonly float PressT;
@@ -601,7 +601,10 @@ internal sealed class SceneRecordingContext
         /// enclosing scope's state through unchanged (a listener that is itself HoverWithin reports 1 either way).</summary>
         public readonly InheritedState ForChild(NodeFlags flags, bool nodeInteractive, bool scopeBoundary, bool hasLocalProgress, float localHoverT, float localPressT)
         {
-            NodeFlags interactiveFlags = nodeInteractive ? flags : InteractiveFlags;
+            // the STATE an interactive node hands its subtree (hover, press, focus, disabled…), never its transient dirty axes: they
+            // say only that it changed, and riding into every descendant's span key they denied the subtree its copies on the
+            // publication's later records (audit PERF r2)
+            NodeFlags interactiveFlags = nodeInteractive ? flags & ~(NodeFlags.LayoutDirty | NodeFlags.PaintDirty | NodeFlags.TransformDirty) : InteractiveFlags;
             byte disabled = Disabled != 0 || (flags & NodeFlags.Disabled) != 0 ? (byte)1 : (byte)0;
             if (nodeInteractive && hasLocalProgress)
                 return new InheritedState(localHoverT, localPressT, interactiveFlags, 1, disabled, UnderElevateRoot);
@@ -739,6 +742,12 @@ internal sealed class SceneRecordingContext
         var dragOverlay = scene.DragOverlay;
         bool hasDragOverlay = !dragOverlay.IsNull && scene.IsLive(dragOverlay)
                               && !UnderAnySkipRoot(scene, skipRoots, dragOverlay);
+        // Between drags the layer is an empty, paintless box (registered for its whole lifetime): its band draws nothing, so it
+        // is no top band — it neither appends to the root arena nor denies the root slice its keep. Counted a tail, it made the
+        // root slice re-walk on EVERY record pass of the app's life (audit PERF r2).
+        bool dragOverlayDraws = hasDragOverlay && (!scene.FirstChild(dragOverlay).IsNull
+            || HasOwnPaint(scene, dragOverlay, (scene.Flags(dragOverlay) & NodeFlags.SparsePaint) != 0, in scene.Paint(dragOverlay),
+                in scene.PaintCold(dragOverlay)));
         int overlayCount = scene.OverlayCount;
         if (hasGhost) disabledReasons |= SpanReuseDisabledReason.DragGhost;   // DragGhost stays GLOBAL this wave (drags are rare; scope later)
         if (scene.DropSpotlightActive) disabledReasons |= SpanReuseDisabledReason.DragSpotlight;
@@ -799,7 +808,7 @@ internal sealed class SceneRecordingContext
         bool hasRootlessOrphan = false;
         for (int i = 0; i < scene.OrphanCount && !hasRootlessOrphan; i++)
             hasRootlessOrphan = scene.OrphanVisualParentAt(i).IsNull;
-        bool rootTail = hasRootlessOrphan || scene.DropSpotlightActive || hasGhost || overlayCount != 0 || hasDragOverlay || !detached.IsEmpty;
+        bool rootTail = hasRootlessOrphan || scene.DropSpotlightActive || hasGhost || overlayCount != 0 || dragOverlayDraws || !detached.IsEmpty;
         if (rootTail || slices.RootHadTail) stats.KeepDenySlot = SliceRecorder.RootSlot;
         slices.RootHadTail = rootTail;
 
@@ -930,7 +939,7 @@ internal sealed class SceneRecordingContext
         // E5 drag-OVERLAY top band (the chip): same hoist as the ghost band above, at band depth (1<<16)|2 and emitted
         // AFTER the connected-animation overlays, so the drag chip is the topmost thing in the frame. Unclipped, at
         // parent opacity 1 (the chip owns its own alpha), with the popup skipRoots threaded like every other band.
-        if (hasDragOverlay)
+        if (dragOverlayDraws)
         {
             var abs = scene.AbsoluteRect(dragOverlay);
             ref readonly RectF ob = ref scene.Bounds(dragOverlay);
@@ -1487,6 +1496,8 @@ internal sealed class SceneRecordingContext
         stats.SelfAcrylic = false;
         stats.SelfStickyClip = false;   // a translation root's sticky clip (a nonsensical .Sticky().StickyClip()) records baked
         EnterSlice(ref stats, sl, slot, ownDx, ownDy, carryAdditive: true);
+        NoteCut(scene, sl, slot, node, CutTranslation, false, in parentWorld, parentOpacity, depth, RectF.Infinite, parentScaleX, parentScaleY,
+            parentInMotion, parentScrollInMotion, in inherited, true, in saved, in clip, ref stats);
         SpanRecordResult res;
         try
         {
@@ -1833,6 +1844,8 @@ internal sealed class SceneRecordingContext
                     stats.SelfAcrylic = isAcrylic;
                     stats.SelfStickyClip = stickyCut;
                     EnterSlice(ref stats, sl, slot, 0f, 0f, carryAdditive: true);
+                    NoteCut(scene, sl, slot, node, CutLayer, isOpacityGroup, in parentWorld, parentOpacity, depth, clip, parentScaleX, parentScaleY,
+                        parentInMotion, parentScrollInMotion, in inherited, true, in saved, RectF.Infinite, ref stats);
                     SpanRecordResult res;
                     try
                     {
@@ -1922,6 +1935,8 @@ internal sealed class SceneRecordingContext
                 stats.SelfAcrylic = false;
                 stats.SelfStickyClip = stickyCut;
                 EnterSlice(ref stats, sl, slot, 0f, 0f, carryAdditive: stickyCut);
+                NoteCut(scene, sl, slot, node, CutBoundary, false, in parentWorld, parentOpacity, depth, posed ? RectF.Infinite : clip, parentScaleX,
+                    parentScaleY, parentInMotion, parentScrollInMotion, in inherited, stickyCut, in saved, RectF.Infinite, ref stats);
                 SpanRecordResult res;
                 try
                 {
@@ -2019,9 +2034,11 @@ internal sealed class SceneRecordingContext
                 // differ (every descendant is clean too — record-dirty is an aggregate), so the arena stays untouched and
                 // its child slices are re-registered as they are. Zero bytes. Else swap the arena and walk.
                 var sl = stats.Slices!;
-                if (!spanReuseDisabled && !blocked && recordDirtyBits == 0 && stats.KeepDenySlot != selfSlot
-                    && spans.TryGet((int)node.Raw.Index, node.Raw.Gen, sl.CurGen(selfSlot), spanInputSig, out var kept)
-                    && kept.ByteStart == 0 && kept.ByteLength == dl.BytePosition)
+                DrawSpan kept = default;
+                bool keepable = !spanReuseDisabled && !blocked && stats.KeepDenySlot != selfSlot
+                    && spans.TryGet((int)node.Raw.Index, node.Raw.Gen, sl.CurGen(selfSlot), spanInputSig, out kept)
+                    && kept.ByteStart == 0 && kept.ByteLength == dl.BytePosition;
+                if (keepable && recordDirtyBits == 0)
                 {
                     sl.Keep(selfSlot);
                     spans.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, in kept, sl.CurGen(selfSlot), selfSlot);
@@ -2030,6 +2047,10 @@ internal sealed class SceneRecordingContext
                     keptResult.Include(kept.SubtreeBounds);
                     return keptResult;
                 }
+                // Dirty below, but only inside child slices: keep this arena, walk just those (SceneRecorder.PartialKeep.cs).
+                if (keepable && TryPartialKeep(scene, images, node, selfSlot, inMotion, in kept, spanInputSig, in focus, in textEdit, scrollThumb,
+                        scrollTrack, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats, out var partial))
+                    return partial;
                 // Why the keep failed — read-only probes replaying the test above, for the walk ledger (never a decision).
                 byte missClass = spans.ClassifyMiss((int)node.Raw.Index, node.Raw.Gen, sl.CurGen(selfSlot), spanInputSig);
                 WalkWhy why = WalkClassifier.Classify(true, spanReuseDisabled, (uint)stats.SpanReuseDisabledReasons, blocked,
@@ -3460,9 +3481,15 @@ internal sealed class SceneRecordingContext
                 IsClipComplete(result.SubtreeBounds, in clip));
             spans!.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, in span, stats.CurGen, stats.CurSlot);
             spans.StoreSelf((int)node.Raw.Index, in visualBounds);
+            if ((flags & NodeFlags.Scrollable) != 0 && scene.HasScroll(node))
+                spans.StoreViewportSig((int)node.Raw.Index, node.Raw.Gen, ViewportStateSig(scene, node, flags));
             stats.SpansReRecorded++;
         }
-        if (isSliceSelf) stats.Slices!.EndWalk(selfSlot, result.HasBounds ? result.SubtreeBounds : default);
+        if (isSliceSelf)
+        {
+            stats.Slices!.EndWalk(selfSlot, result.HasBounds ? result.SubtreeBounds : default);
+            if (PartialKeepValidate) stats.Slices.ValidateExpected(selfSlot);
+        }
         stats.Reloc = parentReloc;
 
         return result;
@@ -3532,7 +3559,9 @@ internal sealed class SceneRecordingContext
     {
         ulong h = 14695981039346656037UL;
         Mix(ref h, node.Raw.Gen);
-        Mix(ref h, (uint)flags);
+        // Not the dirty axes: they say a change HAPPENED (the record-dirty bits already deny a dirty node its copy), never what
+        // the bytes are; keyed, a node recorded on the publication's first turn (dirty) missed its own span on the next.
+        Mix(ref h, (uint)(flags & ~(NodeFlags.LayoutDirty | NodeFlags.PaintDirty | NodeFlags.TransformDirty)));
         Mix(ref h, (uint)depth);
         MixRect(ref h, in clip);
         MixAffine(ref h, in world);

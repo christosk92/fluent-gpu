@@ -258,6 +258,7 @@ public sealed partial class SceneRecordingSnapshot
 
     private void CaptureCore(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots, bool incremental, ulong baseline)
     {
+        _uiDirtConsumed = false;   // a new publication: its UI dirt is unrecorded
         int count = source.RecordingNodeCount;
         // Parked/unreachable slots in the UI store do not require dense recording rows. Growth happens only
         // when the existing reachability walk encounters a required index, never while the renderer paints.
@@ -685,9 +686,10 @@ public sealed partial class SceneRecordingSnapshot
     // reading the trail here is precisely what made one animated leaf repaint everything. The trail readers below are
     // unchanged — span reuse must still be denied along it.
     public NodeFlags Flags(NodeHandle node) => node.Raw.Index < (uint)Capacity
-        ? _flags[node.Raw.Index] | (_overlaySelfEpoch[node.Raw.Index] == _overlayEpoch ? NodeFlags.TransformDirty | NodeFlags.PaintDirty : 0)
+        ? (_uiDirtConsumed ? _flags[node.Raw.Index] & ~UiDirtyAxes : _flags[node.Raw.Index])
+          | (_overlaySelfEpoch[node.Raw.Index] == _overlayEpoch ? NodeFlags.TransformDirty | NodeFlags.PaintDirty : 0)
         : default;
-    public byte RecordDirtyBits(NodeHandle node) => (byte)(_dirty[node.Raw.Index]
+    public byte RecordDirtyBits(NodeHandle node) => (byte)((_uiDirtConsumed ? 0 : _dirty[node.Raw.Index])
         | (_overlayDirtyEpoch[node.Raw.Index] == _overlayEpoch ? SceneStore.RecordDirtyContent : 0));
     // Also the SELF epoch, and for the same reason as Flags above: this is the recorder's OTHER route to a repaint
     // band (`contentDirtyNode`). It used to read "does this node have a paint row this epoch", which is true for a
@@ -695,10 +697,23 @@ public sealed partial class SceneRecordingSnapshot
     // damaging its band on every tick even after Flags stopped reporting it moved. The self epoch is stamped only by
     // a pose that actually changed, and only when a row was really acquired, so an overflowed node (whose pose is
     // discarded and which presents its authored paint) still reports 0 — gate.compositor-row-overflow.
-    public byte RecordDirtySelfBits(NodeHandle node) => (byte)(_dirtySelf[node.Raw.Index]
+    public byte RecordDirtySelfBits(NodeHandle node) => (byte)((_uiDirtConsumed ? 0 : _dirtySelf[node.Raw.Index])
         | (_overlaySelfEpoch[node.Raw.Index] == _overlayEpoch ? SceneStore.RecordDirtyContent : 0));
-    public byte RecordDirtyDescendantBits(NodeHandle node) => (byte)(_dirtyDescendant[node.Raw.Index]
+    public byte RecordDirtyDescendantBits(NodeHandle node) => (byte)((_uiDirtConsumed ? 0 : _dirtyDescendant[node.Raw.Index])
         | (_overlayDirtyEpoch[node.Raw.Index] == _overlayEpoch ? SceneStore.RecordDirtyContent : 0));
+
+    // The UI's dirt of THIS publication (its record-dirty bits and dirty-axis flags) is what changed since the previous
+    // publication. The render thread records a publication on its fresh turn, then again on every motion turn until the next
+    // one arrives (a compositor pose ticked): those later records must see only what changed since the record before them —
+    // this tick's poses. Read back on every turn, the UI's bits re-walked and re-damaged everything the UI last touched at the
+    // display rate: a seek-bar pixel published ten times a second re-recorded the shell's root slice and recomposited the bar
+    // on every equalizer tick (audit PERF r2). Reset by every capture.
+    private const NodeFlags UiDirtyAxes = NodeFlags.LayoutDirty | NodeFlags.PaintDirty | NodeFlags.TransformDirty;
+    private bool _uiDirtConsumed;
+
+    /// <summary>Render thread, after a record pass of this publication: its UI dirt is recorded — every later record of it reads
+    /// only the render thread's own poses as dirty (see <see cref="UiDirtyAxes"/>).</summary>
+    internal void ConsumeUiDirt() => _uiDirtConsumed = true;
 
     // Value-copied at capture, read-only on the renderer: never aliases the UI's mutable layout cache.
     internal TextMeasureEntry ResolveMeasureForWidth(NodeHandle node, float width)
