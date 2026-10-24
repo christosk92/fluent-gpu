@@ -19,4 +19,8 @@ public sealed partial class AppHost
     /// <summary>True when text node <paramref name="node"/> was trimmed (see <see cref="QueryTextOverflow"/>); false for a
     /// non-text node.</summary>
     public bool IsTextTrimmed(NodeHandle node) => QueryTextOverflow(node).Trimmed;
+
+    /// <summary>The glyph ink of text node <paramref name="node"/> as drawn, relative to its box (<see cref="TextOverflowQuery.TryInk"/>
+    /// over this host's scene and font system): false under the headless text model or for a run with no ink. UI thread, between frames.</summary>
+    public bool TryQueryTextInk(NodeHandle node, out RectF ink) => TextOverflowQuery.TryInk(_scene, _fonts, node, out ink);
 }
