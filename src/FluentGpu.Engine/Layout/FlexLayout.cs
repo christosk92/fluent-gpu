@@ -345,7 +345,17 @@ public sealed partial class FlexLayout
         RectF arranged = _scene.Bounds(node);
         BeginMeasurePass();
         var m = Measure(node, availW);
-        if (m.Width != pw || m.Height != ph) return false;   // outer size moved ⇒ ancestors must re-solve (Bounds scribble is repaired by that solve)
+        if (m.Width != pw || m.Height != ph)
+        {
+            // Outer size moved ⇒ ancestors must re-solve. That solve does NOT repair every rect this probe scribbled: it runs a NEW pass, and a
+            // clean boundary under this node (a fixed-size editor) that it answers from the ring and early-outs in Arrange restores only what THAT
+            // pass measured, so the probe's hypothetical sizes stayed live (an EditableText lane left at its 55.64 content width while the field
+            // grew to 301.9, under --fg layout-verify a divergence on every frame of the pill's widening). Put them back now, as MeasureNatural does.
+            ref RectF nb = ref _scene.Bounds(node);
+            nb = arranged;
+            RestoreArrangedDescendants(node);
+            return false;
+        }
         Arrange(node, arranged.X, arranged.Y, arranged.W, arranged.H);
         return true;
     }
