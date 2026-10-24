@@ -48,6 +48,18 @@ internal static class ViewSlotDiagnostics
     }
 }
 
+/// <summary>What a slot host resolved last, for inspection (<see cref="FluentGpu.Hosting.AppHost.CollectViewSlots"/>): both null
+/// while it renders nothing (no registry, an unregistered key).</summary>
+internal interface IViewSlotHost
+{
+    string? ViewId { get; }
+    string? TemplateId { get; }
+}
+
+/// <summary>One live view slot, for inspection: the host component's anchor node, the view key id it resolved (with its
+/// <c>@version</c>) and the template id the registry gave it.</summary>
+public readonly record struct ViewSlotInfo(NodeHandle Anchor, string ViewId, string TemplateId);
+
 /// <summary>
 /// The component behind <see cref="Slots.View{TProps}"/>. It owns no template state: it resolves the key through the
 /// nearest <see cref="ViewRegistry"/> provider and renders a body component with the resolved template. Re-renders when its
@@ -57,13 +69,16 @@ internal static class ViewSlotDiagnostics
 /// <c>Key</c> on a component's root is inert), which disposes the old body's whole scope: hook cells, effects, intervals,
 /// measure hooks.</para>
 /// </summary>
-internal sealed class ViewSlotHost<TProps> : Component where TProps : class
+internal sealed class ViewSlotHost<TProps> : Component, IViewSlotHost where TProps : class
 {
     private static readonly BoxEl s_empty = new();
 
     private string? _lastId;
     private string? _lastTemplateId;
     private bool _flip;
+
+    string? IViewSlotHost.ViewId => _lastId;
+    string? IViewSlotHost.TemplateId => _lastTemplateId;
 
     public override Element Render()
     {
