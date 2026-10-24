@@ -167,7 +167,7 @@ public struct LayoutInput
 /// scene-memory.md §2.6 hot/cold split): <see cref="ColdRef"/> 0 = the shared default row, so the common node pays four
 /// bytes for them. Read the cold half through <c>SceneStore.PaintCold</c> / <c>SceneRecordingSnapshot.PaintCold</c>;
 /// write it only through <c>SceneStore.SetPaintCold</c> (which owns the row's lifetime).</summary>
-public struct NodePaint
+public record struct NodePaint
 {
     public Affine2D LocalTransform;
     public float Opacity;
@@ -297,7 +297,9 @@ public struct NodePaint
     };
 
     /// <summary>Field equality ignoring <see cref="ColdRef"/> (a container-local row id): the snapshot parity check
-    /// compares hot halves with this and the cold rows by value.</summary>
+    /// compares hot halves with this and the cold rows by value. The columns the check compares are <c>record struct</c>s:
+    /// their compiler-generated <c>Equals(T)</c> compares every field without boxing, where a plain struct's
+    /// <c>ValueType.Equals</c> boxes each field through reflection (about 1 MB per verified frame on a Debug stage).</summary>
     public readonly bool HotEquals(in NodePaint other)
     {
         NodePaint a = this, b = other;
@@ -425,7 +427,7 @@ internal sealed class PaintColdRows
 /// (UI-side for hit-testing; render-side by <c>ScrollPoser</c> at the predicted present time). Scrollbar chrome
 /// (fade/expand/hover/idle) lives in <c>FluentGpu.Scroll.Runtime.ScrollBarChromeTable</c>.
 /// </summary>
-public struct ScrollState
+public record struct ScrollState
 {
     // ── RESULT columns — written by the host's per-frame scroll step (AppHost.RunScrollFrame) from the plan. ──
     /// <summary>The displayed main-axis content offset this UI frame (DIP, content coordinates, double — positions
@@ -677,7 +679,7 @@ public struct GridSpec
 /// <c>HoverT</c>/<c>PressT</c> toward their targets on pointer enter/leave/press; the recorder lerps Fill/Border with them
 /// for the WinUI ~83ms brush transition (instead of the instant flag switch).
 /// </summary>
-public struct InteractionAnim
+public record struct InteractionAnim
 {
     public float HoverT, HoverTarget, PressT, PressTarget;
     public float HoverStart, PressStart, HoverElapsedMs, PressElapsedMs;
@@ -710,7 +712,7 @@ public struct InteractionAnim
 /// placeholder and a list row's fill, and <see cref="GradientBit"/>/<see cref="BorderBrushBit"/> fade a gradient fill and a
 /// gradient border from the spec kept in <c>SceneStore.TryGetGradientFadeFrom</c>/<c>TryGetBorderBrushFadeFrom</c>.
 /// </summary>
-public struct BrushAnim
+public record struct BrushAnim
 {
     public ColorF FillFrom, BorderFrom, TextFrom;
     public float T;            // 0 → 1 progress (advanced by the unified engine's BrushFade track)
@@ -726,7 +728,7 @@ public struct BrushAnim
 /// <see cref="SceneStore.SetTextEditRects"/>) to emit selection highlight / selected-text recolor / IME underlines /
 /// the caret bar — retained scene state, never composed elements (0 alloc in phases 6–13).
 /// </summary>
-public struct TextEditState
+public record struct TextEditState
 {
     public int CompStart, CompLen;          // in-flight IME composition span (document indices); CompLen 0 = none
     public float ScrollX;                   // horizontal caret-follow offset (applied by the control as a transform)
@@ -736,7 +738,7 @@ public struct TextEditState
 }
 
 /// <summary>Hit-test / input column.</summary>
-public struct InteractionInfo
+public record struct InteractionInfo
 {
     public uint HandlerMask;      // bit0 click, bit1 key, bit2 pointer, bit3 char, bit4 repeat, bit5 pressed, bit6 context,
                                   // bit7 focus, bit8 drag, bit9 explicit cursor, bit10 no-Enter-activate,
