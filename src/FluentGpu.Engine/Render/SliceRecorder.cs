@@ -2490,7 +2490,7 @@ public sealed partial class SliceRecorder
             // the composite item
             if (_rowCount == _rows.Length) Array.Resize(ref _rows, _rows.Length * 2);
             _rows[_rowCount++] = row;
-            NoteRow(_rowCount - 1, e.Slot, e.Segment, ox, oy);
+            NoteRow(_rowCount - 1, e.Slot, e.Segment, ox, oy, inline);
             float alpha = 1f, sigma = 0f;
             EdgeFeather feather = default;
             RectF srcPx = default;
@@ -2549,6 +2549,7 @@ public sealed partial class SliceRecorder
         }
         _exposedMissing = table.CountExposedMissing();
         PlanRasterDamage(table, scale);   // sub-tile damage: a content re-raster of a trusted surface repaints only what changed
+        CollectInlineOps(scale);          // an inline item's op list: the partial present diffs it (SliceRecorder.Content.cs)
 
         // Present1 parameters: the repaint set (window DIP) ∪ the visible re-rastered tiles' destinations → device px.
         var dirty = repaint;
@@ -2580,7 +2581,7 @@ public sealed partial class SliceRecorder
             _frameSpans.AsSpan(0, _frameSpanCount), _itemLayers.AsSpan(0, _itemCount),
             _rasterDone.AsSpan(0, _rasterCount), _itemInherited.AsSpan(0, 2 * _itemCount),
             EvRasterFlags(_rasterCount), EvItemFlags(_itemCount), table.TrimmedSurfaces,   // the textures the table released (§13.1g)
-            table.OwnerId);
+            table.OwnerId, _inlineOps.AsSpan(0, _inlineOpCount), _rowInlineRange.AsSpan(0, 2 * _rowCount));
     }
 
     private void AddItem(in CompositeItem item, in PushLayerCmd layer, in Inherit dist, in Plan e)
