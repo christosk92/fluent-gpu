@@ -56,6 +56,9 @@ public static class ControlStyles
     /// <summary>The AutoSuggestBox suggestion popup's card (WinUI's SuggestionsContainer: the frosted flyout plate); a theme with solid popups
     /// (square, no frost) hands its own.</summary>
     public static readonly ControlStyleKey<Func<PopupPlate>> AutoSuggestBoxSuggestionsPlate = new("autosuggestbox.suggestions");
+    /// <summary>The generic <see cref="PopupChrome.Popup"/> flyout's card (a panel, a picker, a slider popup: content that brings its own padding; WinUI's
+    /// frosted flyout plate with no presenter padding); a theme with solid popups (square, no frost) hands its own.</summary>
+    public static readonly ControlStyleKey<Func<PopupPlate>> PopupPlateStyle = new("popup.plate");
     /// <summary>InfoBar (and the toast card, which is an InfoBar body): plate, icon, text, close button.</summary>
     public static readonly ControlStyleKey<Func<InfoBar.Style>> InfoBarStyle = new("infobar");
     /// <summary>ToolTip: the bubble.</summary>
@@ -113,6 +116,7 @@ public static class ControlStyles
         .With(TextBoxFieldStyle, TextFieldStyle.Fluent)
         .With(AutoSuggestBoxFieldStyle, AutoSuggestBox.FluentFieldStyle)
         .With(AutoSuggestBoxSuggestionsPlate, PopupPlate.Fluent)
+        .With(PopupPlateStyle, PopupPlate.FluentPopup)
         .With(InfoBarStyle, InfoBar.FluentStyle)
         .With(ToolTipStyle, ToolTip.FluentStyle)
         .With(ProgressRingStyle, ProgressRing.FluentStyle)
