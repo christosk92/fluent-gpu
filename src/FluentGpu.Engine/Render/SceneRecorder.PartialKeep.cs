@@ -33,7 +33,7 @@ internal sealed partial class SceneRecordingContext
     /// <summary><c>--fg rewalk-validate</c>: never keep partially; re-walk and check that it would have been exact.</summary>
     internal static bool PartialKeepValidate;
 
-    private static int s_validatedKeeps, s_keepMismatches, s_entryMismatches, s_entryDrift, s_offsetMismatches, s_cutsChecked;
+    private static int s_validatedKeeps, s_keepMismatches, s_keepDrift, s_entryMismatches, s_entryDrift, s_offsetMismatches, s_cutsChecked;
     private static long s_lastValidateLog;
 
     internal const byte CutTranslation = 1, CutLayer = 2, CutBoundary = 3;
@@ -94,9 +94,12 @@ internal sealed partial class SceneRecordingContext
         clip = RectF.Infinite;
         for (int s = slot, guard = 0; s > SliceRecorder.RootSlot && guard < 64; s = sl.ParentOf(s), guard++)
         {
-            if (sl.PoseOf(s) is not (SliceRecorder.PoseKind.Content or SliceRecorder.PoseKind.Effect)) continue;
             ref CutEntry e = ref sl.CutOf(s);
-            if (e.Frame == 0 || e.Kind != CutTranslation) return false;
+            if (e.Frame == 0)
+            {
+                if (sl.PoseOf(s) is SliceRecorder.PoseKind.Content or SliceRecorder.PoseKind.Effect) return false;   // its clip is unknown
+                continue;
+            }
             if (e.SliceClipPart.IsInfinite) continue;
             sl.CurrentAcc(sl.ParentOf(s), scene, out float pdx, out float pdy);
             RectF w = SliceRecorder.Offset(in e.SliceClipPart, pdx, pdy);
@@ -109,7 +112,7 @@ internal sealed partial class SceneRecordingContext
     /// file header. On success the slice's arena is kept, its clean child slices kept, its dirty ones walked directly, and
     /// <paramref name="result"/> is what the full walk would have returned (a superset: the kept extent ∪ the re-walked ones).</summary>
     private bool TryPartialKeep(SceneRecordingSnapshot scene, ImageRecordingSnapshot? images, NodeHandle node, int selfSlot, bool inMotion,
-        in DrawSpan kept, ulong spanInputSig, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
+        bool rootPosed, in DrawSpan kept, ulong spanInputSig, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
         ReadOnlySpan<NodeHandle> skipRoots, SpanTable spans, uint spanFrame, bool spanReuseDisabled, bool spanStoreEnabled,
         ref RecordAccumulator stats, out SpanRecordResult result)
     {
@@ -118,7 +121,7 @@ internal sealed partial class SceneRecordingContext
         var sl = stats.Slices!;
         int probe = sl.BeginProbe(selfSlot, scene.Capacity);
         int dirty = 0;
-        if (!ProbeOwnWalk(scene, node, sl, spans, spanFrame, inMotion, ref dirty) || dirty == 0) return false;
+        if (!ProbeOwnWalk(scene, node, sl, spans, spanFrame, inMotion, rootPosed, ref dirty) || dirty == 0) return false;
         if (PartialKeepValidate)
         {
             // take the full re-walk; its end checks it wrote exactly the kept bytes (EndWalk → ValidateKept)
@@ -146,10 +149,11 @@ internal sealed partial class SceneRecordingContext
     /// recorded under, and every dirty child slice can be re-entered (each is marked; <paramref name="dirty"/> counts them).</summary>
     /// <param name="inMotion">The slice root's own motion gate: what every node of its walk hands a child slice's root (each of
     /// them is clean, so none adds a transform write of its own) — a child slice is re-entered only under the gate it was cut under.</param>
+    /// <param name="rootPosed">The slice root walks under a pose-free local: its own transform-only self bit is its pose, no byte.</param>
     private bool ProbeOwnWalk(SceneRecordingSnapshot scene, NodeHandle root, SliceRecorder sl, SpanTable spans, uint spanFrame, bool inMotion,
-        ref int dirty)
+        bool rootPosed, ref int dirty)
     {
-        if (scene.RecordDirtySelfBits(root) != 0) return false;
+        if ((scene.RecordDirtySelfBits(root) & (rootPosed ? ~SceneStore.RecordDirtyTransform : 0xFF)) != 0) return false;
         // the slice's OWN Layer slice (a slice root that needs a group layer cuts it at its own node): its stream is that marker
         int own = sl.ProbeBoundary((int)root.Raw.Index);
         if (own >= 0) return MarkIfReenterable(scene, sl, own, root, spans, spanFrame, inMotion, ref dirty);
@@ -186,8 +190,13 @@ internal sealed partial class SceneRecordingContext
         bool inMotion, ref int dirty)
     {
         if (scene.RecordDirtyBits(c) == 0) return true;   // clean: kept whole with its subtree
-        if (scene.RecordDirtySelfBits(c) != 0) return false;   // its own state changed: its marker may differ
         ref CutEntry e = ref sl.CutOf(slot);
+        // its own state changed: its marker may differ — unless the change is only its transform and that is its pose (a posed
+        // slice's marker is pose-free: the composite places it)
+        byte own = scene.RecordDirtySelfBits(c);
+        if (e.Frame != 0 && e.SelfHasLocal && sl.PoseOf(slot) is SliceRecorder.PoseKind.Content or SliceRecorder.PoseKind.Effect)
+            own &= unchecked((byte)~SceneStore.RecordDirtyTransform);
+        if (own != 0) return false;
         if (e.Frame == 0 || e.NodeIndex != (int)c.Raw.Index || e.Gen != c.Raw.Gen || e.ParentSlot != sl.ParentOf(slot)) return false;
         if (e.OpacityGroup || e.Inherited.UnderElevateRoot != 0) return false;
         // the motion gate is the one cut input that changes with no dirty bit (a transform write ends without one)
@@ -237,7 +246,8 @@ internal sealed partial class SceneRecordingContext
         var saved = SaveSlice(ref stats);
         sl.CurrentAcc(sl.ParentOf(slot), scene, out float pdx, out float pdy);
         float odx = 0f, ody = 0f;
-        if (e.Kind == CutTranslation) sl.OwnDelta(slot, scene, out odx, out ody);
+        bool posedCut = sl.PoseOf(slot) is SliceRecorder.PoseKind.Content or SliceRecorder.PoseKind.Effect;
+        if (posedCut) sl.OwnDelta(slot, scene, out odx, out ody);
         DeriveSliceClip(scene, sl, slot, out RectF sliceClip);
         stats.CurDx = pdx; stats.CurDy = pdy;
         stats.SliceClip = sliceClip;
@@ -269,8 +279,8 @@ internal sealed partial class SceneRecordingContext
             stats.Reloc = parentReloc;
             RestoreSlice(ref stats, in saved);
         }
-        if (!res.HasBounds || e.Kind != CutTranslation) return res;
-        // a translation slice paints at its own pose, bounded by its marker clip (what TryCutTranslation hands its parent)
+        if (!res.HasBounds || !posedCut) return res;
+        // a posed slice paints at its own pose, bounded by its marker clip (what its cut hands its parent)
         var painted = new SpanRecordResult();
         RectF p = SliceRecorder.Offset(res.SubtreeBounds, odx, ody);
         painted.Include(e.SliceClipPart.IsInfinite ? p : p.Intersect(e.SliceClipPart));
@@ -296,8 +306,11 @@ internal sealed partial class SceneRecordingContext
         s_validatedKeeps++;
         if (!arena.BytesEqualPrior())
         {
+            // float drift of a recomputed world or clip (< 0.001): the same pixels — counted apart
+            if (arena.DiffersOnlyByFloatDrift(1e-3f)) { s_keepDrift++; MaybeLogValidation(); return; }
             s_keepMismatches++;
-            Console.Error.WriteLine($"[rewalk-validate] MISMATCH kept arena: slot={slot} node={sl.NodeIndexOf(slot)}:{sl.GenOf(slot)} role={sl.RoleOf(slot)} bytes={arena.BytePosition}");
+            arena.FirstOpDifferingFromPrior(out int at, out int curOp, out int priorOp);
+            Console.Error.WriteLine($"[rewalk-validate] MISMATCH kept arena: slot={slot} node={sl.NodeIndexOf(slot)}:{sl.GenOf(slot)} role={sl.RoleOf(slot)} bytes={arena.BytePosition} firstDiff@{at} op {(DrawOp)priorOp} -> {(DrawOp)curOp}");
         }
         MaybeLogValidation();
     }
@@ -385,6 +398,6 @@ internal sealed partial class SceneRecordingContext
         long now = Environment.TickCount64;
         if (now - s_lastValidateLog < 2000) return;
         s_lastValidateLog = now;
-        Console.Error.WriteLine($"[rewalk-validate] {(s_keepMismatches + s_entryMismatches + s_offsetMismatches == 0 ? "ok" : "FAIL")} keepsChecked={s_validatedKeeps} keepMismatches={s_keepMismatches} cutsChecked={s_cutsChecked} entryMismatches={s_entryMismatches} entryDrift={s_entryDrift} offsetMismatches={s_offsetMismatches}");
+        Console.Error.WriteLine($"[rewalk-validate] {(s_keepMismatches + s_entryMismatches + s_offsetMismatches == 0 ? "ok" : "FAIL")} keepsChecked={s_validatedKeeps} keepMismatches={s_keepMismatches} keepDrift={s_keepDrift} cutsChecked={s_cutsChecked} entryMismatches={s_entryMismatches} entryDrift={s_entryDrift} offsetMismatches={s_offsetMismatches}");
     }
 }

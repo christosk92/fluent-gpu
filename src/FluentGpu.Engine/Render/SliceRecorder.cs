@@ -2080,7 +2080,11 @@ public sealed partial class SliceRecorder
         {
             layer.HasLayer = true;
             layer.Layer = PosedLayer(in m, pdx, pdy, sticky, in stickyWc);
-            layer.InnerClip = m.Has(CompositeSliceFlags.InnerClip) ? Offset(m.InnerClip.DeviceRect, pdx, pdy) : default;
+            // A POSED layer slice (a self-blur whose own translate is its pose — SceneRecordingContext's layer cut) recorded its
+            // layer rect and blur source pose-free: they ride its own pose too. Its composite clip is its parent's and does not.
+            float ldx = pdx, ldy = pdy;
+            if (c.Pose == PoseKind.Effect) { ldx = cdx; ldy = cdy; layer.Layer = layer.Layer with { DeviceRect = Offset(m.Layer.DeviceRect, cdx, cdy) }; }
+            layer.InnerClip = m.Has(CompositeSliceFlags.InnerClip) ? Offset(m.InnerClip.DeviceRect, ldx, ldy) : default;
         }
 
         // An acrylic slice: its frosted backdrop composites first (from everything painted before it), then its content.
@@ -2646,12 +2650,21 @@ public sealed partial class SliceRecorder
             }
             // A Screen-blended or feedback item never hides what is under it: its result depends on the destination.
             bool claimsCover = !r.Screen && !r.HasFeedback;
+            // A POSED self-blur (its own translate is its pose): the whole-px placement above, plus what it falls short of the
+            // exact one — the backend draws the blurred surface that much further, bilinearly (CompositeItem.SubPxX).
+            float subX = 0f, subY = 0f;
+            if (r.Pose == PoseKind.Effect && effect && e.HasLayer && sigma > 0f && !fractional)
+            {
+                subX = e.AccDx * scale - MathF.Round(e.AccDx * scale);
+                subY = e.AccDy * scale - MathF.Round(e.AccDy * scale);
+            }
             AddItem(new CompositeItem(id, posedImage ? CompositeKind.Image : lowRes > 0 || inline ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
                 clipPx,
                 RadiiPx(e.RoundR, scale), feather, sigma, default, r.Screen ? CompositeItem.BlendScreen : (byte)0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
                 feather2, default, e.Dist.Count, lowRes,
                 claimsCover && !posedImage ? OpaquePx(in sg.Opaque, in e, scale, alpha, sigma, in feather, in feather2, in clipPx) : default,
-                r.HasFeedback ? r.Feedback.Spec : default, r.HasFeedback ? r.Feedback.Warp : default, r.HasFeedback ? r.Feedback.EffectiveDecay : 0f),
+                r.HasFeedback ? r.Feedback.Spec : default, r.HasFeedback ? r.Feedback.Warp : default, r.HasFeedback ? r.Feedback.EffectiveDecay : 0f,
+                subX, subY),
                 in e.Layer, in e.Dist, in e);
         }
         while (groupDepth > 0) { int at = _groupOpenAt[--groupDepth]; _items[at] = _items[at] with { GroupCount = _itemCount - at - 1 }; }

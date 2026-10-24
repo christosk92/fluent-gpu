@@ -1787,6 +1787,36 @@ internal sealed partial class SceneRecordingContext
                     sl.SetBudget(slot, budget);
                     if (!isAcrylic && !selfLayerCut) sl.SetLowRes(slot, scene.RepaintBoundaryDown(node));
                     bool group = isEdgeFade || isBlurGroup || isOpacityGroup;
+                    // A self-blur's own pure TRANSLATION is a composite pose (audit PERF r2), as a scroll content's or a
+                    // sticky row's already is: the slice records POSE-FREE — its root walked without its translate, under an
+                    // unbounded clip, the clip riding its marker — and the composite places it (layer rect and blur source with
+                    // it) at its posed offset. A row moved by a translate (the lyrics hand-off cascade) then re-records,
+                    // re-rasters and re-blurs nothing: its tiles and its retained blur (keyed relative to the item's whole-px
+                    // placement) move as they are. A scale or rotation, a sticky clip, a Layer-role cut or a skewed parent world
+                    // keep it baked, as before.
+                    Affine2D layerBase = parentWorld.Translate(b.X, b.Y);
+                    bool posedLayer = isBlurGroup && !selfLayerCut && !stickyCut && !isAcrylic
+                        && p.LocalTransform.M11 == 1f && p.LocalTransform.M22 == 1f && p.LocalTransform.M12 == 0f && p.LocalTransform.M21 == 0f
+                        && parentWorld.M12 == 0f && parentWorld.M21 == 0f;
+                    PushLayerCmd markerLayer = groupLayer;
+                    RectF markerSource = groupSourceClip, markerBounds = deviceBounds;
+                    float layerDx = 0f, layerDy = 0f;
+                    if (posedLayer)
+                    {
+                        RectF freeBounds = layerBase.TransformBounds(local);
+                        var freeGeometry = SelfBlurRegion.ComputeRecordGeometry(freeBounds, RectF.Infinite, p.BlurSigma,
+                            scene.DeviceScale > 0f ? scene.DeviceScale : 1f);
+                        if (freeGeometry.VisibleOutput.IsEmpty || freeGeometry.RequiredSource.IsEmpty) posedLayer = false;
+                        else
+                        {
+                            markerLayer = DrawList.BlurLayerCmd(freeBounds, p.Corners, p.BlurSigma, opacity, clip);
+                            markerSource = freeGeometry.RequiredSource;
+                            markerBounds = freeBounds;
+                            Affine2D posedW = SliceRecorder.Conjugate(in layerBase, in p.LocalTransform, ox, oy);
+                            layerDx = posedW.Dx - layerBase.Dx;
+                            layerDy = posedW.Dy - layerBase.Dy;
+                        }
+                    }
                     int mflags = (group ? (int)CompositeSliceFlags.Layer | (isBlurGroup ? (int)CompositeSliceFlags.InnerClip : 0)
                         | (isEdgeFade && distributeFade ? (int)CompositeSliceFlags.DistributeFade : 0) : 0)
                         | (stickyCut ? (int)CompositeSliceFlags.StickyClip : 0)
@@ -1795,7 +1825,7 @@ internal sealed partial class SceneRecordingContext
                         ? new AcrylicRecipe(ac.Tint, ac.Fallback, ac.TintOpacity, ac.BlurSigma, ac.NoiseOpacity, ac.LuminosityOpacity, ac.FeatherTop)
                         : default;
                     var cmd = new CompositeSliceCmd((int)node.Raw.Index, node.Raw.Gen, (int)role, (int)SliceKind.Effect, mflags, clip,
-                        default, group ? groupLayer : default, new ClipCmd(groupSourceClip), deviceBounds, key, key);
+                        default, group ? markerLayer : default, new ClipCmd(markerSource), markerBounds, key, key);
                     if (selfLayerCut)
                     {
                         // This slice's stream is the Layer marker alone: KEEP it whole when nothing below changed, the
@@ -1829,27 +1859,37 @@ internal sealed partial class SceneRecordingContext
                     int markerAt = dl.CompositeSlice(in cmd, key);
                     CountGroups(ref stats, isEdgeFade, isBlurCandidate, isBlurGroup);
                     sl.AddChild(stats.CurSlot, slot);
-                    sl.SetPose(slot, SliceRecorder.PoseKind.None, Affine2D.Identity, 0f, 0f, Affine2D.Identity, 0f, 0f);
-                    sl.SetMarker(slot, in clip, mflags, group ? groupLayer : default, in acrylic, in deviceBounds, p.Corners, opacity);
+                    if (posedLayer) sl.SetPose(slot, SliceRecorder.PoseKind.Effect, in layerBase, ox, oy, Affine2D.Identity, layerDx, layerDy);
+                    else sl.SetPose(slot, SliceRecorder.PoseKind.None, Affine2D.Identity, 0f, 0f, Affine2D.Identity, 0f, 0f);
+                    sl.SetMarker(slot, in clip, mflags, group ? markerLayer : default, in acrylic, in markerBounds, p.Corners, opacity);
                     sl.SetSticky(slot, stickyCut, in world);
                     if (stickyCut) sl.UnbakeClip(nodeIdx);
                     var saved = SaveSlice(ref stats);
+                    if (posedLayer && !clip.IsInfinite)
+                    {
+                        // a posed slice records unclipped: its repaint bands are bounded by its composite clip instead (as a
+                        // translation slice's are)
+                        RectF wclip = SliceRecorder.Offset(in clip, stats.CurDx, stats.CurDy);
+                        stats.SliceClip = stats.SliceClip.IsInfinite ? wclip : stats.SliceClip.Intersect(wclip);
+                    }
                     stats.SelfNode = node;
                     stats.SelfSlot = slot;
-                    // a Layer slice walks its node under the same (pose-free) local the node's own slice walks it under
-                    stats.SelfHasLocal = selfLayerCut && selfHasLocal;
-                    stats.SelfLocal = selfLayerCut ? selfLocal : default;
+                    // a Layer slice walks its node under the same (pose-free) local the node's own slice walks it under; a posed
+                    // layer under none (its translate is its pose)
+                    stats.SelfHasLocal = posedLayer || (selfLayerCut && selfHasLocal);
+                    stats.SelfLocal = posedLayer ? Affine2D.Identity : selfLayerCut ? selfLocal : default;
                     stats.SelfOmitLayer = group;   // the group ops ride the marker; the slice records the group's CONTENT
                     stats.SelfPose = SliceRecorder.PoseKind.None;
                     stats.SelfAcrylic = isAcrylic;
                     stats.SelfStickyClip = stickyCut;
-                    EnterSlice(ref stats, sl, slot, 0f, 0f, carryAdditive: true);
-                    NoteCut(scene, sl, slot, node, CutLayer, isOpacityGroup, in parentWorld, parentOpacity, depth, clip, parentScaleX, parentScaleY,
-                        parentInMotion, parentScrollInMotion, in inherited, true, in saved, RectF.Infinite, ref stats);
+                    EnterSlice(ref stats, sl, slot, layerDx, layerDy, carryAdditive: true);
+                    RectF walkClip = posedLayer ? RectF.Infinite : clip;
+                    NoteCut(scene, sl, slot, node, CutLayer, isOpacityGroup, in parentWorld, parentOpacity, depth, walkClip, parentScaleX, parentScaleY,
+                        parentInMotion, parentScrollInMotion, in inherited, true, in saved, posedLayer ? clip : RectF.Infinite, ref stats);
                     SpanRecordResult res;
                     try
                     {
-                        res = WalkCore(scene, sl.Arena(slot), images, node, parentWorld, parentOpacity, depth, clip, in focus, in textEdit,
+                        res = WalkCore(scene, sl.Arena(slot), images, node, parentWorld, parentOpacity, depth, walkClip, in focus, in textEdit,
                             scrollThumb, scrollTrack, parentScaleX, parentScaleY, parentInMotion, parentScrollInMotion, inherited, skipRoots,
                             spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                     }
@@ -1875,6 +1915,14 @@ internal sealed partial class SceneRecordingContext
                     }
                     if (selfLayerCut) sl.EndWalk(selfSlot, res.HasBounds ? res.SubtreeBounds : default);
                     stats.NodesVisited--;   // the slice-root walk counted it
+                    if (posedLayer && res.HasBounds)
+                    {
+                        // what the slice paints at its pose, bounded by its composite clip (what a translation cut hands its parent)
+                        var painted = new SpanRecordResult();
+                        RectF at = SliceRecorder.Offset(res.SubtreeBounds, layerDx, layerDy);
+                        painted.Include(clip.IsInfinite ? at : at.Intersect(clip));
+                        return painted;
+                    }
                     return res;
                 }
             }
@@ -2038,7 +2086,12 @@ internal sealed partial class SceneRecordingContext
                 bool keepable = !spanReuseDisabled && !blocked && stats.KeepDenySlot != selfSlot
                     && spans.TryGet((int)node.Raw.Index, node.Raw.Gen, sl.CurGen(selfSlot), spanInputSig, out kept)
                     && kept.ByteStart == 0 && kept.ByteLength == dl.BytePosition;
-                if (keepable && recordDirtyBits == 0)
+                // A slice root walked under a pose-free local: its own transform is its composite pose, never a byte, so a
+                // transform-only self bit (a translate written as a pose: a scroll content, a lyrics row's cascade) keeps it.
+                byte keepBits = selfHasLocal
+                    ? (byte)((scene.RecordDirtySelfBits(node) & ~SceneStore.RecordDirtyTransform) | scene.RecordDirtyDescendantBits(node))
+                    : recordDirtyBits;
+                if (keepable && keepBits == 0)
                 {
                     sl.Keep(selfSlot);
                     spans.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, in kept, sl.CurGen(selfSlot), selfSlot);
@@ -2048,7 +2101,7 @@ internal sealed partial class SceneRecordingContext
                     return keptResult;
                 }
                 // Dirty below, but only inside child slices: keep this arena, walk just those (SceneRecorder.PartialKeep.cs).
-                if (keepable && TryPartialKeep(scene, images, node, selfSlot, inMotion, in kept, spanInputSig, in focus, in textEdit, scrollThumb,
+                if (keepable && TryPartialKeep(scene, images, node, selfSlot, inMotion, selfHasLocal, in kept, spanInputSig, in focus, in textEdit, scrollThumb,
                         scrollTrack, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats, out var partial))
                     return partial;
                 // Why the keep failed — read-only probes replaying the test above, for the walk ledger (never a decision).

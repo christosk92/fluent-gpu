@@ -549,6 +549,45 @@ public sealed class DrawList
     /// nested slice writes its own arena byte for byte again: the recorder then keeps that arena's scan.)</summary>
     public bool BytesEqualPrior() => _len == _priorLen && _buf.AsSpan(0, _len).SequenceEqual(_priorBuf.AsSpan(0, _priorLen));
 
+    /// <summary>Diagnostics (<c>--fg rewalk-validate</c>): the first op whose bytes differ between the current buffer and the
+    /// prior one — its offset and opcode in each (−1 when past that buffer's end).</summary>
+    /// <summary>Diagnostics (<c>--fg rewalk-validate</c>): do the current and prior buffers differ ONLY by float drift — the same
+    /// length, and every differing 4-byte word a finite, normal float (never a small integer, which reads as a denormal) within
+    /// <paramref name="eps"/> of the prior one? (A world recomputed through another float path: the same pixels.)</summary>
+    internal bool DiffersOnlyByFloatDrift(float eps)
+    {
+        if (_len != _priorLen || (_len & 3) != 0) return false;
+        var a = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(_priorBuf.AsSpan(0, _len));
+        var b = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(_buf.AsSpan(0, _len));
+        var ai = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, int>(_priorBuf.AsSpan(0, _len));
+        var bi = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, int>(_buf.AsSpan(0, _len));
+        for (int i = 0; i < a.Length; i++)
+        {
+            if (ai[i] == bi[i]) continue;
+            if (!float.IsNormal(a[i]) || !float.IsNormal(b[i]) || MathF.Abs(a[i] - b[i]) > eps) return false;
+        }
+        return true;
+    }
+
+    internal void FirstOpDifferingFromPrior(out int offset, out int curOp, out int priorOp)
+    {
+        int n = Math.Min(_len, _priorLen), d = _buf.AsSpan(0, n).CommonPrefixLength(_priorBuf.AsSpan(0, n));
+        offset = d; curOp = OpAt(_buf, _len, d); priorOp = OpAt(_priorBuf, _priorLen, d);
+
+        static int OpAt(byte[] b, int len, int at)
+        {
+            int pos = 0;
+            while (pos + sizeof(int) <= len)
+            {
+                var op = (DrawOp)System.Runtime.InteropServices.MemoryMarshal.Read<int>(b.AsSpan(pos));
+                if (!FluentGpu.Rhi.RepaintStreamSafety.TryBodySize(op, out int body)) return -2;
+                if (at < pos + sizeof(int) + body) return (int)op;
+                pos += sizeof(int) + body;
+            }
+            return -1;
+        }
+    }
+
     public bool CanCopyPriorSpan(int byteStart, int byteLength, int sortStart, int sortCount)
         => byteStart >= 0 && byteLength >= 0 && byteStart + byteLength <= _priorLen
            && sortStart >= 0 && sortCount >= 0 && sortStart + sortCount <= _priorSortLen;

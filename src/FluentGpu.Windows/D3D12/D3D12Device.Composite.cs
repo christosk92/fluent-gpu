@@ -1347,6 +1347,7 @@ public sealed unsafe partial class D3D12Device
             if (it.Kind == CompositeKind.Group) unscopedEnd = Math.Max(unscopedEnd, k + 1 + it.GroupCount);
             Mix(ref h, (ulong)(uint)it.Kind << 32 | (uint)it.SliceId);
             Mix(ref h, (ulong)(uint)(int)it.Transform.Dx << 32 | (uint)(int)it.Transform.Dy);
+            Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.SubPxX) << 32 | BitConverter.SingleToUInt32Bits(it.SubPxY));   // a posed blur between pixels
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Alpha) << 32 | BitConverter.SingleToUInt32Bits(it.BlurSigma));
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Clip.X) << 32 | BitConverter.SingleToUInt32Bits(it.Clip.Y));
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Clip.W) << 32 | BitConverter.SingleToUInt32Bits(it.Clip.H));
@@ -1396,7 +1397,13 @@ public sealed unsafe partial class D3D12Device
             case CompositeKind.Tiles:
             case CompositeKind.Region:
             {
-                if (it.BlurSigma > 0f) return _itemSurface[k] < 0 || Overlaps(in _itemRegion[k], in region);
+                if (it.BlurSigma > 0f)
+                {
+                    if (_itemSurface[k] < 0) return true;
+                    PixelRect rg = _itemRegion[k];
+                    if (it.SubPxX != 0f || it.SubPxY != 0f) rg = new PixelRect(rg.Left - 1, rg.Top - 1, rg.Right + 1, rg.Bottom + 1);   // drawn between pixels
+                    return Overlaps(in rg, in region);
+                }
                 ReadOnlySpan<TilePlacement> placed = frame.PlacementsOf(it.SliceId);
                 for (int p = 0; p < placed.Length; p++)
                     if (Overlaps(PlacementRect(in it, in placed[p]), in region)) return true;
@@ -1569,7 +1576,18 @@ public sealed unsafe partial class D3D12Device
         PixelRect region = _itemRegion[i];
         ItemScissor(in it, ox, oy);
         int down = _itemDown[i];
-        if (down <= 1)
+        if (it.SubPxX != 0f || it.SubPxY != 0f)
+        {
+            // A posed self-blur between whole pixels (CompositeItem.SubPxX): its surface drawn that much further, bilinearly,
+            // clamped to the region it holds (a pooled scratch past it is not this blur's).
+            float fx = it.SubPxX, fy = it.SubPxY;
+            float clampU = ((region.Right - region.Left) / (float)down - 0.5f) / _surfaces!.ScratchW(s);
+            float clampV = ((region.Bottom - region.Top) / (float)down - 0.5f) / _surfaces.ScratchH(s);
+            DrawItemQuad(in it, region.Left - ox + fx, region.Top - oy + fy, region.Right - ox + fx, region.Bottom - oy + fy, ox, oy, feathers,
+                it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.SampleScreen : SliceCompositor.Pso.Sample, _surfaces.ScratchSrv(s),
+                sample: true, 1f / (down * _surfaces.ScratchW(s)), 1f / (down * _surfaces.ScratchH(s)), clampU, clampV);
+        }
+        else if (down <= 1)
             DrawItemQuad(in it, region.Left - ox, region.Top - oy, region.Right - ox, region.Bottom - oy, ox, oy, feathers,
                 it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.LoadScreen : SliceCompositor.Pso.Load, _surfaces!.ScratchSrv(s));
         else
