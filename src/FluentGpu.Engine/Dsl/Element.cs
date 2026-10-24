@@ -1012,6 +1012,12 @@ public sealed record ImageEl : Element
     /// <summary>Focal point for Cover crops, normalized 0..1. Default 0.5,0.5 centres the decoded image.</summary>
     public float FocusX { get; init; } = 0.5f;
     public float FocusY { get; init; } = 0.5f;
+    /// <summary>Where in the box a Cover crop places the focal point (<see cref="FocusX"/>, <see cref="FocusY"/>), normalized 0..1 of the box. Default
+    /// 0.5,0.5: the focal point at the box's centre. A subject known to sit at a point of the photograph (a face) is placed where the layout leaves
+    /// it in view (above a title over the photograph's foot, say: <c>FocusY = face, FocusFrameY = 0.3</c>). The crop is clamped so the image always
+    /// covers the box: a focal point near the image's edge lands as close to its frame point as the image allows.</summary>
+    public float FocusFrameX { get; init; } = 0.5f;
+    public float FocusFrameY { get; init; } = 0.5f;
     /// <summary>Decode-size hint (target px) used when the layout extent is fluid (<see cref="Width"/> is <c>NaN</c>, so the
     /// real box size isn't known at request time) — PHYSICAL px, the caller applies the device scale. Ignored when <see cref="Width"/> is explicit (the decode is then Width × the device scale, rounded up).
     /// <c>NaN</c> ⇒ decode at source resolution.</summary>

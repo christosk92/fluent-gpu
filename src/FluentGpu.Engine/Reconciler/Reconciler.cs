@@ -6197,6 +6197,8 @@ public sealed partial class TreeReconciler
                 NodePaintCold cold = _scene.PaintCold(node);
                 cold.ImageFocusX = Math.Clamp(im.FocusX, 0f, 1f);
                 cold.ImageFocusY = Math.Clamp(im.FocusY, 0f, 1f);
+                cold.ImageFrameX = Math.Clamp(im.FocusFrameX, 0f, 1f);
+                cold.ImageFrameY = Math.Clamp(im.FocusFrameY, 0f, 1f);
                 _scene.SetPaintCold(node, in cold);
 
                 // Decode-target size: explicit Width/Height when set; otherwise the DecodePx hint (a fluid/aspect image's
