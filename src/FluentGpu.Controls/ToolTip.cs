@@ -239,7 +239,7 @@ public sealed class ToolTip : Component
     /// countdown is <see cref="ToolTipClock"/>, a host one-shot timer armed during the render that mounts it and
     /// drained at the top of the next frame.</summary>
     public static Element Wrap(Element target, string text, float grow = 0f, float showDelayMs = float.NaN)
-        => Embed.Comp(new ToolTipSlots(target, text, grow, showDelayMs), () => new ToolTip());
+        => Embed.Comp(new ToolTipSlots(target, text, grow, showDelayMs), () => new ToolTip()) with { SkeletonProxy = ProxyOf(target, grow) };
 
     /// <summary>BOUND text form (Operation ultra-fast GPU engine, P3 — for a virtualized row: one <see cref="Prop{T}"/>
     /// read per render instead of a rebuilt call-site string). Null/empty resolves to NO TOOLTIP: <see cref="Render"/>
@@ -250,7 +250,11 @@ public sealed class ToolTip : Component
     /// plan's "no component per target" is aspirational for a future hover-time-lookup service — not implemented this
     /// phase); what it removes is the PER-ROW STRING rebuild and the empty-tooltip wiring cost.</summary>
     public static Element Wrap(Element target, Prop<string?> text, float grow = 0f, float showDelayMs = float.NaN)
-        => Embed.Comp(new ToolTipBoundSlots(target, text, grow, showDelayMs), () => new ToolTip());
+        => Embed.Comp(new ToolTipBoundSlots(target, text, grow, showDelayMs), () => new ToolTip()) with { SkeletonProxy = ProxyOf(target, grow) };
+
+    /// <summary>The wrapped target's shape for a derived skeleton: a tooltip draws nothing in place, so a loading region derives the TARGET (a ring,
+    /// a glyph button at its real size), never the deriver's 160-wide default bar for an opaque component, which overran the row it stood in.</summary>
+    static Func<Element> ProxyOf(Element target, float grow) => () => grow > 0f ? Fill(target, grow) : target;
 
     /// <summary>Live target + BOUND text slot for <see cref="Wrap(Element, Prop{string}, float, float)"/>. Compared by
     /// target reference (see <see cref="ToolTipSlots"/>'s comment) plus the <see cref="Prop{T}"/> payload's own value
