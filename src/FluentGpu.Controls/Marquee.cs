@@ -28,7 +28,8 @@ namespace FluentGpu.Controls;
 /// it leaves, the pass under way finishes and the line rests. Both edges fade only while the line is moving and cut on both sides.</item>
 /// <item><b>One mover per surface.</b> Marquees that share a <see cref="Group"/> (a bar's title and artists) never move at once: the
 /// lower <c>order</c> goes first, the next takes its turn when the line is free.</item>
-/// <item><b>Restart on a real content change only</b> (a new text: in a group, a new text on any member restarts the others' budget).
+/// <item><b>Restart on a real content change only</b>: a new text or a new <c>identity</c> (a new track of the same name); in a group a change
+/// on any member renews the others' passes.
 /// A re-render, a colour or theme tweak, or a resize that keeps the line overflowing keeps the phase; a resize that ends the overflow
 /// glides the line home.</item>
 /// <item><b>Unseen, it stops.</b> A covered, minimised or hidden window, a parked page or a collapsed subtree (and an
@@ -77,6 +78,10 @@ public static class Marquee
 
     public static readonly Style Default = new();
 
+    /// <summary>The key of a marquee's moving strip (its presented x is the pass's offset): what a trace watches, and what tells a harness
+    /// that a running row is a marquee's pass (bounded, but ambient like a loop: a few passes after a change, more under the pointer).</summary>
+    public const string StripKey = "marquee-strip";
+
     /// <summary>Marquees on one surface (a bar's title and its artist line) that must never move at the same time. Create one per surface
     /// (a <c>UseMemo</c> / <c>UseRef</c> in the surface's component) and hand it to each line with its <c>order</c>: the lower order passes
     /// first; a line whose turn comes while another is moving waits for it, then passes after a short beat. A content change on any
@@ -123,17 +128,20 @@ public static class Marquee
     /// <summary>A marquee line of text. It fills the width its parent gives it (cross-axis stretch in a column, <c>Grow</c> in a row).
     /// <paramref name="text"/> is a reactive channel: a plain string for a fixed or re-rendered label, a bind (<c>Prop.Of(() =&gt; …)</c> or
     /// a signal) for a live one such as a now-playing title. <paramref name="group"/> and <paramref name="order"/> stagger it with the
-    /// surface's other marquees; <paramref name="allowed"/> is an optional gate (false = rest at the start, as when unseen).</summary>
-    public static BoxEl Of(Prop<string> text, Style? style = null, Group? group = null, int order = 0, IReadSignal<bool>? allowed = null)
-        => Frame(new MarqueeProps(text, null, style ?? Default, group, order, allowed));
+    /// surface's other marquees; <paramref name="allowed"/> is an optional gate (false = rest at the start, as when unseen);
+    /// <paramref name="identity"/> names what the line states (a now-playing track): a new identity restarts the passes even when the
+    /// words are the same (another track of the same name).</summary>
+    public static BoxEl Of(Prop<string> text, Style? style = null, Group? group = null, int order = 0, IReadSignal<bool>? allowed = null,
+                           long identity = 0)
+        => Frame(new MarqueeProps(text, null, style ?? Default, group, order, allowed, identity));
 
     /// <summary>A marquee row of arbitrary content (a line of links). <paramref name="content"/> is drawn twice while the line moves (the
     /// run and its copy), so it must be cheap and keyed only inside itself; mount a component through <c>Embed.Comp(props, …)</c> so a
     /// re-render re-pushes its props. <paramref name="text"/> is the same line as plain words: its change is what restarts the passes, and it
     /// is the tooltip when the line cannot move.</summary>
     public static BoxEl Content(Element content, Prop<string> text, Style? style = null, Group? group = null, int order = 0,
-                                IReadSignal<bool>? allowed = null)
-        => Frame(new MarqueeProps(text, content, style ?? Default, group, order, allowed));
+                                IReadSignal<bool>? allowed = null, long identity = 0)
+        => Frame(new MarqueeProps(text, content, style ?? Default, group, order, allowed, identity));
 
     static BoxEl Frame(MarqueeProps props) => new()
     {
@@ -146,7 +154,7 @@ public static class Marquee
 
 /// <summary>What a marquee is given (re-pushed every parent render: a new static text reaches the line).</summary>
 internal sealed record MarqueeProps(Prop<string> Text, Element? Content, Marquee.Style Sty, Marquee.Group? Group, int Order,
-                                    IReadSignal<bool>? Allowed);
+                                    IReadSignal<bool>? Allowed, long Identity);
 
 /// <summary>The line: the tooltip (only while it is cut and cannot move), the clip with its edge fade and hover, and the moving strip
 /// (the run, the gap and, while the line may move, the copy). It re-renders on a measurement, a text, a visibility edge or a pass's start
@@ -154,9 +162,6 @@ internal sealed record MarqueeProps(Prop<string> Text, Element? Content, Marquee
 internal sealed class MarqueeView : Component
 {
     const float MaxFadeViewportFraction = 0.3f;
-
-    /// <summary>The moving strip's key (a trace watches it: its presented x is the pass's offset).</summary>
-    internal const string StripKey = "marquee-strip";
 
     public override Element Render()
     {
@@ -191,8 +196,9 @@ internal sealed class MarqueeView : Component
         bool copy = canMove && (overflow || moving.Value);
         float period = copy && at > tw ? at : 0f;
         int flags = (overflow ? 1 : 0) | (canMove ? 2 : 0) | (seen ? 4 : 0);
-        UseLayoutEffect(() => run.Sync(text, overflow, period, canMove, seen),
-                        DepKey.From(text.GetHashCode(), BitConverter.SingleToInt32Bits(period), flags, 0));
+        long identity = p.Identity;
+        UseLayoutEffect(() => run.Sync(text, identity, overflow, period, canMove, seen),
+                        DepKey.Combine(DepKey.From(text.GetHashCode(), BitConverter.SingleToInt32Bits(period), flags, 0), DepKey.From(identity)));
 
         float band = overflow ? MathF.Min(sty.FadeBand, cw * MaxFadeViewportFraction) : 0f;
         EdgeFadeSpec? fade = band > 0.5f
@@ -237,7 +243,7 @@ internal sealed class MarqueeView : Component
                 // The strip is the clip's first child: where the fade's overflow cue reads the posed translate. Keyed for the inspector's trace.
                 new BoxEl
                 {
-                    Key = StripKey, Direction = 0, AlignItems = FlexAlign.Center, Shrink = 0f, MeasureUnboundedWidth = true,
+                    Key = Marquee.StripKey, Direction = 0, AlignItems = FlexAlign.Center, Shrink = 0f, MeasureUnboundedWidth = true,
                     OnRealized = h => strip.Value = h,
                     Children = kids,
                 },
@@ -281,6 +287,7 @@ internal sealed class MarqueeRunner
 
     Phase _phase;
     string? _text;
+    long _identity;
     bool _overflow, _canMove, _seen, _hovered;
     float _period;
     int _passesLeft;
@@ -309,13 +316,13 @@ internal sealed class MarqueeRunner
         Order = order;
     }
 
-    /// <summary>The line's facts after a render's layout: its text, whether it overflows, the pass distance (0 until the copy is laid
-    /// out), whether motion is allowed and whether the line can be seen. Diffs them against the last and moves the state machine.</summary>
-    internal void Sync(string text, bool overflow, float period, bool canMove, bool seen)
+    /// <summary>The line's facts after a render's layout: its text and identity, whether it overflows, the pass distance (0 until the copy is
+    /// laid out), whether motion is allowed and whether the line can be seen. Diffs them against the last and moves the state machine.</summary>
+    internal void Sync(string text, long identity, bool overflow, float period, bool canMove, bool seen)
     {
-        bool changed = !string.Equals(text, _text, StringComparison.Ordinal);
+        bool changed = !string.Equals(text, _text, StringComparison.Ordinal) || identity != _identity;
         float oldPeriod = _period;
-        _text = text; _overflow = overflow; _period = period; _canMove = canMove; _seen = seen;
+        _text = text; _identity = identity; _overflow = overflow; _period = period; _canMove = canMove; _seen = seen;
 
         if (changed)
         {
@@ -342,7 +349,7 @@ internal sealed class MarqueeRunner
         if (_phase == Phase.Rest && (_passesLeft > 0 || _hovered)) Arm(Phase.Delay, _sty.StartDelayMs + Order * OrderStepMs);
     }
 
-    /// <summary>A new text: back at its start, a fresh budget of passes after the start delay.</summary>
+    /// <summary>A new text or identity: back at its start, a fresh budget of passes after the start delay.</summary>
     void Restart()
     {
         if (_phase is Phase.Pass or Phase.Home) Snap();
