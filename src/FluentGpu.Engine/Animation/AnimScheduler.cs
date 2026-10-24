@@ -286,7 +286,9 @@ public sealed partial class AnimEngine
     internal bool ReflowContinue(NodeHandle node, AnimChannel ch, float landed, float solved)
     {
         if (!TryGetTransition(node, out var spec) || spec.Size != SizeMode.Reflow) return false;
-        ReflowSize(node, ch, landed, solved, spec);
+        // From rest, critically damped: the row it continues has stopped, so the glide on starts slow instead of carrying most of a small residual
+        // in its first frame (an eased tween of a short distance reads as a step).
+        ReflowSize(node, ch, landed, solved, spec with { Dynamics = TransitionDynamics.Spring(0.30f, 1f), ExitDynamics = null, DelayMs = 0f });
         return Find(node, ch) >= 0;
     }
 

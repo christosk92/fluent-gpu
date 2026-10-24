@@ -7972,6 +7972,20 @@ public sealed partial class AppHost : IDisposable
                     continue;
                 }
             }
+            // An ANCESTOR of a reflow this commit seeds: the layout just solved holds the reflow's target, its first tick puts the captured size back,
+            // and this box (a zone holding a hero whose height eases) follows it through layout from there. Its own size change counts without the
+            // reflow's pending part, or a presented-size reveal would aim at the target and the reflow pull the box back under it.
+            if (_reflowSeedFrames.TryGetValue((int)n.Raw.Index, out var seedPath))
+            {
+                if (MathF.Abs(from.W - to.W) >= SizeEps && MathF.Abs(seedPath.Dw) >= SizeEps) to = to with { W = to.W + seedPath.Dw };
+                if (MathF.Abs(from.H - to.H) >= SizeEps && MathF.Abs(seedPath.Dh) >= SizeEps) to = to with { H = to.H + seedPath.Dh };
+                if (MathF.Abs(from.X - to.X) < PosEps && MathF.Abs(from.Y - to.Y) < PosEps
+                    && MathF.Abs(from.W - to.W) < SizeEps && MathF.Abs(from.H - to.H) < SizeEps)
+                {
+                    if (s_motionDiag) LogMotionNode(n.Raw.Index, "reflow-seed-ancestor", from, to);
+                    continue;
+                }
+            }
             if (relation == ReflowRelation.SeedShoved)
             {
                 to = to with { X = to.X + seedShiftX, Y = to.Y + seedShiftY };
