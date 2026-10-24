@@ -1104,11 +1104,14 @@ public sealed class TabStrip : Component
         Element plateContent = item.IsPinned ? ToolTip.Wrap(plate, item.Header) : plate;
 
         // Content-hug between the MinTabWidth floor and the MaxTabWidth cap (no fixed Width — that is the Chrome
-        // grammar). OnBoundsChanged on the WRAPPER is what feeds the underline.
+        // grammar). OnBoundsChanged on the WRAPPER is what feeds the underline. Its width EASES when the hug changes (a
+        // host's cap moving at a tier crossing, a title that changes length) through real layout, as a formed cell does, so the
+        // tabs after it and the underline glide instead of stepping.
         return new BoxEl
         {
             Key = item.Key ?? "tab#" + index,
             ZStack = true,
+            Animate = FormWidthMotion,
             Width = item.IsPinned ? PinnedTabWidth : float.NaN,
             MinWidth = item.IsPinned ? PinnedTabWidth : MinTabWidth,
             MaxWidth = item.IsPinned ? PinnedTabWidth : MaxTabWidth,
