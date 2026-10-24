@@ -385,7 +385,7 @@ rule that every stateful control obeys:
      `var owned = UseSignal(false); var isOpen = IsOpenSignal ?? owned;` (PopupCore).
    - The **signal instance is a mount-time contract** — swapping the signal requires a re-key (a control's core may
      hold it in hooks/effects wired at mount; the reconciler re-wires only element binds, bound→bound);
-     the `BindContract` DEBUG tripwire (reconciler-hooks §0bis) catches a bound↔static flip. A VerticalSlice gate
+     a bound↔static flip of an element channel is handled by the reconciler (reconciler-hooks §0bis). A VerticalSlice gate
      pins the decoupling contract: **a signal write bypasses render/reconcile** (the whole safety argument for
      controlled-everything, turned into a regression gate — research adjustment #8).
    - **Closed callback-name set** (no `Action<TOld,TNew>` shapes): `onChange` (value), `onClick`/`onInvoked`
@@ -440,10 +440,48 @@ revisions and occurrence reuse follow [virtualization.md](virtualization.md).
   token ramp (`ButtonPalette` — StateBrush×2 + BorderRamp + Sizing; one 4-arm `Tok` switch; Subtle = WinUI
   `SubtleFill*`, Outline = documented Fluent-2 extension on existing timings only) and `ControlSize { Small, Medium,
   Large }` (shared enum, `ControlMetrics.For(size)` 3-arm switch — Padding/MinHeight/FontSize/Corner/IconSize). The
-  24-member `Style` record survives as the full-override escape hatch; a per-appearance/size override rides
-  `Button.StyleHook` (`Func<ButtonAppearance, ControlSize, Style?>?`, consulted first). `AccentStyleOverride`/
-  `StandardStyleOverride` are **deleted** (replaced by `StyleHook`). `IconButton`/`ToggleButton`/`RepeatButton`/
+  24-member `Style` record survives as the full-override escape hatch; a per-appearance/size override rides the theme's
+  control style table (`ControlStyles.ButtonStyle`, `Func<ButtonAppearance, ControlSize, Style?>`, consulted first; EP15
+  replaced the former global `Button.StyleHook`, theming.md §16.2). `AccentStyleOverride`/
+  `StandardStyleOverride` are **deleted**. `IconButton`/`ToggleButton`/`RepeatButton`/
   `HyperlinkButton` adopt `ControlSize`; a glyph-slot + icon+label overload landed. Gate: `gate.ctl.button.variants`.
+- **As built (2026-10, compact control sizes) — the size axis reaches the 40-DIP touch target.** A compact window's
+  hit-target rule (every target at least 40 x 40) is set per instance through each control's existing idiom; every default
+  is the pre-knob metric, pixel for pixel. `ControlSize.Large` (`ControlMetrics.For(Large).MinHeight` = 40) is the touch
+  rung: `ContentDialog.CommandSize` (+ `CommandMinWidth`, default 130, and `UniformCommandWidths`, WinUI's star columns,
+  default off), `ComboBox.Create(…, size:)` (field 32 → 40, re-pushed live with the width and the touch row padding; `width: float.NaN` fills a column parent, non-editable only,
+  the drop-down taking the field's laid-out width at open), `MenuFlyout.Create(…, size:)` (row 36 → 40, inherited by
+  cascades; `MenuFlyout.RowHeightFor`), `BreadcrumbBar.Create(…, size:)` (each crumb at least 40 x 40; a live prop) and
+  `ToastLaneStyle.ActionSize`. Small is remapped to Medium where the control has no compact form (ComboBox, MenuFlyout,
+  BreadcrumbBar — the ClampSize idiom). The rest ride a record: `NumberBox.NumberBoxOptions.Style` (the `Style` record's
+  `FieldHeight`), `TitleBarOptions.RowSpacing` / `TitleBar.RowSpacing` (`Func<TitleBarSpacing>`: the 14-DIP lead pad and
+  the 48-DIP drag strip, read at every render and in the memo key) and the toast lane's `ToastLaneStyle` (side margin 24,
+  cards 300-380, `FillWidth`, `ActionSize`), provided as the ambient `Toast.Lane` context (`Context<Func<ToastLaneStyle>?>`,
+  provided above the `OverlayHost`) — never a new mutable static. Tests: `ControlSizeKnobTests` (Engine.Tests).
+- **As built (2026-10, P5 / Zune) — the overlay, field and status controls are theme-owned.** Thirteen more control style
+  table keys (theming.md §16.2), each a record read at RENDER with a `FluentStyle()` that is the control's previous look:
+  `MenuFlyout.Style` (the host-drawn plate as a `PopupPlate` — fill, frosted layer or none, ring, radius, elevation, presenter
+  padding — plus row height / Large row height, row margin, padding, radius and fills, label size, separator colour, thickness,
+  margin, padding; it styles every menu body, ContextMenu's included); `ContextMenu.Style` (the presenter parts: a `Header`
+  presenter `Func<ContextMenuHeader, bool, Element>`, the header divider, a `PrimaryStrip` presenter
+  `Func<ContextMenuStrip, Element>` that draws the model's primary commands as a strip above the rows inside the plain menu plate
+  — `ContextMenuStrip.Invoke(i)` runs a command and closes — and a theme-wide min width); `ContentDialog.Style` (card fill, ring,
+  radius, elevation, size limits and width; title, message, separator; command row padding, fill, gap, justify, the
+  `CommandOrder` of `ContentDialogCommand`s, star columns or hugging commands, the lone-command trailing column, and a
+  `CommandButton` presenter `Func<ContentDialogCommandArgs, BoxEl>` — the dialog keeps the default command's focus ranking);
+  `ComboBox.Style` (the field as a `TextFieldStyle`, the dropdown `PopupPlate`); `TextFieldStyle` for the TextBox field (every
+  `EditableText`-based field) and the AutoSuggestBox field (radius, the fill ramp, gradient or flat ring, an optional resting
+  underline, the focus bar; a row-rooted field gains its underline through one overlay wrapper, and the stock field keeps its
+  exact node structure); `InfoBar.Style` (plate, severity tint or a fixed fill, ring, elevation, icon, text, close button — the
+  toast card too); `ToolTip.Style`; `ProgressRing.Style`; `ProgressBar.Style`. The existing `SelectorBarStyle`,
+  `SettingsExpander.Style` and `ToastLaneStyle` records gain keys (an instance's style, or a `Toast.Lane` provider, still wins).
+  The host's `FlyoutSurface` takes the menu / dropdown plate from those styles, reports it to its overlay entry, and the
+  per-frame backdrop sync and corner squaring read that card (a plate with no frosted layer stays solid in every state).
+  `TitleBarOptions.Height` (`Prop<float>`, default `TitleBar.ExpandedHeight` 48; `TitleBar.BarHeight`) is read at every render:
+  the caption buttons stretch to it, the back / pane buttons are 4 shorter, islands and drag bands take it, and the region report
+  follows in the same frame (a tier signal gives 56 at Huge4K without a remount). Tests: `ControlStyleKeysTests` (Engine.Tests);
+  the VerticalSlice `control-style-table` suite compares all 30 keyed records under the empty and the explicit table.
+
 
 ### 5.2 Checkbox
 
@@ -1270,7 +1308,7 @@ here. `VirtualListEl` stays in `Reconciler`.
 - **The router** — `RouteDef`/`RouteRegistry`/`[Route]` + `PageHost.Create(nav, routes)` v2 (KeepAlive parking +
   transitions) + `NavigationView` accepting a `Navigator` — `Controls/{RouteRegistry,Navigation}.cs`; the
   `RouteTableGenerator` (FGRT001-003) is owned by dsl-aot.md (source-gen), the registry/runtime API is owned here.
-- **`ControlSize { Small, Medium, Large }`** + `ControlMetrics.For(size)` + `ButtonAppearance` + `Button.StyleHook`
+- **`ControlSize { Small, Medium, Large }`** + `ControlMetrics.For(size)` + `ButtonAppearance` + the Button entry of `ThemeDefinition.Controls`
   (§5.1) — the shared cross-control sizing/appearance axes (`Controls/ControlSize.cs` + `Button.cs`).
 - **The control-kit localization keys** — `Loc.Bind(key) → Prop<string>` at the kit's user-facing strings, the ~41
   neutral keys registered from `Controls/assets/loc/en-US.json` via `RegisterNeutral` (a generated module

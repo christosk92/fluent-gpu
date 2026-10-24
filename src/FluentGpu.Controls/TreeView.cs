@@ -559,7 +559,7 @@ public sealed class TreeView : Component
                     new TextEl(isExpanded ? "" : "")      // ExpandedGlyph/CollapsedGlyph (TreeView.idl:201-203)
                     {
                         Size = GlyphSize,                              // GlyphSize default 8.0 (idl:204)
-                        FontFamily = Theme.IconFont,
+                        FontFamily = Tok.Definition.Fonts.Icon,
                         Color = Tok.TextPrimary,
                         PressedColor = Tok.TextSecondary,              // Pressed → TreeViewItemForegroundPressed (xaml:33-36)
                         DisabledColor = Tok.TextDisabled,

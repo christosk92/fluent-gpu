@@ -36,6 +36,10 @@ public sealed record TitleBarOptions
     /// row overruns — the centre column stops flexing and becomes app-sized. Use with a tab strip that owns a real
     /// horizontal viewport, so overflow clips and scrolls instead of squeezing the search field or the identity cluster.</summary>
     public bool TabsElasticLane { get; init; }
+    /// <summary>In merged mode, while this answers true the tabs island FILLS the row's free lane instead of hugging (a search field that takes the
+    /// lead island at a narrow window): the drag bands beside the centre column stop growing, so the field gets the room; the fixed drag strip before
+    /// the captions stays. Read each render (a signal read here re-renders the bar).</summary>
+    public Func<bool>? TabsFill { get; init; }
     /// <summary>MERGED-ROW slot: the flexible, centred island that sits between the tab strip and the trailing island.
     /// Like <see cref="Content"/> the builder receives the LIVE measured width of its flexible column
     /// (<see cref="TitleBar.CenterAvail"/>) so an expanding search island can clamp itself. Setting this (or
@@ -53,6 +57,70 @@ public sealed record TitleBarOptions
     public bool ShowRailBaseline { get; init; } = true;
     public bool ShowCaptionButtons { get; init; } = true;
     public TemplateParts? Parts { get; init; }
+    /// <summary>The row's fixed spacing, read per render (see <see cref="TitleBar.RowSpacing"/>); null keeps <see cref="TitleBarSpacing.Default"/>.</summary>
+    public Func<TitleBarSpacing>? RowSpacing { get; init; }
+    /// <summary>The bar's height (see <see cref="TitleBar.BarHeight"/>): <see cref="TitleBar.ExpandedHeight"/> (48) by default. A static
+    /// value, or a thunk / signal read at every render (a window tier: 56 at Huge4K), so the bar resizes live without a remount. The
+    /// caption buttons stretch to it, every island and drag band takes it, and the reported drag / button regions follow it.</summary>
+    public Prop<float> Height { get; init; } = TitleBar.ExpandedHeight;
+
+    // ── EP16: the shell rows (see TitleBar.Rows). Any of these switches the bar to the shell layout; unset, the bar is the
+    //    one-row bar above, unchanged. ───────────────────────────────────────────────────────────────────────────────
+    /// <summary>1 or 2, read at every render (see <see cref="TitleBar.Rows"/>). 2 = a <see cref="TopRowHeight"/> tab row
+    /// with the caption buttons over a <see cref="Height"/> toolbar row.</summary>
+    public Prop<int> Rows { get; init; } = 1;
+    /// <summary>The tab row's height when <see cref="Rows"/> is 2 (see <see cref="TitleBar.TopRowHeight"/>); 40 by default.</summary>
+    public Prop<float> TopRowHeight { get; init; } = TitleBar.TabRowHeight;
+    /// <summary>Keyed toolbar children at the row's leading edge (see <see cref="TitleBar.Lead"/>).</summary>
+    public Func<IReadOnlyList<TitleBarItem>>? Lead { get; init; }
+    /// <summary>The non-interactive app mark after <see cref="Lead"/> (see <see cref="TitleBar.Wordmark"/>).</summary>
+    public Func<Element>? Wordmark { get; init; }
+    /// <summary>Keyed toolbar children at the row's trailing edge (see <see cref="TitleBar.TrailingItems"/>).</summary>
+    public Func<IReadOnlyList<TitleBarItem>>? TrailingItems { get; init; }
+    /// <summary>Where the shell toolbar centres <see cref="CenterContent"/> (see <see cref="TitleBar.CenterAlign"/>).</summary>
+    public Prop<TitleBarCenterAlign> CenterAlign { get; init; } = TitleBarCenterAlign.BetweenClusters;
+    /// <summary>The shell toolbar's cluster gap and insets (see <see cref="TitleBar.ToolbarSpacing"/>).</summary>
+    public Func<TitleBarToolbarSpacing>? ToolbarSpacing { get; init; }
+}
+
+/// <summary>The shell toolbar's spacing: the <paramref name="Gap"/> between a cluster's children (outside every child, so
+/// it is drag space), the leading cluster's <paramref name="LeadInset"/> and, in a two-row bar, the trailing cluster's
+/// <paramref name="TrailInset"/> (a one-row bar ends in the caption buttons instead).</summary>
+public readonly record struct TitleBarToolbarSpacing(float Gap, float LeadInset, float TrailInset)
+{
+    /// <summary>The WinUI shell toolbar: 4 between buttons, 4 before the first, 8 after the last.</summary>
+    public static TitleBarToolbarSpacing Default => new(4f, 4f, 8f);
+}
+
+/// <summary>One KEYED title-bar child (<see cref="TitleBar.Lead"/>, <see cref="TitleBar.TrailingItems"/>). The bar reports each
+/// child's own laid-out rect as a <see cref="FluentGpu.Pal.TitleBarHit.Client"/> region, so the gaps between children stay
+/// drag space, and re-reports in the SAME frame a child is swapped (a new <paramref name="Key"/>), added, removed or resized:
+/// no version counter to feed. <paramref name="Build"/> runs when the bar rebuilds; content that changes on its own state
+/// should be its own component (it subscribes itself, and its resize still re-reports through the bar's bounds watch).</summary>
+/// <param name="Key">Stable identity within its slot. A different key is a different child (remounted).</param>
+/// <param name="Build">The child's element (should HUG: its rect is the reported Client region).</param>
+public readonly record struct TitleBarItem(string Key, Func<Element> Build);
+
+/// <summary>Where the shell toolbar row places its centre island.</summary>
+public enum TitleBarCenterAlign : byte
+{
+    /// <summary>In the free space between the leading and trailing clusters (the island centres in that space).</summary>
+    BetweenClusters,
+    /// <summary>On the window's centre line: both sides take an equal share (CSS <c>1fr auto 1fr</c>), so the island stays
+    /// centred whatever the clusters weigh. <see cref="TitleBar.CenterAvail"/> is then the widest centred span that clears
+    /// the heavier cluster.</summary>
+    Window,
+}
+
+/// <summary>The title bar row's two fixed spacers: the lead pad after the back / pane buttons (WinUI's left-header padding column,
+/// 14) and the guaranteed-grabbable drag strip before the caption cluster (WinUI's minimum drag column, 48). A narrow window narrows
+/// them so its buttons fit; a drag strip of 0 leaves only the bar's own grow bands as drag space, so keep one wide enough to grab.</summary>
+/// <param name="LeadPad">The lead pad's width.</param>
+/// <param name="MinDragStrip">The drag strip's width.</param>
+public readonly record struct TitleBarSpacing(float LeadPad, float MinDragStrip)
+{
+    /// <summary>WinUI's TitleBar: a 14-DIP lead pad and a 48-DIP drag strip.</summary>
+    public static TitleBarSpacing Default => new(14f, 48f);
 }
 
 /// <summary>
@@ -101,6 +169,15 @@ public sealed class TitleBar : Component
     public const string PartCaptionMax = "CaptionMax";
     /// <summary>The close caption button. Owned: OnClick, Role, OnRealized, Children.</summary>
     public const string PartCaptionClose = "CaptionClose";
+    /// <summary>SHELL ROWS: the two-row bar's top (tab) row. Owned: Children, Height.</summary>
+    public const string PartTopRow = "TopRow";
+    /// <summary>SHELL ROWS: the toolbar row (the one row of a one-row shell bar is the root). Owned: Children, Height.</summary>
+    public const string PartToolbarRow = "ToolbarRow";
+    /// <summary>SHELL ROWS: the non-interactive wordmark host. Owned: Children, HitTestVisible (false: it is drag space).</summary>
+    public const string PartWordmark = "Wordmark";
+
+    /// <summary>The two-row bar's tab row height (WinUI TabView strip on Mica Alt).</summary>
+    public const float TabRowHeight = 40f;
 
     /// <summary>WinUI TitleBar tall mode — the height when Content is set (the gallery look).</summary>
     public const float ExpandedHeight = 48f;
@@ -108,9 +185,7 @@ public sealed class TitleBar : Component
     public const float CompactHeight = 32f;
 
     const float NavButtonSize = 40f;     // back/pane button width (WinUI TitleBar back/pane = 40w)
-    const float LeftHeaderPad = 14f;     // WinUI left-header padding column
     const float IconSize = 16f;          // WinUI icon Viewbox 16×16
-    const float MinDragStrip = 48f;      // WinUI min drag-region column before the caption buttons
 
     // ── configuration ─────────────────────────────────────────────────────────────────────────────────────────────
     // MOUNT-TIME config: the reconciler reuses the component instance on parent re-render without re-applying these
@@ -165,6 +240,8 @@ public sealed class TitleBar : Component
     /// <summary>In merged mode, make the tabs island the row's ONE shrinkable lane (it still hugs — see
     /// <see cref="TitleBarOptions.TabsElasticLane"/>).</summary>
     public bool TabsElasticLane;
+    /// <summary>The tabs island fills the free lane while this answers true (see <see cref="TitleBarOptions.TabsFill"/>).</summary>
+    public Func<bool>? TabsFill;
     /// <summary>MERGED ROW (the one-row chrome): the FLEXIBLE, centred island that lives between the tab strip and the
     /// trailing island — a window search box, a now-playing chip, … Setting this (or <see cref="Trailing"/>) switches the
     /// bar from the classic <c>Content</c>-XOR-<c>Tabs</c> shape into
@@ -202,6 +279,54 @@ public sealed class TitleBar : Component
     /// <summary>False = a standard OS frame owns the caption buttons; the bar keeps a right inset clear of them.</summary>
     public bool ShowCaptionButtons = true;
     public TemplateParts? Parts;
+    /// <summary>The row's lead pad and drag strip (<see cref="TitleBarSpacing"/>), read at EVERY render — not mount-time: a thunk
+    /// that reads a signal (a window tier) re-renders the bar and re-reports its regions when it changes. Null keeps
+    /// <see cref="TitleBarSpacing.Default"/> (WinUI's 14 and 48).</summary>
+    public Func<TitleBarSpacing>? RowSpacing;
+    /// <summary>The lead pad's width ease when <see cref="RowSpacing"/> changes it (a window tier that moves the app's gutter): null snaps it, the
+    /// default. A size channel through real layout (a <see cref="SizeMode.Reflow"/> on the width axis), so the islands after it ride the re-solve;
+    /// while the pad eases the non-client regions re-push from its bounds, so the islands' hit regions follow it frame by frame.</summary>
+    public LayoutTransition? LeadPadMotion;
+    /// <summary>The same for the drag strip before the caption cluster (<see cref="TitleBarSpacing.MinDragStrip"/>): null snaps it, the default.</summary>
+    public LayoutTransition? DragStripMotion;
+    /// <summary>The bar's height, read at EVERY render (a static value, a thunk or a signal; <see cref="TitleBarOptions.Height"/>):
+    /// <see cref="ExpandedHeight"/> (48) by default. The caption buttons are this tall, the back / pane buttons are 4 shorter (WinUI's
+    /// 44 in 48), the islands and drag bands take it, and a change re-reports the non-client regions in the same frame.</summary>
+    public Prop<float> BarHeight = ExpandedHeight;
+
+    // ── EP16: the shell rows ───────────────────────────────────────────────────────────────────────────────────────
+    /// <summary>1 or 2 rows, read at EVERY render (a static value, a thunk or a signal: tabs on/off flips it live).
+    /// <para><b>2 rows:</b> a <see cref="TopRowHeight"/> (40) tab row holding <see cref="Tabs"/>, the free drag band, the
+    /// drag strip, <see cref="CaptionLeading"/> and the caption buttons (as tall as the row), over a <see cref="BarHeight"/>
+    /// (48) toolbar row: the built-in back / pane / icon / title, <see cref="Lead"/>, <see cref="Wordmark"/>, the centre
+    /// island (<see cref="CenterContent"/>), <see cref="TrailingItems"/> and <see cref="Trailing"/>. The tab strip gets a
+    /// <see cref="TabStripHost"/> (lane + row height) through <see cref="TabStrip.HostContext"/>.</para>
+    /// <para><b>The shell layout</b> (2 rows, or 1 row with any of <see cref="Lead"/>, <see cref="Wordmark"/>,
+    /// <see cref="TrailingItems"/>): the toolbar row alone, captions at its end. Drag space is every pixel of either row
+    /// that no island, keyed child or button covers (one Caption catch-all spans both rows), and every island re-reports
+    /// in the frame it moves: <see cref="ContentVersion"/> is not needed there. Without those slots and with 1 row the bar
+    /// is the one-row bar, unchanged.</para></summary>
+    public Prop<int> Rows = 1;
+    /// <summary>The tab row's height in a two-row bar, read at every render: <see cref="TabRowHeight"/> (40) by default.</summary>
+    public Prop<float> TopRowHeight = TabRowHeight;
+    /// <summary>SHELL: keyed children at the toolbar's leading edge (hamburger, Back, Forward), after the built-in parts.
+    /// Each child is its own Client region (the gaps stay drag space); see <see cref="TitleBarItem"/>. Invoked at every render
+    /// (the key list is part of the render memo), so a list that reads a signal re-forms the bar when it changes.</summary>
+    public Func<IReadOnlyList<TitleBarItem>>? Lead;
+    /// <summary>SHELL: the app mark after <see cref="Lead"/>. NOT interactive: hit-test invisible and reported as drag space
+    /// (WinUI treats the app title as caption).</summary>
+    public Func<Element>? Wordmark;
+    /// <summary>SHELL: keyed children at the toolbar's trailing edge (pin, Friends, bell, avatar), before the legacy
+    /// <see cref="Trailing"/> island; each is its own Client region. Same contract as <see cref="Lead"/>.</summary>
+    public Func<IReadOnlyList<TitleBarItem>>? TrailingItems;
+    /// <summary>SHELL: where the centre island sits (<see cref="TitleBarCenterAlign"/>), read at every render.</summary>
+    public Prop<TitleBarCenterAlign> CenterAlign = TitleBarCenterAlign.BetweenClusters;
+    /// <summary>SHELL: the toolbar clusters' gap and edge insets (<see cref="TitleBarToolbarSpacing"/>), read at every render.
+    /// Null keeps <see cref="TitleBarToolbarSpacing.Default"/>.</summary>
+    public Func<TitleBarToolbarSpacing>? ToolbarSpacing;
+    /// <summary>SHELL, 2 rows: the width the tab strip may use (the tabs island plus the free drag band after it), measured
+    /// after layout. The same signal the strip reads through its <see cref="TabStripHost"/>.</summary>
+    public IReadSignal<float> TabsLane => _tabsLane;
 
     /// <summary>Merged mode = at least one of the merged-row slots is present. Mount-time (both fields freeze at mount),
     /// so the branch below is stable for the life of the instance.</summary>
@@ -223,11 +348,14 @@ public sealed class TitleBar : Component
                 ShowPaneToggle = options.ShowPaneToggle, OnPaneToggle = options.OnPaneToggle,
                 PaneToggleEnabledSignal = options.PaneToggleEnabledSignal,
                 PaneToggleToolTip = options.PaneToggleToolTip,
-                Tabs = options.Tabs, TabsVersion = options.TabsVersion, TabsElasticLane = options.TabsElasticLane,
+                Tabs = options.Tabs, TabsVersion = options.TabsVersion, TabsElasticLane = options.TabsElasticLane, TabsFill = options.TabsFill,
                 Trailing = options.Trailing, CaptionLeading = options.CaptionLeading,
                 ContentVersion = options.ContentVersion,
                 ShowRailBaseline = options.ShowRailBaseline,
-                ShowCaptionButtons = options.ShowCaptionButtons, Parts = options.Parts,
+                ShowCaptionButtons = options.ShowCaptionButtons, Parts = options.Parts, RowSpacing = options.RowSpacing,
+                BarHeight = options.Height,
+                Rows = options.Rows, TopRowHeight = options.TopRowHeight, Lead = options.Lead, Wordmark = options.Wordmark,
+                TrailingItems = options.TrailingItems, CenterAlign = options.CenterAlign, ToolbarSpacing = options.ToolbarSpacing,
             };
             if (options.IconColor is { } ic) tb.IconColor = ic;
             if (options.Content is { } content) tb.Content = _ => content(tb.ContentAvail);
@@ -260,6 +388,7 @@ public sealed class TitleBar : Component
     public override Element Render()
     {
         var hooks = UseContext(InputHooks.Current);
+        _rowHooks = hooks;
         int epoch = hooks.WindowChromeEpoch?.Value ?? 0;          // subscribe: re-render on activation/placement change
         var viewport = UseContext(Viewport.Size);                 // subscribe: re-report regions on window resize/DPI hop
         bool active = hooks.IsWindowActive?.Invoke() ?? true;
@@ -269,6 +398,16 @@ public sealed class TitleBar : Component
         bool backEnabled = BackEnabledSignal is { } bes ? bes.Value : BackEnabled;   // subscribe: re-glyph the back button live
         bool paneEnabled = PaneToggleEnabledSignal is { } pes ? pes.Value : true;   // subscribe: re-glyph the toggle live
         string paneTip = PaneToggleToolTip?.Invoke() ?? "";
+        var spacing = RowSpacing?.Invoke() ?? TitleBarSpacing.Default;   // subscribe: a thunk over a tier re-renders on a change
+        float leadPad = MathF.Max(0f, spacing.LeadPad), dragStrip = MathF.Max(0f, spacing.MinDragStrip);
+        float barH = MathF.Max(1f, BarHeight.Current());             // subscribe: a bound height (a tier) re-renders + re-reports
+        int rows = Rows.Current() >= 2 ? 2 : 1;                      // subscribe: tabs on/off flips the row count live
+        bool wasShell = _shellMode;
+        _shellMode = rows == 2 || Lead is not null || Wordmark is not null || TrailingItems is not null;
+        if (wasShell != _shellMode) { _cachedTree = null; _shellBuilt = false; }   // never serve the other layout's tree
+        if (_shellMode)
+            return RenderShell(hooks, viewport, epoch, active, maximized, tabsVer, contentVer, backEnabled, paneEnabled, paneTip,
+                               leadPad, dragStrip, barH, rows);
 
         // Report the drag/button regions after THIS render's layout settles (phase 6.5) — deps cover everything that
         // moves the parts (resize, maximize→WM_SIZE→viewport, DPI hop→DIP viewport change, the measured-width feedback
@@ -276,7 +415,7 @@ public sealed class TitleBar : Component
         // ContentVersion rides BOTH keys: a merged island that resizes without moving any other dep (an expanding search
         // box) must re-render AND re-push its region in the same frame, or the stale rect leaves dead drag space.
         UseLayoutEffect(() => PushRegions(hooks),
-            DepKey.From(HashCode.Combine(HashCode.Combine(viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons), contentVer, paneEnabled)));
+            DepKey.From(HashCode.Combine(HashCode.Combine(viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons), contentVer, paneEnabled, leadPad, dragStrip, barH)));
 
         // Memo gate: a resize-only re-render returns the cached tree alloc-free (the layout effect above already re-ran
         // — its viewport deps changed — so regions re-push without a rebuild). Key excludes the viewport on purpose.
@@ -285,79 +424,11 @@ public sealed class TitleBar : Component
         int key = unchecked(((((((epoch * 397 ^ tabsVer) * 397 ^ contentVer) * 397 ^ _availDip.Peek().GetHashCode()) * 397 ^ Tok.Epoch) * 397
                               ^ StringComparer.Ordinal.GetHashCode(paneTip)) * 397)
             ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (backEnabled ? 32 : 0) | (ShowRailBaseline ? 64 : 0) | (TabsElasticLane ? 128 : 0) | (paneEnabled ? 256 : 0)));
+        key = HashCode.Combine(key, leadPad, dragStrip, barH);
         if (_cachedTree is { } cached && key == _cacheKey) return cached;
 
-        // WinUI back/pane: 40w × 44h with Margin 2 (the hover backplate spans y=2..46 of the 48px bar; adjacent
-        // margins give the 4px back↔pane gap and the 2px before the 14px header pad = the 16px pane→icon gap).
-        // Deactivated state: foreground → tertiary (fills unchanged).
-        var navStyle = IconButton.DefaultStyle with
-        {
-            Size = NavButtonSize,
-            Height = 44f,
-            Foreground = active ? Tok.TextPrimary : Tok.TextTertiary,
-        };
-        var navMargin = new Edges4(2f, 2f, 2f, 2f);
-
         var kids = new List<Element>(14);
-
-        if (ShowBackButton)
-        {
-            var back = IconButton.Create(Icons.Back, () => OnBack?.Invoke(), navStyle, isEnabled: backEnabled)
-                with { Margin = navMargin };
-            var applied = Parts.Apply(PartBackButton, back);
-            kids.Add(applied with
-            {
-                OnClick = back.OnClick, Role = AutomationRole.Button, Children = back.Children,
-                OnRealized = TemplateParts.Chain<NodeHandle>(h => _back = h, applied.OnRealized),
-            });
-        }
-        if (ShowPaneToggle)
-        {
-            var pane = IconButton.Create(Icons.Menu, () => OnPaneToggle?.Invoke(), navStyle, isEnabled: paneEnabled)
-                with { Margin = navMargin };
-            var applied = Parts.Apply(PartPaneToggle, pane);
-            Element paneEl = applied with
-            {
-                OnClick = pane.OnClick, Role = AutomationRole.Button, Children = pane.Children,
-                OnRealized = TemplateParts.Chain<NodeHandle>(h => _pane = h, applied.OnRealized),
-            };
-            kids.Add(paneTip.Length > 0 ? ToolTip.Wrap(paneEl, paneTip) : paneEl);
-        }
-
-        kids.Add(new BoxEl { Width = LeftHeaderPad });
-
-        if (IconGlyph.Length > 0)
-        {
-            // The identity icon dims to 50% opacity on deactivation (WinUI dims the icon/content presenters).
-            var icon = new BoxEl
-            {
-                Width = IconSize, Height = IconSize, Direction = 0,
-                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Opacity = active ? 1f : 0.5f,
-                Children = [Ui.Icon(IconGlyph, IconSize).Foreground(IconColor)],
-            };
-            kids.Add(Parts is null ? icon : Parts.Apply(PartIcon, icon) with { Children = icon.Children });
-            kids.Add(new BoxEl { Width = 16f });                  // WinUI icon margin-right
-        }
-
-        if (Title.Length > 0)
-        {
-            kids.Add(Parts.Apply(PartTitle, new TextEl(Title)
-            {
-                Size = 12f,                                        // CaptionTextBlockStyle
-                Color = active ? Tok.TextPrimary : Tok.TextTertiary,   // TitleBar(Deactivated)ForegroundBrush
-            }));
-            kids.Add(new BoxEl { Width = 8f });                   // WinUI title margin-right
-        }
-        if (Subtitle.Length > 0)
-        {
-            kids.Add(Parts.Apply(PartSubtitle, new TextEl(Subtitle)
-            {
-                Size = 12f,
-                Color = active ? Tok.TextSecondary : Tok.TextTertiary, // TitleBarSubtitle(Deactivated)ForegroundBrush
-            }));
-            kids.Add(new BoxEl { Width = 16f });                  // WinUI subtitle margin-right
-        }
+        AddNavCluster(kids, barH, active, backEnabled, paneEnabled, paneTip, leadPad, alwaysLeadPad: true);
 
         bool merged = Merged;
         // The bar's flexible/fixed drag bands. `rail` = does this shape carry the Notepad TabView hairline through its
@@ -365,8 +436,8 @@ public sealed class TitleBar : Component
         // what preserves the HTCAPTION contract — the band is drag space that happens to be painted.
         bool rail = (Tabs is not null || merged) && ShowRailBaseline;
         BoxEl Band(float width, float grow, float shrink) => rail
-            ? TabStrip.RailBaselineHost(width, grow) with { Shrink = shrink, Height = ExpandedHeight }
-            : new BoxEl { Width = width, Grow = grow, Shrink = shrink, Height = ExpandedHeight };
+            ? TabStrip.RailBaselineHost(width, grow) with { Shrink = shrink, Height = barH }
+            : new BoxEl { Width = width, Grow = grow, Shrink = shrink, Height = barH };
 
         // A LEFT-aligned tab strip hugging its content (Shrink=1 so a too-full strip gives way before the captions).
         // It is a Client island; the Grow=1 band after it is Caption drag space (WinUI TabStripFooter).
@@ -378,10 +449,11 @@ public sealed class TitleBar : Component
         // instead of letting the strip paint out over the drag strip and the caption buttons.
         // Opacity: the WinUI deactivated dim the content column has always had — the tabs island had none, which read
         // as a title bar half-lit on blur. Composited only; layout and hit-testing are untouched.
+        bool tabsFill = merged && Tabs is not null && TabsFill?.Invoke() == true;
         BoxEl TabsIsland(Func<Element> f) => new()
         {
             Direction = 0, AlignItems = FlexAlign.Stretch,
-            Shrink = 1, MinWidth = 0f, Height = ExpandedHeight,
+            Grow = tabsFill ? 1f : 0f, Shrink = 1, MinWidth = 0f, Height = barH,
             ClipToBounds = true,
             Opacity = active ? 1f : 0.5f,
             OnRealized = h => _tabs = h,
@@ -397,7 +469,7 @@ public sealed class TitleBar : Component
             // cluster and the START of the right cluster. (That is NOT the window centre unless the two clusters are
             // the same width; an app that needs true window-centring pads the lighter side inside its own islands.)
             if (Tabs is { } mergedTabs) kids.Add(TabsIsland(mergedTabs));
-            kids.Add(Band(float.NaN, 1f, 1f));
+            kids.Add(Band(float.NaN, tabsFill ? 0f : 1f, 1f));
 
             float centerAvail = _availDip.Value;                   // subscribe: re-render when the column is re-measured
             // The interactive island is the INNER box that HUGS its content — never the flexible column, whose empty
@@ -417,7 +489,7 @@ public sealed class TitleBar : Component
                 // an app-sized search field is never squeezed by a long tab strip.
                 Grow = TabsElasticLane ? 0f : 1f, Shrink = TabsElasticLane ? 0f : 1, MinWidth = 0f, Direction = 0,
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Height = ExpandedHeight,
+                Height = barH,
                 Opacity = active ? 1f : 0.5f,                      // WinUI deactivated content dim
                 Children = [centerIsland],
             };
@@ -428,14 +500,14 @@ public sealed class TitleBar : Component
                 OnRealized = TemplateParts.Chain<NodeHandle>(h => _centerCol = h, appliedCenter.OnRealized),
             });
 
-            kids.Add(Band(float.NaN, 1f, 1f));
+            kids.Add(Band(float.NaN, tabsFill ? 0f : 1f, 1f));
 
             if (Trailing is { } trailingFunc)
             {
                 // Hugs: its laid-out rect is reported wholesale as Client, so any slack inside it is dead drag space.
                 var trailingIsland = new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Height = ExpandedHeight,
+                    Direction = 0, AlignItems = FlexAlign.Center, Height = barH,
                     Opacity = active ? 1f : 0.5f,
                     Children = [trailingFunc()],
                 };
@@ -476,7 +548,7 @@ public sealed class TitleBar : Component
                 // the arranged width PushRegions feeds back is the honest available space even on resize-down (without
                 // Shrink the column could only track the viewport UP and _availDip would floor at the content's width).
                 Grow = 1, Shrink = 1, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Height = ExpandedHeight,
+                Height = barH,
                 Opacity = active ? 1f : 0.5f,                          // WinUI deactivated content dim
                 Children = [island],
             };
@@ -491,15 +563,19 @@ public sealed class TitleBar : Component
         // The guaranteed-grabbable drag strip. It stays FIXED even under TabsElasticLane: a CaptionLeading control is
         // already flush against Minimize with the strip at full width, so shrinking it would trade real drag space for
         // nothing.
-        kids.Add(Tabs is not null || merged
-            ? Band(MinDragStrip, 0f, 0f)
-            : new BoxEl { Width = MinDragStrip });
+        kids.Add((Tabs is not null || merged
+            ? Band(dragStrip, 0f, 0f)
+            : new BoxEl { Width = dragStrip }) with
+            {
+                Animate = DragStripMotion,
+                OnBoundsChanged = DragStripMotion is null ? null : _leadPadBounds ??= _ => RequestRegionPush(),
+            });
 
         if (CaptionLeading is { } captionLeadingFunc)
         {
             var captionLeading = new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.Center, Height = ExpandedHeight,
+                Direction = 0, AlignItems = FlexAlign.Center, Height = barH,
                 Opacity = active ? 1f : 0.5f,
                 Children = [captionLeadingFunc()],
             };
@@ -515,11 +591,11 @@ public sealed class TitleBar : Component
         {
             string maxGlyph = maximized ? Icons.ChromeRestore : Icons.ChromeMaximize;
             kids.Add(Caption(PartCaptionMin, Icons.ChromeMinimize, () => hooks.WindowMinimize?.Invoke(),
-                             CaptionButton.MinMax, active, h => _min = h));
+                             CaptionButton.MinMax, active, barH, h => _min = h));
             kids.Add(Caption(PartCaptionMax, maxGlyph, () => hooks.WindowToggleMaximize?.Invoke(),
-                             CaptionButton.MinMax, active, h => _max = h));
+                             CaptionButton.MinMax, active, barH, h => _max = h));
             kids.Add(Caption(PartCaptionClose, Icons.ChromeClose, () => hooks.WindowClose?.Invoke(),
-                             CaptionButton.Close, active, h => _close = h));
+                             CaptionButton.Close, active, barH, h => _close = h));
         }
         else
         {
@@ -529,7 +605,7 @@ public sealed class TitleBar : Component
 
         var root = new BoxEl
         {
-            Direction = 0, Height = ExpandedHeight, AlignItems = FlexAlign.Center,
+            Direction = 0, Height = barH, AlignItems = FlexAlign.Center,
             Padding = new Edges4(2f, 0f, 0f, 0f),                  // WinUI rest left-padding column
             ClipToBounds = true,                                   // a mis-sized bar must never paint over the page
             Children = kids.ToArray(),
@@ -537,7 +613,7 @@ public sealed class TitleBar : Component
         var appliedRoot = Parts.Apply(PartRoot, root);
         var result = appliedRoot with
         {
-            Height = ExpandedHeight, Children = root.Children,
+            Height = barH, Children = root.Children,
             OnRealized = TemplateParts.Chain<NodeHandle>(h => _root = h, appliedRoot.OnRealized),
         };
         _cachedTree = result;
@@ -545,10 +621,473 @@ public sealed class TitleBar : Component
         return result;
     }
 
-    BoxEl Caption(string part, string glyph, Action onClick, CaptionButton.Style style, bool active,
+    // ── EP16: the shell rows ───────────────────────────────────────────────────────────────────────────────────────
+    //  [row 1, 2 rows only]  [tabs island (hug)] [grow drag band] [drag strip] [CaptionLeading] [captions, row-1 tall]
+    //  [toolbar row]         [left cluster: nav + Lead items + Wordmark] [centre column → hugging island] [right cluster:
+    //                         TrailingItems + Trailing (+ drag strip, CaptionLeading, captions in a one-row bar)]
+    //  Everything not covered by an island, keyed child or button is the Caption catch-all (one rect over both rows). Every
+    //  reported node carries the shared bounds watch, so a child that moves or resizes re-reports in the same frame.
+
+    sealed class KeyedSlot
+    {
+        public NodeHandle Node;
+        public readonly Action<NodeHandle> Capture;
+        public bool Seen;
+        public KeyedSlot() => Capture = h => Node = h;
+    }
+
+    bool _shellMode, _shellBuilt, _shellPushQueued;
+    InputHooks? _shellHooks;
+    Action? _shellPush, _shellPushQueuedAction;
+    Action<RectF>? _islandBounds;
+    int _shellRows = 1;
+    TitleBarCenterAlign _shellAlign;
+    readonly Signal<float> _tabsLane = new(float.PositiveInfinity);
+    TabStripHost? _stripHost;
+    NodeHandle _topRow, _toolbarRow, _tabsBand, _leftCluster, _rightCluster;
+    readonly Dictionary<string, KeyedSlot> _keyed = new(StringComparer.Ordinal);
+    readonly List<KeyedSlot> _leadSlots = new(), _trailSlots = new();
+    TitleBarRegion[] _shellRegions = new TitleBarRegion[16];
+
+    static int KeysHash(IReadOnlyList<TitleBarItem> items)
+    {
+        int h = items.Count;
+        for (int i = 0; i < items.Count; i++) h = unchecked(h * 397 ^ StringComparer.Ordinal.GetHashCode(items[i].Key));
+        return h;
+    }
+
+    InputHooks? _rowHooks;
+    Action<RectF>? _leadPadBounds;
+    bool _rowPushQueued;
+    Action? _rowPushQueuedAction;
+
+    /// <summary>Re-push the regions after this frame's layout (the lead pad eased: every island after it moved). Coalesced to one push a frame.</summary>
+    void RequestRegionPush()
+    {
+        if (_shellMode) { RequestShellPush(); return; }
+        if (_rowPushQueued || _rowHooks?.QueueAfterLayout is not { } queue) return;
+        _rowPushQueued = true;
+        queue(_rowPushQueuedAction ??= () =>
+        {
+            _rowPushQueued = false;
+            if (!_shellMode && _rowHooks is { } h) PushRegions(h);
+        });
+    }
+
+    void RequestShellPush()
+    {
+        if (_shellPushQueued || _shellHooks?.QueueAfterLayout is not { } queue) return;
+        _shellPushQueued = true;
+        queue(_shellPushQueuedAction ??= () =>
+        {
+            _shellPushQueued = false;
+            if (_shellMode && _shellHooks is { } h) PushShellRegions(h);
+        });
+    }
+
+    bool LiveNode(NodeHandle n) => !n.IsNull && (Context.Scene is not { } s || s.IsLive(n));
+
+    Element RenderShell(InputHooks hooks, Size2 viewport, int epoch, bool active, bool maximized, int tabsVer, int contentVer,
+                        bool backEnabled, bool paneEnabled, string paneTip, float leadPad, float dragStrip, float barH, int rows)
+    {
+        _shellHooks = hooks;
+        _shellPush ??= () => PushShellRegions(_shellHooks!);
+        _islandBounds ??= _ => RequestShellPush();
+        float topH = rows == 2 ? MathF.Max(1f, TopRowHeight.Current()) : 0f;   // subscribe: a tier-bound row height
+        var align = CenterAlign.Current();                                      // subscribe: a tier-bound centring
+        var lead = Lead?.Invoke() ?? [];                                        // subscribe: the key lists ARE the shape
+        var trail = TrailingItems?.Invoke() ?? [];
+        int keys = unchecked(KeysHash(lead) * 31 ^ KeysHash(trail));
+        float centerAvail = _availDip.Value;                                    // subscribe: the centre island clamps to it
+        _shellRows = rows;
+        _shellAlign = align;
+
+        UseLayoutEffect(_shellPush,
+            DepKey.From(HashCode.Combine(
+                HashCode.Combine(viewport.Width, viewport.Height, epoch, centerAvail, tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons),
+                HashCode.Combine(contentVer, paneEnabled, leadPad, dragStrip, barH),
+                HashCode.Combine(topH, (int)align, keys, rows))));
+
+        int key = HashCode.Combine(
+            HashCode.Combine(epoch, tabsVer, contentVer, centerAvail, Tok.Epoch, StringComparer.Ordinal.GetHashCode(paneTip)),
+            (active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0)
+                | (backEnabled ? 32 : 0) | (ShowRailBaseline ? 64 : 0) | (paneEnabled ? 256 : 0),
+            HashCode.Combine(leadPad, dragStrip, barH, topH, (int)align, keys, rows),
+            ToolbarSpacing?.Invoke() ?? TitleBarToolbarSpacing.Default);
+        if (_shellBuilt && _cachedTree is { } cached && key == _cacheKey) return cached;
+
+        float dim = active ? 1f : 0.5f;
+        BoxEl Island(Element child, float height, Action<NodeHandle> capture) => new()
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Shrink = 0f, Height = height, Opacity = dim,
+            OnRealized = capture, OnBoundsChanged = _islandBounds, Children = [child],
+        };
+
+        // ── keyed children: one hugging wrapper per key, its own Client region ──
+        foreach (var slot in _keyed.Values) slot.Seen = false;
+        void Keyed(IReadOnlyList<TitleBarItem> items, string prefix, List<KeyedSlot> slots, List<Element> into)
+        {
+            slots.Clear();
+            for (int i = 0; i < items.Count; i++)
+            {
+                string k = prefix + items[i].Key;
+                if (!_keyed.TryGetValue(k, out var slot)) _keyed[k] = slot = new KeyedSlot();
+                slot.Seen = true;
+                slots.Add(slot);
+                into.Add(new BoxEl
+                {
+                    Key = k, Direction = 0, AlignItems = FlexAlign.Center, Shrink = 0f, Opacity = dim,
+                    OnRealized = slot.Capture, OnBoundsChanged = _islandBounds,
+                    Children = [items[i].Build()],
+                });
+            }
+        }
+
+        // ── the toolbar row ──
+        var left = new List<Element>(8);
+        AddNavCluster(left, barH, active, backEnabled, paneEnabled, paneTip, leadPad, alwaysLeadPad: false);
+        Keyed(lead, "lead:", _leadSlots, left);
+        if (Wordmark is { } wordmark)
+        {
+            var mark = new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Shrink = 0f, HitTestVisible = false, Opacity = dim,
+                Children = [wordmark()],
+            };
+            left.Add(Parts.Apply(PartWordmark, mark) with { Children = mark.Children, HitTestVisible = false });
+        }
+        if (rows == 1 && Tabs is { } rowTabs)
+            left.Add(Island(rowTabs(), barH, h => _tabs = h) with { Shrink = 1f, MinWidth = 0f, ClipToBounds = true });
+
+        var right = new List<Element>(8);
+        Keyed(trail, "trail:", _trailSlots, right);
+        if (Trailing is { } trailingFunc)
+        {
+            var island = Island(trailingFunc(), barH, h => _trailing = h);
+            var applied = Parts.Apply(PartTrailing, island);
+            right.Add(applied with
+            {
+                Children = island.Children, OnBoundsChanged = _islandBounds,
+                OnRealized = TemplateParts.Chain<NodeHandle>(h => _trailing = h, applied.OnRealized),
+            });
+        }
+
+        // Prune the children that left both slots (their handles are dead).
+        if (_keyed.Count > _leadSlots.Count + _trailSlots.Count)
+        {
+            List<string>? gone = null;
+            foreach (var kv in _keyed) if (!kv.Value.Seen) (gone ??= new()).Add(kv.Key);
+            if (gone is not null) foreach (var k in gone) _keyed.Remove(k);
+        }
+
+        void AddCaptions(List<Element> into, float height)
+        {
+            into.Add(new BoxEl { Width = dragStrip, Shrink = 0f });
+            if (CaptionLeading is { } captionLeadingFunc)
+            {
+                var island = Island(captionLeadingFunc(), height, h => _captionLeading = h);
+                var applied = Parts.Apply(PartCaptionLeading, island);
+                into.Add(applied with
+                {
+                    Children = island.Children, OnBoundsChanged = _islandBounds,
+                    OnRealized = TemplateParts.Chain<NodeHandle>(h => _captionLeading = h, applied.OnRealized),
+                });
+            }
+            if (ShowCaptionButtons)
+            {
+                string maxGlyph = maximized ? Icons.ChromeRestore : Icons.ChromeMaximize;
+                into.Add(Caption(PartCaptionMin, Icons.ChromeMinimize, () => hooks.WindowMinimize?.Invoke(),
+                                 CaptionButton.MinMax, active, height, h => _min = h));
+                into.Add(Caption(PartCaptionMax, maxGlyph, () => hooks.WindowToggleMaximize?.Invoke(),
+                                 CaptionButton.MinMax, active, height, h => _max = h));
+                into.Add(Caption(PartCaptionClose, Icons.ChromeClose, () => hooks.WindowClose?.Invoke(),
+                                 CaptionButton.Close, active, height, h => _close = h));
+            }
+            else into.Add(new BoxEl { Width = 140f, Shrink = 0f });   // a standard OS frame owns the captions
+        }
+        // One row: the captions end the toolbar, outside the gapped trailing cluster (they abut, flush right).
+        Element[] captionGroup = [];
+        if (rows == 1)
+        {
+            var caps = new List<Element>(5);
+            AddCaptions(caps, barH);
+            captionGroup = caps.ToArray();
+        }
+        var spacing = ToolbarSpacing?.Invoke() ?? TitleBarToolbarSpacing.Default;   // subscribe: a tier-bound spacing
+
+        // The centre: a column that owns the slack, around an island that HUGS (its flanks stay drag space).
+        var centerBuild = CenterContent ?? Content;
+        var centerIsland = new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center,
+            OnRealized = h => _center = h, OnBoundsChanged = _islandBounds,
+            Children = centerBuild is { } cb ? [cb(centerAvail)] : [],
+        };
+        bool windowCentred = align == TitleBarCenterAlign.Window;
+        var centerCol = new BoxEl
+        {
+            Grow = windowCentred ? 0f : 1f, Shrink = 1f, MinWidth = 0f, Direction = 0,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Height = barH, Opacity = dim,
+            Children = [centerIsland],
+        };
+        var appliedCenter = Parts.Apply(PartCenterContent, centerCol);
+        var center = appliedCenter with
+        {
+            Children = centerCol.Children,
+            OnRealized = TemplateParts.Chain<NodeHandle>(h => _centerCol = h, appliedCenter.OnRealized),
+            OnBoundsChanged = _islandBounds,
+        };
+
+        var leftCluster = new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Shrink = rows == 1 && Tabs is not null ? 1f : 0f, MinWidth = 0f,
+            Gap = spacing.Gap, Padding = new Edges4(spacing.LeadInset, 0f, 0f, 0f),
+            Height = barH, OnRealized = h => _leftCluster = h, OnBoundsChanged = _islandBounds, Children = left.ToArray(),
+        };
+        var rightCluster = new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Shrink = 0f, Height = barH,
+            Gap = spacing.Gap, Padding = new Edges4(0f, 0f, rows == 2 ? spacing.TrailInset : 0f, 0f),
+            OnRealized = h => _rightCluster = h, OnBoundsChanged = _islandBounds, Children = right.ToArray(),
+        };
+        Element[] rightKids = captionGroup.Length == 0 ? [rightCluster] : [rightCluster, .. captionGroup];
+        // ONE shape for both alignments, so a tier that moves the centre (window-centred <-> between the clusters) keeps every
+        // cluster's node: each side is a box that either takes an equal zero-basis share (CSS `1fr auto 1fr`: equal sides keep the
+        // centre on the window's centre line) or hugs its cluster while the centre column takes the slack. A side swapped in and out
+        // around the clusters re-mounted every button in them on that crossing.
+        Element[] toolbarKids =
+        [
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Grow = windowCentred ? 1f : 0f, Basis = windowCentred ? 0f : float.NaN,
+                Shrink = windowCentred ? 1f : leftCluster.Shrink, MinWidth = 0f, Height = barH, Children = [leftCluster],
+            },
+            center,
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Grow = windowCentred ? 1f : 0f,
+                Basis = windowCentred ? 0f : float.NaN, Shrink = windowCentred ? 1f : 0f, MinWidth = 0f, Height = barH, Children = rightKids,
+            },
+        ];
+        var toolbar = new BoxEl
+        {
+            Direction = 0, Height = barH, AlignItems = FlexAlign.Center, ClipToBounds = true, Children = toolbarKids,
+        };
+        var appliedToolbar = Parts.Apply(PartToolbarRow, toolbar);
+        var toolbarRow = appliedToolbar with
+        {
+            Height = barH, Children = toolbar.Children,
+            OnRealized = TemplateParts.Chain<NodeHandle>(h => _toolbarRow = h, appliedToolbar.OnRealized),
+        };
+
+        BoxEl root;
+        if (rows == 2)
+        {
+            bool rail = Tabs is not null && ShowRailBaseline;
+            BoxEl Band(float width, float grow) => rail
+                ? TabStrip.RailBaselineHost(width, grow) with { Shrink = grow > 0f ? 1f : 0f, Height = topH }
+                : new BoxEl { Width = width, Grow = grow, Shrink = grow > 0f ? 1f : 0f, Height = topH };
+
+            var top = new List<Element>(8);
+            if (Tabs is { } tabsFunc)
+            {
+                _stripHost ??= new TabStripHost(_tabsLane, TopRowHeight);
+                top.Add(new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Stretch, Shrink = 1f, MinWidth = 0f, Height = topH,
+                    ClipToBounds = true, Opacity = dim,
+                    OnRealized = h => _tabs = h, OnBoundsChanged = _islandBounds,
+                    Children = [Ctx.Provide(TabStrip.HostContext, _stripHost, tabsFunc())],
+                });
+            }
+            top.Add(Band(float.NaN, 1f) with { OnRealized = h => _tabsBand = h, OnBoundsChanged = _islandBounds });
+            var captions = new List<Element>(5);
+            AddCaptions(captions, topH);
+            captions[0] = Band(dragStrip, 0f);                      // the drag strip carries the rail like the band
+            top.AddRange(captions);
+
+            var topRow = new BoxEl
+            {
+                Direction = 0, Height = topH, AlignItems = FlexAlign.Center, ClipToBounds = true, Children = top.ToArray(),
+            };
+            var appliedTop = Parts.Apply(PartTopRow, topRow);
+            root = new BoxEl
+            {
+                Direction = 1, Height = topH + barH, ClipToBounds = true,
+                Children =
+                [
+                    appliedTop with
+                    {
+                        Height = topH, Children = topRow.Children,
+                        OnRealized = TemplateParts.Chain<NodeHandle>(h => _topRow = h, appliedTop.OnRealized),
+                    },
+                    toolbarRow,
+                ],
+            };
+        }
+        else root = new BoxEl { Direction = 1, Height = barH, ClipToBounds = true, Children = [toolbarRow] };
+
+        var appliedRoot = Parts.Apply(PartRoot, root);
+        var result = appliedRoot with
+        {
+            Height = root.Height, Children = root.Children,
+            OnRealized = TemplateParts.Chain<NodeHandle>(h => _root = h, appliedRoot.OnRealized),
+        };
+        _cachedTree = result;
+        _cacheKey = key;
+        _shellBuilt = true;
+        return result;
+    }
+
+    /// <summary>The shell rows' region report + measurements. Order: every Client island and keyed child (top row, then
+    /// the toolbar left to right), the three buttons, then ONE Caption rect over both rows (first match wins).</summary>
+    void PushShellRegions(InputHooks hooks)
+    {
+        if (hooks.GetNodeRect is not { } rectOf) return;
+
+        // The centre's available width: the column itself between the clusters; on the window centre line, the widest
+        // span centred in the row that clears the heavier cluster.
+        if (LiveNode(_toolbarRow) && LiveNode(_centerCol))
+        {
+            float w;
+            if (_shellAlign == TitleBarCenterAlign.Window && LiveNode(_leftCluster) && LiveNode(_rightCluster))
+            {
+                RectF row = rectOf(_toolbarRow);
+                // Each side's weight runs from the row edge to the far edge of its cluster (captions included).
+                float heavier = MathF.Max(rectOf(_leftCluster).Right - row.X, row.Right - rectOf(_rightCluster).X);
+                w = MathF.Max(0f, row.W - 2f * heavier);
+            }
+            else w = rectOf(_centerCol).W;
+            if (MathF.Abs(w - _availDip.Peek()) > 0.5f) _availDip.Value = w;
+        }
+        // The tab lane: the strip island plus the free band after it (the band is 0 once the strip fills its lane).
+        if (_shellRows == 2 && Tabs is not null && LiveNode(_tabs) && LiveNode(_tabsBand))
+        {
+            float lane = rectOf(_tabs).W + rectOf(_tabsBand).W;
+            if (MathF.Abs(lane - _tabsLane.Peek()) > 0.5f) _tabsLane.Value = lane;
+        }
+
+        if (hooks.SetTitleBarRegions is not { } push) return;
+        int need = 12 + _leadSlots.Count + _trailSlots.Count;
+        if (_shellRegions.Length < need) _shellRegions = new TitleBarRegion[need + 8];
+        var regions = _shellRegions;
+        int n = 0;
+        if (_shellRows == 2)
+        {
+            if (Tabs is not null) AddClient(regions, ref n, _tabs);
+            if (CaptionLeading is not null) AddClient(regions, ref n, _captionLeading);
+        }
+        if (ShowBackButton) AddClient(regions, ref n, _back);
+        if (ShowPaneToggle) AddClient(regions, ref n, _pane);
+        foreach (var slot in _leadSlots) AddClient(regions, ref n, slot.Node);
+        if (_shellRows == 1 && Tabs is not null) AddClient(regions, ref n, _tabs);
+        if (CenterContent is not null || Content is not null) AddClient(regions, ref n, _center);
+        foreach (var slot in _trailSlots) AddClient(regions, ref n, slot.Node);
+        if (Trailing is not null) AddClient(regions, ref n, _trailing);
+        if (_shellRows == 1 && CaptionLeading is not null) AddClient(regions, ref n, _captionLeading);
+        if (ShowCaptionButtons)
+        {
+            if (LiveNode(_min)) regions[n++] = new TitleBarRegion(rectOf(_min), TitleBarHit.MinButton);
+            if (LiveNode(_max)) regions[n++] = new TitleBarRegion(rectOf(_max), TitleBarHit.MaxButton);
+            if (LiveNode(_close)) regions[n++] = new TitleBarRegion(rectOf(_close), TitleBarHit.CloseButton);
+        }
+        if (LiveNode(_root)) regions[n++] = new TitleBarRegion(rectOf(_root), TitleBarHit.Caption);
+        push(regions, n);
+    }
+
+    void AddClient(TitleBarRegion[] regions, ref int n, NodeHandle h)
+    {
+        if (!LiveNode(h) || _shellHooks?.GetNodeRect is not { } rectOf) return;
+        RectF r = rectOf(h);
+        if (r.W > 0f && r.H > 0f) regions[n++] = new TitleBarRegion(r, TitleBarHit.Client);
+    }
+
+    /// <summary>The bar's built-in lead cluster: back, pane toggle, the lead pad, the identity icon, title and subtitle.
+    /// <paramref name="alwaysLeadPad"/> keeps the one-row bar's unconditional lead pad; the shell rows add it only after a
+    /// built-in part.</summary>
+    void AddNavCluster(List<Element> kids, float barH, bool active, bool backEnabled, bool paneEnabled, string paneTip,
+                       float leadPad, bool alwaysLeadPad)
+    {
+        // WinUI back/pane: 40w × 44h with Margin 2 (the hover backplate spans y=2..46 of the 48px bar; adjacent
+        // margins give the 4px back↔pane gap and the 2px before the 14px header pad = the 16px pane→icon gap).
+        // Deactivated state: foreground → tertiary (fills unchanged).
+        var navStyle = IconButton.DefaultStyle with
+        {
+            Size = NavButtonSize,
+            Height = barH - 4f,                                    // 44 in the 48 bar
+            Foreground = active ? Tok.TextPrimary : Tok.TextTertiary,
+        };
+        var navMargin = new Edges4(2f, 2f, 2f, 2f);
+
+        if (ShowBackButton)
+        {
+            var back = IconButton.Create(Icons.Back, () => OnBack?.Invoke(), navStyle, isEnabled: backEnabled)
+                with { Margin = navMargin };
+            var applied = Parts.Apply(PartBackButton, back);
+            kids.Add(applied with
+            {
+                OnClick = back.OnClick, Role = AutomationRole.Button, Children = back.Children,
+                OnRealized = TemplateParts.Chain<NodeHandle>(h => _back = h, applied.OnRealized),
+            });
+        }
+        if (ShowPaneToggle)
+        {
+            var pane = IconButton.Create(Icons.Menu, () => OnPaneToggle?.Invoke(), navStyle, isEnabled: paneEnabled)
+                with { Margin = navMargin };
+            var applied = Parts.Apply(PartPaneToggle, pane);
+            Element paneEl = applied with
+            {
+                OnClick = pane.OnClick, Role = AutomationRole.Button, Children = pane.Children,
+                OnRealized = TemplateParts.Chain<NodeHandle>(h => _pane = h, applied.OnRealized),
+            };
+            kids.Add(paneTip.Length > 0 ? ToolTip.Wrap(paneEl, paneTip) : paneEl);
+        }
+
+        if (alwaysLeadPad || ShowBackButton || ShowPaneToggle || IconGlyph.Length > 0 || Title.Length > 0)
+            kids.Add(new BoxEl
+            {
+                Width = leadPad, Animate = LeadPadMotion,
+                OnBoundsChanged = LeadPadMotion is null ? null : _leadPadBounds ??= _ => RequestRegionPush(),
+            });
+
+        if (IconGlyph.Length > 0)
+        {
+            // The identity icon dims to 50% opacity on deactivation (WinUI dims the icon/content presenters).
+            var icon = new BoxEl
+            {
+                Width = IconSize, Height = IconSize, Direction = 0,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Opacity = active ? 1f : 0.5f,
+                Children = [Ui.Icon(IconGlyph, IconSize).Foreground(IconColor)],
+            };
+            kids.Add(Parts is null ? icon : Parts.Apply(PartIcon, icon) with { Children = icon.Children });
+            kids.Add(new BoxEl { Width = 16f });                  // WinUI icon margin-right
+        }
+
+        if (Title.Length > 0)
+        {
+            kids.Add(Parts.Apply(PartTitle, new TextEl(Title)
+            {
+                Size = 12f,                                        // CaptionTextBlockStyle
+                Color = active ? Tok.TextPrimary : Tok.TextTertiary,   // TitleBar(Deactivated)ForegroundBrush
+            }));
+            kids.Add(new BoxEl { Width = 8f });                   // WinUI title margin-right
+        }
+        if (Subtitle.Length > 0)
+        {
+            kids.Add(Parts.Apply(PartSubtitle, new TextEl(Subtitle)
+            {
+                Size = 12f,
+                Color = active ? Tok.TextSecondary : Tok.TextTertiary, // TitleBarSubtitle(Deactivated)ForegroundBrush
+            }));
+            kids.Add(new BoxEl { Width = 16f });                  // WinUI subtitle margin-right
+        }
+    }
+
+    BoxEl Caption(string part, string glyph, Action onClick, CaptionButton.Style style, bool active, float height,
                   Action<NodeHandle> capture)
     {
-        var b = CaptionButton.Create(glyph, onClick, style, active);
+        var b = CaptionButton.Create(glyph, onClick, style, active, height);
         var applied = Parts.Apply(part, b);
         return applied with
         {

@@ -27,6 +27,17 @@ public enum LineStacking : byte
     BlockLineHeight = 1
 }
 
+/// <summary>How <c>TextEl.MinSize</c> auto-fit chooses its size. <see cref="Lines"/> (the default) takes the largest size that
+/// fits the run in <c>MaxLines</c>, so a long run wraps at full size before it shrinks. <see cref="OneLineFirst"/> takes the largest
+/// size that fits the run on ONE line; only when even the floor cannot hold one line does the run wrap, at the floor, up to
+/// <c>MaxLines</c> (then <c>Trim</c>). In that mode an authored <c>LineHeight</c> scales with the size chosen (the line keeps its
+/// ratio to the em), so two lines at a floor of about half the size take about the block one full-size line takes.</summary>
+public enum TextFitMode : byte
+{
+    Lines = 0,
+    OneLineFirst = 1
+}
+
 /// <summary>Which vertical band a text line reports as its box (mirrors WinUI TextLineBounds, minimum set —
 /// TrimToCapHeight/TrimToBaseline individually are not modeled). Full — the WinUI BaseTextBlockStyle default
 /// (TextBlock_themeresources.xaml:17) — is the font-natural ascent..descent box; Tight trims the box to
@@ -35,6 +46,18 @@ public enum TextLineBounds : byte
 {
     Full = 0,
     Tight = 1
+}
+
+/// <summary>Case transform applied to a text run AT SHAPING (E19), culture-invariantly: the stored string is never rewritten
+/// and nothing is allocated per render. <see cref="Lower"/> / <see cref="Upper"/> are the simple Unicode case mappings of
+/// the invariant culture (a Turkish current culture never turns <c>i</c> into <c>İ</c>), UTF-16 length preserving, so every
+/// index (caret, selection, span range) is the same in the written and the shaped text. Wavee feeds it from theme-written
+/// labels only; content strings keep <see cref="AsWritten"/>.</summary>
+public enum TextCase : byte
+{
+    AsWritten = 0,
+    Lower = 1,
+    Upper = 2
 }
 
 /// <summary>Horizontal alignment of each laid line inside the text box (WinUI <c>TextBlock.TextAlignment</c>, CSS

@@ -6,9 +6,10 @@ namespace FluentGpu.Foundation;
 
 /// <summary>
 /// Minimal pure-managed PNG encoder for debug frame captures — no WIC / System.Drawing, AOT-safe, zero new deps.
-/// Emits an opaque RGB PNG (color type 2) — or, for a capture that must keep the window's translucency, an RGBA PNG
-/// (color type 6) — from a tightly-packed top-down BGRA8 buffer (the D3D12 readback format). Used only by capture
-/// tooling (<c>--screenshot</c>, the evidence bundle, the Store shot export); never on the hot frame path.
+/// Emits an opaque RGB PNG (color type 2), optionally composited over a backdrop colour — or, for a capture that must
+/// keep the window's translucency, an RGBA PNG (color type 6) — from a tightly-packed top-down BGRA8 buffer (the D3D12
+/// readback format). Used only by capture tooling (<c>--screenshot</c>, the evidence bundle, the Store shot export); never
+/// on the hot frame path.
 /// </summary>
 public static class PngWriter
 {
@@ -21,7 +22,30 @@ public static class PngWriter
     /// from the back buffer's premultiplied alpha (<see cref="Unpremultiply"/>), so a Mica/acrylic window's see-through
     /// regions stay see-through when the PNG is composited over another background.</summary>
     public static void WriteBgra(string path, ReadOnlySpan<byte> bgra, int width, int height, bool keepAlpha)
+        => Write(path, bgra, width, height, keepAlpha, flatten: false, default);
+
+    /// <summary>Write a tightly-packed, top-down PREMULTIPLIED BGRA8 buffer as an opaque RGB PNG composited over
+    /// <paramref name="backdrop"/> (<see cref="FlattenOver"/>): what the window shows when its see-through regions sit over
+    /// that colour. The capture form a review reads: dropping the alpha instead composites over black, which dims every
+    /// translucent layer fill and blacks out a Mica window's chrome. <paramref name="backdrop"/>'s alpha is ignored (a
+    /// ground is opaque).</summary>
+    public static void WriteBgra(string path, ReadOnlySpan<byte> bgra, int width, int height, ColorF backdrop)
+        => Write(path, bgra, width, height, keepAlpha: false, flatten: true, backdrop);
+
+    /// <summary>One premultiplied BGRA8 pixel composited over an opaque backdrop (<paramref name="r"/>, <paramref name="g"/>,
+    /// <paramref name="b"/>): <c>out = colour + backdrop × (1 − alpha)</c>, rounded to nearest; <paramref name="dst"/> = B, G, R.
+    /// An opaque pixel is unchanged; a transparent one is the backdrop.</summary>
+    public static void FlattenOver(ReadOnlySpan<byte> bgraPremultiplied, byte r, byte g, byte b, Span<byte> dst)
     {
+        int inv = 255 - bgraPremultiplied[3];
+        dst[0] = (byte)Math.Min(255, bgraPremultiplied[0] + (b * inv + 127) / 255);
+        dst[1] = (byte)Math.Min(255, bgraPremultiplied[1] + (g * inv + 127) / 255);
+        dst[2] = (byte)Math.Min(255, bgraPremultiplied[2] + (r * inv + 127) / 255);
+    }
+
+    private static void Write(string path, ReadOnlySpan<byte> bgra, int width, int height, bool keepAlpha, bool flatten, ColorF backdrop)
+    {
+        byte br = ToByte(backdrop.R), bg = ToByte(backdrop.G), bb = ToByte(backdrop.B);
         using var fs = File.Create(path);
         ReadOnlySpan<byte> sig = [137, 80, 78, 71, 13, 10, 26, 10];
         fs.Write(sig);
@@ -57,6 +81,13 @@ public static class PngWriter
                     raw[w++] = px[0];   // B
                     raw[w++] = px[3];   // A
                 }
+                else if (flatten)
+                {
+                    FlattenOver(bgra.Slice(s, 4), br, bg, bb, px);
+                    raw[w++] = px[2];   // R
+                    raw[w++] = px[1];   // G
+                    raw[w++] = px[0];   // B
+                }
                 else
                 {
                     raw[w++] = bgra[s + 2];   // R
@@ -76,6 +107,8 @@ public static class PngWriter
     /// <summary>One premultiplied BGRA8 pixel to straight alpha (<paramref name="dst"/> = B, G, R, A). A fully transparent
     /// pixel becomes transparent black; a colour channel above its alpha (a blend that overshot) clamps to 255. Rounded
     /// to nearest, so a pixel that round-trips through premultiply comes back within one step.</summary>
+    private static byte ToByte(float c) => (byte)Math.Clamp((int)MathF.Round(c * 255f), 0, 255);
+
     public static void Unpremultiply(ReadOnlySpan<byte> bgraPremultiplied, Span<byte> dst)
     {
         byte a = bgraPremultiplied[3];

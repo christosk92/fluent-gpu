@@ -33,7 +33,10 @@ public static class CaptionButton
     }
 
     /// <summary>Minimize/maximize ramp: transparent → SubtleSecondary → SubtleTertiary fills; glyph primary → secondary.</summary>
-    public static Style MinMax => new()
+    public static Style MinMax => ControlStyles.Resolve(ControlStyles.CaptionMinMaxStyle, FluentMinMax);
+
+    /// <summary>The built-in Fluent default (what a theme table without a CaptionMinMax entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentMinMax() => new()
     {
         Fill = Tok.FillSubtleTransparent,
         HoverFill = Tok.FillSubtleSecondary,
@@ -45,7 +48,10 @@ public static class CaptionButton
     };
 
     /// <summary>Close ramp: the Win11 shell red on hover/press with a white glyph (pressed glyph at ~70%).</summary>
-    public static Style Close => MinMax with
+    public static Style Close => ControlStyles.Resolve(ControlStyles.CaptionCloseStyle, FluentClose);
+
+    /// <summary>The built-in Fluent default (what a theme table without a CaptionClose entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentClose() => MinMax with
     {
         HoverFill = Tok.CaptionCloseHover,
         PressedFill = Tok.CaptionClosePressed,
@@ -73,7 +79,7 @@ public static class CaptionButton
             [
                 new TextEl(glyph)
                 {
-                    Size = GlyphSize, FontFamily = Theme.IconFont,
+                    Size = GlyphSize, FontFamily = Tok.Definition.Fonts.Icon,
                     Color = active ? style.Foreground : style.InactiveForeground,
                     HoverColor = style.HoverForeground,
                     PressedColor = style.PressedForeground,

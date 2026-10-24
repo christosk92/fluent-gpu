@@ -458,6 +458,24 @@ unmounts or changes key and `Restore`s it on the next mount under the same key (
 `SaveScrollPosition`, wired from the reconciler). The engine keys by the string alone — **an app that can show the same
 content twice (tabs) composes its own scope into the key** (Wavee: `Shell.PageScrollScope`).
 
+**Restored in the FIRST layout (E8/EP12, Classic tuning F12).** A returning page never paints at offset 0 and then jumps. The
+seed is armed at mount (`ApplyScrollKey`, before the content mounts or any row realizes) and resolves against the first known
+extent, in the same frame the viewport first lays out:
+- **Plain `ScrollEl`:** the latch resolves in the post-layout `SyncScrollPlansMidFrame` (the 6.5 step), which writes
+  `ScrollState.Offset` and re-poses the content before record, so the first presented frame is at the remembered offset.
+- **`VirtualListEl`:** the latch resolves in `RealizeWindow` against the analytic extent source BEFORE the window is chosen, so
+  the first realized window is the one around the restored offset (no top rows are built, then replaced). A remembered offset
+  past a SHORTER extent stays latched (it resolves if the list grows) but `SetExtent` has already put the plan at the clamp,
+  and a fresh mount takes that clamp as the window offset, so the end window is the first one built. A latch that resolved
+  EARLIER than the realize (the plan already written) is read the same way on a fresh mount (`mount && offset == 0`). The
+  mount frame's PRE-layout `SyncScrollPlansMidFrame` skips a viewport that has no laid-out geometry yet but already carries an
+  offset: publishing its 0 x 0 extent would clamp the plan, and so the offset, to 0 and the next re-realize would build the top
+  rows. The post-layout sync resolves it against real geometry.
+- **KeepAlive re-activation** needs no restore: the parked viewport keeps its plan and offset. A fresh mount of a remembered key
+  (an evicted page, a revisit, a theme-transaction remount) takes the path above; an unknown key starts at 0.
+- Gates: `Engine.Tests/ScrollFirstLayoutTests` (state after exactly one frame: plain, 2,000-row list, clamp, unknown key,
+  KeepAlive) and the VerticalSlice `scroll-first-layout` suite (the same plus zero hot-phase allocation after a restore).
+
 **Observation.** `ScrollCtx.Nearest` (`Hooks/ScrollHooks.cs`) is provided by every `ScrollEl`/`VirtualListEl` to its
 content. `Component.UseScroll(handle?)` → `ScrollObservation(Offset, Motion, AtStart, AtEnd, Extent, Viewport)` for the
 nearest scroller (or `ScrollObservation.None`); `UseScrollProgress(in0, in1, handle?)` → a memoized
@@ -520,7 +538,9 @@ gutter before the rest of its column (`VirtualLayoutExtentLeadInsetTests`). The 
   VisibleFirst, VisibleLast)`: overscan **ahead** of the motion = `clamp(|v|·LookaheadS, OverscanMinPx, OverscanMaxPx)`,
   behind = `OverscanMinPx`. The anchor is the first FULLY visible row.
 - `ScrollContentPose.NeedsRealize(sc, rw)`: the strictly visible band must ALWAYS be realized; the lead band is realized
-  the moment it outruns the window; a window wider than needed by more than `max(TrimSlackRows = 4, count/2)` trims. A
+  the moment it outruns the window; a window wider than needed by more than `max(TrimSlackRows = 4, count/2)` trims, except
+  at a zero main-axis viewport (a pane laid out at 0, e.g. mounted under a covering stage), whose realize falls back to the
+  mount hint and would otherwise re-realize every frame (`ZeroViewportRealizeTests`). A
   persistent prefix counts as covered; `MeasureAll` re-realizes only when the count changes.
 - `ArrangeOriginIndex` keeps the previous arrange-origin row while every realized row stays within
   `MaxLocalExtent` = 16384 DIP of it (retained rows keep their boxes and their recorded spans), else re-centres.
@@ -811,11 +831,10 @@ and renders the verdicts — same guide.
 
 ---
 
-## 11. Invariants (each names its gate)
+## 11. Invariants
 
-VerticalSlice gates run with `dotnet run --project src/FluentGpu.VerticalSlice -- --suite scroll` (tag `scroll` =
-`ScrollSuite` + `ScrollMotionSuite` + `ScrollEffectsSuite`), `--suite tiles` (`TileSuite` + `SliceSuite`), `--suite touch`,
-`--suite listrow`. Unit tests live in `src/FluentGpu.Engine.Tests` and `src/FluentGpu.Windows.Tests`.
+The gates named below were VerticalSlice and unit tests, all deleted on 2026-10-20 (tests are banned); the invariants still
+hold.
 
 1. **Motion is a pure function of absolute time; sampling order and rate are irrelevant.** —
    `ScrollMotionTests.Eval_AtSharedTimes_IsIdenticalRegardlessOfSampleOrder`, `Eval_IsContinuousAcrossSegmentBoundaries`,
@@ -960,11 +979,11 @@ VerticalSlice gates run with `dotnet run --project src/FluentGpu.VerticalSlice -
 - **Virtualization behaviour** — through `Virtualizer`/`IExtentSource`/`NeedsRealize` only; any "realize fewer rows this
   frame" idea is a throttle (§14) — make the row cheaper instead.
 - **Pacing** — `PresentCadence`, `MotionTickRun`, `SlotCatchUp`, `PresentQueueDepthPolicy`, `CompositorTickFilter`,
-  `GpuGovernorWake` are pure and unit-tested; change the pure class and its tests, then measure with `--scroll-soak` and
+  `GpuGovernorWake` are pure; change the pure class, then measure with `--scroll-soak` and
   a lab session. The present-time law and the pose floor are load-bearing for every curve metric.
 - **Diagnostics** — a new probe row kind needs a `ProbeRowKind` ordinal, a single-producer ring choice, a level rule, the
   CSV mapping and `SessionSeries` ingestion; a new mark needs its `ProbeMark` code in the same change as its emitter.
-- Every change: failing-first gate or unit test, Debug + Release build, the full VerticalSlice, and — for feel — a lab
+- Every change: Debug + Release build and — for feel — a lab
   session compared against its baseline. Canon edits: this doc + `SPEC-INDEX.md` §2 + `check-canon.ps1`.
 
 ---

@@ -2170,7 +2170,7 @@ public sealed class MediaPlayerElement : Component
         OnClick = onClick,
         OnPointerPressed = OnChromePointerPressed,
         OnFocusChanged = OnChromeFocusChanged,
-        Children = new Element[] { new TextEl(glyph) { Size = 16f, Color = Tok.OnMediaPrimary, FontFamily = Theme.IconFont } },
+        Children = new Element[] { new TextEl(glyph) { Size = 16f, Color = Tok.OnMediaPrimary, FontFamily = Tok.Definition.Fonts.Icon } },
     };
 
     /// <summary>The LIVE status chip. Deliberately NOT a button: no Role, no TabStop, no hover/press fill and no click —
@@ -2238,7 +2238,7 @@ public sealed class MediaPlayerElement : Component
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Children = new Element[]
                 {
-                    new TextEl(Icons.Play) { Size = 24f, Color = Tok.OnMediaPrimary, FontFamily = Theme.IconFont },
+                    new TextEl(Icons.Play) { Size = 24f, Color = Tok.OnMediaPrimary, FontFamily = Tok.Definition.Fonts.Icon },
                 },
             },
         },
@@ -2401,7 +2401,7 @@ public sealed class MediaPlayerElement : Component
         Fill = Tok.MediaScrim,
         Children =
         [
-            new TextEl(Icons.StatusError) { Size = 30f, Color = Tok.OnMediaPrimary, FontFamily = Theme.IconFont },
+            new TextEl(Icons.StatusError) { Size = 30f, Color = Tok.OnMediaPrimary, FontFamily = Tok.Definition.Fonts.Icon },
             new TextEl(string.IsNullOrWhiteSpace(errorMessage) ? MediaStrings.VideoFailed : errorMessage!)
             { Size = 13f, Color = Tok.OnMediaSecondary, Wrap = TextWrap.Wrap, MaxWidth = 380f },
         ],

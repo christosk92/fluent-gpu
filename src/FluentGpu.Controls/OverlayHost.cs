@@ -64,6 +64,34 @@ public enum OverlayCloseCause : byte { Programmatic, LightDismiss, Escape }
 /// </list></summary>
 public enum PopupChrome : byte { Flyout, Raw, Modal, TeachingTip, Popup, Dropdown, Static, CommandBar }
 
+/// <summary>The visible card of a frosted popup chrome (the host's <c>FlyoutSurface</c>): fill, frosted layer, ring, corner
+/// radius, elevation and presenter padding. The menu chrome (<see cref="PopupChrome.Flyout"/>) takes it from
+/// <see cref="MenuFlyout.Style.Plate"/> and the ComboBox dropdown (<see cref="PopupChrome.Dropdown"/>) from
+/// <see cref="ComboBox.Style.DropdownPlate"/>, both read through the control style table at render; every other frosted chrome
+/// keeps <see cref="Fluent"/>. The defaults are the WinUI MenuFlyoutPresenter / popup card exactly, so a theme that leaves the
+/// keys out renders what the host rendered before the plate became a record.</summary>
+public sealed record PopupPlate
+{
+    /// <summary>The resting fill. With an <see cref="Acrylic"/> layer this is its fallback (painted where the layer cannot run:
+    /// a secondary swapchain, a video hole); with no layer it is the plate's whole, solid body.</summary>
+    public ColorF Fill { get; init; } = Tok.AcrylicFlyout.Fallback;
+    /// <summary>The frosted layer (WinUI AcrylicInAppFillColorDefault); null = a solid <see cref="Fill"/> plate with no backdrop pass.</summary>
+    public AcrylicSpec? Acrylic { get; init; } = Tok.AcrylicFlyout;
+    /// <summary>The ring (SurfaceStrokeColorFlyout).</summary>
+    public ColorF Border { get; init; } = Tok.StrokeFlyoutDefault;
+    /// <summary>The ring's width (1; 0 = no ring).</summary>
+    public float BorderWidth { get; init; } = 1f;
+    /// <summary>The corner radius (OverlayCornerRadius); the corners that abut a dropdown's anchor are squared from it.</summary>
+    public float Radius { get; init; } = Radii.Overlay;
+    /// <summary>The elevation (the flyout band); null = no shadow.</summary>
+    public ShadowSpec? Shadow { get; init; } = Elevation.Flyout;
+    /// <summary>The presenter padding inside the card (MenuFlyoutPresenterThemePadding 0,2,0,2).</summary>
+    public Edges4 Padding { get; init; } = new(0, 2, 0, 2);
+
+    /// <summary>The built-in card: the WinUI flyout plate. Reads the live <c>Tok</c> on every call.</summary>
+    public static PopupPlate Fluent() => new();
+}
+
 /// <summary>Optional popup behavior. <see cref="FocusTrap"/> keeps Tab/Shift-Tab inside the overlay subtree (modal-style).</summary>
 public readonly record struct PopupOptions(
     bool FocusTrap = false,
@@ -110,6 +138,10 @@ public readonly record struct PopupOptions(
     /// row; ThemeAnimations.cpp:682 registers ClipTranslateY = OffsetFromCenter immediately). Null (the default) keeps
     /// the anchor-edge reveal. Only meaningful with <see cref="PopupChrome.Dropdown"/>.</summary>
     public float? SeamOffsetY { get; init; }
+
+    /// <summary>The card a frosted chrome draws for THIS popup (null, the default: the chrome's own, <see cref="FlyoutSurface"/>'s plate for it). A
+    /// control whose popup is themed apart from the menus and dropdowns hands its style's card here (the AutoSuggestBox's suggestions).</summary>
+    public PopupPlate? Plate { get; init; }
 
     /// <summary>WinUI <c>FlyoutBase.OverlayInputPassThroughElement</c> (FlyoutBase_Partial.cpp:3922-3938): pointer
     /// input over THIS node's rendered bounds bypasses the light-dismiss scrim while the popup is open — the MenuBar
@@ -243,6 +275,8 @@ internal sealed class OverlayEntry
     public NodeHandle WrapperNode;    // measured + translated for placement
     public NodeHandle SurfaceNode;    // presenter surface: the clip-reveal + translate + opacity animate this node
     public NodeHandle PlateNode;      // menu chrome plate (acrylic+stroke+shadow): the WinUI MenuFlyoutPresenterBorder ScaleY stretch animates this node
+    public PopupPlate? Plate;         // the caller's card (PopupOptions.Plate), null = the chrome's own
+    public PopupPlate? PlateStyle;    // the card the surface last rendered (FlyoutSurface reports it): the backdrop sync + corner squaring read it, never re-resolve per frame
     public float? SeamOffsetY;        // Dropdown SplitOpen/SplitClose seam (PopupOptions.SeamOffsetY)
     public Func<NodeHandle>? PassThrough;   // WinUI OverlayInputPassThroughElement (PopupOptions.PassThrough)
     public float AnchorOffsetX;       // post-placement nudge, mirrored on flip (cascade 4px overlap)
@@ -375,6 +409,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
             PreserveFocusOnOpen = options.PreserveFocusOnOpen,
             DismissBehavior = options.DismissBehavior,
             Chrome = options.Chrome,
+            Plate = options.Plate,
             ConstrainToRootBounds = options.ConstrainToRootBounds,
             PinsAnchor = options.PinsAnchor,
             FreezeAtLastRect = options.FreezeAtLastRect,
@@ -812,7 +847,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
             scene.Mark(e.WrapperNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
             if (!e.SurfaceNode.IsNull && scene.IsLive(e.SurfaceNode) && e.Chrome is PopupChrome.Flyout or PopupChrome.Dropdown)
             {
-                scene.Paint(e.SurfaceNode).Corners = FlyoutSurface.CornersFor(e.CornerJoin);
+                scene.Paint(e.SurfaceNode).Corners = FlyoutSurface.CornersFor(e);
                 scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
             }
             OverlayHost.SyncWindowedMenuBackdrop(scene, e);
@@ -1001,9 +1036,8 @@ public sealed class OverlayHost : Component
     /// read as the same material: an OS-backed popup (DWM supplies the blur, but its system tint alone is far too weak
     /// — in light theme the app content bleeds straight through the menu), and a plate over a video hole (below).
     /// Matches the in-window acrylic, so all three states read the same.</summary>
-    private static ColorF FlatAcrylicFill()
+    private static ColorF FlatAcrylicFill(in AcrylicSpec a)
     {
-        var a = Tok.AcrylicFlyout;
         float coverage = 1f - (1f - a.LuminosityOpacity) * (1f - a.TintOpacity);
         return a.Tint with { A = coverage };
     }
@@ -1023,11 +1057,7 @@ public sealed class OverlayHost : Component
     /// host-backdrop brush, so it only shows where that brush renders empty). That sprite is also what the composition
     /// drop shadow is masked by — WinUI's no-transparency fallback is the solid FallbackColor WITH its elevation
     /// shadow, and both hold.</para></summary>
-    private static ColorF OsBackedTintFill()
-    {
-        var a = Tok.AcrylicFlyout;
-        return a.Tint with { A = a.TintOpacity };
-    }
+    private static ColorF OsBackedTintFill(in AcrylicSpec a) => a.Tint with { A = a.TintOpacity };
 
     /// <summary>How much of a popup plate has to sit inside a video hole before its acrylic is dropped. Half: a plate
     /// mostly over the video blurs mostly nothing, and the fraction that DOES overlap real content is what the flat
@@ -1065,6 +1095,10 @@ public sealed class OverlayHost : Component
     {
         var target = BackdropNodeOf(e);
         if (target.IsNull || !scene.IsLive(target)) return;
+        // The card the surface rendered (MenuFlyout.Style.Plate / ComboBox.Style.DropdownPlate / the stock card). A plate
+        // with no frosted layer is a SOLID card: no acrylic in any state, its own fill everywhere (an opaque fill over an
+        // OS-backed window simply covers the window's material), and its shadow only where the stock card has one.
+        var plate = e.PlateStyle ?? PopupPlate.Fluent();
         bool osBacked = e.PopupWindowToken >= 0;
         // Asked of the LAST completed record's hole set, which is exactly right here: this runs at host phase 7.1,
         // before this frame is recorded, and the answer only ever picks between two visually equivalent paints.
@@ -1090,19 +1124,19 @@ public sealed class OverlayHost : Component
         // surface honest — otherwise every frame would author an acrylic nothing consumes, and the plate would keep the
         // acrylic-on resting fill while the surface is really running its fallback.
         bool policyOff = !FluentGpu.Dsl.Materials.AcrylicEnabled;
-        bool wantAcrylic = !osBacked && !overVideo && !policyOff;
-        bool wantShadow = !osBacked;
+        bool wantAcrylic = plate.Acrylic is not null && !osBacked && !overVideo && !policyOff;
+        bool wantShadow = !osBacked && plate.Shadow is not null;
         bool hasAcrylic = scene.TryGetAcrylic(target, out _);
         bool hasShadow = scene.TryGetShadow(target, out _);
         bool changed = false;
         if (wantAcrylic != hasAcrylic)
         {
-            if (wantAcrylic) scene.SetAcrylic(target, Tok.AcrylicFlyout); else scene.ClearAcrylic(target);
+            if (wantAcrylic) scene.SetAcrylic(target, plate.Acrylic!.Value); else scene.ClearAcrylic(target);
             changed = true;
         }
         if (wantShadow != hasShadow)
         {
-            if (wantShadow) scene.SetShadow(target, Elevation.Flyout); else scene.ClearShadow(target);
+            if (wantShadow) scene.SetShadow(target, plate.Shadow!.Value); else scene.ClearShadow(target);
             changed = true;
         }
         // The RESTING fill is Tok.AcrylicFlyout.Fallback for EVERY frosted chrome — there is no per-chrome exception,
@@ -1122,12 +1156,14 @@ public sealed class OverlayHost : Component
         // An OS-backed plate is the ONE case where a near-opaque resting fill is wrong rather than merely redundant:
         // its backdrop is the window's, underneath this swapchain, so the fill does not sit on top of a layer that
         // might not run — it sits on top of the material itself and hides it.
-        ColorF desiredFill = wantAcrylic ? Tok.AcrylicFlyout.Fallback
-                           : osBacked ? OsBackedTintFill()
+        ColorF desiredFill = plate.Acrylic is not { } recipe ? plate.Fill
+                           : wantAcrylic ? plate.Fill
+                           : osBacked ? OsBackedTintFill(recipe)
                            // Effects off is not the video-hole case: WinUI cross-fades to the FallbackColor itself,
                            // not to an approximation of the recipe's coverage.
-                           : policyOff ? Tok.AcrylicFlyout.Fallback
-                           : FlatAcrylicFill();
+                           : policyOff ? plate.Fill
+                           : FlatAcrylicFill(recipe);
+
         ref NodePaint tp = ref scene.Paint(target);
         if (changed || !tp.Fill.Equals(desiredFill))
         {
@@ -1331,7 +1367,7 @@ public sealed class OverlayHost : Component
                         if (!e.SurfaceNode.IsNull && scene.IsLive(e.SurfaceNode)
                             && e.Chrome is PopupChrome.Flyout or PopupChrome.Dropdown)
                         {
-                            scene.Paint(e.SurfaceNode).Corners = FlyoutSurface.CornersFor(e.CornerJoin);
+                            scene.Paint(e.SurfaceNode).Corners = FlyoutSurface.CornersFor(e);
                             scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
                         }
                     }
@@ -1657,7 +1693,9 @@ public sealed class OverlayHost : Component
             {
                 Body = e.Content,
                 Chrome = e.Chrome,
+                Plate = e.Plate,
                 OnSurface = h => e.SurfaceNode = h,
+                OnPlateStyle = p => e.PlateStyle = p,
             }),
         ],
     };
@@ -1688,7 +1726,9 @@ public sealed class OverlayHost : Component
                     {
                         Body = () => Ctx.Provide(Overlay.Placement, e.PlacementInfo, e.Content()),
                         Chrome = e.Chrome,
+                        Plate = e.Plate,
                         OnSurface = h => e.SurfaceNode = h,
+                        OnPlateStyle = p => e.PlateStyle = p,
                         OnPlate = h => e.PlateNode = h,
                     }),
                 ],
@@ -1706,16 +1746,36 @@ internal sealed class FlyoutSurface : Component
 {
     public Func<Element> Body = static () => new BoxEl();
     public PopupChrome Chrome = PopupChrome.Flyout;
+    /// <summary>The caller's card (<see cref="PopupOptions.Plate"/>); null = <see cref="PlateFor"/> the chrome.</summary>
+    public PopupPlate? Plate;
     public Action<NodeHandle>? OnSurface;
     /// <summary>Menu chrome only: the stretch PLATE (acrylic + 1px flyout stroke + elevation shadow) — the engine's
     /// WinUI <c>MenuFlyoutPresenterBorder</c>, whose ScaleY the host animates during the open unfold.</summary>
     public Action<NodeHandle>? OnPlate;
+    /// <summary>Reports the <see cref="PopupPlate"/> this render built the card from (frosted chromes only), so the host's
+    /// per-frame backdrop sync and its corner squaring read the same card without resolving the style table every frame.</summary>
+    public Action<PopupPlate>? OnPlateStyle;
 
-    public static CornerRadius4 CornersFor(CornerJoin join) => join switch
+    /// <summary>The corners of a card of radius <paramref name="radius"/> whose <paramref name="join"/> edge abuts its anchor.</summary>
+    public static CornerRadius4 CornersFor(CornerJoin join, float radius) => join switch
     {
-        CornerJoin.Top => new CornerRadius4(0f, 0f, Radii.Overlay, Radii.Overlay),
-        CornerJoin.Bottom => new CornerRadius4(Radii.Overlay, Radii.Overlay, 0f, 0f),
-        _ => Radii.OverlayAll,
+        CornerJoin.Top => new CornerRadius4(0f, 0f, radius, radius),
+        CornerJoin.Bottom => new CornerRadius4(radius, radius, 0f, 0f),
+        _ => CornerRadius4.All(radius),
+    };
+
+    /// <summary>The corners for an entry's last rendered card (OverlayCornerRadius until its surface has rendered once).</summary>
+    internal static CornerRadius4 CornersFor(OverlayEntry e) => CornersFor(e.CornerJoin, e.PlateStyle?.Radius ?? Radii.Overlay);
+
+    /// <summary>The card a frosted <paramref name="chrome"/> draws, resolved now (at render): the menu plate from
+    /// <see cref="MenuFlyout.Style.Plate"/>, the dropdown plate from <see cref="ComboBox.Style.DropdownPlate"/>, the stock card
+    /// otherwise (a generic <see cref="PopupChrome.Popup"/> flyout has no presenter padding: its content brings the 16,15,16,17 card).</summary>
+    internal static PopupPlate PlateFor(PopupChrome chrome) => chrome switch
+    {
+        PopupChrome.Flyout => MenuFlyout.DefaultStyle.Plate,
+        PopupChrome.Dropdown => ComboBox.DefaultStyle.DropdownPlate,
+        PopupChrome.Popup => PopupPlate.Fluent() with { Padding = default },
+        _ => PopupPlate.Fluent(),
     };
 
     public override Element Render()
@@ -1779,12 +1839,14 @@ internal sealed class FlyoutSurface : Component
             // (SceneRecorder draws shadows BEFORE the node's own clip) INSIDE the reveal: the old single-card
             // surface painted both over the anchor for the first 250ms of the unfold (the SplitButton/DropDownButton
             // "menu overlaps the button" mid-open artifact).
+            var menuPlate = Plate ?? PlateFor(Chrome);
+            OnPlateStyle?.Invoke(menuPlate);
             return new BoxEl
             {
                 ZStack = true,
                 AlignSelf = FlexAlign.Start,
                 Fill = ColorF.Transparent,
-                Corners = Radii.OverlayAll,
+                Corners = CornerRadius4.All(menuPlate.Radius),
                 OnRealized = h => OnSurface?.Invoke(h),
                 Children =
                 [
@@ -1800,39 +1862,43 @@ internal sealed class FlyoutSurface : Component
                         // text over whatever was behind it. The fallback keeps the surface solid wherever the layer
                         // path does not run, and is invisible where it does (the acrylic composite is opaque inside
                         // the plate). Same pairing as ScrollBar's track — see ScrollBar.cs.
-                        Fill = Tok.AcrylicFlyout.Fallback,
-                        Acrylic = Tok.AcrylicFlyout,
-                        BorderColor = Tok.StrokeFlyoutDefault,
-                        BorderWidth = 1f,
-                        Corners = Radii.OverlayAll,
-                        Shadow = Elevation.Flyout,
+                        // The card itself is the theme's (MenuFlyout.Style.Plate; the stock plate is the WinUI recipe).
+                        Fill = menuPlate.Fill,
+                        Acrylic = menuPlate.Acrylic,
+                        BorderColor = menuPlate.Border,
+                        BorderWidth = menuPlate.BorderWidth,
+                        Corners = CornerRadius4.All(menuPlate.Radius),
+                        Shadow = menuPlate.Shadow,
                         OnRealized = h => OnPlate?.Invoke(h),
                     },
                     new BoxEl   // the items layer — sizes the stack; rides the surface translate
                     {
                         Direction = 1,
-                        Padding = new Edges4(0, 2, 0, 2),   // MenuFlyoutPresenterThemePadding
+                        Padding = menuPlate.Padding,   // MenuFlyoutPresenterThemePadding 0,2,0,2 by default
                         Children = [Body()],
                     },
                 ],
             };
         }
 
-        bool menuPad = Chrome != PopupChrome.Popup;
+        // The stock card pads 0,2,0,2 for every frosted chrome but the generic Popup flyout (see PlateFor).
+        var plate = Plate ?? PlateFor(Chrome);
+        OnPlateStyle?.Invoke(plate);
         return new BoxEl
     {
         Direction = 1,
         AlignSelf = FlexAlign.Start,
         // See the plate above: a PushLayer acrylic is dropped on a non-primary swapchain, so a Transparent fill
         // leaves this card as border + shadow + text in any detached child window. The fallback is the surface.
-        Fill = Tok.AcrylicFlyout.Fallback,
-        Acrylic = Tok.AcrylicFlyout,
-        BorderColor = Tok.StrokeFlyoutDefault,
-        BorderWidth = 1f,
-        Corners = Radii.OverlayAll,
-        Shadow = Elevation.Flyout,
+        Fill = plate.Fill,
+        Acrylic = plate.Acrylic,
+        BorderColor = plate.Border,
+        BorderWidth = plate.BorderWidth,
+        Corners = CornerRadius4.All(plate.Radius),
+        Shadow = plate.Shadow,
         ClipToBounds = true,
-        Padding = menuPad ? new Edges4(0, 2, 0, 2) : default,
+        Padding = plate.Padding,
+
         OnRealized = h => OnSurface?.Invoke(h),
         Children = [Body()],
     };

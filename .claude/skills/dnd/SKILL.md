@@ -223,19 +223,15 @@ Then read [pitfalls.md](pitfalls.md) — the bug classes, with the mechanism for
 
 ## Verify
 
-Gates and the per-wave verification loop: [gates.md](gates.md). Short form for any engine/Controls change:
+Short form for any engine/Controls change:
 
 ```powershell
-dotnet build src/FluentGpu.slnx                 # Debug
-dotnet build src/FluentGpu.slnx -c Release      # AND Release — the diag const gates compile a different arm
-dotnet run --project src/FluentGpu.VerticalSlice          # "ALL CHECKS PASSED" (full suite; --suite controls|scroll to iterate)
-dotnet test src/apps/Wavee.Tests/Wavee.Tests.csproj       # app-side rules; compare to the recorded baseline
+dotnet build src/FluentGpu.slnx                 # Debug — clean is the bar
 powershell -File docs\design\check-canon.ps1              # after ANY docs/design edit — must exit 0
 ```
 
 Touching a contract (a `DropTargetSpec` member, a lift mode, a band, the spotlight policy) means reconciling the
-owning canon doc in the same change. Add the gate **failing-first** — every fix round in this campaign proved the
-defect at HEAD before fixing it, and that is what makes the gate worth keeping.
+owning canon doc in the same change. There are no tests: verify in the app (the headless inspector in `WaveeMusic`, `--screenshot`) and hand the app back for a feel check.
 
 ---
 
@@ -260,7 +256,6 @@ defect at HEAD before fixing it, and that is what makes the gate worth keeping.
 ## Deeper docs
 
 - [pitfalls.md](pitfalls.md) — the shipped-and-fixed bug classes: mechanism + the rule.
-- [gates.md](gates.md) — every `e5dragdrop.*` / `e11virt.insertion*` / `sortable.*` gate and what it pins.
 - [where-to-change-what.md](where-to-change-what.md) — task → file map across Engine / Controls / Wavee.
 - Canon: `docs/design/subsystems/input-a11y.md` §12, `controls.md` §7.4, `gpu-renderer.md` §7.4.
 - Developer guide: `docs/guide/components-elements-layout.md` (the DnD + `ItemsView` sections).

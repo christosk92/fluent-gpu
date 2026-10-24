@@ -1217,7 +1217,7 @@ sealed class NetworkCard : Component
                     [
                         // Segoe Fluent: Wifi (E701) when online, IncidentTriangle (E814) when offline (raw codepoints —
                         // Icons.cs curates only a subset, and these two are not in it).
-                        new TextEl("") { Size = 28f, FontFamily = Theme.IconFont, Color = Prop.Of(() => online.Value ? Tok.AccentDefault : Tok.SystemFillCaution), Text = Prop.Of(() => online.Value ? "" : "") },
+                        new TextEl("") { Size = 28f, FontFamily = Tok.Definition.Fonts.Icon, Color = Prop.Of(() => online.Value ? Tok.AccentDefault : Tok.SystemFillCaution), Text = Prop.Of(() => online.Value ? "" : "") },
                         new TextEl("") { Size = 18f, Weight = 600, Color = Tok.TextPrimary, Text = Prop.Of(() => online.Value ? "Online" : "Offline") },
                     ],
                 },
@@ -1310,7 +1310,7 @@ sealed class FileDropCard : Component
             Fill = Tok.FillSolidBase,   // the DropZone owns the (reactive) border — no static one here
             Children =
             [
-                new TextEl(Icons.Download) { Size = 30f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary },
+                new TextEl(Icons.Download) { Size = 30f, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextTertiary },
                 new TextEl("Drop files / folders here") { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
                 new TextEl("") { Size = 12f, Color = Tok.TextSecondary, Text = Prop.Of(() => $"{count.Value} item(s)") },
             ],

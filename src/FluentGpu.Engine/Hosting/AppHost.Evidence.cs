@@ -32,6 +32,35 @@ public sealed partial class AppHost
     private SliceRecorder EvidenceSlices => _renderThread is null && _parentRenderThread is null ? _uiSlices : _renderSlices;
     private SliceTable? EvidenceTiles => _renderThread is null && _parentRenderThread is null ? _uiTiles : _renderTiles;
 
+    /// <summary>The tile memory census of the table that composites (<see cref="SliceTable.MemoryCensus"/>). Call it on
+    /// that table's thread: the presenting thread via <see cref="QueueBeforePresent"/> in async mode.</summary>
+    public string TileMemoryCensus()
+        => (EvidenceTiles is { } t ? t.MemoryCensus((int)_window.ClientSizePx.Width, (int)_window.ClientSizePx.Height) : "tile-census: no slice table" + Environment.NewLine)
+           + "  inline static segments=" + EvidenceSlices.LastInlineSegments + " (" + EvidenceSlices.LastInlineCommands + " cmds)"
+           + " tiled static segments=" + EvidenceSlices.LastTiledStaticSegments + " (" + EvidenceSlices.LastTiledStaticCommands + " cmds)" + Environment.NewLine
+           + "  composite " + CompositeItemsLine() + " loop=" + _loopMode + " renderThread=" + (_renderThread is not null) + " budget=" + (EvidenceSlices.LastBudgetBytes >> 20) + "MiB" + Environment.NewLine;
+
+    private string CompositeItemsLine()
+    {
+        int tiles = 0, region = 0, direct = 0, image = 0, group = 0, backdrop = 0, erase = 0, degraded = 0;
+        var table = EvidenceTiles;
+        foreach (ref readonly var it in EvidenceSlices.LastItems)
+        {
+            switch (it.Kind)
+            {
+                case FluentGpu.Rhi.CompositeKind.Tiles: tiles++; break;
+                case FluentGpu.Rhi.CompositeKind.Region: region++; break;
+                case FluentGpu.Rhi.CompositeKind.Direct: direct++; if (table is not null && table.IsDegraded(it.SliceId)) degraded++; break;
+                case FluentGpu.Rhi.CompositeKind.Image: image++; break;
+                case FluentGpu.Rhi.CompositeKind.Group: group++; break;
+                case FluentGpu.Rhi.CompositeKind.Backdrop: backdrop++; break;
+                case FluentGpu.Rhi.CompositeKind.EraseVideoHole: erase++; break;
+            }
+        }
+        return "items tiles=" + tiles + " region=" + region + " direct=" + direct + " (degraded " + degraded + ") image=" + image
+            + " group=" + group + " backdrop=" + backdrop + " erase=" + erase;
+    }
+
     /// <summary>Constructor tail: the ledgers live on the pair that composites.</summary>
     private void EnableEvidence() => EvidenceSlices.EnableEvidence();
 

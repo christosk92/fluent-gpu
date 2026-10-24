@@ -110,7 +110,7 @@ public sealed partial class AnimEngine
     /// <summary>A hover/press REVEAL: the node declares <c>HoverOpacity</c> or <c>PressedOpacity</c>.</summary>
     private bool IsReveal(NodeHandle node)
     {
-        ref NodePaint p = ref _scene.Paint(node);
+        ref readonly NodePaintCold p = ref _scene.PaintCold(node);
         return !float.IsNaN(p.HoverOpacity) || !float.IsNaN(p.PressedOpacity);
     }
 

@@ -39,6 +39,21 @@ public static class SparkBars
         public float RestAlpha { get; init; } = 0.38f;
         public ColorF HoverInk { get; init; }
         public float TipDelayMs { get; init; } = float.NaN;
+        /// <summary>A non-accent bar's ink; null = <see cref="Ink"/> at <see cref="RestAlpha"/> (one hue, two weights). A theme that wants
+        /// the rest in a neutral tint (a quiet grey under one accent bar) sets it.</summary>
+        public ColorF? RestInk { get; init; }
+        /// <summary>The bar's corners; null = 2 on the value end, 1 on the baseline (the Fluent bar). <c>CornerRadius4.All(0f)</c> = square.</summary>
+        public CornerRadius4? BarCorners { get; init; }
+        /// <summary>The column's (the hit target's) corners, which round its lit / hover wash; null = 3.</summary>
+        public CornerRadius4? ColumnCorners { get; init; }
+        /// <summary>The lit column's wash; null = <c>Tok.AccentSubtle</c>.</summary>
+        public ColorF? LitWash { get; init; }
+        /// <summary>The lit column's wash under the pointer; null = <c>Tok.AccentSecondary</c>.</summary>
+        public ColorF? LitHoverWash { get; init; }
+        /// <summary>A column's wash under the pointer; null = <c>Tok.FillSubtleSecondary</c>.</summary>
+        public ColorF? HoverWash { get; init; }
+        /// <summary>A column's wash while pressed; null = <c>Tok.FillSubtleTertiary</c>.</summary>
+        public ColorF? PressedWash { get; init; }
     }
 
     public static Style? StyleOverride;
@@ -74,8 +89,8 @@ public static class SparkBars
         Element fill = new BoxEl
         {
             Height = MathF.Max(st.MinBar, st.Height * MathF.Max(0f, bar.Value) / peak),
-            Corners = new CornerRadius4(2f, 2f, 1f, 1f),
-            Fill = bar.Accent || bar.Lit ? st.Ink : st.Ink with { A = st.RestAlpha },
+            Corners = st.BarCorners ?? new CornerRadius4(2f, 2f, 1f, 1f),
+            Fill = bar.Accent || bar.Lit ? st.Ink : st.RestInk ?? st.Ink with { A = st.RestAlpha },
             HoverFill = st.HoverInk,
             HoverDurationMs = MotionTok.ControlFaster.DurationMs, HoverEasing = MotionTok.ControlFaster.Easing,
             HitTestVisible = false,
@@ -86,10 +101,10 @@ public static class SparkBars
             Role = live ? AutomationRole.Button : AutomationRole.None, Focusable = live,
             Cursor = live ? CursorId.Hand : null,
             FocusVisualMargin = new Edges4(1f, 1f, 1f, 1f),
-            Corners = CornerRadius4.All(3f),
-            Fill = bar.Lit ? Tok.AccentSubtle : ColorF.Transparent,
-            HoverFill = !live ? ColorF.Transparent : bar.Lit ? Tok.AccentSecondary : Tok.FillSubtleSecondary,
-            PressedFill = live ? Tok.FillSubtleTertiary : ColorF.Transparent,
+            Corners = st.ColumnCorners ?? CornerRadius4.All(3f),
+            Fill = bar.Lit ? st.LitWash ?? Tok.AccentSubtle : ColorF.Transparent,
+            HoverFill = !live ? ColorF.Transparent : bar.Lit ? st.LitHoverWash ?? Tok.AccentSecondary : st.HoverWash ?? Tok.FillSubtleSecondary,
+            PressedFill = live ? st.PressedWash ?? Tok.FillSubtleTertiary : ColorF.Transparent,
             HoverDurationMs = MotionTok.ControlFaster.DurationMs, HoverEasing = MotionTok.ControlFaster.Easing,
             OnClick = bar.OnClick,
             Children = [fill],

@@ -69,7 +69,7 @@ public sealed class AppBarToggleButton : Component
 
         var children = new List<Element>(2)
         {
-            new TextEl(Glyph) { Size = 16, Color = fg, PressedColor = pressedFg, DisabledColor = disabledFg, FontFamily = Theme.IconFont },
+            new TextEl(Glyph) { Size = 16, Color = fg, PressedColor = pressedFg, DisabledColor = disabledFg, FontFamily = Tok.Definition.Fonts.Icon },
         };
         if (labeled)
             children.Add(new TextEl(Label) { Size = 12, Color = fg, PressedColor = pressedFg, DisabledColor = disabledFg });

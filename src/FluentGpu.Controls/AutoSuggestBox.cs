@@ -95,6 +95,15 @@ public sealed class AutoSuggestBox : Component
     public const float ItemMinHeight = 40f;
     public const float IconFontSize = 12f;
     public const float MaxPopupHeight = 374f;
+
+    /// <summary>The Standard-chrome field surface now: the active theme's (<see cref="ControlStyles.AutoSuggestBoxFieldStyle"/>), else
+    /// <see cref="FluentFieldStyle"/>. A caller's <see cref="FieldRadius"/> still wins over its radius; the ElevatedPill chrome keeps
+    /// its own surface.</summary>
+    public static TextFieldStyle DefaultFieldStyle => ControlStyles.Resolve(ControlStyles.AutoSuggestBoxFieldStyle, FluentFieldStyle);
+
+    /// <summary>The built-in field: the WinUI TextBox surface with a flat ControlStrokeColorDefault ring (the AutoSuggestBox field has no
+    /// elevation gradient). Reads the live Tok on every call.</summary>
+    public static TextFieldStyle FluentFieldStyle() => TextFieldStyle.Fluent() with { BorderBrush = null, BorderColor = Tok.StrokeControlDefault };
     public const float RightButtonMargin = 4f;   // AutoSuggestBoxRightButtonMargin
     public const float QueryButtonWidth = 32f;
     public const float QueryButtonHeight = 28f;
@@ -137,7 +146,7 @@ public sealed class AutoSuggestBox : Component
     /// <summary>True while an async suggestion fetch is in flight: the popup shows an indeterminate bar at the top and
     /// KEEPS the prior results (instead of flashing "No results found") until the fresh set lands.</summary>
     public IReadSignal<bool>? LoadingSignal;
-    public Prop<string> Placeholder = Loc.Bind(Strings.AutoSuggest.Search);   // culture-reactive default; a plain string overrides
+    public Prop<string> Placeholder = Loc.Bind(Strings.AutoSuggest.Search);   // culture-reactive default; a plain string overrides, a bound one stays live
     public float Width = 280f;
     /// <summary>Flex-fill factor. When &gt; 0 the field fills its parent's WIDTH on its own — no wrapper, no external
     /// <see cref="WidthSignal"/>: the root drops its explicit <see cref="Width"/> (so a COLUMN parent cross-stretches it
@@ -189,10 +198,18 @@ public sealed class AutoSuggestBox : Component
     /// not focused, the caret is not at the end, a suggestion is highlighted, or the completion does not start with
     /// the live document.</summary>
     public IReadSignal<string>? Completion;
+    /// <summary>A query SEEDED at mount (the text signal already holds one) is a fresh user edit that opens the list (true, the default: a composer
+    /// that remounts the box mid-typing keeps its list), or a value the box arrives with (false: a field that mounts on a results page with the
+    /// page's query, where nothing was typed into THIS box, opens nothing; the seed is still the typed text Escape and the arrows restore).</summary>
+    public bool OpenOnSeed = true;
 
+    /// <summary>The factory. Its scalar arguments are read once, at mount (a propless component), except the live ones: the
+    /// <c>*Signal</c> arguments, <paramref name="text"/>, <paramref name="completion"/> and a BOUND <paramref name="placeholder"/>
+    /// (<c>Prop.Of(() =&gt; ...)</c> or a signal), which the editor reads on every change, so a placeholder that depends on a window
+    /// tier or a culture follows it without a remount. A plain string is fixed; null is the culture-reactive "Search".</summary>
     public static Element Create(
         IReadOnlyList<string> suggestions,
-        string? placeholder = null,
+        Prop<string>? placeholder = null,
         float width = 280f,
         Signal<string>? text = null,
         Action<string>? onChange = null,
@@ -217,11 +234,12 @@ public sealed class AutoSuggestBox : Component
         AutoSuggestBoxPresenter? presenter = null,
         AutoSuggestBoxChrome chrome = AutoSuggestBoxChrome.Standard,
         AutoSuggestBoxSuggestionPresentation suggestionPresentation = AutoSuggestBoxSuggestionPresentation.Popup,
-        IReadSignal<string>? completion = null)
+        IReadSignal<string>? completion = null,
+        bool openOnSeed = true)
         => Embed.Comp(() => new AutoSuggestBox
         {
             Suggestions = suggestions, SuggestionsSignal = suggestionsSignal, LoadingSignal = loadingSignal,
-            Placeholder = placeholder is null ? Loc.Bind(Strings.AutoSuggest.Search) : (Prop<string>)placeholder,
+            Placeholder = placeholder is { } p && (p.IsBound || p.Value is not null) ? p : Loc.Bind(Strings.AutoSuggest.Search),
             Width = width, Grow = grow, MaxFillWidth = maxFillWidth,
             WidthSignal = widthSignal, Text = text,
             OnTextChanged = onChange, OnSuggestionChosen = onSuggestionChosen,
@@ -229,7 +247,7 @@ public sealed class AutoSuggestBox : Component
             TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts, Field = field,
             FieldMinHeight = minHeight, FieldRadius = cornerRadius, BoldMatch = boldMatch, ItemGlyph = itemGlyph,
             Presenter = presenter, Chrome = chrome, SuggestionPresentation = suggestionPresentation,
-            Completion = completion,
+            Completion = completion, OpenOnSeed = openOnSeed,
         });
 
     // The rendered width — what sizes the inner editor and the popup. Reading it inside a Render subscribes THAT
@@ -335,7 +353,7 @@ public sealed class AutoSuggestBox : Component
                 // suggestion list appears/disappears instantly. The surface still carries the SuggestionsContainer
                 // chrome (AcrylicBackgroundFillColorDefault + 1px border + OverlayCornerRadius + 0,2 padding,
                 // AutoSuggestBox_themeresources.xaml:283 + generic.xaml:119).
-                new PopupOptions(Chrome: PopupChrome.Static));
+                new PopupOptions(Chrome: PopupChrome.Static) { Plate = ControlStyles.Resolve(ControlStyles.AutoSuggestBoxSuggestionsPlate, PopupPlate.Fluent) });
             opened.ClosedAction = () =>
             {
                 if (handle.Value is { } live && !ReferenceEquals(live, opened)) return;   // reopened before this close finalized
@@ -358,8 +376,9 @@ public sealed class AutoSuggestBox : Component
 
             TextChangeReason reason = first
                 // A mount-SEEDED query behaves like a fresh user edit (cache + open the list) — the established
-                // engine contract; EditableText's first signal→doc sync is reason-silent.
-                ? TextChangeReason.UserInput
+                // engine contract; EditableText's first signal→doc sync is reason-silent. A caller that says the seed
+                // is not an edit (OpenOnSeed false) gets it as a programmatic value: cached, the list left closed.
+                ? (OpenOnSeed ? TextChangeReason.UserInput : TextChangeReason.ProgrammaticChange)
                 : pendingReason.Value
                   ?? _edit?.LastChangeReason
                   ?? TextChangeReason.UserInput;
@@ -374,6 +393,7 @@ public sealed class AutoSuggestBox : Component
                 debouncePending.Value = true;
             }
 
+            if (first && !OpenOnSeed) userTyped.Value = q;   // the seed is what Escape and an arrow past the end restore
             if (reason == TextChangeReason.UserInput)
             {
                 Presenter?.ResetSelection?.Invoke();
@@ -532,6 +552,7 @@ public sealed class AutoSuggestBox : Component
                 Height = editorH,
                 Placeholder = Placeholder,
                 Chromeless = true,
+                FieldStyle = static () => DefaultFieldStyle,   // the chromeless hover / focused fills follow this field's surface
                 OnCommit = OnEnter, OnCancel = OnEscape,
                 PreviewKeyDown = TryAcceptCompletion,
                 OnSelectionChanged = (s, len) =>
@@ -622,7 +643,7 @@ public sealed class AutoSuggestBox : Component
                 OnClick = SubmitQuery,
                 Children = [Parts.Apply(PartQueryIcon, new TextEl(QueryIcon!)
                 {
-                    Size = IconFontSize, FontFamily = Theme.IconFont,
+                    Size = IconFontSize, FontFamily = Tok.Definition.Fonts.Icon,
                     Color = Tok.TextSecondary, PressedColor = Tok.TextTertiary,
                 })],
             };
@@ -648,8 +669,10 @@ public sealed class AutoSuggestBox : Component
 
         // KeepInteriorCornersSquare: while the list is open (open-down), square the field's BOTTOM corners so it joins the
         // popup; full radius (ControlCornerRadius, or the caller's pill radius) otherwise.
-        float fieldR = FieldRadius > 0f ? FieldRadius : Radii.Control;
         bool elevated = Chrome == AutoSuggestBoxChrome.ElevatedPill;
+        // The Standard field's surface, read now (the theme's, else the WinUI field); the ElevatedPill keeps its own.
+        var fs = DefaultFieldStyle;
+        float fieldR = FieldRadius > 0f ? FieldRadius : elevated ? Radii.Control : fs.Radius;
         var fieldCorners = !elevated && open.Value
             ? new CornerRadius4(fieldR, fieldR, 0f, 0f)
             : CornerRadius4.All(fieldR);
@@ -679,19 +702,19 @@ public sealed class AutoSuggestBox : Component
             MaxHeight = Grow > 0f ? FieldMinHeight : float.NaN,
             MinHeight = FieldMinHeight, AlignItems = FlexAlign.Center,
             Corners = fieldCorners,
-            BorderWidth = elevated && hasFocus ? 2f : 1f,
-            BorderColor = elevated ? ColorF.Transparent : Tok.StrokeControlDefault,
+            BorderWidth = elevated ? (hasFocus ? 2f : 1f) : fs.BorderWidth,
+            BorderColor = elevated ? ColorF.Transparent : fs.BorderColor,
             BorderBrush = elevated
                 ? (hasFocus ? GradientSpec.Solid(Tok.AccentDefault) : Tok.CircleElevationBorder)
-                : null,
+                : fs.BorderBrush,
             HoverBorderBrush = elevated && !hasFocus ? Tok.CircleElevationBorder : null,
             PressedBorderBrush = elevated && !hasFocus ? Tok.CircleElevationBorder : null,
-            Fill = elevated && hasFocus ? Tok.FillControlInputActive : Tok.FillControlDefault,
+            Fill = elevated ? (hasFocus ? Tok.FillControlInputActive : Tok.FillControlDefault) : fs.Fill,
             // The field surface (WinUI TextBox BorderElement) owns the PointerOver fill at the field's CORNER RADIUS, and
             // CLIPS — so the inner Chromeless editor's square hover fill follows the (possibly pill) corners instead of
             // bleeding past them as a rectangle (the squaring is intentional per EditableText: "the composer rounds + clips").
-            HoverFill = elevated && hasFocus ? Tok.FillControlInputActive : Tok.FillControlSecondary,
-            PressedFill = elevated && hasFocus ? Tok.FillControlInputActive : Tok.FillControlTertiary,
+            HoverFill = elevated ? (hasFocus ? Tok.FillControlInputActive : Tok.FillControlSecondary) : fs.HoverFill,
+            PressedFill = elevated ? (hasFocus ? Tok.FillControlInputActive : Tok.FillControlTertiary) : fs.PressedFill,
             ClipToBounds = true,
             // form-validation.md: the field chrome owns the invalid border (the inner editor is borderless inside it).
             Validation = Field is { } fb ? Prop.Of(() => fb.Error.Value.IsValid ? ValidationState.None : ValidationState.Error) : default,
@@ -718,13 +741,15 @@ public sealed class AutoSuggestBox : Component
         // form-validation.md: stack the reveal-animated error message row under the field (popup still anchors to `root`).
         // Fill mode: the wrapper fills width like the root (Width=NaN + Grow); no Basis=0 (this is a COLUMN, so Basis is
         // the vertical axis — zeroing it would collapse the field+message height) and no height lock (the message needs room).
-        Element field = root;
+        // A themed underline (none on the WinUI field) shares an overlay stack with the row root; the stock field is returned as is.
+        Element field = elevated ? root : TextFieldStyle.WithUnderline(root, fs, hasFocus, true);
         if (Field is { } vfield)
             field = new BoxEl
             {
                 Direction = 1,
                 Width = Grow > 0f ? float.NaN : width, Grow = Grow,
-                Children = [root, FieldVisuals.MessageRow(vfield.Error)],
+                Children = [field, FieldVisuals.MessageRow(vfield.Error)],
+
             };
 
         if (SuggestionPresentation != AutoSuggestBoxSuggestionPresentation.Inline)
@@ -866,7 +891,7 @@ internal sealed class SuggestionsList : Component
     {
         var kids = new List<Element>(4);
         if (owner.ItemGlyph is { } g)
-            kids.Add(new TextEl(g) { Size = 16f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary, Margin = new Edges4(0, 0, 12, 0) });
+            kids.Add(new TextEl(g) { Size = 16f, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextSecondary, Margin = new Edges4(0, 0, 12, 0) });
 
         int mi = owner.BoldMatch && query.Length > 0
             ? text.ToLowerInvariant().IndexOf(query.ToLowerInvariant(), System.StringComparison.Ordinal) : -1;

@@ -13,11 +13,13 @@ static channel or unbinds a bound one). A component with two branches — an idl
 `Transform` to a static value and an active branch that set it to a bound `Prop.Of(...)` — reused the same node, so
 whichever branch mounted first decided forever whether that channel was bound. The insertion preview mounted idle,
 never got its transform bind, and parked the gap card at viewport y = 0 while the line and the gap were elsewhere.
-(The `BindContract` DEBUG tripwire had been warning about it in the slice output the whole time.)
+(The `BindContract` DEBUG tripwire had been warning about it in the slice output the whole time. Since 2026-10-20 the
+reconciler handles such a flip — it wires or unwires the channel — so this no longer breaks; the rule below still holds
+because one stable bound thunk avoids re-creating the effect on every branch switch.)
 
 **Rule.** A component that can render two shapes of the same node must declare the **same bound channels in BOTH
 branches**. Give the channel one bound thunk that reads state live and returns the identity/neutral value while idle —
-never `bound in one branch, literal in the other`. Watch the slice output for `bindcontract` warnings.
+prefer that to `bound in one branch, literal in the other` (legal, but each switch re-creates or drops the binding).
 Gate: `e11virt.insertion.previewpos`.
 
 ---

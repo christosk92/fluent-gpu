@@ -1105,6 +1105,50 @@ ReducedMotionState UseReducedMotion();         // reads PAL (SPI_GETCLIENTAREAAN
   removes the tween. **Motion tokens (§5.10)** carry a `ReducedMotionPolicy` per token so the *theme* can mark a
   specific motion as "fade-only" or "exempt" centrally, rather than per call site.
 
+### 5.9b Transaction snap scope — `SnapScope` (EP17, E17a/b)
+
+```csharp
+public readonly struct SnapScope : IDisposable { public static SnapScope Enter(AppHost host); public void Dispose(); }
+```
+
+Reduced motion (§5.9) is a process-wide accessibility value that still leaves a 1 ms track per channel; a **snap scope** is the
+per-host, transient version for a whole-app transaction (a theme change) that must publish ONE coherent frame instead of a
+cross-fade of hybrids. A depth counter on the `AppHost` makes it nest; only the outermost exit restores. While it is open:
+
+- **Seeds land at their end value with no row.** The three seed primitives (`Spring`, `SeedEased`, `Keyframes` — `Animate`,
+  `SeedChannel`/`SeedTerminal`, the brush/hover/press fades and the `UseTransition`-style hooks all funnel into them) write the end
+  value through `ApplyImmediate` / the side tables and create no `AnimValue`, so `HasTracks` is already false in the publication
+  that carries the commit. This covers `BrushTransitionMs` (the `BrushFade` row lands at T=1, retiring the `BrushAnim`), bound-channel
+  transitions, and the `Transition` / `Enter` / `Exit` / `Stagger` / `Layout` surface. Size/reflow seeds settle to the laid-out size.
+  Looping and additive rows, `Drive` rows, and the clip / stroke-trim channels are untouched. Tracks already running when the scope
+  opens keep running (only seeds made inside it land).
+- **Structural motion.** Mount Enters are not seeded; a removal frees the node at once (no Exit orphan, no keep-alive exit, no
+  `PendingExitReflow`); `ApplyProjections` and `SeedFlowRevealsPostLayout` take their existing *suppressed* path (FLIPs snap to the
+  laid-out bounds, FlowReveal and reveal bands land); connected animations skip their flight; an image swap is a hard cut.
+- **Images.** `ImageCache.BeginReveal` takes its disabled-transition arm for any image that decodes inside the scope.
+- **Clocks.** `FrameClock.Tick` / `PaceableTick` are not published, and `HostTimerQueue` is *held* (no drain, nothing due). On the
+  outermost exit every armed timer is slid by the time it was held, so an interval resumes a full period after the exit and never
+  replays the periods it missed (`UseInterval` re-arms from `NowMs`, so it could not burst anyway; `UseTimeout`/debounce keep their
+  remaining time).
+- The scope must be open while the frame(s) that publish the change run (seeds and FLIP capture happen at reconcile time). Only a
+  transaction enters one; navigation, live option changes and light/dark never do, and with no scope open every path above is the
+  existing one. Entering/leaving allocates nothing. Gates: `snap-scope` suite; tests `SnapScopeTests`.
+
+### 5.9c Entrance clocks start at the first SHOWN frame (AS-BUILT — E21 / EP20, Classic tuning F11)
+
+A pending-start row (`AnimFlags.StartPending`: `Enter`, `Stagger`, `Exit`, a flow reveal — everything `MarkStartPending` marks) already
+resolves its start at the first frame that presents it (the seed frame holds t = 0). A frame that is presented but never **shown** is
+not that frame: while the main window waits behind its reveal gate (fonts not ready yet), while a freeze holds presents (its capture
+frame still presents), and while a restore hold keeps the pre-hide frame on the glass, the host sets `AnimEngine.HoldPendingStarts`
+before the tick (`AppHost.EntrancesUnseen`). A held row does not advance, its `Stagger` delay is not spent, and it keeps its seed-frame
+hold (`JustSeeded`), so the first shown frame poses t = 0 and the start resolves from there. The verdict rides the publication
+(`RenderFrame.EntranceHeld`) to the render-thread compositor, which applies it per turn together with its own restore latch
+(`RenderCompositorAnimations.HoldPendingStarts`: the row re-takes its hold instead of resolving its start). Choreography (order,
+delays, durations, curves) is unchanged, and a frame that is shown runs exactly as before — a node mounted visible keeps today's
+timeline. Tests: `EntranceFirstFrameTests` (UI scheduler 1/5/30 held frames vs a visible mount, a Stagger delay not spent while held,
+the render compositor, and end to end a host behind `BeginRevealGate` against a visible host: identical opacity sequences from the
+first shown frame).
+
 ### 5.10 Motion tokens — named durations / easings / springs as theme tokens (FOLDED L7d / L14-motion)
 
 Motion is themeable. A **motion token** is a named, theme-resolved animation recipe (`MotionEmphasizedEnter`,

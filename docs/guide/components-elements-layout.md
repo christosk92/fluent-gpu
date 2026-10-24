@@ -148,7 +148,7 @@ int cols = GridEl.AutoFillColumnCount(innerW, minColWidth: 232f, colGap: 12f, ma
 ```
 
 `innerW` is the grid's content width (its arranged width minus padding) — feed it the same width the grid will be laid
-out at (e.g. from `UseMeasuredWidth`). Gate: `gate.grid.auto-fill-max-columns`.
+out at (e.g. from `UseMeasuredWidth`).
 
 ## Visuals on a `BoxEl`
 
@@ -165,7 +165,7 @@ when it has one, else its instant `Hovered`/`HoverWithin`/`Pressed` flags — ne
 that only handles `OnPointerPressed`/`OnPointerReleased` (no anim row) still lights its own `HoverFill` children when
 the pointer is on it, and an interactive row container that is merely `HoverWithin` (the pointer is somewhere in the
 row) does not paint every card in it hovered. Want a listener that is *not* a scope (a ToolTip wrapper)? Set
-`HoverScopeTransparent = true` — its subtree keeps reading the enclosing scope. Gate: `gate.record.hover-fill-scope`.
+`HoverScopeTransparent = true` — its subtree keeps reading the enclosing scope.
 
 ### `.Interactive(recipe)` — the one interactive-styling surface (`src/FluentGpu.Controls/Interaction.cs`)
 
@@ -302,7 +302,7 @@ dropped) travel with the draw command and the GPU expands them (`gpu-renderer.md
 ordinary bound channel (a value, a `Prop.Of` thunk or a signal): `SeriesSamples(float[] array, int count, uint version)` is a view
 over YOUR buffer, equal by array **identity + count + version**, so a producer rewrites the buffer and bumps `version` — the bind
 re-fires once, copies the view into a scene-owned pooled array (so refilling the buffer for the next tick never mutates what a
-frame already committed) and re-records just this node. Steady state allocates nothing (`gate.series.bound.zero-alloc`). Fewer
+frame already committed) and re-records just this node. Steady state allocates nothing. Fewer
 than 2 samples (or an empty view) paints nothing and releases the pooled copy.
 
 Three `Shape`s: **`Baseline`** (an area from the baseline up to each sample — the default baseline is the bottom edge),
@@ -319,7 +319,7 @@ silhouette edge is hard. Preview it with `dotnet run --project src/FluentGpu.Win
 
 Most controls are **element-returning factories** (call them in render); `NavigationView`/`PageHost` are `Component`s.
 Every control has a `Style` record and reads theme tokens by default; most expose a global `…StyleOverride`, while
-`Button` exposes the axis-aware `Button.StyleHook` (below).
+`Button` reads the axis-aware Button entry of the theme's control style table (`ControlStyles.ButtonStyle`, below).
 
 **One creation idiom.** Every public control exposes exactly ONE canonical `X.Create(…)`; named variants are one-line
 forwarders onto it — `Button.Accent/Standard/Subtle/Outline`, `InfoBadge.Dot/Count/Icon` (→ `InfoBadge.Create(kind, …)`),
@@ -359,12 +359,20 @@ through one 4-arm `ButtonPalette` switch (the token ramp: fill/foreground/border
 them into the same 24-member `Style` record, which survives as the **full-override escape hatch** (pass `style:` to win
 outright). Standard/Accent are pixel-identical to before; Subtle uses the WinUI SubtleFillColor* ramp; Outline is a
 documented Fluent-2 extension (solid stroke all states). `glyph:` adds a leading icon-font run. To restyle globally,
-set `Button.StyleHook = (appearance, size) => …` (return a `Style`, or `null` to fall through to the composed default)
+put a Button entry in the theme's control style table (`ThemeDefinition.Controls.With(ControlStyles.ButtonStyle, (appearance, size) => …)`, return a `Style`, or `null` to fall through to the composed default)
 — it replaces the old per-appearance `AccentStyleOverride`/`StandardStyleOverride`. Sibling button-family controls
 (`IconButton`/`ToggleButton`/`RepeatButton`/`HyperlinkButton`) adopt `ControlSize` too; a control may **clamp** an axis
 value it can't honor (a small per-control table, Radix precedent): `IconButton` clamps `Large`→`Medium` to keep its
 square glyph box sane, and `HyperlinkButton` doesn't expose the appearance axis at all (it is link text with no fill
 chrome, so Subtle/Outline are meaningless).
+
+**Compact (touch) sizes.** `ControlSize.Large` is the 40-DIP hit target a compact window asks for, and the non-button controls
+take it too: `ContentDialog.CommandSize` (with `CommandMinWidth` and `UniformCommandWidths` so two 40-tall buttons share a narrow
+card), `ComboBox.Create(…, size: ControlSize.Large)` (pass `width: float.NaN` to fill a column), `MenuFlyout.Create(…, size:)`
+(40-DIP rows), `BreadcrumbBar.Create(…, size:)` and the toast lane's `ToastLaneStyle.ActionSize`. A NumberBox takes
+`NumberBoxOptions.Style = NumberBox.DefaultStyle with { FieldHeight = 40 }`, a TextBox `TextBoxOptions.Height`; the title bar
+narrows its lead pad and drag strip through `TitleBarOptions.RowSpacing`; the toast lane's margins and card widths come from the
+`Toast.Lane` context (`Ctx.Provide(Toast.Lane, () => style, OverlayHost.Create(…))`). Every default is unchanged.
 
 **`AccentSet` — a palette from any color.** `Tok.AccentDefault`/`AccentSecondary`/`AccentTertiary` shade the LIVE
 system/override accent; `FluentGpu.Dsl.AccentSet.From(ColorF)` (`Dsl/Tokens.cs`) derives the SAME tiers (fill @
@@ -418,20 +426,18 @@ band preset sets `(12,0,12,0)` so short pivot words ("All"/"Music"/…) get hori
 via a min-width floor that would also pad an already-wide label. Default zero is today's layout unchanged.
 
 **`SelectorBar` — an optional `SelectorBarStyle` (E28, Wavee Home page-title pivot).** `SelectorBar.Create(items,
-selectedIndex?, onChange?, parts?, icons?, style?)`; `style: null` is the stock WinUI template, byte-identical
-(`gate.selectorbar.style-default-identical`). A style sets the label type (`LabelSize`/`LineHeight`/`FontFamily`/
+selectedIndex?, onChange?, parts?, icons?, style?)`; `style: null` is the stock WinUI template, byte-identical. A style sets the label type (`LabelSize`/`LineHeight`/`FontFamily`/
 `CharSpacing`, and `RestWeight`/`SelectedWeight` — the label weight FOLLOWS selection), the foreground ramp
 (`RestColor`/`SelectedColor`/`HoverColor`/`PressedColor`, null = the stock tokens), an optional hover/press plate
 (`HoverFill`/`PressedFill` on the item's engine-serviced fill ramp — the 83 ms ControlFaster fade, radius 4),
 `ShowPill = false` (no pill AND no reserved pill row), `ItemPadding`/`ItemHeight`/`ItemGap`, and `LeadingInset`
 (a negative left margin on the first item so its TEXT, not its padding, sits on the page edge). Behaviour — roving
-keys, the single tab stop, `onChange`, parts — is identical in every style (`gate.selectorbar.style-title`).
+keys, the single tab stop, `onChange`, parts — is identical in every style.
 
 **Trimmed rich text ends in the cut span's "…" (E29).** A `SpanTextEl` paragraph trimmed with `CharacterEllipsis`
 draws the ellipsis in the style of the span the cut lands in (its face/weight, size and colour) — a 20-px semibold
 title span + a 12-px tertiary subtitle span cut inside the subtitle ends in a small tertiary "…", not a base-size one —
-and the cut reserves that ellipsis's own advance, so measure and render agree (`LineBreaker.FitEllipsisBySpan`,
-`gate.text.span-ellipsis-style`). A glyph in a gap between spans, and plain `TextEl`, keep the base-style "…".
+and the cut reserves that ellipsis's own advance, so measure and render agree (`LineBreaker.FitEllipsisBySpan`). A glyph in a gap between spans, and plain `TextEl`, keep the base-style "…".
 
 **Text alignment and tabular figures (`TextEl.TextAlign`, `TextEl.FontFeatures`; also on `SpanTextEl`).**
 `TextAlign = TextAlign.Start | Center | End | Justify` places each line inside the text's OWN box, so a right-aligned
@@ -454,8 +460,6 @@ new TextEl(Prop.Of(() => $"{used.Value:0.0} GB")) { Grow = 1, TextAlign = TextAl
 - `FontFeatures` is a `[Flags]` set of OpenType features: `TabularFigures` (`tnum`), `LiningFigures` (`lnum`),
   `OldStyleFigures` (`onum`), `SlashedZero` (`zero`), and `StylisticSet01`..`StylisticSet20` (`ss01`..`ss20`). They
   apply to the whole run. A font that lacks a feature ignores it.
-- Gates: `gate.text.align.*` (VerticalSlice `TextSuite`) and `Scout/TextAlignTypographyTests` (real DirectWrite: glyph
-  x matches the caret and hit-test).
 
 **`ProgressBar` — stretch to the parent (E5, Wavee Home redesign).** `ProgressBar.Indeterminate(width: float.NaN)` fills
 whatever width its parent offers instead of a fixed DIP value (the facet-switch busy bar pinned across the content width
@@ -492,7 +496,7 @@ Waveform.Create(new WaveformModel(peaks, 64), progressSignal);                  
 
 Hover never re-renders series geometry (only the small active overlay subscribes to the index); pass your own
 `Signal<int>` as `ActiveIndex` when the active category must persist or drive other UI. Pure maths is `ChartMath`
-(KDE, nice ticks, stacking, curve controls, tick thinning) — gated in `ControlsSuite` (`gate.ctl.charts.*`).
+(KDE, nice ticks, stacking, curve controls, tick thinning).
 
 ### The controlled-input contract (every stateful control)
 
@@ -625,6 +629,8 @@ Repeater.ItemsRepeater(int count, Func<int,Element> template, in RepeatLayout la
 //     .LinedFlow(lineHeight,…) / .SpanGrid(cols,rowH,gap,spanOf) / .HorizontalGrid(rows,w,gap)
 //     .Measured(IMeasuredVirtualLayout) / .VariableList(estimate) / .GroupedList(headerIdx,headerH,itemEstimate)
 //     .Wrap(gap) / .Inline(…)   ← non-virtual, for small collections
+//   A grid's `gap` is the gap between the cells of a row AND between rows; `.WithRowGap(rowGap)` gives the rows their own (GridFit(min, 16).WithRowGap(12)).
+//   A responsive grid (GridFit) re-fits its cell floor and BOTH gaps live on the mounted layout (anchor row kept), no remount.
 ```
 Only the visible window (+overscan) is realized; scrolling recycles row nodes through the slab free-list. Provide a
 stable `keyOf` so row state/identity survives recycling. In-window scroll is transform-only (no realize, no relayout).
@@ -718,8 +724,7 @@ PagedShelf.Create(items, cardAt: SquareItem, cardHeight: CoverHeight,
 - A span change also re-arranges the strip's viewport itself (`LayoutDirty | VirtualRangeDirty`) — the layout's
   `SetLeadSpan` is a field write, and nothing else would re-query `ItemRect` for cells already realized.
 - `leadMinColumns`, like `snap`/`rows`/`lift`, is frozen mount configuration (it configures the hoisted layout instance);
-  `leadSpan`/`leadCardAt` ride the re-pushed props. Gates: `gate.shelf.lead.*`, `gate.shelf.lead-template-follows-span`,
-  `gate.shelf.lead-min-columns`.
+  `leadSpan`/`leadCardAt` ride the re-pushed props.
 
 **The `SkeletonProxy` idiom** — `PagedShelf`'s `ShelfProxy` above and `SettingsCard.Create`'s proxy
 (`src/FluentGpu.Controls/SettingsCard.cs`) are both the same shape: `SkeletonDeriver` walks the author's real Element
@@ -730,7 +735,7 @@ icon + header + description). The fix is `Embed.Comp(new ResponsiveBox.Props(w =
 tells the reconciler to re-run the deriver over the `ResponsiveBox`'s OWN rendered output (the real content built at
 its measured width) instead of stopping at the boundary, so the shimmer is the real icon/text/card shapes, sized to
 the real slot — never a placeholder that reflows the moment data lands. `SettingsCard.Create`'s proxy hands
-`Build(options, w)` straight through (gate `gate.settingscard.skeleton-proxy`: derives an icon bar + at least two text
+`Build(options, w)` straight through (it derives an icon bar + at least two text
 bars, not one bar); `PagedShelf`'s `ShelfProxy` hands real cards at the fitted width instead of a placeholder.
 
 ## Window drag regions (`BoxEl.WindowDrag`)
@@ -836,7 +841,8 @@ Tok.FillControlStrong /*slider rail*/, Tok.ScrollThumb, Tok.FocusOuter/FocusInne
 Tok.Use(ThemeKind.Dark);          // switch theme — one pointer write, re-themes the whole app
 Tok.SetAccent(osAccentColor);     // inject the OS accent at startup
 Tok.SetWindowBackground(color);   // Mica / window background
-Theme.BodyFont = "Segoe UI"; Theme.IconFont = "Segoe Fluent Icons";   // typefaces
+Tok.Use(myDefinition, ThemeKind.Dark);  // switch the WHOLE theme (colours, spacing, radii, type, motion, fonts) - a ThemeDefinition
+var fonts = Tok.Definition.Fonts;                // typefaces: fonts.BodyPrimary, fonts.Icon (read at use)
 ```
 
 `Theme.*` is a small back-compat facade forwarding to `Tok`. `FluentApp.Run` already wires the real OS accent + Mica.
@@ -862,6 +868,6 @@ the fill's WCAG luminance. `Tok.OnAccent` is **baked at accent-set time** (memoi
 **Non-color tokens**: `Spacing` is the 4px grid (`XXS=2, XS=4, S=8, M=12, L=16, XL=20, XXL=24, XXXL=32, Gutter=24`)
 with the semantic names (`PageWide/PageNarrow/Card/Inner/StackS/StackM/StackL` + `PagePadWide/PagePadNarrow/CardPad`
 presets) re-pointed onto it. `Radii` adds `None=0, Card=8, Full=999` alongside `Control=4/Overlay=8/Pill=16`
-(`ControlAll/CardAll/OverlayAll/PillAll/FullAll` presets). `Elevation`/`Typography` round out the non-color set.
+(`ControlAll/CardAll/OverlayAll/PillAll/FullAll` presets). `Elevation`/`Typography` round out the non-color set. These are static PROPERTIES over `Tok.Definition` (`ThemeDefinition.Spacing`/`Radii`/`Type`/`Elevation`), so a `Tok.Use(definition, kind)` re-lays-out everything built from them: never read one into a `const`, a `static readonly` field or a parameter default (analyzer FGTH004 flags the fields). Start a custom theme from `ThemeDefinition.FluentDefault with { Spacing = ..., Radii = ... }`.
 
 Next: **[rendering-and-performance.md](./rendering-and-performance.md)** — the frame pipeline and how to keep it fast.

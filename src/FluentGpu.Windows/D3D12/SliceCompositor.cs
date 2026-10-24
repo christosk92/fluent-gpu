@@ -24,7 +24,7 @@ namespace FluentGpu.Rhi.D3D12;
 /// </summary>
 internal sealed unsafe class SliceCompositor : IDisposable
 {
-    public enum Pso : byte { Load, LoadCopy, Sample, SampleCopy, Fill, FillCopy, Erase, Blur, Down2, KawaseDown, KawaseUp, Acrylic, LoadScreen, SampleScreen, Feedback, Count }
+    public enum Pso : byte { Load, LoadCopy, Sample, SampleCopy, Fill, FillCopy, Erase, Blur, Down2, KawaseDown, KawaseUp, Acrylic, LoadScreen, SampleScreen, Feedback, Dissolve, Count }
 
     /// <summary>The F6 feedback pass, appended to composite.hlsl: the previous trail sampled through the INVERSE warp
     /// (K[2], K[3] = affine rows mapping destination px → source px), multiplied by the keep fraction toward the fade colour
@@ -86,6 +86,7 @@ float4 PSFeedback(V i) : SV_Target
         _pso[(int)Pso.KawaseUp] = MakePso(device, vs, ku, Blend.Copy);
         _pso[(int)Pso.Acrylic] = MakePso(device, vs, acr, Blend.Over);
         _pso[(int)Pso.Feedback] = MakePso(device, vs, fb, Blend.Copy);
+        _pso[(int)Pso.Dissolve] = MakePso(device, vs, load, Blend.Dissolve);
         vs->Release(); load->Release(); sample->Release(); fill->Release(); blur->Release(); down->Release();
         kd->Release(); ku->Release(); acr->Release(); fb->Release();
     }
@@ -192,7 +193,7 @@ float4 PSFeedback(V i) : SV_Target
         GpuDrawCount.Frame++;
     }
 
-    private enum Blend : byte { Over, Copy, DestOut, Screen }
+    private enum Blend : byte { Over, Copy, DestOut, Screen, Dissolve }
 
     private ID3D12RootSignature* BuildRootSignature(ID3D12Device* device)
     {
@@ -257,6 +258,14 @@ float4 PSFeedback(V i) : SV_Target
         rt.RenderTargetWriteMask = (byte)D3D12_COLOR_WRITE_ENABLE.D3D12_COLOR_WRITE_ENABLE_ALL;
         switch (blend)
         {
+            case Blend.Dissolve:
+                // The frame-freeze cross-dissolve (E2): the shader writes (1 - t)·S (PSLoad, alpha = 1 - t) and the destination
+                // already holds N, so ONE / BLEND_FACTOR (= t, OMSetBlendFactor) is out = (1 - t)·S + t·N on all four premultiplied
+                // channels - a true cross-dissolve, never src-over (an alpha-0 hole in both frames stays alpha 0).
+                rt.BlendEnable = BOOL.TRUE;
+                rt.SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE; rt.DestBlend = D3D12_BLEND.D3D12_BLEND_BLEND_FACTOR; rt.BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+                rt.SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE; rt.DestBlendAlpha = D3D12_BLEND.D3D12_BLEND_BLEND_FACTOR; rt.BlendOpAlpha = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+                break;
             case Blend.Over:
                 rt.BlendEnable = BOOL.TRUE;
                 rt.SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE; rt.DestBlend = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA; rt.BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;

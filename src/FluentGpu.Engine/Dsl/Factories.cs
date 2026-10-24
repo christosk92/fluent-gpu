@@ -53,7 +53,7 @@ public static partial class Ui
     /// <summary>A font icon (WinUI FontIcon): a glyph rendered from an icon font. Use <see cref="Icons"/> for the glyph,
     /// or pass any codepoint string (e.g. "") + a <paramref name="family"/> (system name or "path.ttf#Family").</summary>
     public static TextEl Icon(string glyph, float size = 16f, ColorF? color = null, string? family = null)
-        => new(glyph) { FontFamily = family ?? Theme.IconFont, Size = size, Color = color ?? Theme.WindowText };
+        => new(glyph) { FontFamily = family ?? Tok.Definition.Fonts.Icon, Size = size, Color = color ?? Theme.WindowText };
 
     /// <summary>A vertically-scrolling, clipping viewport over <paramref name="content"/> (typically a tall VStack).</summary>
     public static ScrollEl ScrollView(Element content, bool horizontal = false)

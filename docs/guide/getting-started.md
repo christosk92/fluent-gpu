@@ -106,9 +106,9 @@ while (!window.IsClosed)
 | `DrawCommandCount` / `NodesVisited` / `DrawNodeCount` / `CulledNodeCount` | record-phase stats |
 | `Fps` / `FrameMs` | smoothed timing |
 
-## Run headless (tests / CI / agents)
+## Run headless (agents)
 
-No GPU or window required — swap in the headless backends. This is exactly how the golden-check harness runs:
+No GPU or window required — swap in the headless backends:
 
 ```csharp
 using FluentGpu.Foundation;      // StringTable
@@ -119,7 +119,7 @@ using FluentGpu.Text.Headless;   // HeadlessFontSystem
 
 var strings = new StringTable();
 using var app = new HeadlessPlatformApp();
-var window = new HeadlessWindow(new WindowDesc("test", new Size2(1280, 800), 1f));
+var window = new HeadlessWindow(new WindowDesc("headless", new Size2(1280, 800), 1f));
 window.Show();
 var device = new HeadlessGpuDevice();
 var fonts  = new HeadlessFontSystem(strings);
@@ -132,27 +132,11 @@ host.RunFrame();
 ```
 
 The headless `HeadlessGpuDevice` records the DrawList into inspectable lists (`LastGlyphs`, `LastRects`,
-`LastGradientStrokes`, …) so tests assert *what was drawn* without pixels. `host.Scene` exposes post-layout bounds.
-
-## The verification harness
-
-The single source of truth for "does the engine still work":
-
-```bash
-dotnet run --project src/FluentGpu.VerticalSlice
-```
-
-It runs ~60 end-to-end golden checks across every seam (layout, reconcile, signals, scroll, virtualization, images,
-controls, navigation, animation) and prints `[PASS]`/`[FAIL]` + `ALL CHECKS PASSED`. Add a check by writing a
-`Check("…", condition, detail)` in `src/FluentGpu.VerticalSlice/Program.cs` and calling it from `Main`.
-
-> 🤖 **AGENT:** after any engine change, run the harness and confirm `ALL CHECKS PASSED` before claiming success. It's
-> fast (seconds), deterministic, and catches cross-seam regressions that a focused test won't. GPU pixels are *not*
-> asserted here — those are a separate, manual "needs-pixels" check on the real D3D12 path.
+`LastGradientStrokes`, …) so you can read *what was drawn* without pixels. `host.Scene` exposes post-layout bounds.
 
 ## Project layout (assemblies)
 
-The engine ships as 4 libraries + 2 Roslyn analyzers + 2 executables (`src/FluentGpu.slnx`). The ones you touch most:
+The engine ships as 4 libraries + 2 Roslyn analyzers + 1 executable (`src/FluentGpu.slnx`). The ones you touch most:
 
 | Assembly | What's in it |
 |---|---|
@@ -161,7 +145,6 @@ The engine ships as 4 libraries + 2 Roslyn analyzers + 2 executables (`src/Fluen
 | `FluentGpu.Windows` | the swappable Windows backend (D3D12/, Pal/, DirectWrite/, Wic/, Uia/, Interop/) — holds the one TerraFX.Interop.Windows reference |
 | `FluentGpu.WindowsApi` | OS-service scaffold (Notifications, Credentials, Packaging, Activation) |
 | `FluentGpu.SourceGen` / `FluentGpu.Interop.SourceGen` | netstandard2.0 Roslyn analyzers (cannot merge) |
-| `FluentGpu.VerticalSlice` | NativeAOT validation harness exe (refs Engine + Controls; TerraFX-free) |
 | `FluentGpu.WindowsApp` | gallery / composition root (refs Engine + Controls + Windows) |
 
 Next: **[reactivity.md](./reactivity.md)** — the signals model that everything else builds on.

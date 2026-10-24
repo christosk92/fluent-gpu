@@ -167,8 +167,17 @@ public sealed class EditableText : Component
         if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
     }
 
+    /// <summary>Re-size the field on the LIVE instance (a composer whose style is live — NumberBox's field height across a window-tier
+    /// crossing — forwards it here): the render epoch re-renders the field at the new height. A no-op for an unchanged height.</summary>
+    internal void SetHeight(float height)
+    {
+        if (Height == height) return;
+        Height = height;
+        if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
+    }
+
     /// <summary>Flip the enabled state on the LIVE instance. Props freeze at mount, so a composer whose enabled flag is
-    /// live (NumberBox/ComboBox re-push theirs through <c>EnabledProps</c>) forwards it here: the render epoch re-renders the
+    /// live (NumberBox/ComboBox re-push theirs through their live props) forwards it here: the render epoch re-renders the
     /// root (input gate, Focusable, Disabled chrome) and the display epoch re-evaluates BindColor's disabled foreground.</summary>
     internal void SetEnabled(bool enabled)
     {
@@ -201,6 +210,11 @@ public sealed class EditableText : Component
     /// TextControlBackgroundFocused = ControlFillColorInputActive (:25/:132). Default false — TextBox/PasswordBox/
     /// NumberBox/AutoSuggestBox keep their full chrome.</summary>
     public bool Chromeless;
+    /// <summary>Where a composer's field surface (<see cref="TextFieldStyle"/>) comes from, asked at EVERY render (a mounted editor's
+    /// plain fields freeze, the theme does not); null = the active theme's TextBox field (<see cref="TextBox.DefaultFieldStyle"/>).
+    /// A Chromeless editor takes only its hover / focused fills from it. INTERNAL (the composer seam): apps restyle fields through
+    /// the control style table.</summary>
+    internal Func<TextFieldStyle>? FieldStyle;
     /// <summary>Content-lane padding override (WinUI TextBox <c>Padding</c>). Null = the TextBox default 10,5,6,6. The
     /// editable ComboBox passes ComboBoxEditableTextPadding 11,5,38,6 (ComboBox_themeresources.xaml:342) so the text
     /// clears the 38px chevron column while the part spans the field's FULL width (:580 <c>Grid.ColumnSpan="2"</c>).
@@ -429,16 +443,25 @@ public sealed class EditableText : Component
             Children = rowChildren.ToArray(),
         };
 
+        // The field surface, read now (a composer's, else the theme's TextBox field; the stock one is the WinUI field).
+        var fs = FieldStyle?.Invoke() ?? TextBox.DefaultFieldStyle;
         var children = new List<Element> { content };
+        // A themed resting underline (none on the WinUI field) sits on the bottom edge under the focus bar.
+        if (!Chromeless && fs.UnderlineThickness > 0f && !(focused && IsEnabled && fs.FocusBarThickness > 0f))
+            children.Add(new BoxEl
+            {
+                Width = width, Height = fs.UnderlineThickness, AlignSelf = FlexAlign.End,   // laid out on the bottom edge
+                Fill = fs.Underline, Corners = CornerRadius4.All(0f), HitTestVisible = false,
+            });
         // WinUI focus affordance is BorderThickness 1,1,1,2 — the 1px stroke stays all around (below) and a 2px accent
         // bar is pinned to the BOTTOM edge only (not a full 2px ring). See the class doc for the
         // TextControlElevationBorderFocusedBrush equivalence (TextBox_themeresources.xaml ~48–66 / ~295–304).
         // Chromeless suppresses it — the composer's outer box owns the focused underline (editable ComboBox).
-        if (focused && IsEnabled && !Chromeless)
+        if (focused && IsEnabled && !Chromeless && fs.FocusBarThickness > 0f)
             children.Add(new BoxEl
             {
-                Width = width, Height = 2f, OffsetY = Height - 2f,
-                Fill = Tok.AccentDefault, Corners = CornerRadius4.All(0f),
+                Width = width, Height = fs.FocusBarThickness, OffsetY = Height - fs.FocusBarThickness,
+                Fill = fs.FocusBar, Corners = CornerRadius4.All(0f),
             });
 
         Action<NodeHandle> rootCapture = h => { _rootNode = h; if (Field is { } vf) vf.Node.Value = h; };
@@ -450,7 +473,7 @@ public sealed class EditableText : Component
             Height = Height,
             // Chromeless (editable-ComboBox part): square — the composer's outer box rounds + clips (ClipToBounds
             // follows the rounded corners, so the interaction fills below stay inside the shared shape).
-            Corners = Chromeless ? default : Radii.ControlAll,   // WinUI ControlCornerRadius = 4px
+            Corners = Chromeless ? default : CornerRadius4.All(fs.Radius),   // WinUI ControlCornerRadius = 4px
             // WinUI TextBox state fills: rest=ControlFillColorDefault, PointerOver=ControlFillColorSecondary,
             // focused=ControlFillColorInputActive, disabled=ControlFillColorDisabled. Chromeless keeps ONLY the
             // hover/focused fills, painted OVER the composer's shared background — the exact WinUI layering: the
@@ -458,18 +481,20 @@ public sealed class EditableText : Component
             // TextControlBackgroundPointerOver/Focused on top of it (ComboBox_themeresources.xaml:786–803); rest and
             // disabled are transparent there (the outer box paints those once).
             Fill = Chromeless
-                ? (IsEnabled && focused ? Tok.FillControlInputActive : ColorF.Transparent)
-                : (!IsEnabled ? Tok.FillControlDisabled : (focused ? Tok.FillControlInputActive : Tok.FillControlDefault)),
+                ? (IsEnabled && focused ? fs.FocusedFill : ColorF.Transparent)
+                : (!IsEnabled ? fs.DisabledFill : (focused ? fs.FocusedFill : fs.Fill)),
             // A FOCUSED field must NOT lighten on hover (that dark→light flip read as a flicker).
             HoverFill = Chromeless
-                ? (!IsEnabled ? ColorF.Transparent : (focused ? Tok.FillControlInputActive : Tok.FillControlSecondary))
-                : (!IsEnabled ? Tok.FillControlDisabled : (focused ? Tok.FillControlInputActive : Tok.FillControlSecondary)),
+                ? (!IsEnabled ? ColorF.Transparent : (focused ? fs.FocusedFill : fs.HoverFill))
+                : (!IsEnabled ? fs.DisabledFill : (focused ? fs.FocusedFill : fs.HoverFill)),
             // WinUI keeps the field border NEUTRAL (the subtle elevation gradient) in every state — focus emphasis is
             // the 2px accent bar on the BOTTOM edge (above), per the focused-border note in the class doc. Chromeless:
             // NO border at all — the editable-ComboBox part mounts with BorderBrush="Transparent"
             // (ComboBox_themeresources.xaml:580); the one border is the composer's.
-            BorderBrush = Chromeless ? null : (!IsEnabled ? GradientSpec.Solid(Tok.StrokeControlDefault) : Tok.ControlElevationBorder),
-            BorderWidth = Chromeless ? 0f : 1f,
+            BorderBrush = Chromeless ? null : (!IsEnabled ? fs.DisabledBorderBrush : fs.BorderBrush),
+            BorderColor = Chromeless ? ColorF.Transparent : fs.BorderColor,
+            BorderWidth = Chromeless ? 0f : fs.BorderWidth,
+
             // form-validation.md: a bound channel — while the field is invalid the recorder forces a solid critical-color
             // ring over the resting gradient border. Bound (no re-render per keystroke); the write is equality-gated.
             Validation = Field is { } vfield ? Prop.Of(() => vfield.Error.Value.IsValid ? ValidationState.None : ValidationState.Error) : default,
@@ -543,7 +568,7 @@ public sealed class EditableText : Component
         [
             new TextEl(glyph)
             {
-                Size = glyphSize, FontFamily = Theme.IconFont,
+                Size = glyphSize, FontFamily = Tok.Definition.Fonts.Icon,
                 Color = Tok.TextSecondary, PressedColor = Tok.TextTertiary,
             },
         ],

@@ -148,12 +148,3 @@ SliceCompositor,TileRasterizer,UploadQueue}.cs` + `composite.hlsl`. The thumb sl
 
 `ScrollPerfProbes.cs` (`--scroll-bench`, `--scroll-soak`), `RepaintIdentityProbe.cs` (`--repaint-identity`),
 `DialogScrollProbe.cs` (`--dialog-scroll-probe`), `SoakProbe.cs` (`--soak`/`--stress-*`, general longevity).
-
-## Tests
-
-VerticalSlice: `FluentGpu.VerticalSlice/Suites/{ScrollMotionSuite,ScrollEffectsSuite,ScrollSuite,TileSuite,SliceSuite,
-ListRowSuite,TouchSuite}.cs`; the headless producer `HeadlessScrollProducer` is in `Probes/Probes.cs`. Unit tests:
-`FluentGpu.Engine.Tests/{ScrollMotionTests,ScrollRuntimeTests,ExtentSourceTests,ScrollEffectTests,ScrollLinkedEffectTests,
-ScrollProbeTests,ScrollMetricsTests,ScrollParkedViewportTests,ScrollPoseDamageTests,ContactStampTests,
-TouchpadStampRaceTests,RenderThreadLifecycleTests,RenderThreadPacingTests,SlotCatchUpTests,PresentQueueDepthPolicyTests,PresentStatisticsLedgerTests,RefreshLatticeTests,GpuGovernorWakeTests,CadencePacingTests}.cs`,
-`FluentGpu.Windows.Tests/{CompositorTickFilterTests,RenderDisplayClockTests,DmContactStreamTests}.cs`, `FluentGpu.Engine.Tests/TouchpadReleaseDispatchTests.cs`. Map: [gates.md](gates.md).

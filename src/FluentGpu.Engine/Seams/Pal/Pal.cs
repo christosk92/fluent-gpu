@@ -281,6 +281,25 @@ public sealed class InputEventRing
 
     public ReadOnlySpan<InputEvent> Drain() => _buf.AsSpan(0, _count);
 
+    /// <summary>Drop every retained event except the window-lifecycle ones (blur, focus, state change, the OS move/size loop's
+    /// begin and end) and the velocity samples; returns how many events remain. The frame freeze swallows input with it (E2): a
+    /// pointer, key, char or scroll event never reaches a dispatcher that would hit-test the invisible tree.</summary>
+    public int DropInteractive()
+    {
+        int w = 0;
+        for (int r = 0; r < _count; r++)
+        {
+            var k = _buf[r].Kind;
+            if (k is InputKind.WindowBlur or InputKind.WindowFocus or InputKind.WindowStateChanged
+                or InputKind.WindowMoveSizeBegan or InputKind.WindowMoveSizeEnded)
+                _buf[w++] = _buf[r];
+        }
+        _count = w;
+        for (int i = 0; i < IdSlots; i++) _lastMove[i] = -1;
+        _velCount = 0;
+        return w;
+    }
+
     /// <summary>Move all retained samples/events into <paramref name="destination"/> in chronological order, then
     /// clear this ring. Used by platform backends to coalesce high-rate native input before the host's frame pump.</summary>
     public int MoveTo(InputEventRing destination)

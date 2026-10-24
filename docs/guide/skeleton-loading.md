@@ -98,9 +98,6 @@ slot (`SoftReveal`/`SoftRevealStaggered`).
   of painting half-faded over the live page.
 - Under `Motion.ReducedMotion` no exit is stamped at all and the swap is an instant snap.
 
-Gates: `SK.b2` (the swap frame really cross-dissolves — orphaned shimmer fading to 0 while the real root fades up),
-`SK.c` (the pulse is cancelled and the orphan reclaims), `SK.b3` (the wedge deadline).
-
 Honest note: the swap frame is a **reconcile edge** (it allocates the new subtree's elements), so 0-managed-alloc is
 asserted on the steady frames *after* the swap settles, not on the swap frame — the same discipline as any
 mount/`Flow.Show` branch change (bounded Gen0 at the reconcile edge).

@@ -317,8 +317,8 @@ public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, 
 // Ink = the run's PAINTED extent in the same local space (the node box grown by what the measured text overflows it: a
 // run with no wrap / trim wider than its box, more lines than its height) — the footprint every cull, slice bound and
 // sub-tile damage reads (SliceOpBounds, InkRect). Bounds stays the LAYOUT box the replay shapes into. Empty = the box.
-// Typography = FluentGpu.Text.TextTypography.Pack(TextAlign, FontFeatures): the features are a shaping input and the
-// align positions each line inside Bounds.W (the alignWidth every editor query passes too); both key the shaped run.
+// Typography = FluentGpu.Text.TextTypography.Pack(TextAlign, FontFeatures, TextCase): the features and the case transform
+// (E19, applied by the replay's shaping) are shaping inputs and the align positions each line inside Bounds.W (the alignWidth every editor query passes too); both key the shaped run.
 public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
     int SpanRunId = 0, int ForceColor = 0, int InMotion = 0, RectF Ink = default, int Typography = 0)

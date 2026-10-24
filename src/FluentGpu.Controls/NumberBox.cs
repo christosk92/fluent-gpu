@@ -121,16 +121,20 @@ public sealed class NumberBox : Component
     }
 
     public static Style? GlobalStyle;
-    public static Style DefaultStyle => GlobalStyle ?? new Style();
+    public static Style DefaultStyle => GlobalStyle ?? ControlStyles.Resolve(ControlStyles.NumberBoxStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a NumberBox entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style();
 
     // ── Factories ────────────────────────────────────────────────────────────────────────────────────────────────
     // The full factory leads with `Signal<double>? value` so it never collides with the legacy (double,double) overloads.
 
-    /// <summary>LIVE enabled flag re-pushed to the mounted core (<c>Embed.Comp(props, …)</c>): <see cref="IsEnabled"/>
-    /// is a plain field that freezes at mount via a propless <c>Embed.Comp</c>, so a toggle enabling/disabling the box
-    /// would be dropped. <see cref="Create"/> routes it through re-pushed props; the frozen field is the fallback for
-    /// direct callers. A tiny record carries the bool because re-pushed props are class-typed.</summary>
-    internal sealed record EnabledProps(bool IsEnabled);
+    /// <summary>LIVE props re-pushed to the mounted core (<c>Embed.Comp(props, …)</c>): the enabled flag and the per-instance
+    /// style (the field height a window tier changes: a compact window lifts it to its touch target). <see cref="IsEnabled"/> and
+    /// <see cref="StyleOverride"/> are plain fields that freeze at mount via a propless <c>Embed.Comp</c>, so a toggle
+    /// enabling/disabling the box, or a tier crossing re-sizing it, would be dropped. <see cref="Create"/> routes them through
+    /// re-pushed props; the frozen fields are the fallback for direct callers. Re-pushed props are class-typed, hence the record.</summary>
+    internal sealed record LiveProps(bool IsEnabled, Style? Style);
 
     /// <summary>The long-tail NumberBox surface (everything past the controlled value + onChange) as one record —
     /// mirrors <c>TextBoxOptions</c>: the numeric range/step (Min/Max/Small/LargeChange + Wrap), the spin-button
@@ -156,6 +160,11 @@ public sealed class NumberBox : Component
         public Func<string, double?>? Parser { get; init; }
         public bool IsEnabled { get; init; } = true;
         public Field<double>? Field { get; init; }
+        /// <summary>The per-instance style (the <see cref="NumberBox.Style"/> record: field height, spin metrics, colours);
+        /// null keeps <see cref="DefaultStyle"/>. A compact window lifts the field to its touch target with
+        /// <c>Style = NumberBox.DefaultStyle with { FieldHeight = 40 }</c>. LIVE through <see cref="Create"/> (with
+        /// <see cref="IsEnabled"/>): a later render's style re-sizes the mounted box (its field keeps its text, caret and focus).</summary>
+        public Style? Style { get; init; }
     }
 
     static readonly NumberBoxOptions DefaultOptions = new();
@@ -167,7 +176,7 @@ public sealed class NumberBox : Component
     public static Element Create(Signal<double>? value = null, Action<double>? onChange = null, NumberBoxOptions? options = null)
     {
         var o = options ?? DefaultOptions;
-        return Embed.Comp(new EnabledProps(o.IsEnabled), () => new NumberBox
+        return Embed.Comp(new LiveProps(o.IsEnabled, o.Style), () => new NumberBox
         {
             Value = value, Initial = o.Initial, Minimum = o.Minimum, Maximum = o.Maximum,
             SmallChange = o.SmallChange, LargeChange = o.LargeChange,
@@ -175,7 +184,7 @@ public sealed class NumberBox : Component
             IsWrapEnabled = o.IsWrapEnabled, AcceptsExpression = o.AcceptsExpression,
             PlaceholderText = o.PlaceholderText, Header = o.Header, Description = o.Description,
             Width = o.Width, Formatter = o.Formatter, OnChange = onChange,
-            Text = o.Text, Parser = o.Parser, IsEnabled = o.IsEnabled, Field = o.Field,
+            Text = o.Text, Parser = o.Parser, IsEnabled = o.IsEnabled, Field = o.Field, StyleOverride = o.Style,
         });
     }
 
@@ -220,8 +229,9 @@ public sealed class NumberBox : Component
     public override Element Render()
     {
         // Reactive enabled flag (provider wins over the frozen field); shadowing local so downstream reads are live.
-        bool IsEnabled = UsePropsOrDefault<EnabledProps>()?.IsEnabled ?? this.IsEnabled;
-        var s = StyleOverride ?? DefaultStyle;
+        var live = UsePropsOrDefault<LiveProps>();
+        bool IsEnabled = live?.IsEnabled ?? this.IsEnabled;
+        var s = (live is not null ? live.Style : StyleOverride) ?? DefaultStyle;
         var fallbackValue = UseSignal(Initial);
         var value = Value ?? fallbackValue;
         // In-progress edit text (EditableText writes here on every keystroke; we reformat from Value on commit/step).
@@ -359,7 +369,7 @@ public sealed class NumberBox : Component
                     // Popup spin glyph: FontSize 16 (NumberBox.xaml:201), TextControlButtonForeground → pressed Tertiary
                     // (NumberBox.xaml:125–146 RepeatButton* remap).
                     Children = [Parts.Apply(PartSpinGlyph,
-                        new TextEl(glyph) { Size = s.PopupSpinGlyphSize, FontFamily = Theme.IconFont, Color = s.SpinGlyphColor, PressedColor = s.SpinGlyphPressedColor })],
+                        new TextEl(glyph) { Size = s.PopupSpinGlyphSize, FontFamily = Tok.Definition.Fonts.Icon, Color = s.SpinGlyphColor, PressedColor = s.SpinGlyphPressedColor })],
                 };
                 // Parts: restyle the button; the step mechanics (click + auto-repeat) and the field-keeps-focus guard always win.
                 if (Parts is { } sp)
@@ -412,7 +422,7 @@ public sealed class NumberBox : Component
                     OnClick = step,
                     Children = [Parts.Apply(PartSpinGlyph, new TextEl(glyph)
                     {
-                        Size = s.SpinGlyphSize, FontFamily = Theme.IconFont,   // FontSize 12 (NumberBox.xaml:189)
+                        Size = s.SpinGlyphSize, FontFamily = Tok.Definition.Fonts.Icon,   // FontSize 12 (NumberBox.xaml:189)
                         Color = enabled ? s.SpinGlyphColor : s.SpinGlyphDisabledColor,
                         PressedColor = enabled ? s.SpinGlyphPressedColor : s.SpinGlyphDisabledColor,
                     })],
@@ -446,7 +456,7 @@ public sealed class NumberBox : Component
                 HitTestVisible = false,
                 Children = [new TextEl(s.PopupIndicatorGlyph)
                 {
-                    Size = s.PopupIndicatorGlyphSize, FontFamily = Theme.IconFont, Color = s.SpinGlyphColor,
+                    Size = s.PopupIndicatorGlyphSize, FontFamily = Tok.Definition.Fonts.Icon, Color = s.SpinGlyphColor,
                     Margin = new Edges4(0, 0, 8f, 0),
                 }],
             };
@@ -508,6 +518,10 @@ public sealed class NumberBox : Component
             f.SetEnabled(IsEnabled);
             f.SetRightAffix(affix);
         }, (upEnabled ? 1 : 0) | (downEnabled ? 2 : 0) | (IsEnabled ? 4 : 0));
+        // The field's height is the live style's (its propless Embed.Comp froze the mount-time one): a crossing that re-sizes the box
+        // re-sizes the SAME field, so its text, caret and focus survive.
+        float fieldHeight = s.FieldHeight;
+        UseLayoutEffect(() => liveField.Value?.SetHeight(fieldHeight), fieldHeight);
 
         // The field wrapper: the Compact popup's anchor node + the keyboard stepping handler (Up/Down/PageUp/PageDown
         // bubble out of the single-line EditableText to here).

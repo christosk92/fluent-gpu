@@ -1044,7 +1044,181 @@ pool**; `ISystemColors`/`IVirtualMemory` → UI thread (reserve/commit at the Sc
 
 ---
 
-## 11. Backpressure policy
+### 10.1 Frame freeze - `AppHost.Freeze` / `Thaw` (EP10, E2)
+
+```csharp
+public FreezeToken Freeze();                                                  // UI thread; the window and every pop-out
+public void Thaw(FreezeToken t, DissolveSpec d = default, DwmPlan? dwm = null);
+public readonly record struct DissolveSpec(float Ms);                         // Cut = 0 ms
+public sealed record DwmPlan(Action? AtThawStart = null, Action? AtThawEnd = null);
+public sealed class FreezeToken { bool IsCaptured; Task WhenCaptured; FreezeEnd End; }   // End: Thawed | CutByResize | CutByWatchdog
+public event Action<FreezeToken, FreezeEnd>? FreezeEnded;                     // + FreezeWatchdogMs (2000), FreezeState, IsFrozen
+// seams: ISwapchain.SupportsFrameDissolve / CaptureSnapshot() -> IFrameSnapshot / DissolveNextPresent(snapshot, t) / LastPresentDissolved
+```
+
+A theme transaction must not show a hybrid frame. Like the restore hold, the freeze is a property of the PUBLICATION: each frame carries a
+`FreezeKind` (`RenderFrame.Freeze`, plus `DissolveT`) that the UI decides and the presenting side obeys per adopted frame.
+
+- **Capture.** `Freeze()` arms the capture; the FIRST frame published afterwards is the outgoing tree (`FreezeKind.Capture`): submitted and
+  presented as usual, and the presenting side snapshots the target's back buffer before the flip (`ISwapchain.CaptureSnapshot`:
+  premultiplied colour WITH alpha, alpha-0 video holes and transparent Mica regions kept, nothing flattened). The app awaits
+  `FreezeToken.WhenCaptured` (every participating window has published its capture) and only then changes anything. **Deviation from
+  the sketch:** the sketch captures synchronously; a synchronous capture would need a paint inside `Freeze()` (re-entrant from a handler),
+  so the handshake moves the app's first write after the capture frame instead.
+- **Hold.** Every later frame is `FreezeKind.Hold` (also `PresentHeld`): recorded and submitted so uploads, the glyph atlas and copies
+  land, never flipped (`HoldNextPresent`). `DecideHold` decides a freeze frame by its directive alone: the restore hold's faithful-frame
+  extension does not apply, and a freeze hold does not latch the restore state. The owed-present retry carries the directive (the
+  handling lives in `PresentFrame`). Capture, Dissolve and Release frames are never skipped by the byte-identical-frame elision.
+- **While frozen.** The input ring drops pointer, key, char and scroll events before the dispatcher (window-lifecycle events pass),
+  the urgent wheel sink and the scroll pump are gated, in-flight interactions are cancelled at `Freeze()`, windowed popups cannot open,
+  and `VideoPlacementApplier.DeferAll` makes every apply path a no-op: video releases (and creations and moves) wait for the thaw frame.
+  A video inside a `Flow.Persist` subtree (E7, `reconciler-hooks.md`) is not released by a root swap at all: the new root's slot adopts
+  it, or it stays parked with its surface, and the park timer (held with the other timers by the snap scope) cannot release it under a
+  held frame. So the thaw frame either keeps it (adopted) or applies nothing for it until the park time has passed after the thaw.
+- **Snap scope.** The freeze owns a `SnapScope` (E17a) on every frozen host, so the transaction's changes land at their end values and
+  the FrameClock and timers stand still. It ends at `Thaw()` and at a cut.
+- **Cuts.** A resize or DPI/zoom change cuts the freeze (`FreezeFrameStart`, right after `EnsureSize`, before the frame flushes) on the
+  precedent of `EvaluateRestoreHold(resized)`: the snap scope ends first, the cut frame is the `Release` frame, and the tier crossing the
+  resize owes commits on the next non-resized frame and animates (technical-plan §3.3 rule 8; `TierCrossingTests`). A 2 s watchdog
+  (`FreezeWatchdogMs`, on the host timer clock, with a wait clamp so an idle loop still wakes) cuts the same way. A thaw of a cut token is a no-op.
+- **Thaw.** `Thaw` puts the host in `Dissolving`: each frame is `FreezeKind.Dissolve` with `t = elapsed / Ms` and the presenting side arms
+  `DissolveNextPresent(snapshot, t)`: `out = (1-t)·S + t·N` on premultiplied colour AND alpha (`FrameDissolve.Blend`; not src-over, so an
+  alpha-0 hole in both frames stays a hole), a FULL present over a transparent clear so DWM composes it over the live backdrop. The
+  last frame is `Release`: a normal present, the snapshot disposed (the freeze's one extra texture). `DwmPlan.AtThawStart` runs before
+  the first dissolve frame is published, `AtThawEnd` before the last (both run on a cut that follows a thaw). EP9's present hook will move
+  the invocation onto the present index; the ordering contract is the same. Pop-outs thaw in the same call, each on its own swapchain.
+- **Backends.** A swapchain that cannot snapshot or dissolve (`SupportsFrameDissolve` false) still freezes; its thaw is a CUT. The
+  headless swapchain implements the seam (a summary of the frame in the back buffer stands in for pixels; `RecordPresents` logs each
+  present as Normal, Held or Dissolve). NuGet: a binary-breaking change for compiled consumers, so it joins the 0.2.0 minor bump:
+  `RenderFrame` (a public struct) gained `Freeze` and `DissolveT`, `SceneFramePublisher.Publish`/`PublishScene` gained optional
+  parameters (baked into call sites), `DrawGlyphRunCmd`/`DrawGlyphRunGradientCmd` grew by one field when E19 landed, and
+  `ISwapchain` gained four default-implemented members (source-compatible for implementers, but a backend must opt in to dissolve).
+- **D3D12** (`D3D12Device.FrameDissolve.cs`; every D3D12 swapchain reports `SupportsFrameDissolve` true). `CaptureSnapshot` copies the
+  back buffer the capture frame's submit drew (after the submit, before the flip: the frame about to be presented, never the front
+  buffer) into a retained BGRA texture with its alpha and its own one-descriptor SRV heap, on a small command list of the device's own
+  (two allocators, fenced), so no frame bank or recording state is touched. A dissolve present lerps the back buffer IN PLACE right
+  before the flip: the back buffer holds N (composited over the frame's transparent clear), one full-target quad of the composite
+  `Dissolve` pipeline loads S and writes `(1-t)·S`, and the blend `ONE / BLEND_FACTOR(t)` adds `t·N` - the formula exactly, on all four
+  channels, with no copy of N. That present is WHOLE (no `Present1` rects), the present after it is whole (`PpNeedFullPresent`: its
+  dirty rects would describe N against the previous N, not the lerp DWM shows), and the lerped back buffer forgets its partial-present
+  age (`_ppBufTurn = 0`), so the next frame into it is composited whole and no `FLIP_SEQUENTIAL` buffer keeps a stale lerped pixel.
+  The lerp runs before the geometry-motion fence wait, so a video-moving thaw frame waits for it too. The armed dissolve is one-shot: a
+  held or stood-down present consumes it without drawing; a refused non-blocking present that is re-presented without a new submit
+  does not lerp the lerped buffer twice. A snapshot of another size (a resize the cut has not reached yet), a disposed one, or one a
+  device loss released presents the frame as it is; a failed capture returns null and the thaw is a cut. `Dispose` releases the
+  texture once its last GPU use retired (drained by the next present). Gates: `FluentGpu.Windows.Tests` `FrameDissolveTests` on the
+  WARP adapter (CaptureBgra readback: every channel within one 8-bit step of the formula at t = 0, ¼, ½, ¾, 1; alpha-0 holes stay
+  holes; the snapshot equals the presented S and is unchanged after the dissolve; the dissolve and the following present are whole;
+  a held present neither draws nor flips; no double lerp; a mis-sized or disposed snapshot presents as is; the texture is released).
+  **Deviation from the sketch:** the sketch re-composites the pre-freeze publication into the snapshot and adds a `Dissolve` composite
+  item; the backend copies the back buffer the capture submit drew instead (the same pixels, with no second composite), and the
+  dissolve is a present-time pass over the finished back buffer, so it serves the direct route (pop-outs) and the composite route alike.
+
+### 10.2 Settle - `AppHost.Settle` (EP11, E17c)
+
+```csharp
+public Task<SettleResult> Settle(SettleSpec? spec = null);                    // UI thread; inside a snap scope; one at a time
+public sealed record SettleSpec(int MaxPasses = 6, int MaxMs = 250)            // + ImageSoftWaitMs (150), FontsReady (Func<bool>?), FontWaitMs (1000)
+public sealed record SettleResult(int Passes, bool TimedOut, IReadOnlyList<string> UnsettledKeys);   // + WorkPasses, ElapsedMs, FontWaitMs, ImagesUndecoded, Cut
+public event Action<SettleResult>? Settled;  public bool IsSettling { get; }
+```
+
+A theme transaction (E5) applies its change under the freeze and then settles, so the frame the thaw dissolves to is final, not
+the first frame of a cascade of measured corrections. The settle adds no frame path of its own: every pass is an ordinary
+(held) frame, and the settle only judges it.
+
+- **A pass** is one `Paint`: flush the scheduled renders and effects, lay out, run the layout effects (where the measured hooks
+  write), run the passive effects. `SettlePassStart` (right after the freeze's frame start) takes the measured-change baseline;
+  `SettleAfterPass` (right after phase 12) judges it.
+- **Quiet** = no measured value changed during the pass (`MeasureMemory`'s change serial, bumped by every measured hook and keyed
+  capture), no scheduled render or effect (`ReactiveRuntime.HasPending`), layout clean, no pending tier crossing, no virtual list
+  still warming, and the same for every detached pop-out in the snap. The snap scope (E17a/b) makes tickers and intervals unable
+  to keep it busy. UI posts are not awaited (a page without its data settles on its skeleton, as a fresh navigation would).
+- **Then it waits without frames** for `FontsReady` and for the PINNED images that have no texture yet
+  (`ImageCache.CountPinnedUndecoded`: decoding, or a canceled leftover awaiting its retry), the images up to `ImageSoftWaitMs`
+  from the settle's start; past it they keep their final-size placeholder and reveal after the thaw, as production does. An
+  image landing wakes the next pass; a font poll (16 ms) and the deadlines are folded into the idle wait (`ClampWaitToSettle`)
+  and the wake mask (`SettleNeedsFrame`, `FrameNeeded`). A headless host paints every turn while it settles: its clock only
+  moves on painted frames, so its deadlines would otherwise never pass.
+- **Caps**: `MaxPasses` passes that still changed something (waiting passes do not count), `MaxMs` from the moment the fonts are
+  ready, `FontWaitMs` for the fonts. A cap completes the task normally with `TimedOut`, the keys journaled in the last pass
+  (keyed hooks by key, unkeyed ones by call site) and the pending kinds (`render-pending`, `layout-dirty`, `tier-pending`,
+  `virtuals-warming`, `pop-out`, `fonts`), plus one `image:<source>` per undecoded pinned image. Logs: one always-on
+  `[settle] passes= work= ms= fontsMs= images= timedOut= cut=` line per settle and `[settle-timeout] ... unsettled=` on a
+  timeout (`Diag.Line`; a settle is a per-transaction event, never per frame).
+- **Cut**: the snap scope closing under the settle (a resize or the watchdog cuts the freeze) or the host's disposal ends it as
+  `Cut`. The settle never thaws: the transaction does.
+- **Keyed measurement** (`MeasureMemory`, owned by `reconciler-hooks.md` §0bis): `UseMeasuredWidth(key)` / `UseMeasuredBounds(key)`
+  and the keyed `Responsive.Of(key, ...)` start a remounted region at its remembered size, so the first pass is already final;
+  an unkeyed measured region costs one more pass.
+- Gates: Engine.Tests `SettleTests` (keyed remount, unkeyed remount, scope separation, LRU bound, the snap requirement, first-pass
+  settle under a freeze, the pass cap with the `[settle-timeout]` line, pinned image hold and soft wait, the fonts gate and its
+  timeout, tickers and intervals, the resize cut, disposal); VerticalSlice `settle` (keyed vs unkeyed `Responsive.Of`, the
+  freeze-apply-settle-thaw transaction keyed and unkeyed with no present while settling, a waiting pass allocates nothing).
+
+### 10.3 Theme transaction - `AppHost.RunThemeTransaction` (EP14, E5)
+
+```csharp
+public Task<ThemeTransactionResult> RunThemeTransaction(ThemeTransactionRequest r);     // main window, UI thread
+public sealed record ThemeTransactionRequest(ThemeDefinition Next, ThemeKind Kind, Action Apply)
+{ PrewarmSet Prewarm; Action? Rollback; Action? CloseTransients; DissolveSpec Dissolve = 250 ms; SettleSpec? Settle;
+  Action? OnCommitted; Action<Exception>? OnFailed; string? Label; }
+public sealed record PrewarmSet { FontSet? Fonts; IReadOnlyList<ImagePrewarm>? Images; int MaxMs = 1500; }
+public sealed record ThemeTransactionResult(ThemeTransactionOutcome Outcome) { SettleResult? Settle; double PrewarmMs, LatencyMs; Exception? Error; }
+public enum ThemeTransactionOutcome { Committed, Cut, RolledBack, Superseded, Immediate, Canceled }
+public IReadSignal<bool> ThemeTransactionBusy { get; }  public bool IsThemeTransactionRunning { get; }
+// InputHooks (main window only): RunThemeTransaction, ThemeTransactionBusy, IsThemeTransactionRunning
+```
+
+A theme switch, or a change to a definition's NON-colour tables, reaches the screen as one settled frame under a frozen snapshot
+(light/dark and colour-only changes never come here: they keep the live cross-fade). The transaction is a state machine stepped
+by the host's own frames (`TxFrameStart` right after the freeze's frame start, `TxAfterPass` right after the settle judged its
+pass; `TxNeedsFrame` / `ClampWaitToTransaction` keep the loop awake), so no `await` and no continuation runs off the UI thread.
+
+1. **Prewarm**, UI live: `Fonts.Preload(Prewarm.Fonts)` on a worker (the freeze waits for it up to `MaxMs`; with no face source,
+   as headless, nothing is waited for), the images start decoding at prefetch priority (never waited for here).
+   `ThemeTransactionBusy` turns true after 100 ms (the originating control's busy ring) and false at the freeze.
+2. **Close transients**: `CloseTransients` (the app knows which popup hosts the originating control and keeps it). Gestures are
+   not cancelled.
+3. **Freeze** this window and every detached pop-out (§10.1; nothing of the page is captured, owner Q26).
+4. **Apply flush**, in the first frame after the capture, under the freeze's snap scope: `Tok.Use(Next, Kind)`, the material's
+   ground (`ApplyMaterialGround`, no DWM write), then `Apply()` (the app's root swap or in-place change). That frame's flush
+   re-renders every component for the new definition and is the first settle pass. While the transaction owns the frame the live
+   path's `OnApplyThemeMaterial` stays silent (`_txOwnsDwm`).
+5. **Settle** (§10.2) with `Settle ?? SettleSpec.Default` and the fonts gate on `Next.Fonts`.
+6. **Thaw** with `Dissolve` and the DWM plan of E2's table, derived from the material pair (`Next.Materials.For(Kind)`, null keeps
+   the current one) and the dark flag: equal → no write; translucent → `None` at thaw END; otherwise at thaw START. The write is
+   queued to the presenting thread (`QueueBeforePresent`), so it lands immediately before the first (or last) dissolve present.
+   Pop-outs thaw in the same call.
+7. **Committed**: `OnCommitted` at thaw start; one `[theme-tx] <label> outcome= prewarmMs= latencyMs= settlePasses= settleTimedOut=`
+   line per transaction (`latencyMs` = request → thaw start, wall clock).
+
+- **Rollback.** From the apply flush to the thaw the reconciler's `RenderFaultSink` is armed: a component whose render throws is
+  contained (it renders an empty box, so the reconcile that mounted it completes and the tree stays consistent) and recorded;
+  `TxAfterPass` ends the settle as cut and the next frame restores the previous definition, kind and material ground and calls
+  `Rollback` (the app re-activates its previous state and swaps the root back), flushes that under the same freeze and thaws with a
+  CUT. A throw out of `Apply` itself, or out of `Paint` (an effect), takes the same path (`TxAbsorbFault`); a restored tree that
+  keeps throwing (more than 4 frames) ends the transaction and propagates. Outcome `RolledBack`, `OnFailed(ex)`; only the
+  snapshot was ever shown. Outside a transaction a throwing render propagates exactly as before.
+- **Cuts.** A resize, DPI change or the watchdog cuts the freeze as always (§10.1): cut before the capture, the change applies
+  unfrozen; cut under the settle, the change is already applied. Either way the DWM write is made at once and the outcome is `Cut`.
+- **Coalescing.** A request while one runs waits; only the latest waiting request is kept (the replaced one completes
+  `Superseded`); it starts at the next frame after the running one finished (and after its dissolve: a freeze never nests).
+- **Immediate.** A window that shows nothing (hidden, minimized, parked, revealing) or a disposed host applies at once with no
+  freeze (`Immediate`). Disposal completes a running transaction (`Cut` when applied, else `Canceled`) and a waiting one (`Canceled`).
+- **Deviations from the sketch (technical-plan E5):** no `NextRoot` (the host's root component is fixed; the app's `Apply` swaps a
+  component of another type under it, which remounts everything below); no `DetachedHosts` (the host freezes, settles and thaws
+  its own pop-outs); no `DwmPlan` member (derived from the definition's `MaterialPolicy` as above); `Rollback`, `CloseTransients`,
+  `Settle`, `Label` added; the result is a `ThemeTransactionResult`.
+- **D3D12.** The D3D12 backend dissolves (§10.1), so on Windows the thaw is the 250 ms dissolve over the live DWM backdrop, as on
+  the headless backend.
+- Gates: Engine.Tests `ThemeTransactionTests` (the glass S / held / `(1-t)·S + t·N` / N with no motion at thaw start, a throwing
+  template and a throwing apply roll back, resize and watchdog cuts, coalescing, the immediate path, the hooks seam, the four DWM
+  rows, a pop-out frozen and thawed in the same call, all driven through `RunFrame`); VerticalSlice `theme-transaction`
+  (100 transactions alternating geometry and root type with a ticker running: 0 `settle-timeout`, glass per transaction, no motion
+  at thaw start, rollback showing only S).
+
+
 
 Two regimes, both off the lock-free hot path:
 
@@ -1281,11 +1455,13 @@ static weak-tier cadence cap (`TierCadenceCap`, `HostWaitKind.TierPaced`). None 
   render motion through the same `Pause`/`Resume` the minimize edge uses; the occlusion probe still forces one full repaint every
   `OcclusionProbeIntervalMs`, so the un-occlusion is heard and the mirror clears. `IsActive` is not read by any pacing path
   (gates `gate.motion.no-focus-throttle`, `gate.motion.occlusion-mirrors-to-render`).
-- **Marquees glide.** The row takes the display cadence (null) and sub-pixel samples, like every other row — no 30/60 Hz cadence,
-  no device-pixel snap (the audit's `PixelSnap` variant was dropped by the owner on 2026-10-05 and the feature deleted). A marquee
-  parks (glides home) only while its window is covered or cloaked (`Marquee.Style.ParkWhenOccluded`, reads
-  `InputHooks.WindowOccluded`; a hover-driven scroll is never parked); `Style.SyncCycle` gives sibling ping-pong rows one cycle
-  length. Wavee scrolls the player-bar title and artist line with `Trigger = Always` on every tier and beside a video.
+- **Marquees glide, a bounded number of times.** A pass is one one-shot keyframe row at the display cadence (null) with sub-pixel
+  samples — no 30/60 Hz cadence, no device-pixel snap (the audit's `PixelSnap` variant was dropped by the owner on 2026-10-05). The
+  line rests at its start, passes twice after its text or identity changes (and while hovered), and the pauses between are host
+  timers, so a resting or pausing marquee holds no row and no frame (audit B11, 2026-10-24: the endless ping-pong on a shared 14 s
+  cycle parked a short overflow at its tail for most of the cycle). It goes home and holds its passes while unseen: a covered,
+  cloaked or minimised window (`InputHooks.WindowOccluded`), an inactive (parked or collapsed) subtree, an `allowed` gate, a line
+  scrolled out of the window. A `Marquee.Group` keeps a surface's lines (the bar's title and artists) from moving at once.
 - **The GPU governor is the one GPU-based throttle, and it measures the main window alone.** Its engage/release thresholds are
   the fixed 10 / 8 ms on the host's own whole-frame GPU execution sample; a live video surface, a pop-out or the GPU tier never
   move them (the audit's period-relative, weak-tier-with-video pair, F250, was withdrawn: video must never lower the main

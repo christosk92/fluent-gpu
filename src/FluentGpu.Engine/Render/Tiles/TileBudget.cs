@@ -23,12 +23,16 @@ public static class TileBudget
     public const long DefaultFloorBytes = 48 * MiB;
     public const long DefaultCeilingBytes = 128 * MiB;
     public const double DefaultRetainedShare = 0.25;
+    /// <summary>The ceiling scales with the window (<see cref="CeilingFor"/>): the tiles covering the window times this.
+    /// 1.5 keeps the whole visible set resident plus half again for the scroll-ahead/behind bands. 0 disables the scaling.</summary>
+    public const double DefaultCeilingCoverMultiplier = 1.5;
 
     private static double s_windowMultiplier = DefaultWindowMultiplier;
     private static long s_floorBytes = DefaultFloorBytes;
     private static long s_ceilingBytes = DefaultCeilingBytes;
     private static long s_overrideBytes;
     private static double s_retainedShare = DefaultRetainedShare;
+    private static double s_ceilingCoverMultiplier = DefaultCeilingCoverMultiplier;
     private static int s_version;
 
     /// <summary>The backend's retained derived surfaces (a group surface, a self-blur, an acrylic backdrop kept across turns
@@ -72,14 +76,55 @@ public static class TileBudget
         set { Volatile.Write(ref s_overrideBytes, value > 0 ? value : 0); Bump(); }
     }
 
+    /// <summary>The window-scaled ceiling term (<see cref="CeilingFor"/>): the tiles covering the window times this multiplier,
+    /// in bytes, raise the ceiling above <see cref="CeilingBytes"/> for very large windows. 0 turns the scaling off (the fixed
+    /// ceiling alone); negative or non-finite values are ignored.</summary>
+    public static double CeilingCoverMultiplier
+    {
+        get => Volatile.Read(ref s_ceilingCoverMultiplier);
+        set { if (value >= 0.0 && double.IsFinite(value)) { Volatile.Write(ref s_ceilingCoverMultiplier, value); Bump(); } }
+    }
+
     /// <summary>Bumped on every tunable write.</summary>
     public static uint Version => (uint)Volatile.Read(ref s_version);
 
-    /// <summary>The live budget for a <paramref name="widthPx"/>×<paramref name="heightPx"/> window.</summary>
+    /// <summary>The live budget for a <paramref name="widthPx"/>×<paramref name="heightPx"/> window. The ceiling is
+    /// <see cref="CeilingFor"/> (the fixed <see cref="CeilingBytes"/> raised for a window whose tiles do not fit it), so a
+    /// 7680×4320 px window (3840×2160 DIP at 200 %) keeps its visible tiles resident.</summary>
     public static long Current(int widthPx, int heightPx)
     {
         long over = OverrideBytes;
-        return over > 0 ? over : Compute(widthPx, heightPx, WindowMultiplier, FloorBytes, CeilingBytes);
+        return over > 0 ? over : Compute(widthPx, heightPx, WindowMultiplier, FloorBytes, CeilingFor(widthPx, heightPx, CeilingBytes, CeilingCoverMultiplier));
+    }
+
+    /// <summary>How many <see cref="TileGrid.W"/>×<see cref="TileGrid.H"/> tiles cover a <paramref name="widthPx"/>×<paramref name="heightPx"/>
+    /// window at a worst-case grid phase (one extra column and row: a viewport rarely starts on a tile boundary). Pure.</summary>
+    public static int CoverTiles(int widthPx, int heightPx)
+    {
+        if (widthPx <= 0 || heightPx <= 0) return 0;
+        long cols = (widthPx + TileGrid.W - 1) / TileGrid.W + 1L;
+        long rows = (heightPx + TileGrid.H - 1) / TileGrid.H + 1L;
+        long n = cols * rows;
+        return n > int.MaxValue ? int.MaxValue : (int)n;
+    }
+
+    /// <summary>The window-scaled ceiling: <c>max(baseCeilingBytes, coverTiles × TileBytes × coverMultiplier)</c> (the base
+    /// ceiling is the floor, so a window up to 4K at 100 % keeps today's 128 MiB). Pure.</summary>
+    public static long CeilingFor(int widthPx, int heightPx, long baseCeilingBytes, double coverMultiplier)
+    {
+        if (coverMultiplier <= 0.0) return baseCeilingBytes;
+        double scaled = CoverTiles(widthPx, heightPx) * (double)TileBytes * coverMultiplier;
+        long bytes = scaled >= long.MaxValue ? long.MaxValue : (long)Math.Ceiling(scaled);
+        return bytes > baseCeilingBytes ? bytes : baseCeilingBytes;
+    }
+
+    /// <summary>The tile surface cap (<c>SliceTable.SurfaceCap</c>) for a <paramref name="widthPx"/>×<paramref name="heightPx"/>
+    /// window: the default-scaled ceiling in tiles, never below <paramref name="floorCap"/> (today's 64). Pure.</summary>
+    public static int SurfaceCapFor(int widthPx, int heightPx, int floorCap = SliceTable.DefaultSurfaceCap)
+    {
+        long ceiling = CeilingFor(widthPx, heightPx, DefaultCeilingBytes, DefaultCeilingCoverMultiplier);
+        long tiles = (ceiling + TileBytes - 1) / TileBytes;
+        return tiles > floorCap ? (int)Math.Min(tiles, 4096) : floorCap;
     }
 
     /// <summary>The pure derivation: <c>clamp(multiplier × w·h·4, floor, ceiling)</c>. A ceiling below the floor
@@ -105,6 +150,7 @@ public static class TileBudget
         Volatile.Write(ref s_ceilingBytes, DefaultCeilingBytes);
         Volatile.Write(ref s_overrideBytes, 0);
         Volatile.Write(ref s_retainedShare, DefaultRetainedShare);
+        Volatile.Write(ref s_ceilingCoverMultiplier, DefaultCeilingCoverMultiplier);
         Bump();
     }
 

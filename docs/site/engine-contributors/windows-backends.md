@@ -129,8 +129,7 @@ opt-in behind `FG_D3D12_DEBUG` in `DEBUG` builds.
 pipelines do alias `D3D12Device.FrameBankDepth` and their ring math is depth-agnostic — but the three compositors
 (`AcrylicCompositor`, `OpacityLayerCompositor`, `BakedBlurCompositor`) used to bank on a hidden `& 1` frame *parity*,
 which silently corrupts at depth 3. They now index `frameIndex % FRAME_COUNT` and size their SRV heaps, timestamp
-query banks and scratch pairs from `FrameBankDepth`, and `FrameBankingTests` (`FluentGpu.Windows.Tests`) asserts those
-derived depths against `FRAME_COUNT` so the banks cannot drift apart again.
+query banks and scratch pairs from `FrameBankDepth`. Keep those derived depths in step with `FRAME_COUNT` so the banks cannot drift apart.
 
 ### The DXGI flip-model swapchain + DComp present
 
@@ -361,8 +360,8 @@ texture. The decode-pipeline architecture is owned by `media-pipeline.md`; this 
 
 ## Screenshot capture (`CaptureBgra` → `PngWriter`) for fidelity diffs
 
-The harness verifies engine *logic* headlessly; on-screen D3D12 pixels are a separate, manual **needs-pixels** pass (see
-the [Engine Contributors index](./index.md#the-golden-rule-verify-with-the-headless-harness-before-claiming-done)). The
+The headless path shows engine *logic*; on-screen D3D12 pixels are a separate, manual **needs-pixels** pass (see
+the [Engine Contributors index](./index.md#the-golden-rule-verify-with-the-build-and-a-render-before-claiming-done)). The
 screenshot path is the tooling for that visual loop:
 
 - `FluentAppHarness.Run(root, null, new HarnessOptions { Screenshot = "<path>" })` runs a fixed number of settle frames (the gallery's `Program.cs` uses 6),
@@ -410,16 +409,11 @@ iteration does not.
 
 ## Verifying
 
-These are backend leaves, so the headless golden harness does **not** exercise them directly — it runs on
+These are backend leaves, so the headless path does not exercise them directly — it runs on
 `FluentGpu.Engine/Headless/Rhi/` / `FluentGpu.Engine/Headless/Pal/` / `FluentGpu.Engine/Headless/Text/`. Two distinct bars, kept separate:
 
-- **Logic / DrawList correctness** — still the headless harness. After *any* engine change, including one that touches a
-  Windows leaf's shared contract, run it and confirm `ALL CHECKS PASSED`:
-
-  ```bash
-  dotnet build src/FluentGpu.VerticalSlice                 # clean build first
-  dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
-  ```
+- **Build / DrawList correctness** — after *any* engine change, including one that touches a Windows leaf's shared
+  contract, `dotnet build src/FluentGpu.slnx` must be clean (Debug). There are no tests.
 
 - **On-screen pixels** — the needs-pixels pass, which is what these leaves actually produce. Build and run the gallery on
   the real Windows path, or capture a deterministic shot:
@@ -431,8 +425,8 @@ These are backend leaves, so the headless golden harness does **not** exercise t
 
   The DirectWrite path also has focused self-tests: `--itemtest`, `--shapetest`, `--layouttest` (each runs and exits).
 
-A green harness means the logic and the recorded DrawList are correct; it does **not** by itself mean a control looks
-right on screen. When you change a Windows leaf, you almost always owe a needs-pixels check in addition to the harness.
+A clean build does **not** by itself mean a control looks right on screen. When you change a Windows leaf, you almost
+always owe a needs-pixels check in addition to the build.
 
 ## Canon links
 

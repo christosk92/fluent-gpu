@@ -69,7 +69,7 @@ public static class SurfaceRows
         ColorF primary = Tok.TextPrimary;
         ColorF secondary = Tok.TextSecondary;
         ColorF divider = Tok.StrokeDividerDefault;
-        string iconFont = Theme.IconFont;
+        string iconFont = Tok.Definition.Fonts.Icon;
         float textTop = MathF.Max(0f, rowHeight * 0.5f - 19f);
         return new BoxEl
         {

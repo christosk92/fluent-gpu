@@ -323,7 +323,7 @@ sealed class MediaScenarioPage : Component
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
         Role = AutomationRole.Button, OnClick = back,
-        Children = [new TextEl(Icons.Back) { Size = 14f, Color = Tok.TextPrimary, FontFamily = Theme.IconFont }],
+        Children = [new TextEl(Icons.Back) { Size = 14f, Color = Tok.TextPrimary, FontFamily = Tok.Definition.Fonts.Icon }],
     };
 }
 

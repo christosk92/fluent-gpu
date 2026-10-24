@@ -67,6 +67,36 @@ public sealed class ToolTip : Component
     /// hit-test invisibility (a tooltip never intercepts input), and the realized-node capture (safe-zone geometry).</summary>
     public const string PartBubble = "Bubble";
 
+    /// <summary>The bubble's look, read at RENDER through the control style table (<see cref="ControlStyles.ToolTipStyle"/>).
+    /// Every default is the WinUI DefaultToolTipStyle (ToolTip_themeresources.xaml:42-76).</summary>
+    public sealed record Style
+    {
+        /// <summary>The bubble fill under the frosted layer (transparent: the acrylic is the body); with no
+        /// <see cref="Acrylic"/> it is the whole, solid bubble.</summary>
+        public ColorF Fill { get; init; } = ColorF.Transparent;
+        /// <summary>The frosted layer (ToolTipBackgroundBrush = AcrylicInAppFillColorDefault); null = a solid <see cref="Fill"/>.</summary>
+        public AcrylicSpec? Acrylic { get; init; } = Tok.AcrylicFlyout;
+        /// <summary>The ring (SurfaceStrokeColorFlyout) and its width (1; 0 = none).</summary>
+        public ColorF Border { get; init; } = Tok.StrokeFlyoutDefault;
+        public float BorderWidth { get; init; } = 1f;
+        /// <summary>The radius (ControlCornerRadius).</summary>
+        public float Radius { get; init; } = Radii.Control;
+        /// <summary>The elevation (the tooltip band); null = none.</summary>
+        public ShadowSpec? Shadow { get; init; } = Elevation.Tooltip;
+        /// <summary>The bubble's greatest width (320) and its padding (ToolTipBorderPadding 9,6,9,8).</summary>
+        public float MaxWidth { get; init; } = 320f;
+        public Edges4 Padding { get; init; } = new(9, 6, 9, 8);
+        /// <summary>The text (ToolTipContentThemeFontSize 12, TextFillColorPrimary).</summary>
+        public float TextSize { get; init; } = 12f;
+        public ColorF TextColor { get; init; } = Tok.TextPrimary;
+    }
+
+    /// <summary>The bubble style now: the active theme's (<see cref="ControlStyles.ToolTipStyle"/>), else <see cref="FluentStyle"/>.</summary>
+    public static Style DefaultStyle => ControlStyles.Resolve(ControlStyles.ToolTipStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a ToolTip entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new();
+
     public Element Target = new BoxEl();
     public string Text = "";
     /// <inheritdoc cref="Wrap(Element, string, float, float)"/>
@@ -209,7 +239,7 @@ public sealed class ToolTip : Component
     /// countdown is <see cref="ToolTipClock"/>, a host one-shot timer armed during the render that mounts it and
     /// drained at the top of the next frame.</summary>
     public static Element Wrap(Element target, string text, float grow = 0f, float showDelayMs = float.NaN)
-        => Embed.Comp(new ToolTipSlots(target, text, grow, showDelayMs), () => new ToolTip());
+        => Embed.Comp(new ToolTipSlots(target, text, grow, showDelayMs), () => new ToolTip()) with { SkeletonProxy = ProxyOf(target, grow) };
 
     /// <summary>BOUND text form (Operation ultra-fast GPU engine, P3 — for a virtualized row: one <see cref="Prop{T}"/>
     /// read per render instead of a rebuilt call-site string). Null/empty resolves to NO TOOLTIP: <see cref="Render"/>
@@ -220,7 +250,11 @@ public sealed class ToolTip : Component
     /// plan's "no component per target" is aspirational for a future hover-time-lookup service — not implemented this
     /// phase); what it removes is the PER-ROW STRING rebuild and the empty-tooltip wiring cost.</summary>
     public static Element Wrap(Element target, Prop<string?> text, float grow = 0f, float showDelayMs = float.NaN)
-        => Embed.Comp(new ToolTipBoundSlots(target, text, grow, showDelayMs), () => new ToolTip());
+        => Embed.Comp(new ToolTipBoundSlots(target, text, grow, showDelayMs), () => new ToolTip()) with { SkeletonProxy = ProxyOf(target, grow) };
+
+    /// <summary>The wrapped target's shape for a derived skeleton: a tooltip draws nothing in place, so a loading region derives the TARGET (a ring,
+    /// a glyph button at its real size), never the deriver's 160-wide default bar for an opaque component, which overran the row it stood in.</summary>
+    static Func<Element> ProxyOf(Element target, float grow) => () => grow > 0f ? Fill(target, grow) : target;
 
     /// <summary>Live target + BOUND text slot for <see cref="Wrap(Element, Prop{string}, float, float)"/>. Compared by
     /// target reference (see <see cref="ToolTipSlots"/>'s comment) plus the <see cref="Prop{T}"/> payload's own value
@@ -635,16 +669,18 @@ public sealed class ToolTip : Component
     //   Shadow = the light transient elevation class (Elevation.Tooltip) — tooltips sit on the lowest popup band.
     Element BubbleContent(string text, Action<NodeHandle> onRealized)
     {
+        // The bubble's look, read now (the bubble is built in the overlay's render).
+        var st = DefaultStyle;
         var bubble = new BoxEl
         {
-            Fill = ColorF.Transparent,
-            Acrylic = Tok.AcrylicFlyout,
-            BorderColor = Tok.StrokeFlyoutDefault,
-            BorderWidth = 1f,
-            Corners = Radii.ControlAll,
-            Shadow = Elevation.Tooltip,
-            MaxWidth = 320f,
-            Padding = new Edges4(9, 6, 9, 8),
+            Fill = st.Fill,
+            Acrylic = st.Acrylic,
+            BorderColor = st.Border,
+            BorderWidth = st.BorderWidth,
+            Corners = CornerRadius4.All(st.Radius),
+            Shadow = st.Shadow,
+            MaxWidth = st.MaxWidth,
+            Padding = st.Padding,
             // A tooltip never intercepts input (WinUI tooltips are hit-test-transparent): the bubble must not swallow
             // wheel/press under the pointer — scrolling continues through it. Its bounds still join the safe zone,
             // tested by GEOMETRY against the real pointer (SafeZoneCheck), not by hover events.
@@ -654,11 +690,12 @@ public sealed class ToolTip : Component
             [
                 new TextEl(text)
                 {
-                    Size = 12f,
-                    Color = Tok.TextPrimary,
+                    Size = st.TextSize,
+                    Color = st.TextColor,
                     Wrap = TextWrap.Wrap,
-                    MaxWidth = 302f,   // 320 − (9 + 9) horizontal padding
+                    MaxWidth = st.MaxWidth - st.Padding.Left - st.Padding.Right,   // 320 − (9 + 9) horizontal padding
                 },
+
             ],
         };
         // Parts: restyle the bubble chrome (acrylic, stroke, elevation, padding…); the Text content, the input

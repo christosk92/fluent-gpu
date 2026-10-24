@@ -29,6 +29,10 @@ public static class Motion
     /// without conflating that transient interaction with the user's reduced-motion accessibility preference.</summary>
     public static bool LayoutTransitionsSuppressed => _layoutSuppressionSources != 0;
 
+    /// <summary>True when the ONLY live suppression is the user scroll's (not a resize, a snap scope or an activation): a transition that
+    /// <see cref="FluentGpu.Foundation.LayoutTransition.AnimateDuringScroll"/> still animates then.</summary>
+    public static bool LayoutTransitionsSuppressedByScrollOnly => _layoutSuppressionSources == (int)MotionSuppressionSource.Scroll;
+
     /// <summary>Set or clear one independently-owned layout-transition suppression source.</summary>
     public static void SetLayoutTransitionsSuppressed(MotionSuppressionSource source, bool suppressed)
     {

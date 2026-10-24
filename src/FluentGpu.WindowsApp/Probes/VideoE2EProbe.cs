@@ -270,7 +270,7 @@ internal static class VideoE2EProbe
         private bool ResolveFixtures(out string why)
         {
             why = "";
-            const string rel = "src/FluentGpu.Windows.Tests/Fixtures/video/bear-1280x720-av_frag.mp4";
+            const string rel = "ops/e2e/fixtures/video/bear-1280x720-av_frag.mp4";
             string? found = null;
             foreach (string start in new[] { AppContext.BaseDirectory, Directory.GetCurrentDirectory() })
             {

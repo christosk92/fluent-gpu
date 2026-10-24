@@ -66,6 +66,8 @@ public sealed unsafe partial class D3D12Device
     /// <summary>Self-blurs / acrylic backdrops the last composite re-drew from a retained result instead of recomputing.</summary>
     public int LastBlurCacheHits => _frameBlurCacheHits;
     public long TileSurfaceBytes => _surfaces?.TileBytes ?? 0L;
+    /// <summary>The surface pool's census (diagnostics, render thread): see <c>SurfacePool.SurfaceCensus</c>.</summary>
+    public string SurfaceCensus() => _surfaces?.SurfaceCensus() ?? "surface-census: no surface pool";
 
     // ── always-on per-kind offscreen split (plain fields; the scroll bench's diagnosis line) ──
     private int _offGroupN, _offGroupHits, _offBlurN, _offBlurHits, _offBackdropN, _offBackdropHits, _offDirectN, _offInlineN, _groupRenders;
@@ -150,7 +152,7 @@ public sealed unsafe partial class D3D12Device
         PrepareCompositeGlyphs(in frame);
         BeginRecording(sc, f, slot, isPrimaryTarget: true);
         ResetFrameCounters();
-        _frameFeatherItems = 0; _frameFeatherPx = 0; _frameBlurCacheHits = 0; _frameTilesRastered = 0; _frameRenderPasses = 0; _frameInlineGroups = 0; _frameDirectRegions = 0;
+        _frameFeatherItems = 0; _frameFeatherPx = 0; _frameBlurCacheHits = 0; _frameTilesRastered = 0; _frameRenderPasses = 0; _frameInlineGroups = 0; _frameDirectRegions = 0; _frameInlineItems = 0; _frameInlineReopens = 0; _frameResumes = 0; _passSites = 0; _framePassDrawsMax = 0; _framePassesOverBinning = 0; Array.Clear(_frameInlineByKind); _frameInlineBlurred = 0;
         _frameLostPlacements = 0;
         ResetOffscreenSplit();
         BeginPipesFrame(slot);
@@ -856,6 +858,7 @@ public sealed unsafe partial class D3D12Device
         int r = RowOf(it.SliceId);
         if (r < 0) return;
         ref readonly SliceRow row = ref frame.Slices[r];
+        if (InlineDirect(in it) && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) return;   // drawn inline: nothing to prepare
         bool blur = it.BlurSigma > 0f;
         if (it.IsFeedback && !blur && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) { PrepareFeedback(in frame, i, in row); return; }
         if (it.LowResDown > 1 && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0)
@@ -1343,6 +1346,11 @@ public sealed unsafe partial class D3D12Device
         {
             case CompositeKind.Direct:
             {
+                if (InlineDirect(in it) && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0)
+                {
+                    PixelRect f = InlineFoot(in frame, in it);
+                    return !f.IsEmpty && Overlaps(in f, in region);
+                }
                 if (_itemSurface[k] >= 0) return Overlaps(in _itemRegion[k], in region);
                 int end = _itemChunkStart[k] + _itemChunkCount[k];
                 for (int c = _itemChunkStart[k]; c < end; c++)
@@ -1459,6 +1467,7 @@ public sealed unsafe partial class D3D12Device
                     break;
                 }
                 case CompositeKind.Direct:
+                    if (InlineDirect(in it) && !allDirect) { DrawInline(in frame, in it, ox, oy, tw, th); break; }
                     DrawSurfaceItem(in it, i, ox, oy, feathers);
                     break;
                 case CompositeKind.Image:

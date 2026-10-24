@@ -64,6 +64,32 @@ public static class DensityPlot
         public float AxisFontSize { get; init; } = 9f;
         public ColorF AxisInk { get; init; }
         public float TipDelayMs { get; init; } = float.NaN;
+        /// <summary>The axis captions' face and weight; null / 0 = the engine's body face at its normal weight.</summary>
+        public string? AxisFontFamily { get; init; }
+        public ushort AxisFontWeight { get; init; }
+        /// <summary>The axis row's height; NaN = <see cref="AxisFontSize"/> + 2.</summary>
+        public float AxisHeight { get; init; } = float.NaN;
+        /// <summary>Clear space between the stage and the axis row.</summary>
+        public float AxisGap { get; init; }
+        /// <summary>The median marker's and the hairlines' stroke widths.</summary>
+        public float MarkerWidth { get; init; } = 1f;
+        public float HairlineWidth { get; init; } = 1f;
+        /// <summary>A rule along the stage's baseline in this ink; null = none (the ridge's own fill is the baseline).</summary>
+        public ColorF? BaselineInk { get; init; }
+        public float BaselineWidth { get; init; } = 1f;
+        /// <summary>The ridge's line is drawn only where the density stands above this share of the stage (0..1): the empty reaches of the
+        /// domain carry no accent run along the baseline. 0 = the whole curve (the Fluent look).</summary>
+        public float LineFloor { get; init; }
+        /// <summary>The bands' (the hit targets') corners, which round their lit / hover wash; null = 3.</summary>
+        public CornerRadius4? BandCorners { get; init; }
+        /// <summary>The lit band's wash; null = <c>Tok.AccentSubtle</c>.</summary>
+        public ColorF? LitWash { get; init; }
+        /// <summary>The lit band's wash under the pointer; null = <c>Tok.AccentSecondary</c>.</summary>
+        public ColorF? LitHoverWash { get; init; }
+        /// <summary>A band's wash under the pointer; null = <c>Tok.FillSubtleSecondary</c>.</summary>
+        public ColorF? HoverWash { get; init; }
+        /// <summary>A band's wash while pressed; null = <c>Tok.FillSubtleTertiary</c>.</summary>
+        public ColorF? PressedWash { get; init; }
     }
 
     public static Style? StyleOverride;
@@ -96,7 +122,7 @@ public static class DensityPlot
 internal sealed class DensityPlotComponent : Component
 {
     /// <summary>The memoised geometry for one (values, width) pair.</summary>
-    sealed record Geometry(PathData? Area, PathData? Line, PathData? Hairlines, PathData? Marker, List<(uint Argb, PathData Path)> Rug);
+    sealed record Geometry(PathData? Area, PathData? Line, PathData? Hairlines, PathData? Marker, PathData? Baseline, List<(uint Argb, PathData Path)> Rug);
 
     public override Element Render()
     {
@@ -118,21 +144,24 @@ internal sealed class DensityPlotComponent : Component
         var geo = UseMemo(() => w > 0f ? Build(m, st, w, rugMode) : null,
             DepKey.Combine(
                 DepKey.Combine(DepKey.FromRef(valuesSegment.Array), DepKey.From(m.Values.Length, rugMode)),
-                DepKey.Combine(DepKey.From(w, m.DomainMin, m.DomainMax, st.Height),
-                               DepKey.From(m.Marker ?? float.NaN, m.Hairlines.Length))));
+                DepKey.Combine(DepKey.Combine(DepKey.From(w, m.DomainMin, m.DomainMax, st.Height),
+                                              DepKey.From(m.Marker ?? float.NaN, m.Hairlines.Length)),
+                               DepKey.From(st.LineFloor, st.BaselineInk is null ? 0f : 1f))));
 
         var layers = new List<Element>(6) { Bands(m, st, w) };
         if (geo is not null)
         {
-            if (geo.Hairlines is not null) layers.Add(Layer(geo.Hairlines, w, st.Height, default, st.Hairline, new StrokeStyle(1f)));
-            if (geo.Area is not null) layers.Add(Layer(geo.Area, w, st.Height, st.Ink with { A = st.AreaAlpha }, default, default));
+            if (geo.Hairlines is not null) layers.Add(Layer(geo.Hairlines, w, st.Height, default, st.Hairline, new StrokeStyle(st.HairlineWidth)));
+            if (geo.Baseline is not null && st.BaselineInk is { } baseInk)
+                layers.Add(Layer(geo.Baseline, w, st.Height, default, baseInk, new StrokeStyle(st.BaselineWidth, LineCap.Butt, LineJoin.Miter)));
+            if (geo.Area is not null && st.AreaAlpha > 0f) layers.Add(Layer(geo.Area, w, st.Height, st.Ink with { A = st.AreaAlpha }, default, default));
             if (geo.Line is not null) layers.Add(Layer(geo.Line, w, st.Height, default, st.Ink, new StrokeStyle(st.LineWidth, LineCap.Round, LineJoin.Round)));
             foreach (var (argb, path) in geo.Rug)
             {
                 var ink = argb == 0 ? st.Ink with { A = st.RugAlpha } : Argb(argb) with { A = 0.85f };
                 layers.Add(Layer(path, w, st.Height, ink, default, default));
             }
-            if (geo.Marker is not null) layers.Add(Layer(geo.Marker, w, st.Height, default, st.Marker, new StrokeStyle(1f)));
+            if (geo.Marker is not null) layers.Add(Layer(geo.Marker, w, st.Height, default, st.Marker, new StrokeStyle(st.MarkerWidth)));
         }
 
         var stage = new BoxEl
@@ -140,8 +169,12 @@ internal sealed class DensityPlotComponent : Component
             Key = "stage", ZStack = true, Height = st.Height, MinWidth = 0f, HitTestPassThrough = true,
             Children = layers.ToArray(),
         };
-        var kids = new List<Element>(2) { stage };
-        if (m.Ticks.Length > 0) kids.Add(Axis(m, st));
+        var kids = new List<Element>(3) { stage };
+        if (m.Ticks.Length > 0)
+        {
+            if (st.AxisGap > 0f) kids.Add(new BoxEl { Height = st.AxisGap, HitTestVisible = false });
+            kids.Add(Axis(m, st));
+        }
         // Kit sizing rule: the plot STRETCHES to the width its parent offers (Grow in a row, Stretch in a column) — that
         // offered width is what UseMeasuredWidth reads back, so a plot given no width would otherwise never draw.
         return new BoxEl
@@ -175,12 +208,12 @@ internal sealed class DensityPlotComponent : Component
             bool live = b.OnClick is not null;
             var hit = new BoxEl
             {
-                Height = st.Height, Basis = 0f, MinWidth = 0f, Corners = CornerRadius4.All(3f),
+                Height = st.Height, Basis = 0f, MinWidth = 0f, Corners = st.BandCorners ?? CornerRadius4.All(3f),
                 Role = live ? AutomationRole.Button : AutomationRole.None, Focusable = live,
                 Cursor = live ? CursorId.Hand : null, FocusVisualMargin = new Edges4(1f, 1f, 1f, 1f),
-                Fill = b.Lit ? Tok.AccentSubtle : ColorF.Transparent,
-                HoverFill = !live ? ColorF.Transparent : b.Lit ? Tok.AccentSecondary : Tok.FillSubtleSecondary,
-                PressedFill = live ? Tok.FillSubtleTertiary : ColorF.Transparent,
+                Fill = b.Lit ? st.LitWash ?? Tok.AccentSubtle : ColorF.Transparent,
+                HoverFill = !live ? ColorF.Transparent : b.Lit ? st.LitHoverWash ?? Tok.AccentSecondary : st.HoverWash ?? Tok.FillSubtleSecondary,
+                PressedFill = live ? st.PressedWash ?? Tok.FillSubtleTertiary : ColorF.Transparent,
                 HoverDurationMs = MotionTok.ControlFaster.DurationMs, HoverEasing = MotionTok.ControlFaster.Easing,
                 OnClick = b.OnClick,
             };
@@ -216,11 +249,12 @@ internal sealed class DensityPlotComponent : Component
             {
                 Grow = MathF.Max(0.0001f, nextMid - cellStart), Basis = 0f, MinWidth = 0f,
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Children = [new TextEl(ticks[i].Label) { Size = st.AxisFontSize, Color = st.AxisInk, MaxLines = 1 }],
+                Children = [new TextEl(ticks[i].Label) { Size = st.AxisFontSize, Color = st.AxisInk, MaxLines = 1, FontFamily = st.AxisFontFamily, Weight = st.AxisFontWeight }],
             });
             prevEdge = nextMid;
         }
-        return new BoxEl { Key = "axis", Direction = 0, Height = st.AxisFontSize + 2f, MinWidth = 0f, HitTestVisible = false, Children = kids.ToArray() };
+        float axisH = float.IsNaN(st.AxisHeight) ? st.AxisFontSize + 2f : st.AxisHeight;
+        return new BoxEl { Key = "axis", Direction = 0, Height = axisH, MinWidth = 0f, HitTestVisible = false, Children = kids.ToArray() };
     }
 
     // ── geometry (memoised) ───────────────────────────────────────────────────────────────────────────────────────
@@ -243,17 +277,25 @@ internal sealed class DensityPlotComponent : Component
             var ba = new PathBuilder();
             var bl = new PathBuilder();
             ba.MoveTo(0f, baseY);
+            // LineFloor > 0 breaks the line where the density lies under the floor: a run starts at the first sample over it (or the
+            // sample before, so the curve leaves the baseline rather than appearing mid-air) and ends one sample after the last.
+            float floor = Math.Clamp(st.LineFloor, 0f, 1f);
+            bool open = false, any = false;
             for (int i = 0; i < d.Length; i++)
             {
                 float x = w * i / (d.Length - 1);
                 float y = baseY - (baseY - st.TopMargin) * d[i];
                 ba.LineTo(x, y);
-                if (i == 0) bl.MoveTo(x, y); else bl.LineTo(x, y);
+                if (floor <= 0f) { if (i == 0) bl.MoveTo(x, y); else bl.LineTo(x, y); any = true; continue; }
+                bool over = d[i] > floor || (i + 1 < d.Length && d[i + 1] > floor) || (i > 0 && d[i - 1] > floor);
+                if (!over) { open = false; continue; }
+                if (!open) { bl.MoveTo(x, y); open = true; } else bl.LineTo(x, y);
+                any = true;
             }
             ba.LineTo(w, baseY);
             ba.Close();
             area = ba.Finish(PathContentEpoch.Mint(), FillRule.NonZero);
-            line = bl.Finish(PathContentEpoch.Mint(), FillRule.NonZero);
+            line = any ? bl.Finish(PathContentEpoch.Mint(), FillRule.NonZero) : null;
         }
 
         PathData? hair = null;
@@ -262,6 +304,15 @@ internal sealed class DensityPlotComponent : Component
             var b = new PathBuilder();
             foreach (var v in m.Hairlines.Span) { float x = X(v); b.MoveTo(x, 2f); b.LineTo(x, h); }
             hair = b.Finish(PathContentEpoch.Mint(), FillRule.NonZero);
+        }
+
+        PathData? baseline = null;
+        if (st.BaselineInk is not null)
+        {
+            var b = new PathBuilder();
+            float y = baseY - st.BaselineWidth * 0.5f;
+            b.MoveTo(0f, y); b.LineTo(w, y);
+            baseline = b.Finish(PathContentEpoch.Mint(), FillRule.NonZero);
         }
 
         PathData? marker = null;
@@ -311,7 +362,7 @@ internal sealed class DensityPlotComponent : Component
             }
             foreach (var kv in groups) rug.Add((kv.Key, kv.Value.Finish(PathContentEpoch.Mint(), FillRule.NonZero)));
         }
-        return new Geometry(area, line, hair, marker, rug);
+        return new Geometry(area, line, hair, marker, baseline, rug);
     }
 
     /// <summary>Opaque-or-not 0xAARRGGBB → <see cref="ColorF"/> (the wire's colour packing).</summary>

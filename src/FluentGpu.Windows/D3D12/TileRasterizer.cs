@@ -56,9 +56,12 @@ public sealed unsafe partial class D3D12Device
 
     /// <summary>Open a render pass on <paramref name="rtv"/> (the resource must already be in RENDER_TARGET): CLEAR (to
     /// <paramref name="clear"/>), DISCARD or PRESERVE on entry, PRESERVE (store) on exit. Any open pass ends first.</summary>
-    private void BeginPass(D3D12_CPU_DESCRIPTOR_HANDLE rtv, int w, int h, PassLoad load, in ColorF clear = default)
+    private void BeginPass(D3D12_CPU_DESCRIPTOR_HANDLE rtv, int w, int h, PassLoad load, in ColorF clear = default,
+        [CallerFilePath] string site = "", [CallerLineNumber] int line = 0)
     {
+        TallyPass(site, line);
         EndPassIfOpen();
+        _passDraws0 = GpuDrawCount.Frame;
         D3D12_RENDER_PASS_RENDER_TARGET_DESC rt = default;
         rt.cpuDescriptor = rtv;
         rt.BeginningAccess.Type = load switch
@@ -88,6 +91,9 @@ public sealed unsafe partial class D3D12Device
     private void EndPassIfOpen()
     {
         if (!_inRenderPass) return;
+        int draws = GpuDrawCount.Frame - _passDraws0;
+        if (draws > _framePassDrawsMax) _framePassDrawsMax = draws;
+        if (draws > DriverBinningDraws) _framePassesOverBinning++;
         Gen.ID3D12GraphicsCommandList4Vtbl.EndRenderPass(_list4);
         Rec(RecordedOp.RenderPassEnd);
         _inRenderPass = false;
@@ -95,7 +101,35 @@ public sealed unsafe partial class D3D12Device
 
     /// <summary>Re-open a pass on the last pass's target, keeping its contents (after a suspension for a barrier, an
     /// upload or a legacy-bound stencil scope).</summary>
-    private void ResumePass() => BeginPass(_passRtv, _passRtvW, _passRtvH, PassLoad.Preserve);
+    // Per-frame render passes by call site (diagnostics: the untracked-growth line names them). Fixed table, no allocation:
+    // the site string is the caller's compile-time literal.
+    private readonly string?[] _passSite = new string?[24];
+    private readonly int[] _passLine = new int[24], _passN = new int[24];
+    private int _passSites;
+    // Draw calls per render pass. The Adreno X1 driver keeps a large per-pass buffer for every pass in flight once a pass
+    // issues more than ~80 draw calls (d3dprobe 2026-10-21: 16 passes x 75 draws grew nothing, x 90 grew +288 MB, kept
+    // for the life of the process); below it the pass costs the driver nothing. Diagnostics: the frame's largest pass and
+    // how many passed the threshold.
+    internal const int DriverBinningDraws = 80;
+    private int _passDraws0, _framePassDrawsMax, _framePassesOverBinning;
+    private readonly int[] _frameInlineByKind = new int[8];   // inline layers this frame by LayerKind (diagnostics)
+    private int _frameInlineBlurred;                          // ...of which needed a blur halo (extra blur passes)
+    private void TallyPass(string site, int line)
+    {
+        for (int i = 0; i < _passSites; i++)
+            if (_passLine[i] == line && ReferenceEquals(_passSite[i], site)) { _passN[i]++; return; }
+        if (_passSites == _passSite.Length) return;
+        _passSite[_passSites] = site; _passLine[_passSites] = line; _passN[_passSites] = 1; _passSites++;
+    }
+    private string PassSitesLine()
+    {
+        var sb = new System.Text.StringBuilder(128);
+        for (int i = 0; i < _passSites; i++)
+            sb.Append(i == 0 ? "" : ",").Append(System.IO.Path.GetFileNameWithoutExtension(_passSite[i])).Append(':').Append(_passLine[i]).Append('x').Append(_passN[i]);
+        return sb.ToString();
+    }
+
+    private void ResumePass() { _frameResumes++; BeginPass(_passRtv, _passRtvW, _passRtvH, PassLoad.Preserve); }
 
     private bool _inRenderPass;
     private D3D12_CPU_DESCRIPTOR_HANDLE _passRtv;
@@ -152,7 +186,8 @@ public sealed unsafe partial class D3D12Device
         float s = _frameScale <= 0f ? 1f : _frameScale;
         ChooseShift(dx, w, out int spx, out int tlx);
         ChooseShift(dy, h, out int spy, out int tly);
-        float sx = -spx / s, sy = -spy / s;
+        // SliceFrame.Phase: a slice placed at a sub-pixel offset rasters at that fraction (the composite places it whole-pixel).
+        float sx = (-spx + row.Frame.PhaseX) / s, sy = (-spy + row.Frame.PhaseY) / s;
         // target px = replay px + tlx (SetScissorRect's arithmetic): the clamp lives in replay px, the one space a tile
         // and the inline-group scratches it opens share.
         _replayClampOn = clamp;
@@ -369,6 +404,8 @@ public sealed unsafe partial class D3D12Device
         int scratch = _surfaces!.AcquireScratch(gw, gh, _fenceValue + 1);
         if (scratch < 0) { _inlineGroups.Add(new InlineGroup { L = L, Scratch = -1 }); return; }
         _frameInlineGroups++;
+        if ((uint)L.Kind < (uint)_frameInlineByKind.Length) _frameInlineByKind[L.Kind]++;
+        if (halo > 0) _frameInlineBlurred++;
         var g = new InlineGroup
         {
             L = L, Scratch = scratch, Halo = halo,

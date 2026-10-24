@@ -100,7 +100,7 @@ contracts owned elsewhere:
 >   reference-compare `GcDepTable` upgrade (§3.3) is the **gated** `[EnableHookDepsLowering]` (GEN-02) path — probabilistic
 >   FromRef today, exact if collisions ever bite. See the §3.2 status note (updated).
 > - **`UseRequiredContext<T>`** (throws naming the type if unprovided) + the **`BindContract`** DEBUG tripwire
->   (on whenever compiled in; `--fg no-guards` turns it off, `--fg guards-throw` makes it throw) flagging a bound↔static channel flip at the Update seam (a bind is created only at mount and re-wired only bound→bound, so a flip loses).
+>   (on whenever compiled in; `--fg no-guards` turns it off, `--fg guards-throw` makes it throw). Since 2026-10-20 a bound↔static channel flip is handled at the Update seam (§0bis), so BindContract no longer reports flips; after a flip it cross-checks that the node carries one binding per bound `Prop<T>` channel (`BindContract.Unwired`) and still flags a bound `Visible` on a `MorphId` node.
 > - **Typed keyed `Flow.For<T>` + `UpdateFor` (G2).** `Flow.For<T>(items, keyOf, row)` (thunk or signal-direct source;
 >   **key mandatory**, DEBUG duplicate-key tripwire; `Fill` reads the source ONCE per effect run). `UpdateFor`
 >   **re-points the row/key closures on parent re-render** — fixing the latent `ForEl.Update` no-op where For closures
@@ -120,7 +120,16 @@ contracts owned elsewhere:
 >   quiesce preserved). `Signal<T>.SetIfChanged(v): bool` (single compare, reports the write). `UseMeasuredBounds()` /
 >   `UseMeasuredWidth(quantum)` read the bounds-changed column; a layout-phase write only `MarksStale` so the re-render
 >   lands **next frame** (no re-entrancy) — quantum + delivered-baseline dedupe + a DEBUG oscillation tripwire (>8
->   consecutive changed frames warns). `.Boundary()` = `IsolateLayout + ClipToBounds`; `FrameStats.RootRelayoutEscapes`
+>   consecutive changed frames warns). **Keyed (E17c, EP11):** `UseMeasuredBounds(key)` / `UseMeasuredWidth(key, quantum)`
+>   start the signal from the rect `MeasureMemory` remembers for `key` composed onto the ambient `MeasureMemory.Scope`
+>   (`Context<string>`; the app provides the route instance there, the call site a semantic region role), and remember every
+>   arranged rect under it, so a remount renders its first frame at its laid-out size and the measurement that follows changes
+>   nothing. Key and scope are mount inputs (read once, untracked; the full key is composed once). The unkeyed
+>   `UseMeasuredBounds()` carries `[OverloadResolutionPriority(-1)]`, so a string argument always binds the key, never the
+>   caller-info slot. `MeasureMemory` (`Hooks/MeasureMemory.cs`): `Capture(key, Size2|RectF)`, `TryGet`/`TryGetSize`,
+>   `Forget`, `Clear`, `Compose(scope, role)`; at most `Capacity` = 1024 keys, least recently captured dropped first; a capture
+>   of an unchanged value allocates nothing. Every measured change (keyed or not) bumps its change serial, which the settle
+>   loop (`threading-render-seam.md` §10.2) compares across a pass and journals by key (an unkeyed hook by call site). `.Boundary()` = `IsolateLayout + ClipToBounds`; `FrameStats.RootRelayoutEscapes`
 >   counts relayouts that reached the root (+ a throttled `Diag` diagnostic under `--fg diag`).
 
 - **Reactive core** (`FluentGpu.Signals`, shipped in FluentGpu.Engine's `Foundation/` folder): `Signal<T>`/`FloatSignal`
@@ -206,9 +215,17 @@ contracts owned elsewhere:
   same delegate/signal by `Prop<T>` equality — re-runs nothing; zero managed allocation; a layout channel's re-run that
   wrote is promoted to a layout-shape change, as its static write would be. Before this, wiring was mount-only and a
   fresh thunk capturing new render-time values was silently ignored — `ProgressBar.Create`'s indicator kept its
-  fallback-width product while its static track followed. Gates `gate.bind.rewire-*`). A static↔bound **flip** is not
-  re-wired — the mount effect keeps the channel and the new form silently loses (the `BindContract` tripwire below);
-  the STATIC value is re-asserted on every reconcile **iff `!IsBound`** — the single chokepoint rule that fixed the historical
+  fallback-width product while its static track followed. Gates `gate.bind.rewire-*`). A static↔bound **flip** follows
+  the NEW form (2026-10-20, same seam, same gate): **bound→static** — WriteColumns writes the static value through the
+  normal column write (with its layout-shape promotion) and `RewireBinds` unlinks the channel's effect from the node's
+  chain and disposes it (unsubscribed; a fire already queued for the flush is skipped as disposed; unmount never sees it
+  again); **static→bound** — the generated `{T}Diff.AnyBindGained` finds the channel and `WireGainedBinds` wires it
+  through Mount's own `BindNode` code (filtered to the newly bound channels, no `OnRealized` replay), runs it once inside
+  the render scope and promotes a layout channel's write. Anchors (component/Show/For/KeepAlive/SkelRegion/Provider)
+  and Scroll/VirtualList do the same for `Visible`. An unchanged element costs nothing (the RecordChanged gate); a changed
+  element without a flip pays one generated `IsBound` sweep. Before this, a flip silently lost — Wavee's playlist side
+  column mounted at a static `Width` 0, re-rendered bound to the insights toggle, and stayed 0 (gate `gate.bind.flip-follows`,
+  `BindFlipTests`). The STATIC value is re-asserted on every reconcile **iff `!IsBound`** — the single chokepoint rule that fixed the historical
   Opacity `!= 1f` reappear bug and the Fill/TextColor bound-value clobbers by construction. A bound fire writes ONE
   scene column + marks the matching dirty axis (Transform/Paint → compositor-only; Width/Height/Text → scoped
   relayout). This is the **compositor bypass**: a high-frequency scalar (slider scrub via
@@ -280,6 +297,23 @@ contracts owned elsewhere:
   parks the older outgoing root before starting the next transition, and revisiting an exiting key cancels its exit and
   reuses the retained subtree. Reduced motion bypasses the overlap and parks immediately. The 2s wall-clock exit
   backstop is belt-and-braces after freeze, not the snapshot mechanism.
+- **Persistent subtrees (E7, EP13).** `Flow.Persist(key, build)` (`Hooks/Persist.cs`) is an `Embed.Comp` of the internal
+  `PersistSlot` component (no new element type); a reconciler table (`Reconciler/Reconciler.Persist.cs`) keyed by the
+  string key makes the slot's child outlive the slot. One live slot owns a key per window. When the owning slot unmounts
+  (`UnmountSubtree` reaches the anchor, or `ReplaceComponent` swaps it) its child is detached BEFORE the children are torn
+  down and **parked** through the KeepAlive chokepoint (`SetSubtreeParked`: renders deferred, `UseIsActive` false,
+  tickers quiesced) with its resources kept (image pins, video surfaces: a parked video presenter hides, its DComp
+  surface survives). A slot with the key that mounts (`MountComponent`) **adopts** it: re-parent, un-park (or stay
+  parked under a parked slot), and schedule every component render and node binding in the subtree once (detached
+  KeepAlive pages inside it owe the render), so context reads re-resolve through the new ancestors — a re-parented
+  subtree otherwise keeps its old provider subscriptions. The slot's first render then reconciles the new `build()`
+  against the parked element (same root type keeps the state). The keyed child diff mounts before it removes, so a slot
+  that mounts while the owner is live **waits** (renders nothing) and adopts when the owner unmounts in the same pass; a
+  waiter still waiting after the paint (`SettlePersistWaiters`, a true duplicate) mounts its own content as a
+  non-owner (which unmounts normally). A different key on a reused slot replaces it. Without an adopter a parked subtree
+  is unmounted after `Flow.PersistParkMs` (10 s) by a `HostTimerQueue` timer (`TreeReconciler.PersistTimers`), whose
+  clock stands still while a freeze's snap scope holds the timers; `UnmountRoot` unmounts every parked subtree.
+  `AppHost.IsPersistParked(key)` reports the parked state. Gates: `persist-subtrees`, `PersistSubtreeTests`.
 
 ---
 

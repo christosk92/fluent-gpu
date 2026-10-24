@@ -10,9 +10,9 @@ namespace FluentGpu.Animation;
 //  themeable, and reduced-motion-expressible centrally instead of hand-typed per call site. A control configures
 //  `Transition = MotionTok.ControlFaster` (the ~83ms WinUI BrushTransition) rather than a bespoke BrushTransitionMs.
 //
-//  This is the DEFAULT (non-themed) table. The per-theme `FrozenDictionary<MotionTokenId, MotionTokenDef>` that rides
-//  theming's Tok.* machinery (a theme variant can ship all-SnapEnd/KeepFade tokens = reduced-motion-as-a-theme) is the
-//  theming integration step (TODO, build loop). Reuses the existing IntegrationMode (Eased|Spring) + SpringParams.
+//  This is the vocabulary + the timing consts; the recipe each id resolves to is the ACTIVE theme definition's motion table
+//  (Tok.Definition.Motion, FluentGpu.Theming.MotionTable): a theme variant can ship all-SnapEnd/KeepFade tokens
+//  (reduced-motion-as-a-theme). Reuses the existing IntegrationMode (Eased|Spring) + SpringParams.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// <summary>What reduced-motion does to a token's motion (read by Tick/seed, never by authoring code). KeepFade keeps
@@ -167,37 +167,10 @@ public static class MotionTok
     /// ~200 ms (docs/plans/smooth-reveal-implementation.md §1).</summary>
     public const float RevealResponseSec = 0.26f;
 
-    public static MotionTokenDef Get(MotionTokenId id) => id switch
-    {
-        // Control interaction — fades keep their cross-fade under reduced motion.
-        MotionTokenId.ControlFaster => MotionTokenDef.Eased(83f, Easing.FluentStandard, ReducedMotionPolicy.KeepFade),
-        MotionTokenId.ControlFast => MotionTokenDef.Eased(150f, Easing.FluentStandard, ReducedMotionPolicy.KeepFade),
-        MotionTokenId.ControlNormal => MotionTokenDef.Eased(250f, Easing.FluentStandard, ReducedMotionPolicy.KeepFade),
-        // Structural enter/exit — Fluent decelerate in, accelerate out.
-        MotionTokenId.StandardEnter => MotionTokenDef.Eased(300f, Easing.FluentDecelerate, ReducedMotionPolicy.KeepFade),
-        MotionTokenId.StandardExit => MotionTokenDef.Eased(200f, Easing.FluentAccelerate, ReducedMotionPolicy.KeepFade),
-        MotionTokenId.EmphasizedEnter => MotionTokenDef.Eased(500f, Easing.FluentDecelerate, ReducedMotionPolicy.KeepFade),
-        MotionTokenId.EmphasizedExit => MotionTokenDef.Eased(350f, Easing.FluentAccelerate, ReducedMotionPolicy.KeepFade),
-        // Springs — Standard is critically-ish damped; Expressive is bouncier.
-        MotionTokenId.StandardSpring => MotionTokenDef.SpringOf(SpringParams.FromResponse(0.35f, 0.85f)),
-        MotionTokenId.ExpressiveSpring => MotionTokenDef.SpringOf(SpringParams.FromResponse(0.50f, 0.60f)),
-        // Feature motions — ConnectedFly is critically damped (the user prefers a smooth, no-overshoot hero fly).
-        MotionTokenId.ConnectedFly => MotionTokenDef.SpringOf(SpringParams.FromResponse(0.45f, 1.0f)),
-        MotionTokenId.ContentResize => MotionTokenDef.SpringOf(SpringParams.FromResponse(0.40f, 0.90f)),
-        MotionTokenId.ItemPlacement => MotionTokenDef.SpringOf(SpringParams.FromResponse(0.40f, 0.85f)),
-        MotionTokenId.ScrollFade => MotionTokenDef.Eased(150f, Easing.Linear, ReducedMotionPolicy.KeepFade),
-        // Media chrome — SnapEnd (not KeepFade): under reduced motion the transport must appear/disappear instantly.
-        // "Chrome that fades" IS the motion here; there is no orientation cue in it worth keeping. The conceal is an
-        // EASE-OUT, not FluentAccelerate: cubic-bezier(1,0,1,1) stays near 1 for most of its duration and then drops, so
-        // even a running conceal read as a pop — a value fade wants steady, perceptible change (Easing.cs's own warning).
-        MotionTokenId.MediaChromeReveal => MotionTokenDef.Eased(MediaChromeFadeInMs, Easing.FluentDecelerate),
-        MotionTokenId.MediaChromeConceal => MotionTokenDef.Eased(MediaChromeFadeOutMs, Easing.EaseOut),
-        MotionTokenId.PaneOpen => MotionTokenDef.Eased(200f, Easing.FluentPane, ReducedMotionPolicy.KeepFade),
-        MotionTokenId.PaneClose => MotionTokenDef.Eased(100f, Easing.FluentPane, ReducedMotionPolicy.KeepFade),
-        // The smooth disclosure — one critically damped spring both ways (no overshoot, the same curve open and close).
-        MotionTokenId.Reveal => MotionTokenDef.SpringOf(SpringParams.FromResponse(RevealResponseSec, 1f)),
-        _ => MotionTokenDef.SpringOf(SpringParams.Default),
-    };
+    /// <summary>The recipe for <paramref name="id"/> from the ACTIVE theme definition's motion table
+    /// (<c>Tok.Definition.Motion</c>; the Fluent default table is <see cref="FluentGpu.Theming.MotionTable.FluentDefault"/>).
+    /// An array read - no allocation.</summary>
+    public static MotionTokenDef Get(MotionTokenId id) => FluentGpu.Dsl.Tok.Definition.Motion.Get(id);
 
     public static MotionTokenDef ControlFaster => Get(MotionTokenId.ControlFaster);
     public static MotionTokenDef ControlFast => Get(MotionTokenId.ControlFast);

@@ -111,7 +111,7 @@ public sealed record BoxEl : Element
 {
     public override ushort ElementTypeId => 1;
 
-    // Rarely-set channels live in six shared, copy-on-write blocks (BoxCold.cs), one per theme: a BoxEl is allocated and
+    // Rarely-set channels live in seven shared, copy-on-write blocks (BoxCold.cs), one per theme: a BoxEl is allocated and
     // `with`-copied on every render of every box, so its inline footprint is only the channels most boxes set. A block is a
     // null reference until a setter changes a value; the first such setter on an element clones the block, the rest write the clone.
     private BoxColdPaint? _cPaint;
@@ -124,6 +124,8 @@ public sealed record BoxEl : Element
     private BoxColdGesture CGesture => _cGesture is { } c && ReferenceEquals(c.Owner, this) ? c : (_cGesture = (_cGesture ?? BoxColdGesture.Default).CloneFor(this));
     private BoxColdMotion? _cMotion;
     private BoxColdMotion CMotion => _cMotion is { } c && ReferenceEquals(c.Owner, this) ? c : (_cMotion = (_cMotion ?? BoxColdMotion.Default).CloneFor(this));
+    private BoxColdHover? _cHover;
+    private BoxColdHover CHover => _cHover is { } c && ReferenceEquals(c.Owner, this) ? c : (_cHover = (_cHover ?? BoxColdHover.Default).CloneFor(this));
     private BoxColdMisc? _cMisc;
     private BoxColdMisc CMisc => _cMisc is { } c && ReferenceEquals(c.Owner, this) ? c : (_cMisc = (_cMisc ?? BoxColdMisc.Default).CloneFor(this));
 
@@ -136,8 +138,8 @@ public sealed record BoxEl : Element
     /// <summary>Bindable like <see cref="Fill"/>: a bound hover/press fill re-fires on RethemeAll (theme/palette
     /// switch) and can read recycle-varying state (e.g. a virtual list's slot index for zebra-aware hover depth)
     /// without remounting the slot. A==0 ⇒ the recorder auto-lightens/darkens <see cref="Fill"/> instead.</summary>
-    public Prop<ColorF> HoverFill { get; init; } = ColorF.Transparent;
-    public Prop<ColorF> PressedFill { get; init; } = ColorF.Transparent;
+    public Prop<ColorF> HoverFill { get => (_cHover ?? BoxColdHover.Default).HoverFill; init { if (!EqualityComparer<Prop<ColorF>>.Default.Equals((_cHover ?? BoxColdHover.Default).HoverFill, value)) CHover.HoverFill = value; } }
+    public Prop<ColorF> PressedFill { get => (_cHover ?? BoxColdHover.Default).PressedFill; init { if (!EqualityComparer<Prop<ColorF>>.Default.Equals((_cHover ?? BoxColdHover.Default).PressedFill, value)) CHover.PressedFill = value; } }
     /// <summary>Bindable like <see cref="Fill"/> so retained shell/card borders can follow a live theme switch.</summary>
     public Prop<ColorF> BorderColor { get; init; } = ColorF.Transparent;
     public ColorF HoverBorderColor { get => (_cPaint ?? BoxColdPaint.Default).HoverBorderColor; init { if (!EqualityComparer<ColorF>.Default.Equals((_cPaint ?? BoxColdPaint.Default).HoverBorderColor, value)) CPaint.HoverBorderColor = value; } } // A==0 ⇒ recorder auto-lightens BorderColor on hover; else eases to this exact state token
@@ -390,6 +392,11 @@ public sealed record BoxEl : Element
     /// <summary>WinUI FocusVisualMargin: negative values push the keyboard-focus ring OUTSIDE the bounds. Null = the
     /// WinUI template default (−3 all around); Slider uses −7,0,−7,0.</summary>
     public Edges4? FocusVisualMargin { get => (_cInput ?? BoxColdInput.Default).FocusVisualMargin; init { if (!EqualityComparer<Edges4?>.Default.Equals((_cInput ?? BoxColdInput.Default).FocusVisualMargin, value)) CInput.FocusVisualMargin = value; } }
+    /// <summary>Hit slop: how far (DIP, per side) this box's HIT rect reaches outside its laid-out box, for a small target that must still be
+    /// easy to press (a 28 glyph button at a touch tier). No effect on layout or paint. The slop is clipped like the box itself: a clipping or
+    /// scrolling ancestor cuts it, and a real hit always wins over a slop hit (a neighbour whose own box holds the point takes it, so slops
+    /// never steal from what is drawn there). Adds to the host's floor (<c>InputDispatcher.MinHitSize</c>). Default none.</summary>
+    public Edges4 HitSlop { get => (_cInput ?? BoxColdInput.Default).HitSlop; init { if (!EqualityComparer<Edges4>.Default.Equals((_cInput ?? BoxColdInput.Default).HitSlop, value)) CInput.HitSlop = value; } }
     /// <summary>Semantic control role (set by the control factories; a button IS a BoxEl). Surfaced to a11y/devtools/tests.</summary>
     public AutomationRole Role { get; init; }
 
@@ -448,7 +455,7 @@ public sealed record BoxEl : Element
     /// tripwire in the reconciler turns each of those into a stack trace at the offending element.
     /// NOTE <c>default(Affine2D)</c> is all-zeros, not identity — the reconciler treats "differs from default" as
     /// "declared", so leaving this unset costs nothing.</summary>
-    public Prop<Affine2D> Transform { get; init; } = default;
+    public Prop<Affine2D> Transform { get => (_cMotion ?? BoxColdMotion.Default).Transform; init { if (!EqualityComparer<Prop<Affine2D>>.Default.Equals((_cMotion ?? BoxColdMotion.Default).Transform, value)) CMotion.Transform = value; } }
 
     // Legacy *Bind spellings — write-only init-aliases into the unified channel props, deleted per-channel by the
     // migration waves. A null assignment leaves the channel static (preserves the `cond ? null : bind` idiom).
@@ -860,6 +867,16 @@ public sealed record TextEl(Prop<string> Text) : Element
     /// <see cref="Trim"/> ellipsis applies at the floor. Use a font-natural line height (leave <see cref="LineHeight"/>
     /// unset) so the chosen size's spacing scales with it. NaN = off (no auto-fit; the default).</summary>
     public float MinSize { get => (_cold ?? TextCold.Default).MinSize; init { if (!EqualityComparer<float>.Default.Equals((_cold ?? TextCold.Default).MinSize, value)) Cold.MinSize = value; } }
+    /// <summary>How <see cref="MinSize"/> picks its size (<see cref="TextFitMode"/>). <see cref="TextFitMode.Lines"/> (the default): the
+    /// largest size that fits <see cref="MaxLines"/>. <see cref="TextFitMode.OneLineFirst"/>: the largest size that fits ONE line; a run
+    /// that does not fit one line even at the floor wraps at the floor over up to <see cref="MaxLines"/> lines, then trims, and an
+    /// authored <see cref="LineHeight"/> scales with the size chosen. For a display title that should shrink before it wraps.</summary>
+    public TextFitMode FitMode { get => (_cold ?? TextCold.Default).FitMode; init { if ((_cold ?? TextCold.Default).FitMode != value) Cold.FitMode = value; } }
+    /// <summary>Case transform applied at SHAPING (E19), culture-invariantly and length-preserving: the string is stored and
+    /// interned as written, the glyph run is shaped from its lower/upper-cased form, and no string is allocated per render.
+    /// Part of the measure key (<c>TextStyle.Case</c>). Default <see cref="TextCase.AsWritten"/>. For theme-written labels
+    /// (Wavee's <c>R.Case.For(LabelKind)</c>); content strings (titles, lyrics, user text) keep the default.</summary>
+    public TextCase Case { get => (_cold ?? TextCold.Default).Case; init { if (!EqualityComparer<TextCase>.Default.Equals((_cold ?? TextCold.Default).Case, value)) Cold.Case = value; } }
     /// <summary>Horizontal alignment of each line inside the text's box (WinUI <c>TextAlignment</c>): Start (default) /
     /// Center / End / Justify. Works for single-line text in a box wider than the text (Grow / Width / stretch — no
     /// wrapper <c>BoxEl</c> needed) and per line for wrapped text; trailing spaces never shift an End-aligned line.
@@ -995,6 +1012,12 @@ public sealed record ImageEl : Element
     /// <summary>Focal point for Cover crops, normalized 0..1. Default 0.5,0.5 centres the decoded image.</summary>
     public float FocusX { get; init; } = 0.5f;
     public float FocusY { get; init; } = 0.5f;
+    /// <summary>Where in the box a Cover crop places the focal point (<see cref="FocusX"/>, <see cref="FocusY"/>), normalized 0..1 of the box. Default
+    /// 0.5,0.5: the focal point at the box's centre. A subject known to sit at a point of the photograph (a face) is placed where the layout leaves
+    /// it in view (above a title over the photograph's foot, say: <c>FocusY = face, FocusFrameY = 0.3</c>). The crop is clamped so the image always
+    /// covers the box: a focal point near the image's edge lands as close to its frame point as the image allows.</summary>
+    public float FocusFrameX { get; init; } = 0.5f;
+    public float FocusFrameY { get; init; } = 0.5f;
     /// <summary>Decode-size hint (target px) used when the layout extent is fluid (<see cref="Width"/> is <c>NaN</c>, so the
     /// real box size isn't known at request time) — PHYSICAL px, the caller applies the device scale. Ignored when <see cref="Width"/> is explicit (the decode is then Width × the device scale, rounded up).
     /// <c>NaN</c> ⇒ decode at source resolution.</summary>

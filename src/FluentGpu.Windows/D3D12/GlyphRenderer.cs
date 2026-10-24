@@ -89,8 +89,9 @@ internal readonly struct RunKey : IEquatable<RunKey>
 
     public int TextId => _textId;
 
-    /// <param name="typo">TextTypography.Pack(align, features): features change the shaped glyphs and align moves each
-    /// line inside the (already keyed) box width, so two runs differing only in either never share baked quads.</param>
+    /// <param name="typo">TextTypography.Pack(align, features, case): features and the case transform change the shaped glyphs
+    /// and align moves each line inside the (already keyed) box width, so two runs differing only in any of them never share
+    /// baked quads.</param>
     public RunKey(int textId, int famId, int sizeQ, int weight, int wrap, int trim, int maxLines, int widthQ, int originXQ, int originYQ, int scaleQ,
         int spacingQ, int lineHQ, int lineFlags, int spanId, int typo = 0)
     {
@@ -180,10 +181,11 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private static int PhaseStackHeight(int h) => h * SubPixelPhases + (SubPixelPhases - 1);
 
     private IDWriteFactory* _dw;
-    private const string DefaultFamily = "Segoe UI";
-    // Per-(family, numeric weight) faces + metrics, resolved on demand. Family = a system name OR "path.ttf#Family Name".
-    private readonly Dictionary<(string fam, int weight), nint> _faces = new();
-    private readonly Dictionary<(string fam, int weight), FaceMetrics> _faceMetrics = new();
+    // Faces come from the one shared registry (E9) - there is no private face cache here. The default text family is the
+    // active theme definition's body CHAIN, read at use through it.
+    private readonly FontRegistry _registry = FontRegistry.Shared;
+    private int _bodyVersionSeen;
+    private string DefaultFamily => _registry.BodyChain;
     private readonly Dictionary<string, int> _famIds = new();
 
     // The R8 mirror + the append-only shelf packer + the DIRTY-ROW REGION that bounds every upload, all in one
@@ -444,7 +446,7 @@ float4 PSMain(VSOutG i) : SV_Target
     {
         _device = device;
         InitDWrite();
-        _engine = new TextLayoutEngine();
+        _engine = new TextLayoutEngine(_registry);
         InitAtlasTexture(device);
         InitPipeline(device);
     }
@@ -454,13 +456,14 @@ float4 PSMain(VSOutG i) : SV_Target
         IDWriteFactory* f;
         Check(DWriteCreateFactory(DWRITE_FACTORY_TYPE.DWRITE_FACTORY_TYPE_SHARED, __uuidof<IDWriteFactory>(), (IUnknown**)&f), "DWriteCreateFactory");
         _dw = f;
+        DWriteFontFaceSource.EnsureInstalled();
         // Colour-glyph translation (best effort: null ⇒ emoji keep rendering as monochrome outlines, nothing else changes).
         IDWriteFactory2* f2;
         if ((int)_dw->QueryInterface(__uuidof<IDWriteFactory2>(), (void**)&f2) >= 0 && f2 != null) _dw2 = f2;
         IDWriteFactory4* f4;
         if ((int)_dw->QueryInterface(__uuidof<IDWriteFactory4>(), (void**)&f4) >= 0 && f4 != null) _dw4 = f4;
-        // warm the default face so the atlas has metrics from frame 1
-        ResolveFace(DefaultFamily, 400, out _, out _, out _);
+        // warm the body chain's Regular face so the atlas has metrics from frame 1
+        ResolveFace("", 400, out _, out _, out _);
     }
 
     // A small per-family integer used in the glyph-cache key (so the same codepoint in two fonts caches separately).
@@ -471,77 +474,26 @@ float4 PSMain(VSOutG i) : SV_Target
         id = _famIds.Count + 1; _famIds[family] = id; return id;
     }
 
-    /// <summary>Resolve (and cache) a font face for a family + NUMERIC weight (the int IS the DWRITE_FONT_WEIGHT;
-    /// ≤0 → 400, clamped to 999). Family is a system name ("Segoe UI", "Segoe Fluent Icons") or a custom file
-    /// "path.ttf#Family Name" (the WinUI syntax). Falls back to the default on error.</summary>
+    /// <summary>Resolve a font face for a family CHAIN + NUMERIC weight through the shared <see cref="FontRegistry"/> (E9) - the
+    /// same cache the measure engine uses, so a family is created and metered once. Chain entries are system names or
+    /// "path.ttf#Family Name" (the WinUI syntax); falling off the chain is the registry's error, not a silent substitution.</summary>
     private IDWriteFontFace* ResolveFace(string family, int weight, out ushort em, out short asc, out short desc)
     {
-        if (string.IsNullOrEmpty(family)) family = DefaultFamily;
-        if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
-        var key = (family, weight);
-        if (_faces.TryGetValue(key, out var cached))
-        {
-            var m0 = _faceMetrics[key]; em = m0.Em; asc = m0.Asc; desc = m0.Desc;
-            return (IDWriteFontFace*)cached;
-        }
-
-        IDWriteFontFace* face;
-        try { face = CreateFaceFor(family, weight); }
-        catch { face = family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, weight); }
-        if (face == null) { em = 2048; asc = 1500; desc = 500; return null; }
-
-        DWRITE_FONT_METRICS m; face->GetMetrics(&m);
-        var fm = new FaceMetrics { Em = m.designUnitsPerEm, Asc = (short)m.ascent, Desc = (short)m.descent };
-        _faces[key] = (nint)face; _faceMetrics[key] = fm;
-        em = fm.Em; asc = fm.Asc; desc = fm.Desc;
-        return face;
+        nint face = _registry.ResolveFace(family, weight, out FontFaceMetrics m);
+        em = m.Em; asc = m.Asc; desc = m.Desc;
+        return (IDWriteFontFace*)face;
     }
 
-    private IDWriteFontFace* CreateFaceFor(string family, int weight)
+    /// <summary>Evict every cached run when the theme's body font changed: a run with no family of its own keys on the empty
+    /// family id, which cannot see the body chain behind it, so it would replay glyphs of the previous font.</summary>
+    private void SyncBodyFont()
     {
-        int hash = family.IndexOf('#');
-        string path = hash >= 0 ? family.Substring(0, hash) : family;
-        bool isFile = path.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".otf", StringComparison.OrdinalIgnoreCase);
-        return isFile ? CreateFaceFromFile(path, weight) : CreateSystemFace(family, weight);
-    }
-
-    private IDWriteFontFace* CreateSystemFace(string familyName, int weight)
-    {
-        IDWriteFontCollection* coll;
-        Check(_dw->GetSystemFontCollection(&coll, BOOL.FALSE), "GetSystemFontCollection");
-        uint index; BOOL exists;
-        fixed (char* pn = familyName) Check(coll->FindFamilyName(pn, &index, &exists), "FindFamilyName");
-        if (!exists)   // unknown family → fall back to the default
-        {
-            coll->Release();
-            return familyName == DefaultFamily ? null : CreateSystemFace(DefaultFamily, weight);
-        }
-        IDWriteFontFamily* family;
-        Check(coll->GetFontFamily(index, &family), "GetFontFamily");
-        // The numeric weight passes straight through (WinUI FontWeight ≡ DWRITE_FONT_WEIGHT) — GetFirstMatchingFont
-        // picks the nearest face / variable-font named instance (e.g. SemiBold 600 of "Segoe UI Variable Text").
-        IDWriteFont* font;
-        Check(family->GetFirstMatchingFont((DWRITE_FONT_WEIGHT)weight, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, &font), "GetFirstMatchingFont");
-        IDWriteFontFace* face;
-        Check(font->CreateFontFace(&face), "CreateFontFace");
-        font->Release(); family->Release(); coll->Release();
-        return face;
-    }
-
-    // Load a face directly from a .ttf/.otf file (custom icon fonts). A raw file has no weight family to pick from,
-    // so the heavy half (>= 600) synthesizes bold.
-    private IDWriteFontFace* CreateFaceFromFile(string path, int weight)
-    {
-        IDWriteFontFile* file;
-        fixed (char* p = path) Check(_dw->CreateFontFileReference(p, null, &file), "CreateFontFileReference");
-        BOOL supported; DWRITE_FONT_FILE_TYPE ft; DWRITE_FONT_FACE_TYPE faceType; uint numFaces;
-        Check(file->Analyze(&supported, &ft, &faceType, &numFaces), "Analyze(font)");
-        IDWriteFontFile** files = &file;
-        var sim = weight >= 600 ? DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_BOLD : DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_NONE;
-        IDWriteFontFace* face;
-        Check(_dw->CreateFontFace(faceType, 1, files, 0, sim, &face), "CreateFontFace(file)");
-        file->Release();
-        return face;
+        _registry.SyncBody();
+        int v = _registry.BodyVersion;
+        if (v == _bodyVersionSeen) return;
+        _bodyVersionSeen = v;
+        foreach (var kv in _runCache) ReturnQuads(kv.Value.Glyphs);
+        _runCache.Clear();
     }
 
     /// <summary>The glyph realization's size key: the DEVICE em in 10.6 fixed point (canon text.md §3.1 "SizePx: size
@@ -777,6 +729,7 @@ float4 PSMain(VSOutG i) : SV_Target
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF color, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList,
         int spanRunId = 0, bool forceColor = false, float motionSoft = 0f, int typography = 0)
     {
+        SyncBodyFont();
         var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId, typography);
 
         ref var hit = ref CollectionsMarshal.GetValueRefOrNullRef(_runCache, key);
@@ -862,6 +815,7 @@ float4 PSMain(VSOutG i) : SV_Target
         List<GradGlyphInstance> outList, List<GlyphInstance> plainList,
         int spanRunId = 0, float motionSoft = 0f, int typography = 0)
     {
+        SyncBodyFont();
         var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId, typography);
 
         ShapedGlyph[] quadsArr; int count;
@@ -2081,8 +2035,7 @@ float4 PSMain(VSOutG i) : SV_Target
         if (_rootSig != null) _rootSig->Release();
         if (_srvHeap != null) { D3D12MemoryDiagnostics.Release(_srvHeap, "Glyph.SrvHeap"); _srvHeap->Release(); }
         if (_tex != null) { D3D12MemoryDiagnostics.Release(_tex, "Glyph.AtlasTexture"); _tex->Release(); _tex = null; }
-        foreach (var f in _faces.Values) if (f != 0) ((IDWriteFontFace*)f)->Release();
-        _faces.Clear();
+        // Faces belong to the shared FontRegistry; the renderer never releases them.
         if (_dw4 != null) { _dw4->Release(); _dw4 = null; }
         if (_dw2 != null) { _dw2->Release(); _dw2 = null; }
         if (_dw != null) _dw->Release();

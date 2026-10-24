@@ -146,8 +146,7 @@ catalogued in [pitfalls.md](../../guide/pitfalls.md).
 9. **Keep state low.** State that lives at the root makes the root's render-effect run on every interaction. Move state
    *down* into the component that owns it, or bind the hot value instead of `setState`-ing it.
 
-10. **Verify with the harness, not by eye.** Run `dotnet run --project src/FluentGpu.VerticalSlice` — ~60 headless
-    cross-seam golden checks that print `[PASS]`/`[FAIL]` and `ALL CHECKS PASSED`, in seconds, with no GPU or window.
+10. **Verify with the build, not by eye.** Build Debug clean (there are no tests).
     For perf claims, read `FrameStats` (`Rendered`, `ComponentsRendered`, `HotPhaseAllocBytes`) — on a slider drag you
     want `Rendered == false`; on a steady frame you want `HotPhaseAllocBytes == 0`.
 

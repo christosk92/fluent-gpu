@@ -3,7 +3,7 @@ using FluentGpu.Signals;
 
 namespace FluentGpu.Dsl;
 
-// The rarely-set BoxEl channels, split into six themed blocks so a box that sets none costs six null references and one
+// The rarely-set BoxEl channels, split into seven themed blocks so a box that sets none costs seven null references and one
 // that sets a few clones only the block it touches. Copy-on-write: BoxEl's `with` copies share a block until a setter that
 // changes a value runs on the copy, which clones it first (Owner tells a clone made for that element from a shared one). A
 // setter that writes the value a channel already holds (the default included) does not clone. Defaults mirror the former
@@ -148,6 +148,7 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
     public Action<bool>? OnFocusChanged;
     public bool AllowFocusOnInteraction = true;
     public bool HitTestPassThrough;
+    public Edges4 HitSlop;
     public bool? TabStop;
     public Edges4? FocusVisualMargin;
     public bool BlocksDragArm;
@@ -174,6 +175,7 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
             && EqualityComparer<Action<bool>?>.Default.Equals(OnFocusChanged, o.OnFocusChanged)
             && EqualityComparer<bool>.Default.Equals(AllowFocusOnInteraction, o.AllowFocusOnInteraction)
             && EqualityComparer<bool>.Default.Equals(HitTestPassThrough, o.HitTestPassThrough)
+            && EqualityComparer<Edges4>.Default.Equals(HitSlop, o.HitSlop)
             && EqualityComparer<bool?>.Default.Equals(TabStop, o.TabStop)
             && EqualityComparer<Edges4?>.Default.Equals(FocusVisualMargin, o.FocusVisualMargin)
             && EqualityComparer<bool>.Default.Equals(BlocksDragArm, o.BlocksDragArm)
@@ -260,11 +262,44 @@ internal sealed class BoxColdGesture : IEquatable<BoxColdGesture>
 }
 
 /// <summary>BoxEl's hover/press motion and the composited transform.</summary>
+/// <summary>BoxEl's hover / press fills (page-mount RCA, allocations): two bindable 24-byte colour channels that only
+/// interactive surfaces set, inline on every box until they moved here.</summary>
+internal sealed class BoxColdHover : IEquatable<BoxColdHover>
+{
+    public static readonly BoxColdHover Default = new();
+
+    public BoxEl? Owner;
+
+    public Prop<ColorF> HoverFill = ColorF.Transparent;
+    public Prop<ColorF> PressedFill = ColorF.Transparent;
+
+    public BoxColdHover CloneFor(BoxEl owner)
+    {
+        var c = (BoxColdHover)MemberwiseClone();
+        c.Owner = owner;
+        return c;
+    }
+
+    public bool Equals(BoxColdHover? o)
+    {
+        if (ReferenceEquals(this, o)) return true;
+        if (o is null) return false;
+        return EqualityComparer<Prop<ColorF>>.Default.Equals(HoverFill, o.HoverFill)
+            && EqualityComparer<Prop<ColorF>>.Default.Equals(PressedFill, o.PressedFill);
+    }
+
+    public override bool Equals(object? obj) => Equals(obj as BoxColdHover);
+    public override int GetHashCode() => 0;
+}
+
 internal sealed class BoxColdMotion : IEquatable<BoxColdMotion>
 {
     public static readonly BoxColdMotion Default = new();
 
     public BoxEl? Owner;
+
+    /// <summary>The declared affine (rare: most boxes animate the decomposed statics or nothing) — 32 bytes that were inline.</summary>
+    public Prop<Affine2D> Transform = default;
 
     public float OffsetX;
     public float OffsetY;
@@ -297,7 +332,8 @@ internal sealed class BoxColdMotion : IEquatable<BoxColdMotion>
     {
         if (ReferenceEquals(this, o)) return true;
         if (o is null) return false;
-        return EqualityComparer<float>.Default.Equals(OffsetX, o.OffsetX)
+        return EqualityComparer<Prop<Affine2D>>.Default.Equals(Transform, o.Transform)
+            && EqualityComparer<float>.Default.Equals(OffsetX, o.OffsetX)
             && EqualityComparer<float>.Default.Equals(OffsetY, o.OffsetY)
             && EqualityComparer<float>.Default.Equals(ScaleX, o.ScaleX)
             && EqualityComparer<float>.Default.Equals(ScaleY, o.ScaleY)

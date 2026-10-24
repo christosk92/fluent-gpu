@@ -1243,6 +1243,17 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     {
         if (bytes == 0 || w != h || w < 64 || w > 512 || (w & (w - 1)) != 0) return;   // only the pool's square power-of-two buckets
         int i = w <= 64 ? 0 : w <= 128 ? 1 : w <= 256 ? 2 : 3;
+        // A thumbnail bucket the placed pool serves is charged what a placed SLOT commits, not what the texture that triggered
+        // this measurement did: the first thumbnails of a session always take the committed fallback (no page is activated
+        // yet), and on the Adreno X1 that fallback charges a 128 x 128 texture 128 KiB against a slot's ~66 KiB. The first
+        // measurement wins and the image cache scales its whole budget by the largest ratio, so that one fallback doubled the
+        // budget (64 -> 128 MB) for the rest of every session.
+        if (_uma && w <= 128 && (_umaPagesDisabled || !_atlasAllocationKnown))
+        {
+            _smallImages ??= new SmallImageHeapPool(_device);
+            ulong slot = _smallImages.SlotBytes(w);
+            if (slot > 0) bytes = slot;
+        }
         if (System.Threading.Volatile.Read(ref _measuredBucketBytes[i]) == 0) System.Threading.Volatile.Write(ref _measuredBucketBytes[i], (long)bytes);
     }
 

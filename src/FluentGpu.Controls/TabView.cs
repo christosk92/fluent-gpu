@@ -30,6 +30,10 @@ public sealed record TabViewItem
     /// <summary>Segoe Fluent Icons glyph (the IconSource analog): 16px, 10px right margin, foreground follows the
     /// header ramp (TabViewItemHeaderIconSize/IconMargin, TabView_themeresources.xaml:246-247; ramps :95-99).</summary>
     public string? Icon { get; init; }
+    /// <summary>A leading visual drawn instead of <see cref="Icon"/> (a 16x16 cover thumbnail, an artist disc), invoked per
+    /// render. Honoured by a <see cref="TabStrip"/> with a <see cref="TabStrip.Form"/> (Chrome appearance), where it is also
+    /// the face of a Compact form's icon-only cells.</summary>
+    public Func<Element>? IconContent { get; init; }
     /// <summary>WinUI <c>TabViewItem.IsClosable</c> (idl:217-219, default true) — gates the close button, middle-click
     /// close and Ctrl+F4.</summary>
     public bool IsClosable { get; init; } = true;
@@ -472,7 +476,7 @@ public sealed class TabView : Component
                 main.Add(new TextEl(glyph)
                 {
                     Size = 16f,                          // TabViewItemHeaderIconSize 16 viewbox (themeresources:246; TabView.xaml:568)
-                    FontFamily = Theme.IconFont,
+                    FontFamily = Tok.Definition.Fonts.Icon,
                     // Compact zeroes the icon margin (TabView.xaml:486); standard = 0,0,10,0 (themeresources:247).
                     Margin = compact ? default : new Edges4(0, 0, 10, 0),
                     Color = isSel ? Tok.TextPrimary : Tok.TextSecondary,           // TabViewItemIconForeground (:95) / Selected (:97)
@@ -528,7 +532,7 @@ public sealed class TabView : Component
                         new TextEl(Icons.Cancel)                // E711 (TabView.xaml:576)
                         {
                             Size = 12f,                         // TabViewItemHeaderCloseFontSize (themeresources:251)
-                            FontFamily = Theme.IconFont,
+                            FontFamily = Tok.Definition.Fonts.Icon,
                             Color = Tok.TextPrimary,            // CloseButtonForeground (:132)
                             HoverColor = Tok.TextPrimary,       // PointerOver (:134)
                             PressedColor = Tok.TextSecondary,   // Pressed = TextFillColorSecondary (:133)
@@ -729,7 +733,7 @@ public sealed class TabView : Component
                             new TextEl(back ? CaretLeftSolid8 : CaretRightSolid8)
                             {
                                 Size = 8f,                          // TabViewItemScrollButonFontSize (themeresources:257)
-                                FontFamily = Theme.IconFont,
+                                FontFamily = Tok.Definition.Fonts.Icon,
                                 Color = Tok.TextSecondary,          // ScrollButtonForeground — same token rest/hover/pressed (:116-118)
                                 DisabledColor = Tok.TextDisabled,   // Disabled (:119)
                             },
@@ -791,7 +795,7 @@ public sealed class TabView : Component
                 new TextEl(Icons.Add)                   // E710 (TabView.xaml:41)
                 {
                     Size = 12f,                         // TabViewItemAddButtonFontSize (themeresources:263)
-                    FontFamily = Theme.IconFont,
+                    FontFamily = Tok.Definition.Fonts.Icon,
                     Color = Tok.TextPrimary,            // TabViewButtonForeground (:104)
                     HoverColor = Tok.TextPrimary,       // PointerOver (:106)
                     PressedColor = Tok.TextSecondary,   // Pressed = TextFillColorSecondary (:105)

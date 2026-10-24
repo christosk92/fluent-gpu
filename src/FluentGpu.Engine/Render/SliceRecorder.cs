@@ -166,6 +166,7 @@ public sealed partial class SliceRecorder
         public AcrylicRecipe Acrylic;
         public RectF Bounds;       // slice-space (pose-free window DIP) subtree bounds
         public bool PoseLocked;    // the stream holds a viewport-fixed op baked at the record-time delta
+        public bool Fractional;    // a composited transition layer (NodePaint.CompositeLayer): placed at its exact sub-pixel offset
         // which cut budget the slice spends when registered (effect budget / acrylic budget / a free distributable fade)
         public BudgetClass Budget;
         // a repaint boundary's raster downscale (BoxEl.RasterScale): > 1 = the low-resolution route (no tiles)
@@ -484,6 +485,21 @@ public sealed partial class SliceRecorder
     {
         ref Rec r = ref _recs[slot];
         r.Pose = pose; r.BaseWorld = baseWorld; r.Ox = ox; r.Oy = oy; r.FreeLocal = freeLocal; r.OwnDx = ownDx; r.OwnDy = ownDy;
+        r.Fractional = false;
+    }
+
+    /// <summary>The slice at <paramref name="slot"/> is a composited transition layer: it and every slice below it place at their
+    /// exact (sub-pixel) offset — see <see cref="SliceFrame.PhaseX"/>.</summary>
+    internal void SetFractional(int slot) => _recs[slot].Fractional = true;
+
+    private bool UnderFractional(int slot)
+    {
+        for (int s = slot, guard = 0; s >= 0 && guard < 64; s = _recs[s].Parent, guard++)
+        {
+            if (_recs[s].Fractional) return true;
+            if (s == RootSlot) break;
+        }
+        return false;
     }
 
     internal void SetMarker(int slot, in RectF clip, int flags, in PushLayerCmd layer, in AcrylicRecipe acrylic,
@@ -1130,7 +1146,9 @@ public sealed partial class SliceRecorder
     /// <summary>A scanned segment. <see cref="Opaque"/> (slot space DIP) is the largest rect its stream paints FULLY OPAQUE
     /// (a solid fill of alpha 1, no corner radius, axis-aligned, outside every layer and non-rectangular clip, cut by the
     /// rectangular clips): what it hides of the items composited before it. Empty = none known.</summary>
-    private struct ScanSeg { public int ByteStart, ByteEnd, Commands; public RectF Bounds, Opaque; }
+    // Heavy: the segment opens an inline layer, a stencil clip or a video hole, or starts inside one its prefix re-opens —
+    // replaying it costs offscreen work every time, so it keeps tiles (see InlineSegment).
+    private struct ScanSeg { public int ByteStart, ByteEnd, Commands; public RectF Bounds, Opaque; public bool Heavy; }
     /// <summary>A video hole a segment punched: its rect (slot space DIP, cut by the in-stream clips) and where its composite
     /// erase goes relative to that segment (<see cref="VideoHoleErase.Order"/> — on the tile, before it; inside an inline
     /// group layer, after it). The composite erase must be the SAME shape and strength as the in-tile punch (F078), so the scan
@@ -1195,7 +1213,7 @@ public sealed partial class SliceRecorder
         ContentScanBegin(s);
         int pos = 0, segStart = 0, cmds = 0;
         RectF segBounds = default, segOpaque = default;
-        bool segVideo = false;
+        bool segVideo = false, segHeavy = false;
         int stencils = 0;   // stencil (path) clips open: nothing inside them is a known opaque rect
         RectF top = RectF.Infinite, round = default;
         float roundR = 0f;
@@ -1231,6 +1249,7 @@ public sealed partial class SliceRecorder
                     int kind = lc.Kind;
                     if (kind != (int)LayerKind.Acrylic) inline++;
                     layers.Push(kind);
+                    segHeavy = true;
                     layerPush = true;
                     // a blurred group composites each pixel from its content AROUND it: no sub-tile repaint bounds it
                     layerSpread = (kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && lc.BlurSigma > 0f;
@@ -1242,6 +1261,7 @@ public sealed partial class SliceRecorder
                     var c = MemoryMarshal.Read<PushStencilClipCmd>(p);
                     RectF r = top.IsInfinite ? c.DeviceRect : c.DeviceRect.Intersect(top);
                     stencils++;
+                    segHeavy = true;
                     _scanClip.Add((r, round, roundR));
                     top = r;
                     ContentScanOp(s, pos, ClipSlack(in r), oh, scope: true, clip: true);
@@ -1265,7 +1285,7 @@ public sealed partial class SliceRecorder
                     break;
                 case DrawOp.CompositeSlice:
                 {
-                    AddSeg(s, marks, segStart, pos, cmds, segBounds, segVideo ? default : segOpaque);
+                    AddSeg(s, marks, segStart, pos, cmds, segBounds, segVideo ? default : segOpaque, segHeavy || segVideo);
                     if (marks == _scanMarks[s].Length) Array.Resize(ref _scanMarks[s], marks * 2);
                     _scanMarks[s][marks++] = new ScanMark
                     {
@@ -1275,6 +1295,7 @@ public sealed partial class SliceRecorder
                     ContentScanSegment(s, marks);   // the scopes still open where segment `marks` starts
                     segStart = payload + body;
                     segBounds = default; segOpaque = default; segVideo = false;
+                    segHeavy = layers.Depth > 0 || stencils > 0;   // the next segment's prefix re-opens these
                     cmds = 0;
                     pos = payload + body;
                     continue;
@@ -1346,7 +1367,7 @@ public sealed partial class SliceRecorder
         if (pos < bytes.Length)
             whole = FluentGpu.Render.Evidence.TileContentHash.Fold(whole, FluentGpu.Render.Evidence.TileContentHash.OpHash(bytes[pos..]));
         _scanHash[s] = FluentGpu.Render.Evidence.TileContentHash.Fold(whole, (ulong)bytes.Length);
-        AddSeg(s, marks, segStart, bytes.Length, cmds, segBounds, segVideo ? default : segOpaque);
+        AddSeg(s, marks, segStart, bytes.Length, cmds, segBounds, segVideo ? default : segOpaque, segHeavy || segVideo);
         _scanMarkCount[s] = marks;
         _scanVideoCount[s] = videos;
         _scanFadeCount[s] = fades;
@@ -1396,10 +1417,37 @@ public sealed partial class SliceRecorder
         FluentGpu.Foundation.Diag.Line($"[video] DrawVideo recorded with opacity {opacity:0.##} < 1: the video visual cannot fade, so the video stays at full strength under a faded hole (gpu-renderer.md 7.3)");
     }
 
-    private void AddSeg(int s, int k, int start, int end, int cmds, in RectF bounds, in RectF opaque)
+    /// <summary>Static segments of at most this many commands draw INLINE (see <see cref="InlineSegment"/>). Live-tunable
+    /// (the Diagnostics page / a probe), never an environment variable; 0 turns inline drawing off.</summary>
+    public static int InlineMaxCommands { get; set; } = 400;
+
+    /// <summary>Segments the last composite drew inline / static segments it tiled, and their commands.</summary>
+    public int LastInlineSegments { get; private set; }
+    public int LastInlineCommands { get; private set; }
+    public int LastTiledStaticSegments { get; private set; }
+    public int LastTiledStaticCommands { get; private set; }
+
+    /// <summary>
+    /// Whether a segment draws INLINE: no tile surfaces at all, its commands replayed straight into the composite target in
+    /// painter order (a <see cref="CompositeKind.Direct"/> item the backend recognises as plain, see D3D12Device.DrawInline).
+    /// <para>Why: retaining a segment's pixels costs its whole bounding box in 2 MiB tiles, and compositing them READS all of
+    /// it back every frame. The shell's static band (window background, sidebar, title and player bars) was five
+    /// near-window-sized segments: a constant 25.5 MiB, 3.3x the window, on every page (real-profile tile census,
+    /// 2026-10-21) — and on a UMA driver that keeps freed GPU memory, a permanent share of the process's private bytes.
+    /// A segment of a few hundred fills, glyph runs and images replays in a fraction of what reading its tiles back costs.</para>
+    /// <para>What keeps tiles: scroll content (moved, not redrawn), effect slices, anything under a composite layer, a
+    /// distributed fade, a rounded or sticky composite clip, a pose, and a Heavy segment (an inline layer, a stencil clip or
+    /// a video hole: offscreen work on every replay), and a segment past <see cref="InlineMaxCommands"/>.</para>
+    /// </summary>
+    private static bool InlineSegment(in Rec r, in Plan e, in ScanSeg sg)
+        => InlineMaxCommands > 0 && r.Kind == SliceKind.Static && r.Pose == PoseKind.None && !r.Screen && !r.HasFeedback
+           && !e.HasLayer && e.Dist.Count == 0 && e.RoundR <= 0f && float.IsNaN(e.StickyY)
+           && !sg.Heavy && sg.Commands <= InlineMaxCommands;
+
+    private void AddSeg(int s, int k, int start, int end, int cmds, in RectF bounds, in RectF opaque, bool heavy)
     {
         if (k >= _scanSegs[s].Length) Array.Resize(ref _scanSegs[s], Math.Max(k + 1, _scanSegs[s].Length * 2));
-        _scanSegs[s][k] = new ScanSeg { ByteStart = start, ByteEnd = end, Commands = cmds, Bounds = bounds, Opaque = opaque };
+        _scanSegs[s][k] = new ScanSeg { ByteStart = start, ByteEnd = end, Commands = cmds, Bounds = bounds, Opaque = opaque, Heavy = heavy };
     }
 
     /// <summary>Recorded commands across every live slice arena (the frame's command census).</summary>
@@ -2224,6 +2272,7 @@ public sealed partial class SliceRecorder
         table.BeginFrame(++_turn);
         _rowCount = _itemCount = _rasterCount = _placementCount = _frameSpanCount = _streamLen = _dirtyCount = 0;
         int posedImages = 0;
+        LastInlineSegments = LastInlineCommands = LastTiledStaticSegments = LastTiledStaticCommands = 0;
         if (withStreams) ConcatStreams();
         _coverageClamps = 0;
         // A theme / window-background change — or a repaint the host could not describe (first frame, resize, device
@@ -2256,7 +2305,9 @@ public sealed partial class SliceRecorder
                     // The group's transform is its slice's posed offset (whole device px) and its footprint the placed
                     // extent of what it encloses (+ its blur reach): a group moved rigidly by an ancestor scroll keeps its
                     // surface origin relative to its content — the group-cache key (GroupCacheKey) then matches.
-                    var gT = Affine2D.Translation(MathF.Round(e.AccDx * scale), MathF.Round(e.AccDy * scale));
+                    var gT = UnderFractional(e.Slot)
+                        ? Affine2D.Translation(MathF.Floor(e.AccDx * scale), MathF.Floor(e.AccDy * scale))
+                        : Affine2D.Translation(MathF.Round(e.AccDx * scale), MathF.Round(e.AccDy * scale));
                     RectF gFoot = ScalePx(e.Rect, scale);
                     if (!gFoot.IsEmpty && gSigma > 0f)
                     {
@@ -2331,7 +2382,19 @@ public sealed partial class SliceRecorder
             bool grows = covSlot >= 0 && GrowsOnMainAxis(covSlot, scene);
             SegmentOrigin(r.Kind, grows ? (_recs[covSlot].Horizontal ? 1 : 0) : -1, bDip, scale,
                 out float ox, out float oy, out float residualX, out float residualY);
-            var frame = new SliceFrame((int)ox, (int)oy, residualX, residualY, scale);
+            // Under a composited transition layer the slice places at its EXACT offset: the composite keeps the whole-pixel
+            // part, the raster takes the fraction (SliceFrame.Phase) — so `ox`/`oy` (slice px = DIP·scale − ox) carry it from
+            // here on, and every slice-px rect below (content, needed tiles, damage, span cull) follows.
+            bool fractional = UnderFractional(e.Slot);
+            float phaseX = 0f, phaseY = 0f;
+            int originX = (int)ox, originY = (int)oy;
+            if (fractional)
+            {
+                float px = e.AccDx * scale, py = e.AccDy * scale;
+                phaseX = px - MathF.Floor(px); phaseY = py - MathF.Floor(py);
+                ox -= phaseX; oy -= phaseY;
+            }
+            var frame = new SliceFrame(originX, originY, residualX, residualY, scale, phaseX, phaseY);
             RectF contentPx = bDip.IsEmpty ? default : new RectF(bDip.X * scale - ox, bDip.Y * scale - oy, bDip.W * scale, bDip.H * scale);
             int sub = e.Segment * 8 + r.Role;
             ulong identity = SegmentIdentity(e.Slot, e.Segment);
@@ -2370,7 +2433,11 @@ public sealed partial class SliceRecorder
             // A low-resolution boundary holds none (the backend replays it into one downscaled surface instead).
             byte lowRes = r.LowRes > 1 && r.Kind == SliceKind.Effect ? r.LowRes : (byte)0;
             if (r.HasFeedback && lowRes == 0) lowRes = 1;   // a feedback trail always takes the low-res surface route (scale 1 allowed): no tiles
-            if (!contentPx.IsEmpty && lowRes == 0 && !posedImage)
+            // A cheap static segment draws inline (InlineSegment): no tiles, its commands replayed into the composite target.
+            bool inline = !posedImage && lowRes == 0 && InlineSegment(in r, in e, in sg);
+            if (inline) { LastInlineSegments++; LastInlineCommands += sg.Commands; }
+            else if (r.Kind == SliceKind.Static) { LastTiledStaticSegments++; LastTiledStaticCommands += sg.Commands; }
+            if (!contentPx.IsEmpty && lowRes == 0 && !posedImage && !inline)
             {
                 RectF vp = e.Clip.IsInfinite ? new RectF(0f, 0f, winW, winH) : e.Clip;
                 // A self-blurred leaf samples its whole blur SOURCE (the visible output grown by the kernel's reach),
@@ -2429,7 +2496,9 @@ public sealed partial class SliceRecorder
             RectF srcPx = default;
             if (e.HasLayer) LayerParams(in e.Layer, e.InnerClip, scale, out alpha, out sigma, out feather, out srcPx);
             ApplyDist(in e.Dist, scale, ref alpha, ref feather, out EdgeFeather feather2);
-            var transform = Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
+            var transform = fractional
+                ? Affine2D.Translation(originX + MathF.Floor(e.AccDx * scale), originY + MathF.Floor(e.AccDy * scale))
+                : Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
             RectF clipPx = StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH);
             if (r.Pose == PoseKind.Posed)
             {
@@ -2450,7 +2519,7 @@ public sealed partial class SliceRecorder
             }
             // A Screen-blended or feedback item never hides what is under it: its result depends on the destination.
             bool claimsCover = !r.Screen && !r.HasFeedback;
-            AddItem(new CompositeItem(id, posedImage ? CompositeKind.Image : lowRes > 0 ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
+            AddItem(new CompositeItem(id, posedImage ? CompositeKind.Image : lowRes > 0 || inline ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
                 clipPx,
                 RadiiPx(e.RoundR, scale), feather, sigma, default, r.Screen ? CompositeItem.BlendScreen : (byte)0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
                 feather2, default, e.Dist.Count, lowRes,

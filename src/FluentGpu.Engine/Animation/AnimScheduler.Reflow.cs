@@ -56,6 +56,13 @@ public sealed partial class AnimEngine
     /// boundary-scoped re-solve before record. Self-clearing.</summary>
     public bool ConsumeReflowWrites() { bool w = _reflowWrote; _reflowWrote = false; return w; }
 
+    /// <summary>Raised with the node each time a reflow row writes its LAYOUT size: a tick, a seed's start
+    /// (<see cref="PresentReflowStart"/>), a shift (<see cref="ShiftReflow"/>) and the settle restore. A component's (or a view's)
+    /// transparent anchor copies its rendered root's size (<c>Reconciler.MirrorParticipation</c>); the host hands this to the
+    /// reconciler, which re-mirrors the anchors above the node, so a template ROOT that eases its size through real layout moves its
+    /// parent frame by frame like any other box instead of the parent taking the new declared size at once. Allocation-free per call.</summary>
+    public Action<NodeHandle>? ReflowSizeWritten { get; set; }
+
     /// <summary>A node mounted with a SizeMode.Reflow enter eases its MAIN-axis LAYOUT size 0 → its solved size so
     /// neighbours reflow as it reveals. Host-called after layout (the natural size isn't known pre-layout).
     /// <para>The seeded row is flagged <see cref="AnimFlags.NaturalTarget"/>: an ENTER reflow targets the node's
@@ -163,7 +170,9 @@ public sealed partial class AnimEngine
         // region easing 0→H is the pathological case: it starts at ZERO and covers the whole sibling below). Add
         // the clip for the life of the track and remember that WE added it — a node that declared ClipToBounds
         // itself, or a ScrollEl / VirtualListEl viewport, must never be un-clipped when the row is freed.
-        if (!r.Has(AnimFlags.ClipAdded) && !hadRow && _scene.IsLive(node) && (_scene.Flags(node) & NodeFlags.ClipsToBounds) == 0)
+        // LayoutTransition.ReflowUnclipped opts out: content laid out at the animated size that overhangs its box on purpose.
+        if (!spec.ReflowUnclipped && !r.Has(AnimFlags.ClipAdded) && !hadRow && _scene.IsLive(node)
+            && (_scene.Flags(node) & NodeFlags.ClipsToBounds) == 0)
         {
             _scene.Mark(node, NodeFlags.ClipsToBounds);
             _scene.Mark(node, NodeFlags.PaintDirty);
@@ -392,6 +401,38 @@ public sealed partial class AnimEngine
         _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
     }
 
+    /// <summary>Cancel a node's in-flight PRESENTED-size rows (a Reveal's or a Relayout's SizeW/SizeH, a ScaleCorrect's ScaleX/ScaleY) and land
+    /// it on its laid-out size, leaving its position, layout-size (Reflow) and every other row running: the host's answer for a part inside a
+    /// container a live reflow is resizing, whose layout moves on every tick (a presented size seeded at a commit would keep that commit's
+    /// target). Gesture-owned and looping rows are skipped, as <see cref="SnapStructuralToLayout"/> skips them.</summary>
+    public void SnapPresentedSizeToLayout(NodeHandle node)
+    {
+        int idx = (int)node.Raw.Index;
+        if (!_slab.NodeHasRows(idx)) return;
+        bool live = _scene.IsLive(node);
+        bool damaged = false, resetScale = false;
+        int s = _slab.HeadOnNode(idx);
+        while (s >= 0)
+        {
+            int next = _slab.At(s).NextOnNode;   // read the link BEFORE FreeSlot unlinks the row
+            AnimChannel ch = _slab.At(s).Channel;
+            if ((ch is AnimChannel.SizeW or AnimChannel.SizeH or AnimChannel.ScaleX or AnimChannel.ScaleY)
+                && !IsGestureOwnedTransform(idx, ch) && !_slab.At(s).Has(AnimFlags.Loop))
+            {
+                if (live && !damaged) { CaptureLastPresentedDamage(node); damaged = true; }
+                if (ch is AnimChannel.ScaleX or AnimChannel.ScaleY) resetScale = true;
+                SettleRestore(s);
+                FreeSlot(s);
+            }
+            s = next;
+        }
+        if (!resetScale || !live) return;
+        ref NodePaint p = ref _scene.Paint(node);
+        Affine2D rest = RestTransformOf(idx);
+        p.LocalTransform = p.LocalTransform with { M11 = rest.M11, M12 = rest.M12, M21 = rest.M21, M22 = rest.M22 };
+        _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+    }
+
     /// <summary>Take back the <see cref="NodeFlags.ClipsToBounds"/> a reflow row added (see
     /// <see cref="AnimFlags.ClipAdded"/>). Called from the ONE row-teardown sink (<c>FreeSlot</c>) plus
     /// <c>CancelAll</c>'s bulk clear, so no path — settle, Cancel, or a structural snap — can leak the clip.</summary>
@@ -405,6 +446,49 @@ public sealed partial class AnimEngine
     /// <summary>Dirty the node whose Measure must see this reflow write. A live node's topological parent is that
     /// scope; an exit orphan's Parent is null (detached), so the former visual parent is the one that still measures
     /// it — marking the orphan itself would RunSubtree a rootless node and never update the virtual row's extent.</summary>
+    /// <summary>Shift a live reflow row's start and target alike by <paramref name="delta"/>, over the time it has left: a stretched, auto-sized box
+    /// whose parent the live layout re-sizes (a card filling a chapter while a docking panel's reflow eases the page) keeps its planned offset from the
+    /// parent's size while the parent moves on, instead of landing on the size of the commit that seeded it. Writes the shifted interp into the layout
+    /// input at once and dirties the parent (the caller re-solves). False when no row is in flight.</summary>
+    internal bool ShiftReflow(NodeHandle node, AnimChannel ch, float delta)
+    {
+        int ex = Find(node, ch);
+        if (ex < 0) return false;
+        AnimValue cur = _slab.At(ex);          // copy: Animate/Spring may grow the slab's backing array
+        if (cur.Has(AnimFlags.Done)) return false;
+        float from = cur.Position + delta, to = cur.To + delta;
+        AnimFlags carried = cur.Flags & ReflowOwnedFlags;
+        if (!TryGetTransition(node, out LayoutTransition spec)) spec = default;
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if (cur.Kind == GenKind.Spring)
+            Spring(node, ch, to, SpringParams.FromResponse(dyn.Kind == DynamicsKind.Spring ? dyn.Response : 0.30f,
+                dyn.Kind == DynamicsKind.Spring ? dyn.DampingRatio : 1f), initial: from);
+        else
+            Animate(node, ch, from, to, MathF.Max(1f, cur.Gen.DurationMs - cur.ElapsedMs), dyn.Easing, delayMs: cur.DelayRemainingMs);
+        int s = FinishReflowRow(node, ch, cur.RestoreTo, in spec, hadRow: true, carried);
+        if (s < 0) return false;
+        _slab.At(s).Flags &= ~AnimFlags.JustSeeded;   // a shift keeps moving (the row was presented already)
+        ref LayoutInput li = ref _scene.Layout(node);
+        if (ch == AnimChannel.LayoutW) li.Width = from; else li.Height = from;
+        MarkReflowLayoutDirty(node);
+        ReflowSizeWritten?.Invoke(node);
+        return true;
+    }
+
+    /// <summary>Write the START of <paramref name="node"/>'s reflow rows (a seed that has not ticked: its from) into its layout input and dirty
+    /// the parent, as the seed frame's tick would: the host re-solves the commit at it before measuring the other projections
+    /// (AppHost.SeedReflowsFirst). False when the node has no reflow row. Allocates nothing.</summary>
+    internal bool PresentReflowStart(NodeHandle node)
+    {
+        bool wrote = false;
+        int s = Find(node, AnimChannel.LayoutW);
+        if (s >= 0) { _scene.Layout(node).Width = _slab.At(s).Position; wrote = true; }
+        s = Find(node, AnimChannel.LayoutH);
+        if (s >= 0) { _scene.Layout(node).Height = _slab.At(s).Position; wrote = true; }
+        if (wrote) { MarkReflowLayoutDirty(node); ReflowSizeWritten?.Invoke(node); }
+        return wrote;
+    }
+
     private void MarkReflowLayoutDirty(NodeHandle node)
     {
         var rp = _scene.Parent(node);
@@ -460,6 +544,7 @@ public sealed partial class AnimEngine
             MarkReflowLayoutDirty(node);
             _scene.Mark(node, NodeFlags.PaintDirty);
             _reflowWrote = true;
+            ReflowSizeWritten?.Invoke(node);   // the anchors above take the declared size back (the row is still found: freed after this)
             return;
         }
 

@@ -1,4 +1,5 @@
 using FluentGpu.Foundation;
+using FluentGpu.Theming;
 
 namespace FluentGpu.Dsl;
 
@@ -23,6 +24,15 @@ public enum ThemeKind : byte { Light = 0, Dark = 1 }   // HighContrast reserved 
 public readonly record struct AccentRamp(
     ColorF Base, ColorF Light1, ColorF Light2, ColorF Light3, ColorF Dark1, ColorF Dark2, ColorF Dark3)
 {
+    /// <summary>The WinUI default accent ramp (<c>#0078D4</c> base, the OS-authored shades listed in the type remarks). It is
+    /// the marker <see cref="ThemeDefinition.Accent"/> carries for "use the baked per-kind accent tokens": a definition
+    /// whose <c>Accent</c> equals this ramp reads its accent tokens straight from its <see cref="TokenSet"/>s (today's
+    /// behaviour, bit-for-bit); any other ramp drives the accent tokens like <see cref="Tok.SetAccent(in AccentRamp)"/>.</summary>
+    public static AccentRamp FluentDefault { get; } = new(
+        Base: ColorF.FromRgba(0x00, 0x78, 0xD4),
+        Light1: ColorF.FromRgba(0x42, 0x9C, 0xE3), Light2: ColorF.FromRgba(0x76, 0xB9, 0xED), Light3: ColorF.FromRgba(0xA6, 0xD8, 0xFF),
+        Dark1: ColorF.FromRgba(0x00, 0x5A, 0x9E), Dark2: ColorF.FromRgba(0x00, 0x42, 0x75), Dark3: ColorF.FromRgba(0x00, 0x26, 0x42));
+
     /// <summary>Synthesize the full ramp from a single base color (see the type remarks for the WinUI approximation).</summary>
     public static AccentRamp Derive(ColorF @base)
     {
@@ -229,31 +239,48 @@ public sealed record TokenSet
 /// </summary>
 public static partial class Tok
 {
-    public static readonly ThemePalette WarmPalette = PaletteBuilder.Build(PaletteBuilder.Warm);
-    public static readonly ThemePalette SlatePalette = PaletteBuilder.Build(PaletteBuilder.Slate);
-    public static readonly ThemePalette NeutralPalette = PaletteBuilder.Build(PaletteBuilder.Neutral);
-    public static ThemePalette AccentTintedPalette { get; private set; } = PaletteBuilder.Build(PaletteBuilder.AccentTinted(210f));
+    /// <summary>The engine default definition (<see cref="ThemeDefinition.FluentDefault"/>): the Warm preset's colours with
+    /// the Fluent non-colour tables. Same instance.</summary>
+    public static readonly ThemeDefinition WarmPalette = ThemeDefinition.FluentDefault;
+    public static readonly ThemeDefinition SlatePalette = PaletteBuilder.Build(PaletteBuilder.Slate);
+    public static readonly ThemeDefinition NeutralPalette = PaletteBuilder.Build(PaletteBuilder.Neutral);
+    public static ThemeDefinition AccentTintedPalette { get; private set; } = PaletteBuilder.Build(PaletteBuilder.AccentTinted(210f));
 
     /// <summary>All built-in presets (Accent-tinted excluded — rebuilt on accent injection).</summary>
-    public static readonly ThemePalette[] Presets = [WarmPalette, SlatePalette, NeutralPalette];
+    public static readonly ThemeDefinition[] Presets = [WarmPalette, SlatePalette, NeutralPalette];
 
     // Back-compat aliases — the Warm preset is the default calibrated ramp.
     public static TokenSet Dark => WarmPalette.Dark;
     public static TokenSet Light => WarmPalette.Light;
 
-    static ThemePalette _palette = WarmPalette;
-    public static ThemePalette Palette => _palette;
+    static ThemeDefinition _definition = WarmPalette;
+
+    /// <summary>The active <see cref="ThemeDefinition"/>: every colour, spacing, radius, type, elevation, motion and font
+    /// table the engine reads. Swapped as one value by <see cref="Use(ThemeDefinition, ThemeKind)"/>. Read it at USE (per
+    /// render or per recording), never into a <c>const</c> or <c>static readonly</c> field: the FGTH004 analyzer fences that.</summary>
+    public static ThemeDefinition Definition => _definition;
+
+    /// <summary>Alias of <see cref="Definition"/> kept for callers that read the shell palettes
+    /// (<c>Tok.Palette.LightShell</c>) or the token sets (<c>Tok.Palette.Light</c>).</summary>
+    public static ThemeDefinition Palette => _definition;
 
     public static TokenSet T = WarmPalette.Dark;
     public static ThemeKind Theme { get; private set; } = ThemeKind.Dark;
 
-    /// <summary>Monotonic version bumped by every PALETTE mutation (<see cref="Use"/>/<see cref="SetAccent"/>) — light/dark,
-    /// preset swap, accent injection. The host watches this counter and, on a change, re-renders every mounted
+    /// <summary>Monotonic version bumped by every PALETTE mutation (<see cref="Use(ThemeKind)"/>, <see cref="Use(ThemeDefinition, ThemeKind)"/>,
+    /// <see cref="SetAccent(in AccentRamp)"/>) — light/dark, preset swap, accent injection. The host watches this counter and, on a change, re-renders every mounted
     /// component IN PLACE and cross-fades the resulting color diffs — a live, animated theme switch with no remount.
     /// A plain counter, NOT a <c>Signal</c>: <see cref="Tok"/> is a process-global static, so a signal would bind to a
     /// single host's reactive runtime and cross-contaminate multi-window / headless. The mutators are no-op-guarded so a
     /// redundant set (e.g. toggling to the already-active theme, re-injecting the same OS accent) doesn't churn a frame.</summary>
     public static int Epoch { get; private set; }
+
+    /// <summary>Monotonic version bumped, together with <see cref="Epoch"/>, only when <see cref="Use(ThemeDefinition, ThemeKind)"/>
+    /// installs a definition whose NON-colour tables (type ramp, spacing, radii, elevation, motion, fonts, materials, icons,
+    /// control styles, app roles) differ from the previous one. A colour-only change or a light/dark flip leaves it alone,
+    /// so a consumer that caches something derived from a non-colour table (the host's scrollbar-arrow icon family, a
+    /// cached measure) re-derives on this counter and ignores the colour-only churn of <see cref="Epoch"/>.</summary>
+    public static int StyleEpoch { get; private set; }
 
     /// <summary>Monotonic version bumped ONLY by <see cref="SetWindowBackground"/>, and deliberately SEPARATE from
     /// <see cref="Epoch"/>: the Mica backdrop override feeds exactly one consumer — the frame's clear color, which the
@@ -264,23 +291,49 @@ public static partial class Tok
     /// the inactive fallback would never show); it never rethemes.</summary>
     public static int WindowBackgroundEpoch { get; private set; }
 
-    // Live OS/developer accent override — the FULL ramp, so accent FILL/TEXT resolve THEME-AWARE (WinUI Dark1 in light,
-    // Light2 in dark), not one flat color reused in both themes. Null = revert to the baked per-theme TokenSet accents.
+    // The EFFECTIVE accent ramp — the FULL ramp, so accent FILL/TEXT resolve THEME-AWARE (WinUI Dark1 in light, Light2 in
+    // dark), not one flat color reused in both themes. It is the SetAccent override when one is set, else the active
+    // definition's Accent when that is not the baked AccentRamp.FluentDefault marker, else null = the baked per-theme
+    // TokenSet accents. Recomputed (RecomputeAccent) by every mutator that can change either source.
     private static AccentRamp? _accentRamp;
+    private static AccentRamp? _accentOverride;   // the Tok.SetAccent value (OS / developer / album accent)
     private static ColorF? _windowBg;     // Mica → Transparent override
 
-    public static void Use(ThemeKind kind) => Use(_palette, kind);
-
-    public static void Use(ThemePalette palette, ThemeKind kind)
+    private static void RecomputeAccent()
     {
-        if (palette == _palette && kind == Theme) return;
-        _palette = palette;
-        Theme = kind;
-        T = kind == ThemeKind.Light ? palette.Light : palette.Dark;
-        Epoch++;
+        AccentRamp? fromDefinition = _definition.Accent == AccentRamp.FluentDefault ? null : _definition.Accent;
+        _accentRamp = _accentOverride ?? fromDefinition;
     }
 
-    public static ThemePalette? PaletteById(string id) => id switch
+    /// <summary>Switch light/dark on the CURRENT definition (the live path: <see cref="Epoch"/> bumps, the host re-renders in place).</summary>
+    public static void Use(ThemeKind kind) => Use(_definition, kind);
+
+    /// <summary>
+    /// Install <paramref name="definition"/> and the theme kind in one pointer swap. Bumps <see cref="Epoch"/> (the host
+    /// re-renders every mounted component in place, so colours AND spacing/radii/type/motion/fonts all reach the screen in
+    /// the same publication) and, when a non-colour table changed, <see cref="StyleEpoch"/>. A repeat of the active
+    /// definition and kind is a no-op; so is an equal-valued definition at the same kind (the reference is adopted, no
+    /// epoch moves). No allocation on any path.
+    /// </summary>
+    public static void Use(ThemeDefinition definition, ThemeKind kind)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        var current = _definition;
+        if (kind == Theme)
+        {
+            if (ReferenceEquals(definition, current)) return;
+            if (definition.Equals(current)) { _definition = definition; return; }
+        }
+        bool styleChanged = !ReferenceEquals(definition, current) && !definition.HasSameStyleAs(current);
+        _definition = definition;
+        Theme = kind;
+        T = kind == ThemeKind.Light ? definition.Light : definition.Dark;
+        RecomputeAccent();
+        Epoch++;
+        if (styleChanged) StyleEpoch++;
+    }
+
+    public static ThemeDefinition? PaletteById(string id) => id switch
     {
         "warm" => WarmPalette,
         "slate" => SlatePalette,
@@ -291,33 +344,38 @@ public static partial class Tok
 
     /// <summary>Inject the OS accent (host startup) or a developer/album global override from a single base color; all
     /// accent tokens (fill + text + subtle + hero + attention) recompute from the <see cref="AccentRamp.Derive"/>d ramp,
-    /// THEME-AWARE. Pass <c>null</c> to clear the override and revert to the baked per-theme accents.</summary>
+    /// THEME-AWARE. Pass <c>null</c> to clear the override and revert to the definition's accent (the baked per-theme
+    /// accents for the engine presets).</summary>
     public static void SetAccent(ColorF? c)
     {
         if (c is { } cc) { var ramp = AccentRamp.Derive(cc); SetAccent(in ramp); }
-        else if (_accentRamp is not null) { _accentRamp = null; Epoch++; }
+        else if (_accentOverride is not null) { _accentOverride = null; RecomputeAccent(); Epoch++; }
     }
 
     /// <summary>Inject the EXACT OS-authored accent ramp (host startup via <c>IUISettings3.GetColorValue</c>) — the
     /// seven system shades, no approximation. Same effect as <see cref="SetAccent(ColorF?)"/> otherwise.</summary>
     public static void SetAccent(in AccentRamp ramp)
     {
-        if (_accentRamp is { } cur && cur == ramp) return;
-        _accentRamp = ramp;
+        if (_accentOverride is { } cur && cur == ramp) return;
+        _accentOverride = ramp;
         AccentTintedPalette = PaletteBuilder.BuildAccentTinted(ramp.Base);
-        if (_palette.Id == "accent")
+        if (_definition.Id == "accent")
         {
-            // Re-point the ACTIVE palette too, not just T — Tok.Palette feeds the app-shell chrome (WaveeColors
+            // Re-point the ACTIVE definition too, not just T — Tok.Definition feeds the app-shell chrome (WaveeColors
             // reads Palette.LightShell/DarkShell), which otherwise keeps serving the stale pre-injection accent
             // palette until the next Tok.Use happens to re-resolve it.
-            _palette = AccentTintedPalette;
+            _definition = AccentTintedPalette;
             T = Theme == ThemeKind.Light ? AccentTintedPalette.Light : AccentTintedPalette.Dark;
         }
+        RecomputeAccent();
         Epoch++;
     }
     /// <summary>Set the Mica backdrop override (host: Transparent while active, the opaque fallback while inactive).
     /// Repaint-only — bumps <see cref="WindowBackgroundEpoch"/>, never <see cref="Epoch"/>.</summary>
     public static void SetWindowBackground(ColorF c) { if (_windowBg == c) return; _windowBg = c; WindowBackgroundEpoch++; }
+    /// <summary>Drop the backdrop override: <see cref="WindowBackground"/> follows the active token set again (the opaque ground of a
+    /// window with no material). Repaint-only, like <see cref="SetWindowBackground"/>.</summary>
+    public static void ClearWindowBackground() { if (_windowBg is null) return; _windowBg = null; WindowBackgroundEpoch++; }
 
     // Fill + Stroke forwards (pure `=> T.X`) are GENERATED by TokAccessorGenerator (SourceGen/Engine) from the
     // TokenSet fields — every settable TokenSet property without a hand-written Tok getter below gets a forward,

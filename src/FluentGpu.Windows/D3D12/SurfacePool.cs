@@ -476,6 +476,44 @@ internal sealed unsafe class SurfacePool : IDisposable
         }
     }
 
+    /// <summary>The surface census (diagnostics, render thread): tile textures by size, and every scratch texture with
+    /// what it is doing (leased this frame, holding a retained result, idle in the pool), plus fence-retired bytes.</summary>
+    public string SurfaceCensus()
+    {
+        const double MiB = 1024.0 * 1024.0;
+        var sb = new System.Text.StringBuilder(1024);
+        var tileSizes = new SortedDictionary<string, (int N, long B)>(StringComparer.Ordinal);
+        long tileBytes = 0; int tileN = 0;
+        for (int i = 0; i < _tiles.Length; i++)
+        {
+            if (_tiles[i].Res == null) continue;
+            long b = LayerTargetBucket.Bytes(_tiles[i].W, _tiles[i].H);
+            string k = _tiles[i].W + "x" + _tiles[i].H;
+            var v = tileSizes.GetValueOrDefault(k); tileSizes[k] = (v.N + 1, v.B + b);
+            tileBytes += b; tileN++;
+        }
+        long inUse = 0, retained = 0, idle = 0; int nIn = 0, nRet = 0, nIdle = 0;
+        var scratchSizes = new SortedDictionary<string, (int N, long B)>(StringComparer.Ordinal);
+        for (int i = 0; i < _scratch.Length; i++)
+        {
+            ref Entry e = ref _scratch[i];
+            if (e.Res == null) continue;
+            long b = LayerTargetBucket.Bytes(e.W, e.H);
+            string state = e.Retained ? "retained" : e.InUse ? "leased" : "idle";
+            if (e.Retained) { retained += b; nRet++; } else if (e.InUse) { inUse += b; nIn++; } else { idle += b; nIdle++; }
+            string k = state + " " + e.W + "x" + e.H;
+            var v = scratchSizes.GetValueOrDefault(k); scratchSizes[k] = (v.N + 1, v.B + b);
+        }
+        sb.Append("surface-census tiles=").Append(tileN).Append(' ').Append((tileBytes / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)).Append(" MiB")
+          .Append(" scratch leased=").Append(nIn).Append('/').Append((inUse / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
+          .Append(" retained=").Append(nRet).Append('/').Append((retained / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
+          .Append(" idle=").Append(nIdle).Append('/').Append((idle / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
+          .Append(" retired=").Append((Interlocked.Read(ref _retiredBytes) / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)).AppendLine(" MiB");
+        foreach (var kv in tileSizes) sb.Append("  tile ").Append(kv.Key).Append(" x").Append(kv.Value.N).Append(' ').Append((kv.Value.B / MiB).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)).AppendLine(" MiB");
+        foreach (var kv in scratchSizes) sb.Append("  scratch ").Append(kv.Key).Append(" x").Append(kv.Value.N).Append(' ').Append((kv.Value.B / MiB).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)).AppendLine(" MiB");
+        return sb.ToString();
+    }
+
     /// <summary>Bytes held by tile surface textures.</summary>
     public long TileBytes
     {

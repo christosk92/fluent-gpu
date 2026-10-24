@@ -24,6 +24,13 @@ public sealed partial class FlexLayout
     /// every standalone layout run (unchanged behaviour).</summary>
     public bool DeferOffsetClamp { get; set; }
 
+    /// <summary>Host-set around a re-solve of a layout this same frame already arranged at OTHER sizes (the commit laid out at its targets, then
+    /// again at its reflows' start, <c>AppHost.SeedReflowsFirst</c>): the cross-pass measure ring is not consulted. A ring slot stored at the
+    /// start's width (the frame before) is clean and its version unchanged, but a hit does not descend, so the node's children keep the Bounds
+    /// that pass at the TARGET left them, and the arrange reads those as their base sizes: a command bar laid out at its start width with its
+    /// trailing group at the target's x, a list's rows at the target width, for one frame. False otherwise.</summary>
+    public bool BypassMeasureRing { get; set; }
+
     // `--fg layout` (EngineSwitches.LayoutDiag): per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
     // measure≫arrange flags a redundant-measure blow-up. Gated to a single bool check (zero work/alloc) when off.
@@ -48,6 +55,98 @@ public sealed partial class FlexLayout
     public int DiagMeasure => _dMeasure;
     public int DiagArrange => _dArrange;
     public int DiagTextHit => _dTextHit;
+    /// <summary>Per-node measure-cache misses answered by the shared content-keyed cache (no font-system call).</summary>
+    public int DiagTextSharedHit => _dTextSharedHit;
+    private int _dTextSharedHit;
+
+    // ── shared text measure (page-mount RCA #5) ─────────────────────────────────────────────────────────────────────
+    // The per-node TextMeasureCache dies with its node: a freshly mounted row's "3:45" re-ran the font system's layout
+    // although the same text, style and width was measured a frame (or a page) earlier — 396–577 misses at ~1.6 µs on
+    // every playlist mount. This content-keyed second level (the string, not its StringId: a released id re-interns
+    // under a NEW id) answers those misses without the font system. A pure function of its key: the font system's
+    // Measure reads only (text, style, maxWidth) and the body-font epoch. Consulted for a node's FIRST measure only (a
+    // mount, the case it exists for — a resize re-measure never inserts). A span run takes its own content-keyed level (MeasureSpanRunShared: its Measure publishes
+    // the run's link/decoration rects as a side effect); an auto-fit size bypasses both. Bounded: cleared past SharedMeasureCap.
+    private readonly record struct SharedMeasureKey(string Text, TextStyle Style, float MaxW, int Epoch);
+    private readonly Dictionary<SharedMeasureKey, TextMetrics> _sharedMeasure = new(256);
+    private const int SharedMeasureCap = 8192;
+
+    private TextMetrics MeasureTextShared(StringId text, in TextStyle style, float maxW, int fontEpoch, bool fitted)
+    {
+        if (style.SpanRunId != 0) return fitted ? _fonts.Measure(text, style, maxW) : MeasureSpanRunShared(text, in style, maxW, fontEpoch);
+        string? s = fitted ? null : _scene.Strings?.Resolve(text);
+        if (s is null) return _fonts.Measure(text, style, maxW);
+        var key = new SharedMeasureKey(s, style, maxW, fontEpoch);
+        if (_sharedMeasure.TryGetValue(key, out var hit)) { _dTextSharedHit++; return hit; }
+        var m = _fonts.Measure(text, style, maxW);
+        if (_sharedMeasure.Count >= SharedMeasureCap) _sharedMeasure.Clear();
+        _sharedMeasure[key] = m;
+        return m;
+    }
+
+    // ── shared span-run measure (page-mount RCA #5, the span half) ─────────────────────────────────────────────────────
+    // A span run (a track row's credit line: "Artist A, Artist B" as links) mints a NEW run id on every mount, so neither
+    // the per-node cache nor an id-keyed one ever hits, and its measure is the dearest text work of a mount (~8.5 us: a
+    // multi-format DirectWrite layout plus the run's link/decoration rects). Keyed on its CONTENT instead: the text, the
+    // base style with the run id cleared, the spans (by value), the overflow suffix, the width and the font epoch. The
+    // measure's side effect - the run's SpanRunRects at that width - is captured with the metrics and re-published onto
+    // the new run on a hit (immutable, so runs with equal content share one).
+    private readonly struct SpanMeasureKey(string text, TextStyle style, SpanStyle[] spans, int suffix, float maxW, int epoch)
+    {
+        public readonly string Text = text;
+        public readonly TextStyle Style = style;
+        public readonly SpanStyle[] Spans = spans;
+        public readonly int Suffix = suffix;
+        public readonly float MaxW = maxW;
+        public readonly int Epoch = epoch;
+    }
+
+    private sealed class SpanMeasureKeyComparer : IEqualityComparer<SpanMeasureKey>
+    {
+        public static readonly SpanMeasureKeyComparer Instance = new();
+        public bool Equals(SpanMeasureKey a, SpanMeasureKey b)
+        {
+            if (a.MaxW != b.MaxW || a.Epoch != b.Epoch || a.Suffix != b.Suffix || a.Spans.Length != b.Spans.Length
+                || !string.Equals(a.Text, b.Text, StringComparison.Ordinal) || !a.Style.Equals(b.Style)) return false;
+            for (int i = 0; i < a.Spans.Length; i++) if (!a.Spans[i].Equals(b.Spans[i])) return false;
+            return true;
+        }
+        public int GetHashCode(SpanMeasureKey k)
+        {
+            var h = new HashCode();
+            h.Add(k.Text.GetHashCode()); h.Add(k.MaxW); h.Add(k.Suffix); h.Add(k.Spans.Length);
+            for (int i = 0; i < k.Spans.Length; i++) { h.Add(k.Spans[i].Start); h.Add(k.Spans[i].End); h.Add(k.Spans[i].Flags); }
+            return h.ToHashCode();
+        }
+    }
+
+    private readonly Dictionary<SpanMeasureKey, (TextMetrics Metrics, SpanRunRects? Rects)> _sharedSpanMeasure = new(64, SpanMeasureKeyComparer.Instance);
+
+    private TextMetrics MeasureSpanRunShared(StringId text, in TextStyle style, float maxW, int fontEpoch)
+    {
+        var run = SpanRunTable.Shared.Resolve(style.SpanRunId);
+        string? s = run is null ? null : _scene.Strings?.Resolve(text);
+        if (s is null) return _fonts.Measure(text, style, maxW);
+        var key = new SpanMeasureKey(s, style with { SpanRunId = 0 }, run!.Spans, run.OverflowSuffixStart, maxW, fontEpoch);
+        if (_sharedSpanMeasure.TryGetValue(key, out var hit))
+        {
+            _dTextSharedHit++;
+            if (hit.Rects is { } rects) run.PublishRects(rects);
+            return hit.Metrics;
+        }
+        var m = _fonts.Measure(text, style, maxW);
+        var published = run.Rects;
+        bool current = published is not null && published.MaxWidth == maxW;
+        if (!current)
+        {
+            // Nothing published at this width: cacheable only when the run has no decorated / link span to publish for.
+            foreach (var span in run.Spans) if (span.Flags != 0) return m;
+        }
+        if (_sharedSpanMeasure.Count >= SharedMeasureCap) _sharedSpanMeasure.Clear();
+        _sharedSpanMeasure[key] = (m, current ? published : null);
+        return m;
+    }
+
     public int DiagTextMiss => _dTextMiss;
     /// <summary>Measure calls served by the within-pass memo (no recompute). <see cref="DiagMeasure"/> counts REAL
     /// measures only, so measure+memoHit is the raw call count and memoHit/(measure+memoHit) is the redundancy rate.</summary>
@@ -55,7 +154,7 @@ public sealed partial class FlexLayout
 
     /// <summary>Host-driven per-frame reset: zero the diag counters at the top of a frame so DiagMeasure/Arrange/TextMiss
     /// read that frame's total after all layout (full + scoped + phase-7 reflow) has run. Cheap; no-op meaning when off.</summary>
-    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = 0; }
+    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dTextSharedHit = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = 0; }
 
     // Within-pass Measure memo. Measure(node, availW) is a PURE function of the node's subtree content + availW within
     // ONE layout solve (it has no external mutable input; its only side effect is writing the node's Bounds W/H). But the
@@ -134,7 +233,7 @@ public sealed partial class FlexLayout
     private bool TryRingHit(NodeHandle node, float availW, out Size2 size)
     {
         size = default;
-        if (Verifying) return false;   // --fg layout-verify: the oracle's re-solve descends for real, it never rides the ring
+        if (Verifying || BypassMeasureRing) return false;   // --fg layout-verify: the oracle's re-solve descends for real, it never rides the ring
         uint i = node.Raw.Index;
         if (i >= (uint)_memo.Length) return false;
         // Two complementary validators, both required (P4 fix, 2026-09-19):
@@ -248,11 +347,22 @@ public sealed partial class FlexLayout
         // Copy out BEFORE BeginMeasurePass: the probe measure re-writes this slot (and may resize the array).
         float availW = rec.PAvailW, pw = rec.PW, ph = rec.PH;
         if (LayoutSig(node) != rec.PInputSig) return false;
+        FluentGpu.Hosting.MountProf.SizeStableProbes++;
         // Also copy the ARRANGED rect before measuring — Measure overwrites Bounds W/H with the hypothetical size.
         RectF arranged = _scene.Bounds(node);
         BeginMeasurePass();
         var m = Measure(node, availW);
-        if (m.Width != pw || m.Height != ph) return false;   // outer size moved ⇒ ancestors must re-solve (Bounds scribble is repaired by that solve)
+        if (m.Width != pw || m.Height != ph)
+        {
+            // Outer size moved ⇒ ancestors must re-solve. That solve does NOT repair every rect this probe scribbled: it runs a NEW pass, and a
+            // clean boundary under this node (a fixed-size editor) that it answers from the ring and early-outs in Arrange restores only what THAT
+            // pass measured, so the probe's hypothetical sizes stayed live (an EditableText lane left at its 55.64 content width while the field
+            // grew to 301.9, under --fg layout-verify a divergence on every frame of the pill's widening). Put them back now, as MeasureNatural does.
+            ref RectF nb = ref _scene.Bounds(node);
+            nb = arranged;
+            RestoreArrangedDescendants(node);
+            return false;
+        }
         Arrange(node, arranged.X, arranged.Y, arranged.W, arranged.H);
         return true;
     }
@@ -283,23 +393,24 @@ public sealed partial class FlexLayout
     /// <summary>Text-leaf measure inside the natural probe: a read-only look at the node's real ring, then the probe ring,
     /// then a PURE shape (<see cref="IFontSystem.Measure(StringId, in TextStyle, float, bool)"/> with no artifact
     /// publish). Never writes the node's <see cref="TextMeasureCache"/>.</summary>
-    private (float W, float H) MeasureTextProbe(NodeHandle node, in TextMeasureCache mc, StringId text, in TextStyle style, float maxW)
+    private (float W, float H) MeasureTextProbe(NodeHandle node, in TextMeasureCache mc, StringId text, in TextStyle style, float maxW, int fontEpoch)
     {
-        if (mc.E0.Matches(text, in style, maxW)) return (mc.E0.Size.Width, mc.E0.Size.Height);
-        if (mc.E1.Matches(text, in style, maxW)) return (mc.E1.Size.Width, mc.E1.Size.Height);
+        if (mc.E0.Matches(text, in style, maxW, fontEpoch)) return (mc.E0.Size.Width, mc.E0.Size.Height);
+        if (mc.E1.Matches(text, in style, maxW, fontEpoch)) return (mc.E1.Size.Width, mc.E1.Size.Height);
         uint i = node.Raw.Index;
         bool slot = i < (uint)_probeText.Length;
-        if (slot && _probeText[i].TryGet(text, in style, maxW, out var hit)) return (hit.Size.Width, hit.Size.Height);
+        if (slot && _probeText[i].TryGet(text, in style, maxW, out var hit, fontEpoch)) return (hit.Size.Width, hit.Size.Height);
         TextStyle eff = style;
-        if (style.MinSizeDip > 0f && style.MinSizeDip < style.SizeDip
-            && style.MaxLines > 0 && style.Wrap != Foundation.TextWrap.NoWrap && !float.IsInfinity(maxW))
+        // The same auto-fit gate as the real measure (a NoWrap run fits its one line; a wrapping run needs MaxLines).
+        if (style.MinSizeDip > 0f && style.MinSizeDip < style.SizeDip && !float.IsInfinity(maxW)
+            && (style.Wrap == Foundation.TextWrap.NoWrap || style.MaxLines > 0))
         {
             float chosen = FitTextSize(text, style, maxW);
-            if (chosen < style.SizeDip) eff = style with { SizeDip = chosen };
+            if (chosen < style.SizeDip) eff = style.AtFitSize(chosen);
         }
         var m = _fonts.Measure(text, in eff, maxW, publishArtifacts: false);
         if (slot)
-            _probeText[i].Store(new TextMeasureEntry { Valid = true, Text = text, Style = style, MaxW = maxW, Size = m.Size });
+            _probeText[i].Store(new TextMeasureEntry { Valid = true, Text = text, Style = style, MaxW = maxW, Size = m.Size, FontEpoch = fontEpoch });
         return (m.Size.Width, m.Size.Height);
     }
 
@@ -330,6 +441,7 @@ public sealed partial class FlexLayout
     {
         if (root.IsNull) return;
         // Snapshot so the per-Run print stays per-call even though the counters are now frame accumulators (host-reset).
+        FluentGpu.Hosting.MountProf.RootSolves++;
         int m0 = _dMeasure, th0 = _dTextHit, tm0 = _dTextMiss, a0 = _dArrange, mh0 = _dMeasureMemoHit;
         BeginMeasurePass();
         Measure(root, window.Width);
@@ -348,6 +460,7 @@ public sealed partial class FlexLayout
     public void RunSubtree(NodeHandle node)
     {
         if (node.IsNull) return;
+        FluentGpu.Hosting.MountProf.SubtreeSolves++;
         BeginMeasurePass();
         ref LayoutInput li = ref _scene.Layout(node);
         ref RectF b = ref _scene.Bounds(node);
@@ -558,6 +671,13 @@ public sealed partial class FlexLayout
     // ── Measure: fill Bounds.W/H with each node's base (hypothetical) border-box size ──
     private Size2 Measure(NodeHandle node, float availW = float.PositiveInfinity)
     {
+        if (!FluentGpu.Hosting.MountProf.On) return MeasureCore(node, availW);
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Measure);
+        try { return MeasureCore(node, availW); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+    }
+
+    private Size2 MeasureCore(NodeHandle node, float availW)
+    {
         // P1 presence: a collapsed node (incl. a collapsed scroll/grid/zstack root — "a collapsed virtual slot root
         // measures 0 at its rect") measures 0×0 unconditionally, before the viewport/grid/zstack dispatch and before
         // the memo lookup (no memo entry recorded — cheap enough to redo, and TryResolveSizeStable's LayoutSig
@@ -603,6 +723,7 @@ public sealed partial class FlexLayout
         // solve), so a measure≫arrange reading now means genuine recompute redundancy rather than call-site churn
         // the memo absorbs.
         _dMeasure++;
+        if (FluentGpu.Hosting.MountProf.On) FluentGpu.Hosting.MountProf.NoteMeasure((int)node.Raw.Index, availW, (_scene.Flags(node) & NodeFlags.LayoutDirty) != 0 || !_scene.IsLayoutClean(node));
         ref LayoutInput li = ref _scene.Layout(node);
         ref NodePaint paint = ref _scene.Paint(node);
 
@@ -617,8 +738,10 @@ public sealed partial class FlexLayout
             // MaxLines/Trim need a finite wrap width even when Wrap=NoWrap — otherwise a long title measures at its
             // natural width, the grid cell's cross-size inflates, and glyphs bleed into the next column.
             bool widthConstrained = !float.IsInfinity(measureW);
+            // Auto-fit (MinSizeDip) needs the column too: a NoWrap run shrinks until its single line fits it.
             bool needsColumnBudget = li.TextStyle.Wrap != Foundation.TextWrap.NoWrap
-                || li.TextStyle.Trim != Foundation.TextTrim.None;
+                || li.TextStyle.Trim != Foundation.TextTrim.None
+                || li.TextStyle.MinSizeDip > 0f;
             float maxW = widthConstrained && needsColumnBudget
                 ? MathF.Max(0f, measureW)
                 : float.PositiveInfinity;
@@ -627,15 +750,16 @@ public sealed partial class FlexLayout
             // P4: a 2-ENTRY RING — a stretched leaf is measured at the parent's available width AND again at the final
             // arranged width, which thrashed a single slot into a miss on every single pass (Scene/Columns.cs).
             ref TextMeasureCache mc = ref _scene.MeasureCacheRef(node);
+            int fontEpoch = FluentGpu.Text.FontRegistry.Shared.BodyVersion;   // E9: a body-font change evicts every cached measure
             if (_naturalProbe)
             {
                 // The SizeToContent probe must not touch text state: read the node's ring WITHOUT TryGet (a hit moves
                 // its "last used" slot — the recorder's fallback), never Store into it (the probe width would evict the
                 // laid width), and shape in the pure mode (no span-artifact republish at the probe width). Repeated
                 // probes hit the layout's own private ring instead (pure-function key ⇒ a recycled index is harmless).
-                (w, h) = MeasureTextProbe(node, in mc, paint.Text, in li.TextStyle, maxW);
+                (w, h) = MeasureTextProbe(node, in mc, paint.Text, in li.TextStyle, maxW, fontEpoch);
             }
-            else if (mc.TryGet(paint.Text, in li.TextStyle, maxW, out var cached))
+            else if (mc.TryGet(paint.Text, in li.TextStyle, maxW, out var cached, fontEpoch))
             {
                 _dTextHit++;
                 w = cached.Size.Width; h = cached.Size.Height;
@@ -643,25 +767,31 @@ public sealed partial class FlexLayout
             else
             {
                 _dTextMiss++;
-                // Auto-fit (TextEl.MinSize / TextStyle.MinSizeDip): shrink the font so the run fits MaxLines at maxW.
-                // Opt-in (MinSizeDip>0), so normal text skips this entirely. The chosen size feeds BOTH the measured box
-                // and the recorder (stored as FitSize); 0 ⇒ no shrink (the recorder shapes at the authored SizeDip).
+                // Auto-fit (TextEl.MinSize / TextStyle.MinSizeDip): shrink the font so the run fits at maxW: a wrapping
+                // run fits when it wraps to <= MaxLines, a NoWrap run when its one line is no wider than maxW (MaxLines
+                // is moot there). Opt-in (MinSizeDip>0), so normal text skips this entirely. The chosen size feeds BOTH
+                // the measured box and the recorder (stored as FitSize); 0 => no shrink (the authored SizeDip). Only the
+                // em shrinks: an authored LineHeight stays, so the line box (and everything under it) holds still.
                 float fit = 0f;
                 TextStyle eff = li.TextStyle;
-                if (li.TextStyle.MinSizeDip > 0f && li.TextStyle.MinSizeDip < li.TextStyle.SizeDip
-                    && li.TextStyle.MaxLines > 0 && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && !float.IsInfinity(maxW))
+                if (li.TextStyle.MinSizeDip > 0f && li.TextStyle.MinSizeDip < li.TextStyle.SizeDip && !float.IsInfinity(maxW)
+                    && (li.TextStyle.Wrap == Foundation.TextWrap.NoWrap || li.TextStyle.MaxLines > 0))
                 {
                     float chosen = FitTextSize(paint.Text, li.TextStyle, maxW);
-                    if (chosen < li.TextStyle.SizeDip) { fit = chosen; eff = li.TextStyle with { SizeDip = chosen }; }
+                    if (chosen < li.TextStyle.SizeDip) { fit = chosen; eff = li.TextStyle.AtFitSize(chosen); }
                 }
-                var m = _fonts.Measure(paint.Text, eff, maxW);
+                FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.TextMeasure);
+                // A node's FIRST measure only (a fresh mount): a live re-measure (resize, a text edit) stays off the shared
+                // level, so a drag-resize never fills it with one-off widths.
+                var m = mc.Valid ? _fonts.Measure(paint.Text, eff, maxW) : MeasureTextShared(paint.Text, in eff, maxW, fontEpoch, fit > 0f);
+                FluentGpu.Hosting.MountProf.Exit();
                 w = m.Size.Width; h = m.Size.Height;
                 // Retain the face's decoration metrics alongside the size: the recorder places underline/strikethrough
                 // bars (NodePaint.TextDecorations) from this row at record time without re-touching the font seam.
                 mc.Store(new TextMeasureEntry
                 {
                     Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h),
-                    FitSize = fit,
+                    FitSize = fit, FontEpoch = fontEpoch,
                     UnderlineY = m.UnderlineY, UnderlineThickness = m.UnderlineThickness, StrikeY = m.StrikeY,
                     FirstLineWidth = m.FirstLineWidth,
                 });
@@ -859,6 +989,13 @@ public sealed partial class FlexLayout
 
     // ── Arrange: position + size children within the node's final box ──
     private void Arrange(NodeHandle node, float x, float y, float finalW, float finalH)
+    {
+        if (!FluentGpu.Hosting.MountProf.On) { ArrangeCore(node, x, y, finalW, finalH); return; }
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Arrange);
+        try { ArrangeCore(node, x, y, finalW, finalH); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+    }
+
+    private void ArrangeCore(NodeHandle node, float x, float y, float finalW, float finalH)
     {
         // P1 presence: snap to 0×0 at the offered position and stop — no recursion into a collapsed subtree (its
         // children are never visited during layout; the recorder/hit-test walks independently early-return on the
@@ -1408,7 +1545,11 @@ public sealed partial class FlexLayout
             float mH = cli.Margin.Horizontal, mV = cli.Margin.Vertical;
             var cs = Measure(c, unbounded ? float.PositiveInfinity
                 : float.IsInfinity(childAvail) ? childAvail : MathF.Max(0f, childAvail - mH));
-            maxW = MathF.Max(maxW, cs.Width + mH); maxH = MathF.Max(maxH, cs.Height + mV);
+            // …and, as its contract says, the stack's own size is unaffected by it: it asks for no more than its slot. A marquee's strip (laid
+            // out at its natural width, cut by the stack's clip) otherwise handed its whole run up as the line's preferred width, and a
+            // content-sized ancestor that does not shrink (a Mini bar's row) grew past the window to hold it.
+            float cw0 = unbounded && !float.IsInfinity(childAvail) ? MathF.Min(cs.Width, MathF.Max(0f, childAvail - mH)) : cs.Width;
+            maxW = MathF.Max(maxW, cw0 + mH); maxH = MathF.Max(maxH, cs.Height + mV);
         }
         float w = float.IsNaN(li.Width) ? maxW + li.Padding.Horizontal : li.Width;
         float h = float.IsNaN(li.Height) ? maxH + li.Padding.Vertical : li.Height;
@@ -1513,6 +1654,10 @@ public sealed partial class FlexLayout
     // opt-in (MinSizeDip>0) text node — never normal text, never a steady frame — so the extra measures are immaterial.
     private float FitTextSize(StringId text, TextStyle style, float maxW)
     {
+        // OneLineFirst: the ONE-line fit, wrapping or not; a run the floor cannot hold on one line is drawn at the floor and wraps
+        // (up to MaxLines, then Trim). A line's width does not depend on the line height, so the one-line solve is exact here too.
+        if (style.Wrap == Foundation.TextWrap.NoWrap || style.Fit == Foundation.TextFitMode.OneLineFirst)
+            return FitSingleLineSize(text, style with { Wrap = Foundation.TextWrap.NoWrap }, maxW);
         int maxLines = style.MaxLines;
         float maxS = style.SizeDip, minS = style.MinSizeDip;
 
@@ -1531,6 +1676,36 @@ public sealed partial class FlexLayout
         float lo = minS, hi = maxS;
         for (int i = 0; i < 6; i++) { float mid = (lo + hi) * 0.5f; if (Fits(mid)) lo = mid; else hi = mid; }
         return lo;
+    }
+
+    // NoWrap auto-fit: the largest size in [MinSizeDip, SizeDip] whose ONE line is no wider than maxW. Advances (and the
+    // CharSpacing tracking, in 1/1000 em) scale with the em, so the width is close to linear in size: solve for the size
+    // directly and correct for the shaper's rounding (hinting, pixel-snapped advances) with a few proportional steps.
+    // A direct solve, not a bisection, so the size follows the column continuously while a window resizes (a 6-step
+    // bisection quantizes it to ~(max-min)/64 steps). The solve aims FitSlack under the column so a shaper rounding the
+    // fitted line a hair over maxW cannot make the Trim cut a run that was sized to fit. Below the floor the run stays
+    // at MinSizeDip and the Trim cuts it.
+    private const float FitSlack = 0.5f;
+
+    private float FitSingleLineSize(StringId text, TextStyle style, float maxW)
+    {
+        float maxS = style.SizeDip, minS = style.MinSizeDip;
+        float LineW(float s) => _fonts.Measure(text, style with
+        {
+            SizeDip = s, MaxLines = 0, Trim = Foundation.TextTrim.None, MinSizeDip = 0f,
+        }, float.PositiveInfinity, publishArtifacts: false).Size.Width;
+
+        float w = LineW(maxS);
+        if (w <= maxW || w <= 0f) return maxS;
+        float target = MathF.Max(1f, maxW - FitSlack);
+        float s = maxS * target / w;
+        for (int i = 0; i < 4 && s > minS; i++)
+        {
+            w = LineW(s);
+            if (w <= maxW || w <= 0f) break;
+            s *= target / w;
+        }
+        return MathF.Max(minS, MathF.Min(maxS, s));
     }
 
     // A grid cell's slot holds its MARGIN box (CSS grid; the ArrangeVirtual slot rule): an Auto track and an auto row

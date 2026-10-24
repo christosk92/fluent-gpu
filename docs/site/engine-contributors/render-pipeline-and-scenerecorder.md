@@ -8,7 +8,7 @@ This page is for engine contributors changing the **record half** of the frame �
 how [`SceneRecorder`](../../../src/FluentGpu.Engine/Render/SceneRecorder.cs) walks the retained scene into a `DrawList`, what the
 DrawList POD stream is (and who owns its opcode shapes), the rounded-rect SDF pipeline rules that every `BoxEl` rasterizes
 through, the color/coordinate contract those pipelines honour, why a bound transform re-records without relayout, how
-record stays allocation-free, and exactly how to verify a change in the headless harness.
+record stays allocation-free, and how to inspect a change on the headless device.
 
 It does **not** restate opcode payload shapes or the color/DPI contract — those are owned by the design corpus and linked
 inline. The rule on this page is the same one the whole corpus runs on: **define an artifact in its owner; reference it
@@ -18,8 +18,8 @@ the working view of the code that fills the container.
 
 > **Where to change what.** Record walk + DrawList emit: `src/FluentGpu.Engine/Render/SceneRecorder.cs`. The POD command stream
 > + `DrawOp` enum + `DrawList` writer: `src/FluentGpu.Engine/Render/DrawList.cs`. The rounded-rect / gradient SDF pipelines and
-> their HLSL: `src/FluentGpu.Windows/D3D12/RoundRectPipeline.cs` and `GradientPipeline.cs`. The headless decoder you assert
-> against: `src/FluentGpu.Engine/Headless/Rhi/HeadlessGpuDevice.cs`. The harness that drives them: `src/FluentGpu.VerticalSlice/Program.cs`.
+> their HLSL: `src/FluentGpu.Windows/D3D12/RoundRectPipeline.cs` and `GradientPipeline.cs`. The headless decoder you read
+> from: `src/FluentGpu.Engine/Headless/Rhi/HeadlessGpuDevice.cs`.
 
 ---
 
@@ -297,8 +297,7 @@ must not require any layout state that a transform-only tick failed to update.**
 
 ## Zero-alloc in record
 
-Phases 6–13 must not allocate managed memory on a steady frame (`FrameStats.HotPhaseAllocBytes == 0`, asserted by the
-harness — the near-zero-allocation guarantee; see the [performance-rules page](../app-authors/performance-rules-and-zero-alloc-boundaries.md)
+Phases 6–13 must not allocate managed memory on a steady frame (`FrameStats.HotPhaseAllocBytes == 0` — the near-zero-allocation guarantee; see the [performance-rules page](../app-authors/performance-rules-and-zero-alloc-boundaries.md)
 and the `SPEC-INDEX.md` "0 managed allocations in frame phases 6–13" binding). The record path holds to this by construction:
 
 - **`Walk` is a `static` recursion over `ref`-returning column accessors** (`scene.Bounds(node)`, `scene.Paint(node)`,
@@ -318,17 +317,16 @@ buffer, `stackalloc` it or stash it in a pre-sized field. A regression here is c
 
 ---
 
-## Verifying: balance counters, per-opcode logs, the named checks
+## Verifying: balance counters, per-opcode logs
 
-Verify with the **headless harness**, never by eye. [`HeadlessGpuDevice`](../../../src/FluentGpu.Engine/Headless/Rhi/HeadlessGpuDevice.cs)
-is the structural test backend: `SubmitDrawList` decodes the POD stream into reusable, inspectable command lists (capacity
-retained → no per-frame alloc after warmup) and tracks push/pop balances. The workflow in the harness
-(`src/FluentGpu.VerticalSlice/Program.cs`) is: build a scene, `SceneRecorder.Record(scene, dl)`, `dev.SubmitDrawList(dl.Bytes, dl.SortKeys, frame)`,
-then assert on the decoded lists.
+Never verify by eye alone. [`HeadlessGpuDevice`](../../../src/FluentGpu.Engine/Headless/Rhi/HeadlessGpuDevice.cs)
+is the structural headless backend: `SubmitDrawList` decodes the POD stream into reusable, inspectable command lists (capacity
+retained → no per-frame alloc after warmup) and tracks push/pop balances. The workflow is: build a scene, `SceneRecorder.Record(scene, dl)`, `dev.SubmitDrawList(dl.Bytes, dl.SortKeys, frame)`,
+then read the decoded lists.
 
 ### Per-opcode command logs
 
-The device exposes one list per opcode family — assert *what was drawn* without pixels:
+The device exposes one list per opcode family — read *what was drawn* without pixels:
 
 | Property | What it logs |
 |---|---|
@@ -347,35 +345,16 @@ The device exposes one list per opcode family — assert *what was drawn* withou
 `ClipBalance` and `LayerBalance` must each be **0** at the end of a well-formed frame — the device increments on `PushClip`/`PushLayer`
 and decrements on `PopClip`/`PopLayer` while decoding. They are the cheap structural guard that the recorder's push/pop
 pairing is sound (a missing `PopClip` would scissor the rest of the frame). `LastStrokeClipDepths` is the parallel guard for
-the focus-ring-outside-its-clip rule: it records the clip depth at the moment each stroke decoded, so a check can assert a
+the focus-ring-outside-its-clip rule: it records the clip depth at the moment each stroke decoded, so you can confirm a
 `ClipsToBounds` field's focus ring records at its *parent's* depth, not inside its own clip.
 
-### The named checks to read and extend
+### Verifying a change
 
-Two harness functions are the model for any rounded-rect/border/stroke change you make — read them before adding your own:
-
-- **`GradientBorderChecks`** (`Program.cs`) — check **57** asserts the gradient elevation border emits exactly one
-  `DrawGradientStroke` band with the ring inset by `bw/2` (`Near(gs.Rect.X, 0.5f) && Near(gs.Rect.W, 119f)` for a 120-wide
-  box, `bw=1`) **and** the fill drew once over the full bounds (the hollow-ring rule). **57b** covers a gradient-only fill,
-  **57c** the chrome paint order (parent border records *after* descendant fills — it walks `dl.Bytes` opcode-by-opcode),
-  and **57e** the absolute-axis (`MappingMode=Absolute`) elevation band including the `AnchorEnd` mirror.
-- **`PolylineStrokeChecks`** (`Program.cs`) — check **57d** asserts a `PolylineStroke` emits one `DrawPolylineStroke` with the
-  expected `PointCount`/`TrimEnd`, then drives `AnimEngine` keyframes on `AnimChannel.StrokeTrimEnd` and asserts the recorded
-  `TrimEnd` tracks the eased value mid-flight (`t16 > 0 && t16 < 0.35`) — proving the recorder reads the animated paint
-  channel each frame.
-
-Run the whole spine after any change:
-
-```bash
-dotnet build src/FluentGpu.VerticalSlice          # clean build first
-dotnet run   --project src/FluentGpu.VerticalSlice # expect: ALL CHECKS PASSED
-```
-
-Add a `Check("…", condition, detail)` for the behavior you changed and call it from `Main`. If your change is record-only,
-also assert on `FrameStats` (`Rendered == false` for a compositor-bypass frame, `HotPhaseAllocBytes == 0` for a steady one).
+`dotnet build src/FluentGpu.slnx` must be clean (Debug). There are no tests. If your change is record-only,
+also read `FrameStats` (`Rendered == false` for a compositor-bypass frame, `HotPhaseAllocBytes == 0` for a steady one).
 On-screen D3D12 pixels are a separate manual "needs-pixels" pass on the real Windows path
 ([control-fidelity.md §4](../../guide/control-fidelity.md) describes the `--screenshot`/`--shot` route and the slow-motion
-proof for animations) — the harness proves the *recorded DrawList* is correct, not that a control looks right on screen.
+proof for animations) — the decoded DrawList is the recorded structure, not proof a control looks right on screen.
 Keep both bars distinct.
 
 ---
@@ -392,7 +371,7 @@ Keep both bars distinct.
 - **Frame loop & the compositor-bypass mental model** (app-author view): [rendering-and-performance.md](../../guide/rendering-and-performance.md);
   engine-side neighbours: [reconciler & scene](./reconciler-and-scene.md), [layout internals](./layout-internals.md),
   [the seams](./seams-rhi-pal-text.md), [Windows backends](./windows-backends.md), and the
-  [frame pipeline & verification harness](./frame-pipeline-and-verification-harness.md).
+  [frame pipeline & headless seams](./frame-pipeline-and-verification-harness.md).
 - **Rounded-rect rendering rules in control terms** (the three bug-fix rules, the state ramps, the motion engines):
   [control-fidelity.md](../../guide/control-fidelity.md).
 

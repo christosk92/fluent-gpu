@@ -144,8 +144,14 @@ public sealed class ScrollPoser
             // Coverage clamp: never show content the UI thread did not realize. The clamp relaxes at the content's
             // true ends (coverage starting at 0 / ending at ExtentTotal) so a rubber-band overpan — which shows empty
             // space, not un-realized rows — is not counted as a clamp.
+            // The clamp never pulls the content below its own start, though: realized content shorter than the viewport
+            // (a list whose count just grew, its new rows realizing next frame) once gave hi = End - Viewport < 0, and the
+            // whole content was posed that far DOWN for one frame (a playlist's hero dropping ~200 DIP and snapping back).
+            // Unrealized space below the content's end shows blank for that frame instead; nothing moves.
             double lo = row.Start <= 0.0 ? double.NegativeInfinity : row.Start;
             double hi = row.End >= row.ExtentTotal ? double.PositiveInfinity : row.End - row.Viewport;
+            double floor = row.Start <= 0.0 ? 0.0 : row.Start;
+            if (hi < floor) hi = floor;
             if (hi < lo) hi = lo;
             double shown = p < lo ? lo : (p > hi ? hi : p);
             bool clamped = shown != p;

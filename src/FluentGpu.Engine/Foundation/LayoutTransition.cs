@@ -87,10 +87,53 @@ public readonly record struct TransitionDynamics(
 /// start delay, which also carries any parent <see cref="FluentGpu.Dsl.Element.Stagger"/> delay (the reconciler adds it
 /// here, not to <see cref="LayoutTransition.DelayMs"/>, which exit and FLIP legs read), on top of the seeding
 /// <see cref="LayoutTransition.DelayMs"/> — <c>FluentGpu.Animation.AnimEngine.SeedEnter</c> is the one place
-/// both are summed. Default 0f is today's behaviour (byte-identical). Ignored on exit (SeedExit does not read it).</summary>
+/// both are summed. Default 0f is today's behaviour (byte-identical). Ignored on exit (SeedExit does not read it).
+/// <c>SwapFamily</c> is the id <see cref="SwapFamilies.Declare"/> gave a theme's declared tree-swap cross-fade (0: none). The engine
+/// never reads it (the terminal animates the same either way); inspection does, to tell a declared swap of a genuinely different
+/// tree from any other fade.</summary>
 public readonly record struct EnterExit(
     float Dx = 0f, float Dy = 0f, float Sx = 1f, float Sy = 1f, float Opacity = 1f, bool Active = false, float Blur = 0f,
-    float DelayMs = 0f);
+    float DelayMs = 0f, ushort SwapFamily = 0);
+
+/// <summary>The registered swap families: the cross-fades a theme declares for a tree that is genuinely different on each side of a tier
+/// edge (a form swap: the old tree fades out over the new, keyed per family), so a remount under one is the design, not a rebuilt part.
+/// A theme's swap helper declares its fade once (<c>public static readonly EnterExit SwapFade = SwapFamilies.Declare("Zune.SwapFade",
+/// new(Opacity: 0f, Active: true));</c>); every other fade (an arm cross-fade, a control's appear) stays undeclared, and the inspector's
+/// crossing and trace gates trust only declared ones.</summary>
+public static class SwapFamilies
+{
+    static readonly object Gate = new();
+    static readonly List<string> Names = [""];
+
+    /// <summary><paramref name="fade"/> carrying the id of the family <paramref name="name"/> (declared on first use; the same name gets the
+    /// same id).</summary>
+    public static EnterExit Declare(string name, EnterExit fade)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        lock (Gate)
+        {
+            int id = Names.IndexOf(name);
+            if (id < 0)
+            {
+                if (Names.Count > ushort.MaxValue) throw new InvalidOperationException("too many swap families");
+                id = Names.Count;
+                Names.Add(name);
+            }
+            return fade with { SwapFamily = (ushort)id };
+        }
+    }
+
+    /// <summary>The name a declared family was given; false for 0 (none) or an id nothing declared.</summary>
+    public static bool TryName(ushort id, out string name)
+    {
+        lock (Gate)
+        {
+            if (id > 0 && id < Names.Count) { name = Names[id]; return true; }
+        }
+        name = "";
+        return false;
+    }
+}
 
 /// <summary>The whole authoring surface (interned POD). Channels × dynamics × size-mode × enter/exit compose
 /// orthogonally — translate / scale / rotate / opacity / clip-reveal all fall out, with no per-control special cases.</summary>
@@ -118,7 +161,14 @@ public readonly record struct LayoutTransition(
     bool SuppressDescendantTransitions = false,
     // Optional EXIT-only delay. Null preserves the historical behavior (exit reuses DelayMs); setting 0 lets a delayed
     // entrance dismiss immediately — the TransitionHelper-style asymmetric show/hide timing used by shy overlays.
-    float? ExitDelayMs = null)
+    float? ExitDelayMs = null,
+    // This transition keeps animating while a user scroll is moving content. The scroll-motion latch snaps every FLIP so cards never fly
+    // through a scrolling viewport; a surface that the scroll itself CAUSES to change (a band folding as the page scrolls down) opts out.
+    bool AnimateDuringScroll = false,
+    // A SizeMode.Reflow node clips to its bounds while its size animates (its content may still be arranged at the far size,
+    // and would paint over its neighbours). True keeps painting its overflow: for content laid out AT the animated size that
+    // draws outside its own box on purpose (a Chrome tab's flared selected plate, which overhangs the cell by its flares).
+    bool ReflowUnclipped = false)
 {
     /// <summary>Translate-only reflow (the default for reordered / moved items). Springs.</summary>
     public static LayoutTransition Slide => new(TransitionChannels.Position, TransitionDynamics.Default);

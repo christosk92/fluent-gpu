@@ -124,7 +124,7 @@ public sealed partial class AnimEngine
         float cur = ex >= 0 ? _slab.At(ex).Position : p0;
         float vel = ex >= 0 ? _slab.At(ex).Velocity : v0;
         // Reduced motion is a VALUE read here (never a branch in authoring code).
-        bool snap = FluentGpu.Dsl.Motion.ReducedMotion || (dyn.Kind == DynamicsKind.Tween && dyn.DurationMs <= 1f);
+        bool snap = FluentGpu.Dsl.Motion.ReducedMotion || Snapping || (dyn.Kind == DynamicsKind.Tween && dyn.DurationMs <= 1f);   // Snapping: SnapScope lands the reveal
         RevealView(node, out float top, out float viewTop, out float viewBottom, out NodeHandle viewport);
         float from = p1, to = p1;
         if (!snap) snap = !RevealPlan.TryClamp(cur, p1, top, viewTop, viewBottom, out from, out to);
@@ -373,7 +373,7 @@ public sealed partial class AnimEngine
         RectF view = _scene.AbsoluteRect(viewport);
         float regionTop = _scene.AbsoluteRect(sc.ContentNode).Y + top;
         float from = p1, to = p1;
-        bool animate = !FluentGpu.Dsl.Motion.ReducedMotion
+        bool animate = !FluentGpu.Dsl.Motion.ReducedMotion && !Snapping   // Snapping: SnapScope lands the band
             && RevealPlan.TryClamp(cur, p1, regionTop, view.Y, view.Y + sc.ViewportH, out from, out to);
         if (!animate)
         {

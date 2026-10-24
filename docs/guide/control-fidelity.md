@@ -192,12 +192,8 @@ timing specs* - which is what reading the WinUI template gives you.
 
 Three layers; use all three. **Evidence before claiming an animation works.**
 
-- **Headless golden checks** (`src/FluentGpu.VerticalSlice/Program.cs`, `dotnet run` -> "ALL CHECKS PASSED"). This is
-  the deterministic, log-based truth. Patterns: reconcile a control, `new FlexLayout(...).Run`, find a node with
-  `Child(scene, node, i)`, `engine.Tick(16f)`, assert `scene.Paint(node).Opacity` / `.LocalTransform.M11`. For the
-  **live** path use a real `AppHost` + `ClickNode` and read the node after the click frame (see 23h/23h2 for
-  RadioButton checked/pressed glyph sizes, 23i for interaction ramp wiring, and 66b for CheckBox draw-on). A control
-  animation is not done until a headless check proves the node's opacity/scale/trim goes mid-flight -> settled.
+- **Logs** - `FrameStats` and `--fg diag` (below) are the deterministic truth. A control animation is not done until
+  the node's opacity/scale/trim is seen going mid-flight -> settled (slow-motion proof below).
 - **GPU pixels** - `dotnet run --project src/FluentGpu.WindowsApp -- --screenshot out\x.png --shot <id>` renders a
   deterministic `ShotScene`. `--frames N` picks the capture frame. **To prove an animation actually runs on the GPU,
   temporarily slow its duration/spring response and capture an early frame** - a slow draw/grow forces a visibly
@@ -224,8 +220,7 @@ it look instant. Use a deterministic frame clock or temporary slow-motion proof 
 5. **Motion**: map hover/press storyboards to `InteractionAnimator` targets/specs; map authored timelines
    (stroke trim, reveal, FLIP, open/close) to `AnimEngine` keyframes/channels; use enter/exit only for true
    insert/remove sub-parts.
-6. **Verify**: a headless `Check()` for behavior + a key motion assertion; a `--shot` capture diffed against WinUI
-   (incl. the slow-motion proof for any animation). Save a golden PNG.
+6. **Verify**: a `--shot` capture compared against WinUI (incl. the slow-motion proof for any animation).
 
 If you skip step 1 you WILL miss states — that is the recurring failure this guide exists to prevent.
 

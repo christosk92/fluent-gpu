@@ -205,4 +205,4 @@ long `Composite`/`TileRaster` passes) from a UI-late or compositor-latch one (`t
 - **Phase 3 — contacts and fixtures.** Contact records, touch replay, engine-level `InjectScroll` replay of recorded
   touchpad/hi-res streams, the ShelvesInPage / StickyPage / SnapPager surfaces, metric rows for edge overshoot, touchpad
   tracking error (posed − Σ contact Δ), contact-start discontinuity and present cadence, `.fgs` fixtures with a
-  headless time base and a `ScrollFixtureSuite` gate ("promote to fixture").
+  headless time base ("promote to fixture").

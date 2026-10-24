@@ -4,8 +4,7 @@
 
 This page is for engine contributors. It explains how the **reconciler** (`src/FluentGpu.Engine/Reconciler/Reconciler.cs`)
 turns an immutable `Element` tree into edits on the retained **struct-of-arrays** scene
-(`src/FluentGpu.Engine/Scene/SceneStore.cs`), where exactly to change each behavior, and how to prove a change with the
-headless harness. It is the working view; the architecture authority is the design corpus — semantics live in
+(`src/FluentGpu.Engine/Scene/SceneStore.cs`), where exactly to change each behavior, and how to check a change. It is the working view; the architecture authority is the design corpus — semantics live in
 [`reconciler-hooks.md`](../../../design/subsystems/reconciler-hooks.md), storage lives in
 [`scene-memory.md`](../../../design/subsystems/scene-memory.md), and the canonical contract values live in
 [`SPEC-INDEX.md`](../../../design/SPEC-INDEX.md). Those docs own the column shapes and the seam declaration; **this
@@ -95,7 +94,6 @@ properties that matter:
     in both modes. Both the stack path (`ReconcileChildrenCore`, ≤128 children) and the planned path
     (`ChildReconcilePlan`, >128) apply it: one forward cursor and one counting pass, no allocation, and pure-keyed
     lists never run the count. The recycle-shape guard (`ShapeCompatible`) checks the ordinal model.
-  - Gates: `gate.reconcile.unkeyed-ordinal.*`, `gate.child-plan-unkeyed-ordinal-yield` (`UnkeyedOrdinalChecks`).
   - Unkeyed identity is still positional *in kind*. If sibling identity matters across structural changes, key the
     children. That is the only rule that survives every mix of inserts, removes and moves.
 
@@ -109,8 +107,7 @@ if (structural || moved || newN != oldN) _scene.Mark(node, NodeFlags.LayoutDirty
 ```
 
 That `moved` branch is load-bearing: a list reverse creates and removes nothing, but the rows still have to move, so a
-pure reorder must still relayout. (The harness pins this — see `FlowReorderChecks` below, and
-`gate.reconcile.moved-flag` for a keyed reorder and a mixed keyed/unkeyed swap at the reconciler level.)
+pure reorder must still relayout. (Easy to regress: check a keyed reorder and a mixed keyed/unkeyed swap.)
 
 **Where to change:** `TreeReconciler.ReconcileChildren` for the structural diff; `ReconcileSingleChild` for the
 single-optional-child case (component output, provider child, `Show` branch).
@@ -188,10 +185,10 @@ Two contracts make this correct, and you must preserve both when you add a chann
 
 1. **Created at mount, re-wired bound→bound.** `BindNode` runs from `Mount`, never from `Update`. On a re-render,
    `Update` (behind the DiffProps `RecordChanged` gate) calls `RewireBinds`: a still-bound channel whose thunk/signal
-   payload changed swaps the effect's source and re-runs it once (re-tracking); an equal payload re-runs nothing
-   (`gate.bind.rewire-*`). So a body must read its source via `fx.Read()` and any static companion via `fx.El` (the
-   element last reconciled) — never a local captured at mount. A static↔bound **flip** is not re-wired
-   (`BindContract` flags it).
+   payload changed swaps the effect's source and re-runs it once (re-tracking); an equal payload re-runs nothing.
+   So a body must read its source via `fx.Read()` and any static companion via `fx.El` (the
+   element last reconciled) — never a local captured at mount. A static↔bound **flip** follows the new form
+   (bound→static unwires the effect, static→bound wires one; `Reconciler.Rewire.cs`).
 2. **The static value is re-asserted on every reconcile only when `!IsBound`.** In `WriteColumns` you will see this
    guard on every bound channel — e.g. `if (!b.Opacity.IsBound) paint.Opacity = b.Opacity.Value;` and
    `if (!b.Width.IsBound) li.Width = b.Width.Value;`. This is the single chokepoint that fixed the historical Opacity
@@ -311,34 +308,22 @@ by [`scene-memory.md`](../../../design/subsystems/scene-memory.md). The richer d
 Keep it POD-only — a GC reference crossing this seam (beyond the handler-column `Action`s, which live in side arrays
 at the edge) breaks the render-thread-confinement contract.
 
-## Verifying: the headless harness
+## Verifying
 
-Verify every reconciler change with the headless harness, never by eye — `src/FluentGpu.VerticalSlice/Program.cs`:
+`dotnet build src/FluentGpu.slnx` must be clean (Debug). There are no tests. The contracts on this page to
+keep in mind when you change behavior:
 
-```bash
-dotnet build src/FluentGpu.VerticalSlice                 # clean build first
-dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
-```
+- Keyed reorder preserves node identity (`[a,b,c] → [c,a,b]` reuses the same handles) and removal drops only the
+  vanished key.
+- `Flow.For`/`Flow.Show` restructure the tree with **no parent re-render** (the boundary-effect autonomy contract).
+- A *pure* `Flow.For` reverse (same keys, same count) preserves the key-matched node **and** relayouts it (the `moved`
+  branch in `ReconcileChildren`).
+- Exit-animation orphaning: removing an animated child keeps it live and drawing (`scene.IsOrphan` + `IsLive`), then
+  `ReclaimOrphan` deferred-frees it once the fade settles (the generation bump makes the handle dead).
+- A nested component owns its own state and a click re-renders only it; a provider value reaches a nested consumer and
+  a change propagates on re-render.
 
-The reconciler/scene behavior on this page is already pinned by named check groups in `Program.cs`. Read them as
-executable spec, and add a `Check("…", condition, detail)` next to the closest one when you change behavior:
-
-- **`KeyedChecks`** — keyed reorder preserves node identity (`[a,b,c] → [c,a,b]` reuses the same handles) and removal
-  drops only the vanished key. Drives `ReconcileRoot` directly with `BoxEl { Key = … }` children.
-- **`FlowChecks`** — `Flow.For`/`Flow.Show` restructure the tree with **no parent re-render** (asserts
-  `FlowProbe.Renders == r0` across a count change and a toggle). This is the boundary-effect autonomy contract.
-- **`FlowReorderChecks`** — a *pure* `Flow.For` reverse (same keys, same count) preserves the key-matched node **and**
-  relayouts it (the `moved` branch in `ReconcileChildren`); asserts the row's bounds actually moved while parent
-  renders stayed flat.
-- **`EnterExitChecks`** — exit-animation orphaning: removing an animated child keeps it live and drawing
-  (`scene.IsOrphan` + `IsLive`), then `ReclaimOrphan` deferred-frees it once the fade settles (the generation bump
-  makes the handle dead). This is the `Remove` → `Orphan` path in the reconciler plus `SceneStore`'s orphan list.
-- **`NestedChecks`** — a nested component mounts, owns its own state, and a click re-renders only it (`child 0` →
-  click → `child 1`) — granular re-render across a component boundary.
-- **`ContextChecks`** — a provider value reaches a nested consumer and a change propagates on re-render (`ctx 7` →
-  `ctx 8`) — `MountProvider` + `ResolveContext` + the per-provider signal.
-
-When you touch reactivity or the scene, also assert on the `FrameStats` returned by `AppHost.RunFrame()`:
+When you touch reactivity or the scene, also read the `FrameStats` returned by `AppHost.RunFrame()`:
 
 - `Rendered == false` on a steady or compositor-only frame (a bound `Transform`/`Opacity`/`Fill`/`Color` write did no
   reconcile/relayout).
@@ -347,9 +332,8 @@ When you touch reactivity or the scene, also assert on the `FrameStats` returned
 - `HotPhaseAllocBytes == 0` on a steady frame — the near-zero-allocation guarantee. Structural reconcile (mount/remove)
   may use bounded Gen0; that is the reconcile edge (phases 3–5), **not** the paint half.
 
-The harness asserts *what was drawn* (the `HeadlessGpuDevice` records the DrawList) and post-layout bounds via
-`host.Scene` — it does **not** assert on-screen D3D12 pixels. "Green harness" means the logic and recorded DrawList are
-correct, not that a control looks right on screen; that is a separate manual needs-pixels pass on the Windows path.
+The headless `HeadlessGpuDevice` records the DrawList and `host.Scene` exposes post-layout bounds; neither shows
+on-screen D3D12 pixels, which are a separate manual needs-pixels pass on the Windows path.
 
 ## Real example: the patterns the reconciler diffs
 
@@ -452,4 +436,4 @@ exactly the drift the canon gate and reviews catch.
 **Next:** [rendering & performance](../../guide/rendering-and-performance.md) for the frame pipeline and the three
 dirty axes · [reactivity.md](../../guide/reactivity.md) for the signals model these internals implement ·
 the [file & ownership map](../../guide/README.md#-agent--file--ownership-map-where-to-change-what) for where to change
-what · the engine [index](./index.md) for the assembly graph and the harness golden rule.
+what · the engine [index](./index.md) for the assembly graph and the verification rule.

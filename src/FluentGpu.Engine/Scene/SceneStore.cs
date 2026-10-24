@@ -101,6 +101,9 @@ public sealed partial class SceneStore : ISceneBackend
     private LayoutInput[] _layout;
     private RectF[] _bounds;          // LOCAL
     private NodePaint[] _paint;
+    // The cold half of the paint column (scene-memory.md §2.6): one row per node with a non-default NodePaintCold,
+    // referenced by NodePaint.ColdRef. Rows are owned here and recycled on SetPaintCold-to-default and on free.
+    private readonly PaintColdRows _paintCold = new(64);
     private DynamicTextKind[] _dynamicText;
     private int _dynamicTextCount;
     private InteractionInfo[] _interaction;
@@ -183,6 +186,10 @@ public sealed partial class SceneStore : ISceneBackend
     private readonly ColdSlab<TextMeasureCache> _measureCache = new();   // GEN-17 (wired) — hot: per-layout text measure
     // Implicit brush transitions (WinUI BrushTransition): sparse, O(transitioning nodes), advanced at phase 7.
     private readonly ColdSlab<BrushAnim> _brushAnims = new();   // GEN-17 (wired)
+    // E20: the gradient fill / gradient border a live theme cross-fade starts from (BrushAnim.GradientBit / BorderBrushBit).
+    // Present only while such a fade runs; dropped with its BrushAnim row.
+    private readonly ColdSlab<GradientSpec> _gradientFadeFrom = new();
+    private readonly ColdSlab<GradientSpec> _borderBrushFadeFrom = new();
     private readonly List<int> _brushScratch = new();
     // Text-edit decoration state (sparse, O(editors)): caret/IME/focus PODs + per-node POOLED decoration-rect slots
     // (grow-only RectF[] reused across frames — a selection drag updates at pointer rate with ZERO steady alloc).
@@ -388,6 +395,7 @@ public sealed partial class SceneStore : ISceneBackend
         _elementTypeId[idx] = elementTypeId;
         _layout[idx] = LayoutInput.Default;
         _bounds[idx] = default;
+        FreePaintCold(idx);   // a free slot holds no cold row (FreeSubtreeCore dropped it); defensive for any other path
         _paint[idx] = NodePaint.Default;
         ClearDynamicText(idx);
         _interaction[idx] = default;
@@ -494,6 +502,7 @@ public sealed partial class SceneStore : ISceneBackend
         // slot must start from its own estimates, not the freed list's row heights (and the table must not outlive it).
         if (_extents.Count != 0) _extents.Remove(idx);
         if (_hitPassThrough.Count != 0) _hitPassThrough.Remove(idx);
+        if (_hitSlop.Count != 0) _hitSlop.Remove(idx);
         if (_wheelTargets.Count != 0) _wheelTargets.Remove(idx);
         if (_wheelOccludes.Count != 0) _wheelOccludes.Remove(idx);   // only a BoxEl rewrites it: a reused slot must not stay opaque
         // Scroll-linked effect rows are index-keyed: a freed slot must not hand its effects (or its engaged signals) to
@@ -527,6 +536,8 @@ public sealed partial class SceneStore : ISceneBackend
             _edgeFades.Remove(idx);
             _imageEffects.Remove(idx);
             _brushAnims.Remove(idx);
+            _gradientFadeFrom.Remove(idx);
+            _borderBrushFadeFrom.Remove(idx);
         }
         if (_paint[idx].VisualKind == VisualKind.Text)
         {
@@ -544,6 +555,7 @@ public sealed partial class SceneStore : ISceneBackend
             ReleaseRowCells(idx);
         if (_paint[idx].VisualKind == VisualKind.Series && _seriesSamples.Count != 0) _seriesSamples.Remove(idx);
         if (_paint[idx].VisualKind == VisualKind.Sprites) ReleaseSprites(idx);
+        FreePaintCold(idx);
         if (_dragSources.Count != 0) _dragSources.Remove(idx);
         if (_dropTargets.Count != 0 && _dropTargets.Remove(idx)) _dropTargetsVersion++;
         ReleaseWindowDrag(idx);   // BoxEl.WindowDrag side table (SceneStore.WindowDrag.cs)
@@ -674,6 +686,16 @@ public sealed partial class SceneStore : ISceneBackend
         _lastChild[p] = c;
         _childCount[p]++;
         MarkRecordDirty(c, RecordDirtyLayout);
+        PropagateMovedSubtreeBits(p, c);
+    }
+
+    /// <summary>A re-attached subtree keeps the record-dirty bits it gathered under its old parent; its NEW ancestors must hold
+    /// them as descendant bits too, or the early out in <see cref="WalkRecordDirty"/> would stop at the moved node (already
+    /// stamped) and leave the new chain unmarked. A fresh node has no bits (CreateNode zeroes them): one byte read.</summary>
+    private void PropagateMovedSubtreeBits(int p, int c)
+    {
+        byte carried = (byte)(_recordDirtySelf[c] | _recordDirtyDescendant[c]);
+        if (carried != 0) WalkRecordDirty(0, p, carried);
     }
 
     /// <summary>Attach <paramref name="child"/> as the first child without freeing/recreating it. Used by reverse
@@ -690,6 +712,7 @@ public sealed partial class SceneStore : ISceneBackend
         _firstChild[p] = c;
         _childCount[p]++;
         MarkRecordDirty(c, RecordDirtyLayout);
+        PropagateMovedSubtreeBits(p, c);
     }
 
     /// <summary>Unlink a child from its parent without freeing it (used by keyed reconcile to reorder).</summary>
@@ -888,6 +911,47 @@ public sealed partial class SceneStore : ISceneBackend
     public ref LayoutInput Layout(NodeHandle h) => ref _layout[h.Raw.Index];
     public ref RectF Bounds(NodeHandle h) => ref _bounds[h.Raw.Index];
     public ref NodePaint Paint(NodeHandle h) => ref _paint[h.Raw.Index];
+    /// <summary>The node's cold paint (<see cref="NodePaintCold"/>): its own row, or the shared default when it has none.
+    /// Read-only: write through <see cref="SetPaintCold"/>, which owns the row's lifetime.</summary>
+    public ref readonly NodePaintCold PaintCold(NodeHandle h) => ref _paintCold[_paint[h.Raw.Index].ColdRef];
+
+    /// <summary>Replace the node's cold paint. A value equal to the current one is a no-op (returns false); a value equal
+    /// to <see cref="NodePaintCold.Default"/> releases the node's row, so only nodes that actually carry a cold field hold
+    /// one. Notes the capture ledger on a change (the snapshot copies the row with the node). Callers still mark
+    /// PaintDirty exactly as they do for a hot <see cref="Paint"/> write.</summary>
+    public bool SetPaintCold(NodeHandle h, in NodePaintCold value)
+    {
+        int idx = (int)h.Raw.Index;
+        int r = _paint[idx].ColdRef;
+        if (_paintCold[r].Equals(value)) return false;
+        if (value.Equals(NodePaintCold.Default))
+        {
+            _paintCold.Free(r);   // r != 0 here: the default row equals Default
+            _paint[idx].ColdRef = 0;
+        }
+        else
+        {
+            if (r == 0) _paint[idx].ColdRef = r = _paintCold.Alloc();
+            _paintCold.Mutable(r) = value;
+        }
+        NoteCaptureChanged(idx);
+        return true;
+    }
+
+    /// <summary>The store's cold row <paramref name="coldRef"/> (a <see cref="NodePaint.ColdRef"/> read off this store's
+    /// paint column) — the capture's copy source.</summary>
+    internal ref readonly NodePaintCold PaintColdRow(int coldRef) => ref _paintCold[coldRef];
+
+    /// <summary>Nodes that carry a cold paint row (diagnostics).</summary>
+    public int PaintColdRowCount => _paintCold.LiveCount;
+
+    private void FreePaintCold(int idx)
+    {
+        int r = _paint[idx].ColdRef;
+        if (r == 0) return;
+        _paintCold.Free(r);
+        _paint[idx].ColdRef = 0;
+    }
     public ref InteractionInfo Interaction(NodeHandle h) => ref _interaction[h.Raw.Index];
     /// <summary>Read a node's flag word. By VALUE, deliberately: a mutable <c>ref</c> here would let any of ~300 call
     /// sites write a captured column invisibly, which the P8 capture ledger cannot survive. Writers use
@@ -999,6 +1063,34 @@ public sealed partial class SceneStore : ISceneBackend
     }
     public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGet((int)h.Raw.Index, out ba);
 
+    /// <summary>E20: the gradient fill a theme cross-fade starts from (read only while the node's BrushAnim carries
+    /// <see cref="BrushAnim.GradientBit"/>).</summary>
+    public void SetGradientFadeFrom(NodeHandle h, in GradientSpec g)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _gradientFadeFrom.GetOrAdd(idx) = g;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetGradientFadeFrom(NodeHandle h, out GradientSpec g) => _gradientFadeFrom.TryGet((int)h.Raw.Index, out g);
+
+    /// <summary>E20: the gradient border a theme cross-fade starts from (<see cref="BrushAnim.BorderBrushBit"/>).</summary>
+    public void SetBorderBrushFadeFrom(NodeHandle h, in GradientSpec g)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _borderBrushFadeFrom.GetOrAdd(idx) = g;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetBorderBrushFadeFrom(NodeHandle h, out GradientSpec g) => _borderBrushFadeFrom.TryGet((int)h.Raw.Index, out g);
+
+    private void RemoveBrushAnim(int idx)
+    {
+        _brushAnims.Remove(idx);
+        _gradientFadeFrom.Remove(idx);
+        _borderBrushFadeFrom.Remove(idx);
+    }
+
     /// <summary>Force a full re-record: mark every occupied node <see cref="NodeFlags.PaintDirty"/>. Device-lost recovery
     /// (threading-render-seam.md §9) — after <c>RecoverDevice</c> the backend's textures + glyph atlas are freshly
     /// recreated and empty, so the next frame must regenerate the WHOLE DrawList to repopulate them via on-demand glyph
@@ -1013,17 +1105,26 @@ public sealed partial class SceneStore : ISceneBackend
             }
     }
 
+    /// <summary>Mark every live text node <see cref="NodeFlags.LayoutDirty"/> and <see cref="NodeFlags.PaintDirty"/>: a body-font
+    /// change (E9) invalidates every measure shaped in the default family, and a clean subtree is skipped by measure, so a
+    /// full layout alone would keep the stale sizes. Cold path (once per body-font change).</summary>
+    public void MarkAllTextLayoutDirty()
+    {
+        for (int i = 1; i < _high; i++)
+            if (_gen[i] != 0 && !_paint[i].Text.IsEmpty) Mark(HandleAt(i), NodeFlags.LayoutDirty | NodeFlags.PaintDirty);
+    }
+
     /// <summary>Set the brush cross-fade progress, driven by the unified engine's <c>AnimChannel.BrushFade</c> track
     /// (the separate per-frame AdvanceBrushAnims ticker is deleted). Marks PaintDirty; drops the row at T≥1 so the
     /// recorder snaps to the live color. The engine's BrushFade track keeps the loop awake while a fade runs.</summary>
     public void SetBrushAnimT(int idx, float t)
     {
         if (!_brushAnims.TryGet(idx, out var ba)) return;
-        if (_gen[idx] == 0) { _brushAnims.Remove(idx); return; }
+        if (_gen[idx] == 0) { RemoveBrushAnim(idx); return; }
         ba.T = t < 0f ? 0f : (t > 1f ? 1f : t);
         _flags[idx] |= NodeFlags.PaintDirty;
         MarkRecordDirty(idx);
-        if (ba.T >= 1f) _brushAnims.Remove(idx);
+        if (ba.T >= 1f) RemoveBrushAnim(idx);
         else _brushAnims.GetOrAdd(idx) = ba;
     }
 
@@ -1424,20 +1525,53 @@ public sealed partial class SceneStore : ISceneBackend
 
     private void MarkRecordDirty(int idx, byte bits)
     {
+        if (!FluentGpu.Hosting.MountProf.On) { MarkRecordDirtyCore(idx, bits); return; }
+        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.RecordDirty);
+        try { MarkRecordDirtyCore(idx, bits); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+    }
+
+    private void MarkRecordDirtyCore(int idx, byte bits)
+    {
         if ((uint)idx >= (uint)_high || _gen[idx] == 0 || bits == 0) return;
-        for (int n = idx; n != 0; n = _parent[n])
+        FluentGpu.Hosting.MountProf.RecordDirtyCalls++;
+        WalkRecordDirty(idx, idx, bits);
+    }
+
+    /// <summary>The record-dirty walk from <paramref name="start"/> to the root: <paramref name="self"/> takes the bits as
+    /// its own (pass 0 for none), every other node on the way as a descendant contribution.
+    /// <para>EARLY OUT (the page-mount RCA, root cause 1): an ancestor that already holds these descendant bits, stamped for
+    /// the publication being built, was reached by an earlier walk of this same publication, and that walk went on to the
+    /// root (or stopped at a node that had, by the same rule) — so every node above it already holds them with this stamp
+    /// and the rest of the walk would change nothing. Without the stop, every mark paid the node's full depth: a Zune
+    /// playlist mount made 20,390 marks over a ~62-deep tree, 1,267,313 ancestor visits, 4.4 ms of a 16 ms frame. Stamps
+    /// cannot retire mid-publication (a consumer's sequence is at most the last published one, below this stamp); the one
+    /// way to break the chain is re-parenting a subtree that carries bits, which <see cref="PropagateMovedSubtreeBits"/>
+    /// repairs on attach.</para></summary>
+    private void WalkRecordDirty(int self, int start, byte bits)
+    {
+        ulong walkStamp = _publishSeq + 1;
+        bool transformBit = (bits & RecordDirtyTransform) != 0;
+        bool contentBit = (bits & (RecordDirtyContent | RecordDirtyLayout)) != 0;
+        for (int n = start; n != 0; n = _parent[n])
         {
+            FluentGpu.Hosting.MountProf.RecordDirtyIters++;
+            if (n != self && (_recordDirtyDescendant[n] & bits) == bits && (_recordDirty[n] & bits) == bits)
+            {
+                ref var held = ref _recordDirtyStamp[n];
+                if ((!transformBit || held.DescendantTransform == walkStamp) && (!contentBit || held.DescendantContent == walkStamp))
+                    break;
+            }
             byte oldAggregate = _recordDirty[n];
             byte oldSelf = _recordDirtySelf[n];
             byte oldDescendant = _recordDirtyDescendant[n];
             byte nextAggregate = (byte)(oldAggregate | bits);
-            byte nextSelf = n == idx ? (byte)(oldSelf | bits) : oldSelf;
-            byte nextDescendant = n == idx ? oldDescendant : (byte)(oldDescendant | bits);
+            byte nextSelf = n == self ? (byte)(oldSelf | bits) : oldSelf;
+            byte nextDescendant = n == self ? oldDescendant : (byte)(oldDescendant | bits);
             // Restamp only this contribution, including when its bit was already present. Ancestors' descendant
             // bits must outlive this publication, but their independent self bits can retire as soon as consumed.
             ref var stamps = ref _recordDirtyStamp[n];
             ulong stamp = _publishSeq + 1;
-            if (n == idx)
+            if (n == self)
             {
                 if ((bits & RecordDirtyTransform) != 0) stamps.SelfTransform = stamp;
                 if ((bits & (RecordDirtyContent | RecordDirtyLayout)) != 0) stamps.SelfContent = stamp;
@@ -1454,10 +1588,10 @@ public sealed partial class SceneStore : ISceneBackend
             // its snapshot row at the first write until a full capture: the lyrics karaoke wipe advanced at the
             // full-capture cadence (~5 Hz) while every frame wrote a new split. Ancestors are unchanged except for
             // their dirty bytes, so they stay gated on a bit change below.
-            if (n == idx) NoteCaptureChanged(n);
+            if (n == self) NoteCaptureChanged(n);
             if (nextAggregate == oldAggregate && nextSelf == oldSelf && nextDescendant == oldDescendant)
                 continue;
-            if (n != idx) NoteCaptureChanged(n);   // P8: the record-dirty BYTES are captured columns - a changed bit is a changed row
+            if (n != self) NoteCaptureChanged(n);   // P8: the record-dirty BYTES are captured columns - a changed bit is a changed row
 
             _recordDirty[n] = nextAggregate;
             _recordDirtySelf[n] = nextSelf;
@@ -1816,6 +1950,24 @@ public sealed partial class SceneStore : ISceneBackend
     public bool TryGetHitTestPassThrough(NodeHandle node, out NodeHandle target)
         => _hitPassThrough.TryGet((int)node.Raw.Index, out target);
 
+    // ── hit slop (Element.HitSlop) ────────────────────────────────────────────────────────────────────
+    // A box's hit rect reaching past its laid-out box, per side (InputDispatcher.Hit). Sparse — O(boxes that set one).
+    private readonly ColdSlab<Edges4> _hitSlop = new();
+
+    public void SetHitSlop(NodeHandle node, Edges4 slop)
+    {
+        if (!IsLive(node)) return;
+        if (slop.Left <= 0f && slop.Top <= 0f && slop.Right <= 0f && slop.Bottom <= 0f) { if (_hitSlop.Count != 0) _hitSlop.Remove((int)node.Raw.Index); }
+        else _hitSlop.GetOrAdd((int)node.Raw.Index) = slop;
+    }
+
+    /// <summary>The box's own hit slop (<see cref="SetHitSlop"/>), false when it set none.</summary>
+    public bool TryGetHitSlop(NodeHandle node, out Edges4 slop)
+    {
+        if (_hitSlop.Count == 0) { slop = default; return false; }
+        return _hitSlop.TryGet((int)node.Raw.Index, out slop);
+    }
+
     // ── background-scroll occlusion (Element.BlocksBackgroundScroll) ──────────────────────────────
     // A covering modal/popup surface's geometric bounds sit over background content it is not an ancestor of; this
     // marks it opaque for InputDispatcher.ContainingScrollerForAxis's paint-order-blind geometric fallback. Sparse —
@@ -1953,7 +2105,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGet((int)h.Raw.Index, out s);
-    public void ClearShadow(NodeHandle h) { int idx = (int)h.Raw.Index; _shadows.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearShadow(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_shadows.Contains(idx)) return; _shadows.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetArc(NodeHandle h, in ArcSpec a)
     {
@@ -1963,7 +2115,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetArc(NodeHandle h, out ArcSpec a) => _arcs.TryGet((int)h.Raw.Index, out a);
-    public void ClearArc(NodeHandle h) { int idx = (int)h.Raw.Index; _arcs.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearArc(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_arcs.Contains(idx)) return; _arcs.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetPolylineStroke(NodeHandle h, in PolylineStrokeSpec p)
     {
@@ -1973,7 +2125,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetPolylineStroke(NodeHandle h, out PolylineStrokeSpec p) => _polylines.TryGet((int)h.Raw.Index, out p);
-    public void ClearPolylineStroke(NodeHandle h) { int idx = (int)h.Raw.Index; _polylines.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearPolylineStroke(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_polylines.Contains(idx)) return; _polylines.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetPath(NodeHandle h, in PathSpec ps)
     {
@@ -1983,7 +2135,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetPath(NodeHandle h, out PathSpec ps) => _paths.TryGet((int)h.Raw.Index, out ps);
-    public void ClearPath(NodeHandle h) { int idx = (int)h.Raw.Index; _paths.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearPath(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_paths.Contains(idx)) return; _paths.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetSeries(NodeHandle h, in SeriesSpec spec)
     {
@@ -1993,7 +2145,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetSeries(NodeHandle h, out SeriesSpec spec) => _series.TryGet((int)h.Raw.Index, out spec);
-    public void ClearSeries(NodeHandle h) { int idx = (int)h.Raw.Index; _series.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearSeries(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_series.Contains(idx)) return; _series.Remove(idx); MarkRecordDirty(idx); }
 
     /// <summary>The tier-3 STENCIL path clip for this node (gpu-renderer.md §6). Setting it marks SparsePaint and
     /// dirties the record exactly like <see cref="SetPath"/> does for the FillPath lane, so a changed silhouette
@@ -2008,7 +2160,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetClipPath(NodeHandle h, out ClipPathSpec cs) => _clipPaths.TryGet((int)h.Raw.Index, out cs);
-    public void ClearClipPath(NodeHandle h) { int idx = (int)h.Raw.Index; _clipPaths.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearClipPath(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_clipPaths.Contains(idx)) return; _clipPaths.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetGradient(NodeHandle h, in GradientSpec g)
     {
@@ -2018,7 +2170,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGet((int)h.Raw.Index, out g);
-    public void ClearGradient(NodeHandle h) { int idx = (int)h.Raw.Index; _gradients.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearGradient(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_gradients.Contains(idx)) return; _gradients.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetRadialGradientCenter(NodeHandle h, Point2 center)
     {
@@ -2049,7 +2201,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetGradientTo(NodeHandle h, out GradientSpec g) => _gradientTos.TryGet((int)h.Raw.Index, out g);
-    public void ClearGradientTo(NodeHandle h) { int idx = (int)h.Raw.Index; _gradientTos.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearGradientTo(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_gradientTos.Contains(idx)) return; _gradientTos.Remove(idx); MarkRecordDirty(idx); }
 
     /// <summary>The fill's blend toward <see cref="SetGradientTo"/>. Paint-only: equal writes are no-ops; 0 is stored as
     /// absent (the recorder's default).</summary>
@@ -2108,7 +2260,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetBorderBrush(NodeHandle h, out GradientSpec g) => _borderBrushes.TryGet((int)h.Raw.Index, out g);
-    public void ClearBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; _borderBrushes.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_borderBrushes.Contains(idx)) return; _borderBrushes.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetHoverGradient(NodeHandle h, in GradientSpec g)
     {
@@ -2118,7 +2270,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetHoverGradient(NodeHandle h, out GradientSpec g) => _hoverGradients.TryGet((int)h.Raw.Index, out g);
-    public void ClearHoverGradient(NodeHandle h) { int idx = (int)h.Raw.Index; _hoverGradients.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearHoverGradient(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_hoverGradients.Contains(idx)) return; _hoverGradients.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetPressedGradient(NodeHandle h, in GradientSpec g)
     {
@@ -2128,7 +2280,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetPressedGradient(NodeHandle h, out GradientSpec g) => _pressedGradients.TryGet((int)h.Raw.Index, out g);
-    public void ClearPressedGradient(NodeHandle h) { int idx = (int)h.Raw.Index; _pressedGradients.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearPressedGradient(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_pressedGradients.Contains(idx)) return; _pressedGradients.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetHoverBorderBrush(NodeHandle h, in GradientSpec g)
     {
@@ -2138,7 +2290,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetHoverBorderBrush(NodeHandle h, out GradientSpec g) => _hoverBorderBrushes.TryGet((int)h.Raw.Index, out g);
-    public void ClearHoverBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; _hoverBorderBrushes.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearHoverBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_hoverBorderBrushes.Contains(idx)) return; _hoverBorderBrushes.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetPressedBorderBrush(NodeHandle h, in GradientSpec g)
     {
@@ -2148,7 +2300,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetPressedBorderBrush(NodeHandle h, out GradientSpec g) => _pressedBorderBrushes.TryGet((int)h.Raw.Index, out g);
-    public void ClearPressedBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; _pressedBorderBrushes.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearPressedBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_pressedBorderBrushes.Contains(idx)) return; _pressedBorderBrushes.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetAcrylic(NodeHandle h, in AcrylicSpec a)
     {
@@ -2158,7 +2310,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGet((int)h.Raw.Index, out a);
-    public void ClearAcrylic(NodeHandle h) { int idx = (int)h.Raw.Index; _acrylics.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearAcrylic(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_acrylics.Contains(idx)) return; _acrylics.Remove(idx); MarkRecordDirty(idx); }
 
     /// <summary>BoxEl.RepaintBoundary: the subtree records into its own retained slice (SceneRecorder's isolation cut).
     /// Equality-gated so an identical re-render marks nothing.</summary>
@@ -2196,7 +2348,7 @@ public sealed partial class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
     }
     public bool TryGetEdgeFade(NodeHandle h, out EdgeFadeSpec e) => _edgeFades.TryGet((int)h.Raw.Index, out e);
-    public void ClearEdgeFade(NodeHandle h) { int idx = (int)h.Raw.Index; _edgeFades.Remove(idx); MarkRecordDirty(idx); }
+    public void ClearEdgeFade(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_edgeFades.Contains(idx)) return; _edgeFades.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetImageEffects(NodeHandle h, in ImageVisualEffects effects)
     {

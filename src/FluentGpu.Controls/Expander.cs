@@ -107,11 +107,11 @@ public sealed class Expander : Component
 
     // The one disclosure motion (docs/plans/smooth-reveal-implementation.md §1): layout snaps once, the presented height
     // springs under MotionTok.Reveal, siblings ride it at paint time; Parallax lets the panel trail the edge.
-    static readonly LayoutTransition Reveal = new(TransitionChannels.Size, MotionTok.Reveal.ToDynamics(),
+    static LayoutTransition Reveal => new(TransitionChannels.Size, MotionTok.Reveal.ToDynamics(),
         Size: SizeMode.FlowReveal, Anchor: SizeAnchor.Parallax);
     // ExpanderOptions.AnimateContentResize=false's STEADY-state spec: no Size channel, so a settled-open clip host's content
     // change lands in the next layout as is. Only used while no toggle is in flight (see `animateResize` in Render).
-    static readonly LayoutTransition RevealNoResize = Reveal with { Channels = TransitionChannels.None };
+    static LayoutTransition RevealNoResize => Reveal with { Channels = TransitionChannels.None };
 
     public override Element Render()
     {
@@ -221,7 +221,7 @@ public sealed class Expander : Component
             Children =
             [
                 // ExpanderChevronGlyphSize = 12. ExpanderChevronForeground = TextFillColorPrimaryBrush. One glyph, rotated.
-                new TextEl(Icons.ChevronDown) { Size = 12f, Color = Tok.TextPrimary, FontFamily = Theme.IconFont },
+                new TextEl(Icons.ChevronDown) { Size = 12f, Color = Tok.TextPrimary, FontFamily = Tok.Definition.Fonts.Icon },
             ],
         };
         if (parts is { } cp)

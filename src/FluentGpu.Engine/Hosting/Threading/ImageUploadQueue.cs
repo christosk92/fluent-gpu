@@ -32,7 +32,7 @@ public sealed class ImageUploadQueue
 {
     /// <summary>One unit of render-thread image work. <see cref="Evict"/> ⇒ free id (Buffer null); else stage
     /// <c>Buffer[0..ByteLen]</c> into the resident texture for <see cref="Id"/> at <see cref="W"/>×<see cref="H"/>.</summary>
-    public struct Job { public int Id; public byte[]? Buffer; public int W, H, ByteLen; public bool Evict; }
+    public struct Job { public int Id; public FluentGpu.Media.PixelBlock? Buffer; public int W, H, ByteLen; public bool Evict; }
 
     private readonly ConcurrentQueue<Job> _jobs = new();                                    // UI → render
     // Render-owned. Each registered consumer retains its last adopted image snapshot until replacement.
@@ -85,16 +85,14 @@ public sealed class ImageUploadQueue
     /// (the scheduler's decode buffer taken via <c>DecodeScheduler.TryTakeDecodeBuffer</c>, or a <see cref="BufferPool"/> /
     /// <c>ArrayPool&lt;byte&gt;.Shared</c> rental the sink copied into); the render thread returns it via
     /// <see cref="ReturnUploadBuffer"/> after <c>Stage</c> copies it. Only <c>buffer[0..byteLen)</c> are pixels.</summary>
-    public void EnqueueUpload(int id, byte[] buffer, int w, int h, int byteLen)
+    public void EnqueueUpload(int id, FluentGpu.Media.PixelBlock buffer, int w, int h, int byteLen)
         => _jobs.Enqueue(new Job { Id = id, Buffer = buffer, W = w, H = h, ByteLen = byteLen, Evict = false });
 
     /// <summary>Render thread: give a drained job's buffer back after <c>Stage</c> copied it. Routes to the host's bounded
-    /// pool — the device leaf never knows the pool type. Null pool falls back to ArrayPool.Shared.</summary>
-    public void ReturnUploadBuffer(byte[] buffer)
+    /// pool — the device leaf never knows the pool type. With no pool the block is dropped and its finalizer frees it.</summary>
+    public void ReturnUploadBuffer(FluentGpu.Media.PixelBlock buffer)
     {
-        var pool = BufferPool;
-        if (pool is not null) pool.Return(buffer);
-        else System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+        BufferPool?.Return(buffer);
     }
 
     /// <summary>UI thread: hand an eviction to the render thread (frees the GPU texture there, fence-deferred).</summary>

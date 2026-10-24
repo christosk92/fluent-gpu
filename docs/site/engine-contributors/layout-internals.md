@@ -6,7 +6,7 @@ Layout is **phase 6** of the frame loop: between reconcile (which patches the re
 
 This page is the as-built tour for someone **changing** the engine. It assumes you have read [rendering & performance](../../guide/rendering-and-performance.md) (the frame pipeline, the three dirty axes, the boundary firewall from above) and want to know how the two descents, the scoped-relayout walk, and the virtualization participant are wired — and exactly which file to open. The architecture **authority** is [`design/subsystems/layout.md`](../../../design/subsystems/layout.md) (and [`virtualization.md`](../../../design/subsystems/virtualization.md)); this page is the working view over the live source and **flags where the live core is narrower than the design of record**. Where they disagree, the source wins.
 
-> **Where it all lives.** `src/FluentGpu.Engine/Layout/FlexLayout.cs` (the two descents + grid + scroll + the virtualization arrange) · `src/FluentGpu.Engine/Layout/LayoutInvalidator.cs` (the scoped-relayout boundary walk) · `src/FluentGpu.Engine/Scene/VirtualLayout.cs` (the `IVirtualLayout` seam + built-in layouts) · `src/FluentGpu.Engine/Hosting/AppHost.cs` (the phase-6 call site). Verify in `src/FluentGpu.VerticalSlice/Program.cs`.
+> **Where it all lives.** `src/FluentGpu.Engine/Layout/FlexLayout.cs` (the two descents + grid + scroll + the virtualization arrange) · `src/FluentGpu.Engine/Layout/LayoutInvalidator.cs` (the scoped-relayout boundary walk) · `src/FluentGpu.Engine/Scene/VirtualLayout.cs` (the `IVirtualLayout` seam + built-in layouts) · `src/FluentGpu.Engine/Hosting/AppHost.cs` (the phase-6 call site).
 
 ---
 
@@ -228,26 +228,11 @@ The realize **window** is `VirtualWindowing.NeedsRealize` plus the `D1` realize-
 
 ---
 
-## Verifying: `FlexChecks`, `WrapChecks`, `GridChecks`, `SizeModeChecks`, `ReflowChecks`
+## Verifying
 
-There is no build/test for layout other than the **headless harness** — `src/FluentGpu.VerticalSlice/Program.cs`. After any layout change:
+After any layout change, `dotnet build src/FluentGpu.slnx` must be clean (Debug). There are no tests. Run a frame headless (no GPU, no window) and read post-layout `Bounds` back from `host.Scene` (`AbsoluteRect`/`Bounds`), or look at a gallery page.
 
-```bash
-dotnet build src/FluentGpu.VerticalSlice          # clean build first
-dotnet run   --project src/FluentGpu.VerticalSlice # expect: ALL CHECKS PASSED
-```
-
-The layout checks build a tree, run a frame headless (no GPU, no window), and assert on post-layout `Bounds` read back from `host.Scene` (`AbsoluteRect`/`Bounds`). The ones to extend when you touch layout, all in `Program.cs`:
-
-| Check group | What it pins | Example assertion |
-|---|---|---|
-| `FlexChecks` | justify / grow / align / padding+gap | a 300-wide `SpaceBetween` row → children at `x = 0` and `260`; two `Grow=1` → `150`+`150`; `align-items: center` in a 100-tall row → `y = 40` |
-| `WrapChecks` / `ConstrainedWrapChecks` | multi-line flow; grow children wrapping text to `availW − fixed siblings` | three 40-wide tiles in a 100-wide wrap row → third tile at `(0, 20)`; the gallery shell's wrapped caption measures to the content frame width |
-| `GridChecks` / `AutoGridChecks` / `GridStretchChecks` | star tracks + row-major auto-flow; auto-fill count; stretch-width grid measuring real content height | star columns split width (`x = 0,110,220`, `w = 100`); a stretch-width 8-cell/4-col grid measures `H = 192` so the sibling below doesn't overlap |
-| `SizeModeChecks` / `ReflowChecks` | `SizeMode.Relayout`/`Reflow` animations re-solving a boundary scope each tick; settle restores the declared input | a collapsing wrapper eases its height monotonically, the trailing sibling shift rides the interp, and settle restores the declared `NaN`(auto) `LayoutInput.Height` |
-| `VirtualChecks` (checks 38–40a) | windowing + recycle at scale; transform-only in-window scroll | 10k×40px rows realize `≥10 && <40` children with `ContentH = N×40`; an in-window wheel is `!Rendered` with the content `LocalTransform.Dy` shifted; a fling keeps live nodes bounded (`< 90`, no leak) |
-
-When you change reactivity-adjacent layout, also assert on `FrameStats`: a bound scroll/animation frame must be `Rendered == false` (compositor bypass), and a steady frame must have `HotPhaseAllocBytes == 0` (the near-zero-alloc contract — phases 6–13 allocate **no** managed memory; a boundary-crossing virtual realize is bounded Gen0 at the reconcile edge, *not* the paint half). Add a `Check("…", condition, detail)` for the exact behavior you changed and call it from `Main`. The harness asserts the **logic and the recorded DrawList**, not on-screen D3D12 pixels — that is a separate manual "needs-pixels" pass on the real Windows path.
+When you change reactivity-adjacent layout, also read `FrameStats`: a bound scroll/animation frame must be `Rendered == false` (compositor bypass), and a steady frame must have `HotPhaseAllocBytes == 0` (the near-zero-alloc contract — phases 6–13 allocate **no** managed memory; a boundary-crossing virtual realize is bounded Gen0 at the reconcile edge, *not* the paint half). On-screen D3D12 pixels are a separate manual "needs-pixels" pass on the real Windows path.
 
 ---
 

@@ -45,6 +45,17 @@ public sealed partial class AnimEngine
 
     public AnimEngine(SceneStore scene) => _scene = scene;
 
+    /// <summary>E21: the frame the next tick poses will not be SHOWN (the main window is still hidden behind its reveal gate, the
+    /// window is frozen, or a restore hold keeps an older frame on the glass). Set by the host before every tick. While true a
+    /// pending-start row (<see cref="AnimFlags.StartPending"/>: Enter, Stagger, Exit, a flow reveal) does not advance and keeps
+    /// its seed-frame hold, so the first frame that IS shown poses it at t = 0 and its clock starts there. The choreography
+    /// (order, delays, durations, curves) is unchanged, and a frame that is shown runs exactly as before.</summary>
+    public bool HoldPendingStarts { get; set; }
+
+    /// <summary>The scheduler's animation clock (the running sum of the frame steps): the time base the live theme cross-fade
+    /// (E20) measures its shared timeline on, so a subtree that joins the fade late lands on the same curve.</summary>
+    public double ClockNowMs => _clock.NowMs;
+
     /// <summary>Due-check slack (ms): a row whose period rounds to 17 ms must still be due on a 16.67 ms frame, and a
     /// 33 ms row on the fourth 8.33 ms tick. Chromium's begin-frame judder margin plays the same role.</summary>
     internal const double CadenceSlackMs = 0.5;
@@ -113,6 +124,13 @@ public sealed partial class AnimEngine
                 // commit work (a page mount making the frame 40-60 ms long). Web Animations resolves a pending play at the
                 // first frame after the commit (Gecko Animation::Tick/TryTriggerNow: "trigger on the next tick, with this
                 // tick's timestamp"); Flutter's Ticker takes the first vsync after start() as elapsed 0.
+                // E21: a frame that will not be shown is not a presentation. The row stays at t = 0 and keeps its seed-frame
+                // hold (JustSeeded), so the first SHOWN frame poses t = 0 and the start resolves from there.
+                if (HoldPendingStarts && r.Has(AnimFlags.StartPending))
+                {
+                    r.Flags |= AnimFlags.JustSeeded;
+                    continue;
+                }
                 if (!justSeeded && r.Has(AnimFlags.StartPending))
                 {
                     r.Flags &= ~AnimFlags.StartPending;
@@ -247,9 +265,31 @@ public sealed partial class AnimEngine
                 if (_scene.TryGetRevealBand(owner, slot, out var band) && band.Opening) _scene.ClearRevealBand(owner, slot);
                 QueueSettled(owner, ch);
             }
+            // A reflow that eased toward the node's AUTO size (declared NaN) lands on the size solved when it was seeded: content that changed
+            // under it since (a title that re-sets at the widths a docked panel's slide passes through) would snap the difference on the
+            // restore. The host glides on from here instead (AppHost.RunReflowLayout, SettledToAuto).
+            if (ch is AnimChannel.LayoutW or AnimChannel.LayoutH && float.IsNaN(_slab.At(s).RestoreTo) && _scene.IsLive(owner)
+                && (_scene.Flags(owner) & NodeFlags.Exiting) == 0)
+                SettledToAuto.Add((owner, ch, _slab.At(s).To));
             SettleRestore(s);
             FreeSlot(s);
         }
+    }
+
+    /// <summary>Reflow rows toward an AUTO size (declared NaN) that completed this tick: the node, the axis and the size the row landed on. The host
+    /// compares each with the size the restore solves and, where the content changed under the row, glides on from the landed size
+    /// (<see cref="ReflowContinue"/>) instead of letting the difference snap. Cleared by the host.</summary>
+    public List<(NodeHandle Node, AnimChannel Channel, float Landed)> SettledToAuto { get; } = new();
+
+    /// <summary>Glide a node whose reflow toward its auto size just landed on <paramref name="landed"/> on to <paramref name="solved"/>, the size its
+    /// content now solves to, on the node's own reflow dynamics. False where the node no longer carries a reflow transition.</summary>
+    internal bool ReflowContinue(NodeHandle node, AnimChannel ch, float landed, float solved)
+    {
+        if (!TryGetTransition(node, out var spec) || spec.Size != SizeMode.Reflow) return false;
+        // From rest, critically damped: the row it continues has stopped, so the glide on starts slow instead of carrying most of a small residual
+        // in its first frame (an eased tween of a short distance reads as a step).
+        ReflowSize(node, ch, landed, solved, spec with { Dynamics = TransitionDynamics.Spring(0.30f, 1f), ExitDynamics = null, DelayMs = 0f });
+        return Find(node, ch) >= 0;
     }
 
     private void FreeSlot(int slot)
@@ -328,6 +368,7 @@ public sealed partial class AnimEngine
             MarkReflowLayoutDirty(node);
             _reflowWrote = true;
             ReflowRoots.Add(node);
+            ReflowSizeWritten?.Invoke(node);
         }
     }
 
@@ -352,6 +393,12 @@ public sealed partial class AnimEngine
     public void SeedBrushFade(NodeHandle node, float durationMs)
         => SeedEased(node, AnimChannel.BrushFade, 0f, 1f, durationMs, Easing.Linear);
 
+    /// <summary>E20: seed the brush cross-fade part-way along a shared timeline — progress <paramref name="fromT"/> → 1 over the
+    /// <paramref name="remainingMs"/> that timeline has left, so a node that joins a running theme fade late (a parked page
+    /// that comes back mid-fade) shows the same <c>T</c> as the nodes that started with it. Linear, like every brush fade.</summary>
+    public void SeedBrushFade(NodeHandle node, float remainingMs, float fromT)
+        => SeedEased(node, AnimChannel.BrushFade, fromT, 1f, remainingMs, Easing.Linear);
+
     /// <summary>Seed (or retarget) a 0-ALLOC two-point eased track From→To over durationMs with a NAMED curve — no
     /// Keyframe[] (AdvanceTimeline's two-point branch reads Gen.FromV/To/EaseId directly). No first-frame hold: the fade
     /// advances immediately, matching the deleted AdvanceBrushAnims/InteractionAnimator tickers. This is the 0-alloc seed
@@ -359,6 +406,7 @@ public sealed partial class AnimEngine
     /// allocates a Keyframe[] per call (fine for one-shot enter/exit, not for frequent hover/press/brush edges).</summary>
     public void SeedEased(NodeHandle node, AnimChannel channel, float from, float to, float durationMs, Easing ease)
     {
+        if (Snapping && TryLandAtEnd(node, channel, to)) return;   // SnapScope: end value now, no row
         int s = Get(node, channel, false);
         ref AnimValue r = ref _slab.At(s);
         r.Kind = GenKind.Eased;
@@ -416,6 +464,7 @@ public sealed partial class AnimEngine
                        float? initial = null, float initialVelocity = 0f,
                        CompositeOp composite = CompositeOp.Replace, float delayMs = 0f)
     {
+        if (Snapping && composite == CompositeOp.Replace && TryLandAtEnd(node, channel, to)) return;   // SnapScope: end value now, no row
         int existing = Find(node, channel);
         if (existing >= 0 && _slab.At(existing).Kind == GenKind.Spring)
         {
@@ -453,6 +502,7 @@ public sealed partial class AnimEngine
     internal void RebaseSpring(NodeHandle node, AnimChannel channel, float to, in SpringParams spring, float from,
                                float velocityScale = 1f)
     {
+        if (Snapping && TryLandAtEnd(node, channel, to)) return;   // SnapScope: end value now, no row
         int existing = Find(node, channel);
         if (existing < 0 || _slab.At(existing).Kind != GenKind.Spring)
         {

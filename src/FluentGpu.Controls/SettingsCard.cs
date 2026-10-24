@@ -101,7 +101,10 @@ public static partial class SettingsCard
     }
 
     public static Style? StyleOverride;
-    public static Style DefaultStyle => StyleOverride ?? new Style
+    public static Style DefaultStyle => StyleOverride ?? ControlStyles.Resolve(ControlStyles.SettingsCardStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a SettingsCard entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style
     {
         Background = Tok.FillCardDefault,
         BackgroundPointerOver = Tok.FillControlSecondary,
@@ -224,7 +227,7 @@ public static partial class SettingsCard
                 : new TextEl(o.HeaderIcon!)
                 {
                     Size = s.HeaderIconSize,
-                    FontFamily = Theme.IconFont,
+                    FontFamily = Tok.Definition.Fonts.Icon,
                     Color = o.IsEnabled ? s.Foreground : s.ForegroundDisabled,
                     HoverColor = s.ForegroundPointerOver,
                     PressedColor = s.ForegroundPressed,
@@ -329,7 +332,7 @@ public static partial class SettingsCard
                 new TextEl(glyph)
                 {
                     Size = ActionIconMaxSize,
-                    FontFamily = Theme.IconFont,
+                    FontFamily = Tok.Definition.Fonts.Icon,
                     Color = o.IsEnabled ? s.Foreground : s.ForegroundDisabled,
                     HoverColor = s.ForegroundPointerOver,
                     PressedColor = s.ForegroundPressed,

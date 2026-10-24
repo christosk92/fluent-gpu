@@ -488,6 +488,50 @@ promise otherwise. Gate: `gate.occlusion.hook-follows-swapchain` (`SeriesSuite`)
 
 ---
 
+### 2.5 The main-window reveal gate and the re-armable reveal exemption (AS-BUILT 2026-10, EP8)
+
+A composited window shown before its swapchain has presented is a hollow or wrong-coloured rectangle, so the main window now
+uses the pop-out rule (the hidden window + first-present reveal, `DetachedRevealGate`) behind a public host API.
+
+| Member | Contract |
+|---|---|
+| `AppHost.BeginRevealGate(RevealGateOptions? = null)` | Main window, UI thread, window **hidden**. Arms the gate: the host is exempt from the hidden-window park (`_revealPending`, shared with the pop-out reveal) so the frame the reveal waits for paints into the hidden window; re-arms the swapchain exemption; requests a full repaint. A pop-out throws (it uses `BeginDetachedReveal`). |
+| `RevealGateOptions { FirstFrameReady, TimeoutMs = 750 }` | `FirstFrameReady` is evaluated at the start of every frame while pending (null = ready); the first frame at which it is true records `PublishSequence` and asks for a fresh publication. `TimeoutMs` is the watchdog. |
+| Reveal condition (`TryRevealMain`, after `RunFrame`) | `FirstFrameReady` was seen true **and** `ISwapchain.HasPresentedContent` **and** `RenderPresentSeq` is newer than the publication recorded at the ready edge (a stood-down present or a pre-ready frame never reveals), **or** the watchdog deadline. Then, once: `OnApplyThemeMaterial(Tok.Theme == Dark)` (OS material + dark attribute, and anything that changed while hidden, land **before** the window is visible), `IPlatformWindow.Show()`, `MainRevealed(RevealTiming)`, one `[reveal] main shown ...` line. |
+| `ISwapchain.ArmRevealExemption()` (default no-op) | Forgets that the target ever presented content: `HasPresentedContent` reads false and the next present of a composited target is the exempt reveal frame again (`D3D12Device.Present`'s `revealFrame`). `BeginRevealGate` calls it, so a tray restore repaints into the hidden window and shows on that present instead of showing the last frame. |
+| `AppOptions.RevealOnFirstPresent` / `FirstFrameReady` / `RevealTimeoutMs` (`FluentApp`) | Cold start calls `BeginRevealGate` instead of `window.Show()`; `FluentApp.SetWindowVisible(true)` re-arms it for every later show-from-hidden. Needs a composited window (`Mica`); a non-composited window logs and keeps show-first. While pending the `WindowStateChanged` relay reads the window as visible, so the real Show is not a second "shown" edge. |
+
+**Composited-only (EP8 → EP9):** a non-composited HWND swapchain stands a hidden window's presents down (and DXGI reports a hidden
+flip-model window as occluded), so there is no frame to pre-load and the gate does not apply; `RevealOnFirstPresent` is ignored (and
+logged) for a window with `Composited = false`. Composition is now its own option (§2.6), so a window that needs the gate without a
+backdrop uses `Composited = true` + `WindowMaterial.None`. Tests: `RevealGateTests` (headless window: show after the first ready present and after the material callback,
+the watchdog, a stood-down present, re-arm for a show-from-hidden).
+
+---
+
+### 2.6 Window material, composited decoupled from Mica, and DWM writes ordered with the present (AS-BUILT 2026-10, EP9)
+
+The system backdrop and the swapchain's composition are two decisions. `Seams/Pal/WindowMaterial.cs` owns the vocabulary and the one
+policy function; the Windows backend and the host both read it.
+
+| Member | Contract |
+|---|---|
+| `WindowMaterial { None, Mica, MicaAlt, Acrylic }` | The DWM system backdrop. `None` writes `DWMSBT_NONE` (a previous backdrop is really removed) and the frame clears to the **opaque** theme ground. |
+| `WindowMaterialPolicy.Resolve(material, composited, customFrame)` | `TransparentGround = composited && material != None`; `ExtendGlass = TransparentGround && !customFrame` (a custom frame owns zero margins); `VideoCapable = composited`. A non-composited window keeps an opaque ground whatever the material (only its title bar can show a backdrop). |
+| `AppOptions.Material : WindowMaterial?` / `AppOptions.Composited : bool?` | Null keeps the legacy rule (`Mica`/`MicaAlt` flags pick the material; composited iff `Mica`), so existing callers are unchanged. `Composited = true` + `Material = None` is the supported composited-without-backdrop window; video needs a composited swapchain and the entry point logs when it is off. The same value feeds `WindowDesc.Composited` (no redirection bitmap, the modal-resize paint rule) and the `D3D12Device` primary swapchain. |
+| `FluentApp.SetWindowMaterial(WindowMaterial)` / `Material` / `Composited` | Live change. The host updates the ground (`Tok.ClearWindowBackground` for an opaque one, `Theme.WindowBackground = Transparent` with its inactive solid fallback otherwise) and requests a repaint, and the DWM write rides the ordered path below. `SetWindowMaterialAlt(bool)` is a wrapper. |
+| `AppHost.SetWindowMaterial(material, dark, ordered = true)`, `WindowMaterialSink`, `SeedWindowMaterial` | The engine half (headless-testable): the sink is the backend's writer (Win32: `Win32Theme.ApplyWindowMaterial(hwnd, dark, material, composited, customFrame)` after `Win32Theme.AlignToDwm()` = `DwmFlush`). |
+| `AppHost.QueueBeforePresent(Action)` | Any thread, main window. The work runs on the **presenting thread** (the render thread, or the UI thread inline) immediately before the first shown (not held) present whose publication is newer than the one current at the call (`MinPublishSeq = PublishSequence + 1`), exactly once, FIFO; a full repaint is requested so that present exists. A hidden window has nothing to order against and runs it at once; an item no present claims within 500 ms runs on the UI thread at the next frame start. Zero cost when the queue is empty (one volatile read per present). |
+| `OnApplyThemeMaterial(dark)` | Unchanged: the live light/dark path keeps today's UI-thread write at the top of `Paint`. Only a material change (and the transaction, E5) uses the ordered path. |
+
+Tests: `DwmOrderTests` (a recording headless swapchain + sink: write-then-present order, exactly once, FIFO, immediate when
+unordered or hidden, the stale drain, the ground per material, the policy table, video-needs-composited, `MaterialPolicy`).
+**Package note:** additive in the API (new options and members; the `Mica`/`MicaAlt` flags and the `Win32Theme.ApplyWindowMaterial` bool
+overload remain), but `Mica = false` no longer writes `DWMSBT_TRANSIENTWINDOW` (it means `None`) and every non-glass window now writes
+zero frame margins; ships with the 0.2.0 minor bump of the theming work.
+
+---
+
 ## 3. D3D12 device, queues, fences, heaps, allocator (`FluentGpu.Windows` D3D12/)
 
 Forked from ComputeSharp's compute-only `GraphicsDevice` (per `architecture-spec.md` §3b.3): keep

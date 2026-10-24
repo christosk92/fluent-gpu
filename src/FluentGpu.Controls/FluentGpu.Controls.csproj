@@ -7,7 +7,6 @@
        platform code reaches controls only through the Engine's seam interfaces. -->
   <ItemGroup>
     <!-- The M1 tests exercise MediaPlayerElement's pure layout/degrade helpers (internal static). -->
-    <InternalsVisibleTo Include="FluentGpu.Windows.Tests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />

@@ -8,8 +8,8 @@ tree, painted on **Direct3D 12 + DirectWrite + DirectComposition** (pure Win32, 
 swappable seam so a macOS backend can drop in later.
 
 > **Status (June 2026): the engine is built and runs.** The reactive core, keyed reconciler, flex/grid layout, the
-> control kit, virtualization (10k+ lists), the async image pipeline, theming + Mica, and animation all pass **60+
-> end-to-end golden checks** on the headless backends — including a full Wavee-shell acceptance test. The real Windows
+> control kit, virtualization (10k+ lists), the async image pipeline, theming + Mica, and animation all build
+> and run on the headless backends and in the Wavee app. The real Windows
 > path is wired via `FluentApp.Run`; on-screen pixel polish is the ongoing edge. See [Honest status](#honest-status)
 > below.
 
@@ -124,7 +124,7 @@ concrete signal assigns directly — `Text = sig`. The `Prop<T>` type lives in `
 **Start here, in order:**
 
 1. [Getting started](../guide/getting-started.md) — the minimal app, the frame loop you call, running headless, the
-   verification harness, the assembly layout.
+   assembly layout.
 2. [Reactivity](../guide/reactivity.md) — signals, the update model, `UseState`/`UseSignal`/`UseComputed`, effects,
    the one `Component` model (run-once inferred), bindings, `For`/`Show`, context. **The most important doc.**
 3. [Components, elements & layout](../guide/components-elements-layout.md) — the hooks reference, the element zoo,
@@ -140,7 +140,7 @@ confirming `FrameStats.Rendered == false` during the drag.
 
 ### For engine contributors
 
-Changing internals means editing **one owner** and verifying against the headless harness. FluentGpu enforces a strict
+Changing internals means editing **one owner** and verifying with a clean Debug build. FluentGpu enforces a strict
 single-owner model: every shared artifact (an opcode, a column, a seam, a hook) is defined in exactly one place and
 referenced everywhere else. Honor it — the #1 review finding is the same artifact defined two ways in two docs.
 
@@ -161,20 +161,11 @@ canonical contract owners are in [`SPEC-INDEX.md`](../../design/SPEC-INDEX.md)):
 | Layout (flex/grid/measure) | `src/FluentGpu.Engine/Layout/{FlexLayout,LayoutInvalidator}.cs` |
 | Retained scene (SoA tree, columns, dirty flags) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` |
 | Theming tokens / colors | `src/FluentGpu.Engine/Dsl/{Tokens,Theme}.cs` |
-| Tests / golden checks | `src/FluentGpu.VerticalSlice/Program.cs` |
 
-**Verify with the headless harness, not by eye.** It is the single source of truth for "does the engine still work" —
-~60 cross-seam golden checks, no GPU or window needed:
-
-```bash
-dotnet build src/FluentGpu.VerticalSlice                 # clean build first
-dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
-```
-
-Add a check by writing a `Check("…", condition, detail)` in `src/FluentGpu.VerticalSlice/Program.cs` and calling it from
-`Main`. If you touched reactivity/layout/render, assert on `FrameStats` — `Rendered`, `ComponentsRendered`, and
-`HotPhaseAllocBytes` (which **must be 0** on steady frames) — for the interaction you changed. GPU pixels are *not*
-asserted by the harness; that is a separate manual "needs-pixels" pass on the real D3D12 path.
+**Verify with the build, not by eye.** `dotnet build src/FluentGpu.slnx`, clean (Debug). There are no tests (banned
+2026-10-20). If you touched reactivity/layout/render, read `FrameStats` — `Rendered`, `ComponentsRendered`, and
+`HotPhaseAllocBytes` (which **must be 0** on steady frames) — for the interaction you changed. GPU pixels: look at a
+`--screenshot` on the real D3D12 path.
 
 If you edit the design corpus under `design/`, run the canon gate afterward (it fails the build if a superseded token
 reappears in the live tree):
@@ -218,7 +209,7 @@ pipeline as-built, and the design corpus for architecture — start at [`design/
 FluentGpu's docs deliberately don't overclaim, and these are **truths, not gaps to be fixed**:
 
 - **Near-zero-allocation** — *not* "zero". Zero managed allocation only in the per-frame paint phases (6–13); bounded
-  Gen0 at the reconcile/render edge. The harness asserts `HotPhaseAllocBytes == 0` on steady frames.
+  Gen0 at the reconcile/render edge. `HotPhaseAllocBytes` reports it (0 on steady frames).
 - **Retained-mode & composited** — the `Element` tree is a description; a reconciler patches a retained SoA scene; a
   recorder walks it to a GPU command list. Transform/opacity animate by re-recording world transforms (no relayout, no
   re-diff). This is *not* immediate-mode.

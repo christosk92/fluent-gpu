@@ -11,7 +11,7 @@ Audience: AI coding agents (and their humans) working in `C:\wavee\fluent-gpu`. 
 1. **Load the rulebook before the file.** Read `CLAUDE.md`, then invoke the `fluentgpu` skill (`.claude/skills/fluentgpu/SKILL.md` — "rules that prevent ~90% of bugs" plus a where-to-change-what file map). For app work, the `wavee` skill; for theming, `.claude/skills/fluentgpu/theming.md` is mandatory reading.
 2. **Explore read-only against exemplars, not abstractions.** Exemplar-file pointers beat prose descriptions. The canonical exemplars: `src/apps/Wavee/Features/Detail/ArtistPopular.cs` (responsive + SWR + props-freeze done right), `src/apps/Wavee/Components/TrackRow.cs` (flex laws, row states), `src/FluentGpu.Controls/Responsive.cs` (self-measuring composition).
 3. **Plan multi-file work; skip planning for one-sentence diffs.** Symptom→cause→fix lookups live in `docs/guide/pitfalls.md` before you invent a diagnosis.
-4. **Verify with the gates, show evidence.** `dotnet build src/FluentGpu.slnx` clean + `dotnet run --project src/FluentGpu.VerticalSlice` → "ALL CHECKS PASSED" (~521 gates incl. zero-alloc tripwires); `--screenshot <path>` for pixels; `docs\design\check-canon.ps1` after any `docs/design/` edit. "Looks done" is never the stop signal — paste the gate output.
+4. **Verify with the build, show evidence.** `dotnet build src/FluentGpu.slnx` clean in Debug and Release; `--screenshot <path>` for pixels; `docs\design\check-canon.ps1` after any `docs/design/` edit. "Looks done" is never the stop signal — paste the build output.
 
 **How not to hardcode around existing systems.** Agents optimize for what's in the context window, so they regenerate what already exists — a second validator, an ad-hoc breakpoint, a hand-rolled lerp. The antidote is mechanical: before writing any primitive (animation, spacing, color, virtualization, responsive measure, skeleton), grep for the house one first. This repo enforces it deterministically: the single-owner canon model (`docs/design/SPEC-INDEX.md` §2 + `docs/design/subsystems/README.md` ownership map — every artifact defined in exactly ONE doc), the canon drift gate (`check-canon.ps1` fails when a superseded form reappears), and `ReuseGuard` (`FG_REUSE_GUARD=1`) which trips props-freeze mistakes at runtime. Two standing user rulings bind all agents: **no FG_\* env kill switches for new behavior** (the new path is the unconditional default), and **the user runs the app themselves** — verify headlessly, don't launch the gallery unprompted. Never touch the fenced paths (`src/apps/.native/**`, `Wavee.PlayPlay/**`, `private-runtimes/**` — see CLAUDE.md).
 
@@ -48,7 +48,7 @@ Audience: AI coding agents (and their humans) working in `C:\wavee\fluent-gpu`. 
 
 ## 4. Performance rules
 
-- **Zero managed alloc in frame phases 6–13 is a gated invariant, not an aspiration.** A GC sweep eats several ms of a 16.6ms budget. The gate: `CoreSuite.cs:77` asserts `HotPhaseAllocBytes == 0`; every change re-runs it via VerticalSlice. Corollaries: no `new`/LINQ/boxing/closures in bind thunks or hot effect bodies; wire bindings/effects once at mount.
+- **Zero managed alloc in frame phases 6–13 is an invariant, not an aspiration.** A GC sweep eats several ms of a 16.6ms budget. `FrameStats.HotPhaseAllocBytes` reports it. Corollaries: no `new`/LINQ/boxing/closures in bind thunks or hot effect bodies; wire bindings/effects once at mount.
 - **High-frequency scalars bind, never setState-per-event.** A pointer-move driving `setState` re-renders per event; a bound `FloatSignal` (`Slider.Create(FloatSignal)`) stays compositor-side. Prefer a `Transform` bind (compositor-only) over `Width`/`Text` binds (scoped relayout). SKILL.md rules 9-10.
 - **Virtualize every long list.** `Virtual.List(count, itemExtent, renderItem, keyOf)` / `Virtual.Grid` recycle over the slab free-list with 0-alloc in-window scroll (`src/FluentGpu.Controls/Virtual.cs:12-30`). `Flow.For` over 10k tracks is a guaranteed hitch. Realize budgets and skewed overscan are already engine policy (scroll-perf campaign) — don't reinvent them per-surface.
 - **Respect the budgets ledger.** Image residency Soft 192/Hard 384 MB LRU, decode channel cap ~256 with priority drop, `ObjectPool` cap 32, ≤16 damage rects else full redraw — one roll-up table in `docs/design/budgets.md` §1. Decode off-thread at display size; never on the UI thread.
@@ -69,7 +69,7 @@ Audience: AI coding agents (and their humans) working in `C:\wavee\fluent-gpu`. 
 6. **Hand-rolled animation** (timers, lerps, reduced-motion if-branches) → use `Transition`/`While*` + `MotionTok.*`; reduced-motion is a value.
 7. **Hardcoded hex/pixel literals** → breaks theme switching. Fix: `Tok.*` / `WaveeTokens` / `Spacing.*`.
 8. **Non-virtualized or keyless lists** → `Virtual.List/Grid`; `Flow.For` keys mandatory.
-9. **Claiming done without evidence** → run build + VerticalSlice + (for design docs) `check-canon.ps1`; paste output. Never restate an owned contract in a second doc.
+9. **Claiming done without evidence** → run the Debug and Release build + (for design docs) `check-canon.ps1`; paste output. Never restate an owned contract in a second doc.
 10. **Touching fenced paths or adding FG_\* kill switches** → `.native`/`Wavee.PlayPlay`/`private-runtimes` are out of scope; new behavior ships as the unconditional default.
 
 ---
@@ -82,8 +82,7 @@ Audience: AI coding agents (and their humans) working in `C:\wavee\fluent-gpu`. 
 ### Scope & process
 - NEVER read/edit: src/apps/.native/**, src/apps/Wavee.PlayPlay/**, private-runtimes/**, ops/tools/playplay_* (separate private repo).
 - Before writing UI code, read .claude/skills/fluentgpu/SKILL.md (and theming.md for any theme work); docs/guide/pitfalls.md maps symptom→fix.
-- Evidence before "done": `dotnet build src/FluentGpu.slnx` clean AND
-  `dotnet run --project src/FluentGpu.VerticalSlice` prints "ALL CHECKS PASSED".
+- Evidence before "done": `dotnet build src/FluentGpu.slnx` clean in Debug AND Release.
   After editing docs/design/: `powershell -File docs\design\check-canon.ps1` exits 0.
 - Every cross-cutting contract has ONE owning doc (docs/design/SPEC-INDEX.md §2). Reference it; never restate a struct/enum elsewhere.
 - No FG_* env kill switches for new behavior — the new path is the unconditional default.
