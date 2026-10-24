@@ -1545,7 +1545,11 @@ public sealed partial class FlexLayout
             float mH = cli.Margin.Horizontal, mV = cli.Margin.Vertical;
             var cs = Measure(c, unbounded ? float.PositiveInfinity
                 : float.IsInfinity(childAvail) ? childAvail : MathF.Max(0f, childAvail - mH));
-            maxW = MathF.Max(maxW, cs.Width + mH); maxH = MathF.Max(maxH, cs.Height + mV);
+            // …and, as its contract says, the stack's own size is unaffected by it: it asks for no more than its slot. A marquee's strip (laid
+            // out at its natural width, cut by the stack's clip) otherwise handed its whole run up as the line's preferred width, and a
+            // content-sized ancestor that does not shrink (a Mini bar's row) grew past the window to hold it.
+            float cw0 = unbounded && !float.IsInfinity(childAvail) ? MathF.Min(cs.Width, MathF.Max(0f, childAvail - mH)) : cs.Width;
+            maxW = MathF.Max(maxW, cw0 + mH); maxH = MathF.Max(maxH, cs.Height + mV);
         }
         float w = float.IsNaN(li.Width) ? maxW + li.Padding.Horizontal : li.Width;
         float h = float.IsNaN(li.Height) ? maxH + li.Padding.Vertical : li.Height;
