@@ -8236,6 +8236,16 @@ public sealed partial class AppHost : IDisposable
 
     /// <summary>Does <paramref name="n"/>'s size on one axis (<paramref name="horizontal"/>: its width) come from above, never from its children: declared,
     /// a share of its parent's free space on that main axis, or stretched across its parent's cross axis by a parent whose size is imposed in turn?</summary>
+    /// <summary>Is <paramref name="content"/> a virtualizing viewport's content node, whose children are the realized rows the viewport's item
+    /// layout places AND sizes (a paged shelf's cells, a grid's tiles)? Their size never comes from their children.</summary>
+    private bool IsVirtualContent(NodeHandle content)
+    {
+        NodeHandle vp = _scene.Parent(content);
+        if (vp.IsNull || !_scene.HasScroll(vp)) return false;
+        ref ScrollState sc = ref _scene.ScrollRef(vp);
+        return sc.ItemCount > 0 && sc.ContentNode == content;
+    }
+
     private bool SizeImposed(NodeHandle n, bool horizontal)
     {
         for (; !n.IsNull; n = _scene.Parent(n))
@@ -8244,6 +8254,7 @@ public sealed partial class AppHost : IDisposable
             if (!float.IsNaN(horizontal ? li.Width : li.Height)) return true;
             NodeHandle p = _scene.Parent(n);
             if (p.IsNull) return true;   // the root: the window's size
+            if (IsVirtualContent(p)) return true;   // a realized virtual row: its viewport's item layout sizes it (ArrangeVirtual)
             if ((_scene.Flags(p) & NodeFlags.ZStack) != 0) return false;
             ref LayoutInput pl = ref _scene.Layout(p);
             if ((pl.Direction == 0) == horizontal) return li.FlexGrow > 0f || li.FlexShrink > 0f;   // its parent's main axis: a share of the free space
