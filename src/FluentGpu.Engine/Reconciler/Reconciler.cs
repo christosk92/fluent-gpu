@@ -3015,6 +3015,14 @@ public sealed partial class TreeReconciler
         _scene.Mark(node, NodeFlags.PaintDirty);
     }
 
+    /// <summary>A bound size on a node whose <see cref="SizeMode.Reflow"/> row is in flight hands the new value to the row as its declared target
+    /// (the reconciler's own hand-off for an authored size): written into the layout input, it would hold only until the next tick wrote the interp
+    /// back, and the settle would restore the stale declaration. True when the row took it. With no row in flight the size is written as before
+    /// and the commit's projection seeds the reflow (AppHost.SeedReflowsFirst lays the commit out at its start). Not while layout transitions are
+    /// suppressed (a resize, a scroll, a seam drag: the size follows the pointer), under a snap scope or under reduced motion.</summary>
+    private bool HandOffBoundSize(NodeHandle node, AnimChannel ch, float next)
+        => Anim is { } anim && !Motion.LayoutTransitionsSuppressed && !anim.Snapping && !Motion.ReducedMotion && anim.RecordDeclaredSize(node, ch, next);
+
     private void FireBoxWidth(BindEffect<float> fx)
     {
         NodeHandle node = fx.Node;
@@ -3024,7 +3032,9 @@ public sealed partial class TreeReconciler
         if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the size this frame
         ref var li = ref _scene.Layout(node);
         if (fx.Primed && li.Width.Equals(next)) return;
+        bool primed = fx.Primed;
         fx.Primed = true;
+        if (primed && HandOffBoundSize(node, AnimChannel.LayoutW, next)) { NodeBindingWriteCount++; return; }
         li.Width = next;
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.LayoutDirty);
@@ -3041,7 +3051,9 @@ public sealed partial class TreeReconciler
         if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the size this frame
         ref var li = ref _scene.Layout(node);
         if (fx.Primed && li.Height.Equals(next)) return;
+        bool primed = fx.Primed;
         fx.Primed = true;
+        if (primed && HandOffBoundSize(node, AnimChannel.LayoutH, next)) { NodeBindingWriteCount++; return; }
         li.Height = next;
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.LayoutDirty);

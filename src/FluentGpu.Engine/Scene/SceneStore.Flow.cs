@@ -25,6 +25,7 @@ public sealed partial class SceneStore
             }
         }
         ref readonly NodePaint p = ref _paint[h.Raw.Index];
-        return new RectF(a.X, a.Y + dy, a.W, float.IsNaN(p.PresentedH) ? a.H : p.PresentedH);
+        // Both presented extents (a Reveal's width as well as its height): what the recorder draws and hit-testing reads (InputDispatcher's hitW).
+        return new RectF(a.X, a.Y + dy, float.IsNaN(p.PresentedW) ? a.W : p.PresentedW, float.IsNaN(p.PresentedH) ? a.H : p.PresentedH);
     }
 }

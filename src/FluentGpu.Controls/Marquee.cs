@@ -32,6 +32,11 @@ public static class Marquee
         /// repaints reactively without re-rendering the marquee.</summary>
         public Prop<ColorF> Foreground { get; init; } = Prop.Of(static () => Tok.TextPrimary);
         public string? FontFamily { get; init; }
+        /// <summary>The line height (DIP, NaN = the font's natural line), forwarded to the inner <c>TextEl.LineHeight</c>.</summary>
+        public float LineHeight { get; init; } = float.NaN;
+        /// <summary>The tracking (1/1000 em, negative = tighter), forwarded to the inner <c>TextEl.CharSpacing</c>, so a display title keeps its
+        /// tracking while it scrolls.</summary>
+        public float CharSpacing { get; init; }
         public float Speed { get; init; } = 9f;           // minimum pixels per second — keeps a barely-overflowing line
                                                           // visibly moving instead of taking CycleMs to travel one glyph.
         // Maximum scroll-cycle duration (ms) for ONE traversal. Constant velocity alone makes a line's duration depend
@@ -267,6 +272,8 @@ internal sealed class MarqueeScroller : Component
     private TextEl Glyphs() => new(Text)
     {
         Size = Sty.FontSize,
+        LineHeight = Sty.LineHeight,
+        CharSpacing = Sty.CharSpacing,
         Weight = Sty.Weight,
         Color = Sty.Foreground,
         FontFamily = Sty.FontFamily,
