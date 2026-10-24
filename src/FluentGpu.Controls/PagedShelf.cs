@@ -23,6 +23,9 @@ public enum ShelfPager : byte
     Pips = 2,
     /// <summary>Buttons overlaid at the left/right edges of the strip (the FlipView affordance).</summary>
     HoverEdge = 4,
+    /// <summary>With <see cref="Chevrons"/>: the chevrons show only while the shelf has more than one page (a shelf whose cards all fit offers no
+    /// buttons that can never act). Without it they rest dimmed, the stock look.</summary>
+    WhenPaged = 8,
 }
 
 /// <summary>Whether a <see cref="PagedShelf"/> RESTS on page boundaries or free-pans (default <see cref="None"/> —
@@ -1885,7 +1888,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                 // Both channels take the CACHED Action<int> (see the fields) — stable instances, so the pips' own props
                 // channel short-circuits on a shelf render that changed nothing about the pager.
                 row.Add(PipsPager.Create(pageCount, _page, onChange: _pagerGoTo, onReselect: _pagerGoTo));
-            if ((_pager & ShelfPager.Chevrons) != 0)
+            if (ShowsChevrons(pageCount))
             {
                 row.Add(Chevron(_prevGlyph, canPrev, _pagerPrev, PagedShelf.PartChevronPrev));
                 row.Add(Chevron(_nextGlyph, canNext, _pagerNext, PagedShelf.PartChevronNext));
@@ -1895,11 +1898,15 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // Nothing to show (no title, no pager controls) → no header row.
         bool hasPager = _customPager is not null
             || ((_pager & ShelfPager.Pips) != 0 && pageCount > 1)
-            || (_pager & ShelfPager.Chevrons) != 0;
+            || ShowsChevrons(pageCount);
         if (titleEl is null && !hasPager) return null;
 
         return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = HeaderItemGap, Children = row.ToArray() };
     }
+
+    /// <summary>The header draws the chevrons: asked for, and (under <see cref="ShelfPager.WhenPaged"/>) more than one page to page through.</summary>
+    bool ShowsChevrons(int pageCount)
+        => (_pager & ShelfPager.Chevrons) != 0 && ((_pager & ShelfPager.WhenPaged) == 0 || pageCount > 1);
 
     const float HeaderItemGap = 8f;
 
