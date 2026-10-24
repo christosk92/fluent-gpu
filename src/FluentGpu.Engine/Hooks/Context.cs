@@ -384,9 +384,9 @@ public sealed class InputHooks
     public Action<Action>? QueueAfterLayout;
     /// <summary>Run <c>action</c> ONCE this frame after its LAST layout pass: the commit's, then the reflow re-solve after the animation tick
     /// (a commit during a live reflow, a docking panel's reservation easing, is laid out at the reflow's target first and re-solved at its live
-    /// size there), then the presented flow. It reads the geometry this frame presents. It runs AFTER the animation tick, so a motion seeded
-    /// here presents its own start pose (as the reflow re-solve's wrap watch does). Queue it from a layout effect; callers pass a cached
-    /// delegate. Null in a host-less tree.</summary>
+    /// size there), then the presented flow. It reads the geometry this frame presents. It runs AFTER the animation tick: seed a position FLIP
+    /// here with <see cref="FluentGpu.Animation.AnimEngine.AnimateBoundsPresented"/>, which shows its start this frame and moves from the next.
+    /// Queue it from a layout effect; callers pass a cached delegate. Null in a host-less tree.</summary>
     public Action<Action>? QueueAfterFrameLayout;
     /// <summary>Bumped by the host on WindowFocus/WindowBlur/WindowStateChanged: the TitleBar reads it (subscribes)
     /// and pulls <see cref="GetWindowState"/>/<see cref="IsWindowActive"/> for the current values on re-render.</summary>
