@@ -441,6 +441,10 @@ public sealed partial class AnimEngine
                 if (ns < 0) continue;
                 _slab.At(ns).Flags &= ~AnimFlags.JustSeeded;   // a re-aim keeps moving (as ReframePosition's retarget)
                 MarkSeedRelative(ns, uiBase);
+                // This frame's tick has run: present the re-aimed start NOW, or the frame draws the size the layout just left.
+                ref NodePaint pp = ref _scene.Paint(node);
+                if (ch == AnimChannel.SizeW) pp.PresentedW = uiBase + delta; else pp.PresentedH = uiBase + delta;
+                _scene.Mark(node, NodeFlags.PaintDirty);
                 s = ns;   // the walk continues from the row now on the node (Animate/Spring reuse the channel's slot)
             }
     }

@@ -439,6 +439,20 @@ public sealed partial class AnimEngine
     /// <summary>Dirty the node whose Measure must see this reflow write. A live node's topological parent is that
     /// scope; an exit orphan's Parent is null (detached), so the former visual parent is the one that still measures
     /// it — marking the orphan itself would RunSubtree a rootless node and never update the virtual row's extent.</summary>
+    /// <summary>Write the START of <paramref name="node"/>'s reflow rows (a seed that has not ticked: its from) into its layout input and dirty
+    /// the parent, as the seed frame's tick would: the host re-solves the commit at it before measuring the other projections
+    /// (AppHost.SeedReflowsFirst). False when the node has no reflow row. Allocates nothing.</summary>
+    internal bool PresentReflowStart(NodeHandle node)
+    {
+        bool wrote = false;
+        int s = Find(node, AnimChannel.LayoutW);
+        if (s >= 0) { _scene.Layout(node).Width = _slab.At(s).Position; wrote = true; }
+        s = Find(node, AnimChannel.LayoutH);
+        if (s >= 0) { _scene.Layout(node).Height = _slab.At(s).Position; wrote = true; }
+        if (wrote) MarkReflowLayoutDirty(node);
+        return wrote;
+    }
+
     private void MarkReflowLayoutDirty(NodeHandle node)
     {
         var rp = _scene.Parent(node);
