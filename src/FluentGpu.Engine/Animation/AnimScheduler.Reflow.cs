@@ -394,6 +394,38 @@ public sealed partial class AnimEngine
         _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
     }
 
+    /// <summary>Cancel a node's in-flight PRESENTED-size rows (a Reveal's or a Relayout's SizeW/SizeH, a ScaleCorrect's ScaleX/ScaleY) and land
+    /// it on its laid-out size, leaving its position, layout-size (Reflow) and every other row running: the host's answer for a part inside a
+    /// container a live reflow is resizing, whose layout moves on every tick (a presented size seeded at a commit would keep that commit's
+    /// target). Gesture-owned and looping rows are skipped, as <see cref="SnapStructuralToLayout"/> skips them.</summary>
+    public void SnapPresentedSizeToLayout(NodeHandle node)
+    {
+        int idx = (int)node.Raw.Index;
+        if (!_slab.NodeHasRows(idx)) return;
+        bool live = _scene.IsLive(node);
+        bool damaged = false, resetScale = false;
+        int s = _slab.HeadOnNode(idx);
+        while (s >= 0)
+        {
+            int next = _slab.At(s).NextOnNode;   // read the link BEFORE FreeSlot unlinks the row
+            AnimChannel ch = _slab.At(s).Channel;
+            if ((ch is AnimChannel.SizeW or AnimChannel.SizeH or AnimChannel.ScaleX or AnimChannel.ScaleY)
+                && !IsGestureOwnedTransform(idx, ch) && !_slab.At(s).Has(AnimFlags.Loop))
+            {
+                if (live && !damaged) { CaptureLastPresentedDamage(node); damaged = true; }
+                if (ch is AnimChannel.ScaleX or AnimChannel.ScaleY) resetScale = true;
+                SettleRestore(s);
+                FreeSlot(s);
+            }
+            s = next;
+        }
+        if (!resetScale || !live) return;
+        ref NodePaint p = ref _scene.Paint(node);
+        Affine2D rest = RestTransformOf(idx);
+        p.LocalTransform = p.LocalTransform with { M11 = rest.M11, M12 = rest.M12, M21 = rest.M21, M22 = rest.M22 };
+        _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+    }
+
     /// <summary>Take back the <see cref="NodeFlags.ClipsToBounds"/> a reflow row added (see
     /// <see cref="AnimFlags.ClipAdded"/>). Called from the ONE row-teardown sink (<c>FreeSlot</c>) plus
     /// <c>CancelAll</c>'s bulk clear, so no path — settle, Cancel, or a structural snap — can leak the clip.</summary>

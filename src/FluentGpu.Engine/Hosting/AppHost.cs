@@ -1451,6 +1451,8 @@ public sealed partial class AppHost : IDisposable
     private readonly List<NodeHandle> _projectionSuppressionRoots = new();          // changed projected containers that own descendant motion this commit
     private readonly List<NodeHandle> _liveReflowScratch = new(8);                  // nodes with a live LayoutW/H reflow row this commit (ApplyProjections shove suppression)
     private readonly Dictionary<int, int> _reflowShoveFrames = new(16);             // parent idx → the child idx on a reflowing node's ancestor path ("the reflow-carrying child under this parent")
+    private readonly Dictionary<int, int> _reflowSeedFrames = new(16);              // parent idx -> the child idx on the path of a reflow this commit seeds (shoves only)
+    private readonly List<NodeHandle> _reflowOwnedRoots = new(4);                    // SuppressDescendantTransitions containers a live sibling reflow resizes this commit: they land, they suppress nothing
     private readonly List<RenderContext> _pendingLayoutEffectContexts = new();
     private readonly List<RenderContext> _pendingPassiveEffectContexts = new();
     // InputHooks.QueueAfterLayout: one-shot post-layout callbacks (a keyed TitleBar child re-pushing the NC regions in the
@@ -7830,23 +7832,6 @@ public sealed partial class AppHost : IDisposable
         // Suppressed by the user scroll alone: only the transitions that opt in (AnimateDuringScroll) still start.
         bool scrollOnly = suppressed && Motion.LayoutTransitionsSuppressedByScrollOnly && !keepAliveSuppressed && _snapDepth == 0;
 
-        // Discover changed containers that explicitly own the visual projection for their subtree. A shell/card width
-        // commit commonly changes dozens of descendant card/shelf bounds; allowing every descendant's authored
-        // CardRefit/CardResize recipe to start here recreates per-frame Relayout/Reflow under the projected root. Keep
-        // the semantic final layout, but let the container be the sole geometry animator for this commit.
-        _projectionSuppressionRoots.Clear();
-        if (!suppressed)
-        {
-            foreach (var kv in _projectBefore)
-            {
-                NodeHandle n = kv.Key;
-                if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
-                if (!_anim.TryGetTransition(n, out var spec) || !spec.SuppressDescendantTransitions) continue;
-                if (TryProjectionRects(n, kv.Value, PosEps, SizeEps, out _, out _))
-                    _projectionSuppressionRoots.Add(n);
-            }
-        }
-
         // Reflow-shove suppression: a node whose commit-time position delta is CAUSED by an active reflow (its ancestor
         // hop crosses a reflowing sibling, so the reflow's growing/shrinking main-axis extent is what moved it) must NOT
         // position-FLIP. The reflow's per-tick layout re-solve IS the animation — a FLIP translate on top of it is stale
@@ -7880,6 +7865,51 @@ public sealed partial class AppHost : IDisposable
         var revealExits = _anim.RevealExitCarriers;
         for (int i = 0; i < revealExits.Count; i++)
             if (_scene.IsLive(revealExits[i].VisualParent)) AddShoveCarrier(revealExits[i].Node, revealExits[i].VisualParent);
+        // Reflow-seed frames: a projected SizeMode.Reflow node whose size changed on this commit seeds its row in the loop below, and its first
+        // tick re-solves the layout at the CAPTURED size: a sibling AFTER it (a zone under a hero whose height eases) rides that re-solve, so a
+        // position FLIP from the capture on top of it would count the move twice (the zone drawn a hero-height off, closing back). Those siblings
+        // are shoved; this map moves nothing else (a sibling BEFORE the node, or one it only resizes, keeps its own projection: on the commit that
+        // seeds a reflow, the layout just solved still holds the reflow's TARGET, so nothing under a resized container may be judged by it).
+        _reflowSeedFrames.Clear();
+        foreach (var kv in _projectBefore)
+        {
+            NodeHandle rn = kv.Key;
+            if (!_scene.IsLive(rn) || !_anim.TryGetTransition(rn, out var rs) || rs.Size != SizeMode.Reflow || (rs.Channels & TransitionChannels.Size) == 0) continue;
+            ref readonly RectF nb = ref _scene.Bounds(rn);
+            bool w = (rs.Axes & SizeAxes.Width) != 0 && MathF.Abs(kv.Value.Rel.W - nb.W) >= SizeEps;
+            bool h = (rs.Axes & SizeAxes.Height) != 0 && MathF.Abs(kv.Value.Rel.H - nb.H) >= SizeEps;
+            if (!w && !h) continue;
+            for (NodeHandle c = rn, par = _scene.Parent(rn); !par.IsNull && _scene.IsLive(par); c = par, par = _scene.Parent(par))
+                _reflowSeedFrames.TryAdd((int)par.Raw.Index, (int)c.Raw.Index);
+        }
+
+        // Discover changed containers that explicitly own the visual projection for their subtree. A shell/card width
+        // commit commonly changes dozens of descendant card/shelf bounds; allowing every descendant's authored
+        // CardRefit/CardResize recipe to start here recreates per-frame Relayout/Reflow under the projected root. Keep
+        // the semantic final layout, but let the container be the sole geometry animator for this commit.
+        // A container a live sibling REFLOW is resizing (the content card beside a docking panel's easing reservation) is
+        // no such animator: what changed it since the capture is that reflow's tick, which the reflow's own re-solve already
+        // presents. Promoting it made every part of the page under it snap on any commit during the dock (a content-tier
+        // crossing the dock caused, a responsive grid re-fitting). When the reflow explains its whole change (its place kept, its
+        // extent moved) it lands on its layout instead (_reflowOwnedRoots) and the parts under it project as they would anywhere.
+        _projectionSuppressionRoots.Clear();
+        _reflowOwnedRoots.Clear();
+        if (!suppressed)
+        {
+            foreach (var kv in _projectBefore)
+            {
+                NodeHandle n = kv.Key;
+                if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
+                if (!_anim.TryGetTransition(n, out var spec) || !spec.SuppressDescendantTransitions) continue;
+                if (!TryProjectionRects(n, kv.Value, PosEps, SizeEps, out RectF rootFrom, out RectF rootTo)) continue;
+                // Reflow-owned only when the reflow explains the whole change: it kept its place and only its extent moved. A container
+                // that also moved on this commit (a crossing that docks the nav pane beside it while the play bar's slot eases) still
+                // animates the commit as before.
+                bool kept = MathF.Abs(rootFrom.X - rootTo.X) < PosEps && MathF.Abs(rootFrom.Y - rootTo.Y) < PosEps;
+                if (kept && _reflowShoveFrames.Count > 0 && ReflowRelationOf(n) != ReflowRelation.None) _reflowOwnedRoots.Add(n);
+                else _projectionSuppressionRoots.Add(n);
+            }
+        }
 
         foreach (var kv in _projectBefore)
         {
@@ -7913,12 +7943,21 @@ public sealed partial class AppHost : IDisposable
                 }
                 continue;
             }
+            var relation = _reflowShoveFrames.Count > 0 || _reflowSeedFrames.Count > 0 ? ReflowRelationOf(n) : ReflowRelation.None;
+            // A container a live reflow is moving or resizing that would have owned this commit's projection (see the roots above)
+            // lands whole: the reflow's re-solve presents its geometry.
+            if (relation != ReflowRelation.None && _reflowOwnedRoots.Contains(n))
+            {
+                if (s_motionDiag) LogMotionNode(n.Raw.Index, "reflow-owned-snap", fLog, tLog);
+                _anim.SnapStructuralToLayout(n);
+                continue;
+            }
             // Reflow-shoved (see the frame map above): drop any in-flight position row, land the node on the geometry the
             // reflow's own re-solve just wrote, and zero the position delta so nothing re-seeds a translate. Size/opacity
             // still animate — POSITION is the one channel the reflow owns. Accepted edge: a sibling that genuinely made an
             // independent move on the SAME commit gets snapped for that one commit; a rare coincidence, bounded to one
             // frame, and far preferable to the overlap artifact.
-            if (_reflowShoveFrames.Count > 0 && IsReflowShoved(n))
+            if (relation == ReflowRelation.Shoved)
             {
                 _anim.SnapPositionToLayout(n);
                 from = @from with { X = to.X, Y = to.Y };
@@ -7929,6 +7968,24 @@ public sealed partial class AppHost : IDisposable
                 }
             }
             if (!_anim.TryGetTransition(n, out var spec)) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "no-transition", from, to); continue; }
+            // Inside a container a live reflow is resizing (the page in a card beside a docking panel's reservation): the reflow
+            // re-solves this node's layout every tick until it settles, so a PRESENTED size (Reveal, ScaleCorrect, Relayout)
+            // seeded now would hold this commit's size as its target while the layout moves on: it would clip a part the reflow
+            // widens, for the whole tween. The size lands on the layout and follows the re-solve; the position FLIP (an offset over
+            // the live layout) and a size that runs through layout (Reflow) still play.
+            if (relation == ReflowRelation.Resized)
+            {
+                if (spec.Size != SizeMode.Reflow && spec.Size != SizeMode.FlowReveal)
+                {
+                    _anim.SnapPresentedSizeToLayout(n);
+                    from = @from with { W = to.W, H = to.H };
+                    if (MathF.Abs(from.X - to.X) < PosEps && MathF.Abs(from.Y - to.Y) < PosEps)
+                    {
+                        if (s_motionDiag) LogMotionNode(n.Raw.Index, "reflow-resize-snap", from, to);
+                        continue;
+                    }
+                }
+            }
             if (reduced) spec = spec with { Dynamics = TransitionDynamics.Tween(1f, Easing.Linear) };
             if (s_motionDiag) LogMotionNode(n.Raw.Index, "animate", from, to);
             // AnimateBounds consumes only deltas, so parent-relative rects feed it directly; for a purely local
@@ -7938,6 +7995,8 @@ public sealed partial class AppHost : IDisposable
         _projectionSuppressionRoots.Clear();
         _liveReflowScratch.Clear();
         _reflowShoveFrames.Clear();
+        _reflowSeedFrames.Clear();
+        _reflowOwnedRoots.Clear();
         _projectBefore.Clear();
     }
 
@@ -8004,18 +8063,53 @@ public sealed partial class AppHost : IDisposable
             _reflowShoveFrames.TryAdd((int)p.Raw.Index, (int)c.Raw.Index);
     }
 
-    /// <summary>True when <paramref name="n"/>'s commit-time move was CAUSED by an active reflow: some hop of its
-    /// ancestor chain has a reflow-carrying child that is NOT the child we came up through — i.e. the reflowing subtree
-    /// is a SIBLING that shoved us along the main axis. When the carrier IS our own hop we are INSIDE the reflow subtree
-    /// and pass straight through: the reflow's own target/echo guards already own that case.</summary>
-    private bool IsReflowShoved(NodeHandle n)
+    /// <summary>How a live reflow (or a flow reveal) relates to <paramref name="n"/>'s commit-time change, from the frame map above:
+    /// walk its ancestor chain, and at every hop whose parent has a reflow-carrying child that is NOT the child we came up through
+    /// (the reflowing subtree is a SIBLING of this hop), ask what that sibling's growing or shrinking main-axis extent does to it.
+    /// <list type="bullet">
+    /// <item><see cref="ReflowRelation.Shoved"/>: the sibling comes BEFORE this hop in the parent's flow (or the parent distributes
+    /// its free space, or wraps), so its extent MOVES this hop: the reflow's re-solve is the motion (the drawer's case).</item>
+    /// <item><see cref="ReflowRelation.Resized"/>: the sibling comes after this hop in a start-justified flow and this hop takes a
+    /// share of the free space (grow or shrink): the sibling's extent comes out of (or back into) this hop, which the reflow
+    /// RESIZES in place (the page's card beside a docking panel's reservation); nothing under it is shoved.</item>
+    /// </list>
+    /// A sibling in a z-stack moves nothing. When the carrier IS our own hop we are INSIDE the reflow subtree and pass straight
+    /// through: the reflow's own target/echo guards already own that case. A shove anywhere up the chain wins. A reflow this commit seeds
+    /// (<c>_reflowSeedFrames</c>) only shoves.</summary>
+    private ReflowRelation ReflowRelationOf(NodeHandle n)
     {
-        if (_reflowShoveFrames.Count == 0) return false;
+        if (_reflowShoveFrames.Count == 0 && _reflowSeedFrames.Count == 0) return ReflowRelation.None;
+        bool resized = false;
         for (NodeHandle a = n, p = _scene.Parent(a); !p.IsNull && _scene.IsLive(p); a = p, p = _scene.Parent(p))
-            if (_reflowShoveFrames.TryGetValue((int)p.Raw.Index, out int carrier) && carrier != (int)a.Raw.Index)
-                return true;
-        return false;
+        {
+            if ((_scene.Flags(p) & NodeFlags.ZStack) != 0) continue;
+            if (_reflowSeedFrames.TryGetValue((int)p.Raw.Index, out int seed) && seed != (int)a.Raw.Index && CarrierLeads(p, seed, a))
+                return ReflowRelation.Shoved;
+            if (!_reflowShoveFrames.TryGetValue((int)p.Raw.Index, out int carrier) || carrier == (int)a.Raw.Index) continue;
+            if (CarrierLeads(p, carrier, a)) return ReflowRelation.Shoved;
+            ref LayoutInput ali = ref _scene.Layout(a);
+            if (ali.FlexGrow > 0f || ali.FlexShrink > 0f) resized = true;
+        }
+        return resized ? ReflowRelation.Resized : ReflowRelation.None;
     }
+
+    /// <summary>Does the reflow carrier (<paramref name="carrier"/>, a child of <paramref name="p"/>) move <paramref name="a"/>'s place
+    /// in <paramref name="p"/>'s flow? Yes when it comes first, when the parent distributes free space or wraps (any extent can move
+    /// every child), and when it is not found among the children (an exit orphan's former parent: the conservative shove).</summary>
+    private bool CarrierLeads(NodeHandle p, int carrier, NodeHandle a)
+    {
+        ref LayoutInput pli = ref _scene.Layout(p);
+        if (pli.Justify != FlexJustify.Start || pli.Wrap) return true;
+        for (NodeHandle c = _scene.FirstChild(p); !c.IsNull; c = _scene.NextSibling(c))
+        {
+            if ((int)c.Raw.Index == carrier) return true;
+            if (c == a) return false;
+        }
+        return true;
+    }
+
+    /// <summary>What a live reflow does to a node's commit-time change (<see cref="ReflowRelationOf"/>).</summary>
+    private enum ReflowRelation : byte { None, Shoved, Resized }
 
     private bool TryProjectionRects(NodeHandle n, in ProjCapture captured, float posEps, float sizeEps,
                                     out RectF from, out RectF to)
@@ -8068,11 +8162,37 @@ public sealed partial class AppHost : IDisposable
     private void RunReflowLayout(Size2 layoutSize)
     {
         var roots = _anim.ReflowRoots;
-        if (!_anim.ConsumeReflowWrites()) { roots.Clear(); return; }
+        if (!_anim.ConsumeReflowWrites()) { roots.Clear(); _anim.SettledToAuto.Clear(); return; }
         if (_scene.AnyLayoutDirty)
         {
             _invalidator.RunDirty(layoutSize);
             _scene.ClearLayoutDirty();
+        }
+        // A reflow toward an AUTO size that landed this tick on a size its content has since left (it re-wrapped under the row: a hero whose title
+        // re-sets at the widths a docked panel's slide passes through) would show the difference as a one-frame snap now that the restore solved
+        // the real size. Glide on from the landed size instead: re-seed the row there and lay this frame out at it.
+        var settled = _anim.SettledToAuto;
+        if (settled.Count > 0)
+        {
+            bool reseeded = false;
+            for (int i = 0; i < settled.Count; i++)
+            {
+                var (node, ch, landed) = settled[i];
+                if (!_scene.IsLive(node)) continue;
+                float solved = ch == AnimChannel.LayoutW ? _scene.Bounds(node).W : _scene.Bounds(node).H;
+                if (MathF.Abs(solved - landed) < 0.5f || !_anim.ReflowContinue(node, ch, landed, solved)) continue;
+                ref LayoutInput li = ref _scene.Layout(node);
+                if (ch == AnimChannel.LayoutW) li.Width = landed; else li.Height = landed;
+                var parent = _scene.Parent(node);
+                _scene.Mark(parent.IsNull ? node : parent, NodeFlags.LayoutDirty);
+                reseeded = true;
+            }
+            settled.Clear();
+            if (reseeded && _scene.AnyLayoutDirty)
+            {
+                _invalidator.RunDirty(layoutSize);
+                _scene.ClearLayoutDirty();
+            }
         }
         // Natural-extent retarget: a reflow row PINS LayoutInput.Width/Height to its interp every tick, so layout can
         // never expose a changed natural size — but the node's CHILDREN are still arranged at their natural size inside

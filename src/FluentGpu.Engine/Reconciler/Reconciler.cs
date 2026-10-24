@@ -3015,6 +3015,28 @@ public sealed partial class TreeReconciler
         _scene.Mark(node, NodeFlags.PaintDirty);
     }
 
+    /// <summary>A bound size on a node whose layout transition is a <see cref="SizeMode.Reflow"/> on that axis eases from where it is, seeded HERE
+    /// rather than by the commit's projection: the projection path wrote the new size into the layout input first, so the commit's layout solved the
+    /// TARGET (a docking panel's reservation at its full width, the page beside it at its landing width) before the reflow's first tick put the
+    /// start back. Everything that commit seeded from that transient (a flow reveal's height, a FLIP) aimed at a layout the frame never showed.
+    /// A row already in flight takes the new value as its declared target (the reconciler's own hand-off for an authored size). Not while layout
+    /// transitions are suppressed (a resize, a scroll, a seam drag: the size follows the pointer), under a snap scope, under reduced motion, for an
+    /// auto size or on the bind's first write. True when the reflow owns the write.</summary>
+    private bool EaseBoundSize(NodeHandle node, AnimChannel ch, float current, float next)
+    {
+        if (Anim is not { } anim || Motion.LayoutTransitionsSuppressed || anim.Snapping || Motion.ReducedMotion) return false;
+        if (anim.RecordDeclaredSize(node, ch, next)) return true;   // a row in flight: re-aimed at the new declared size
+        if (!float.IsFinite(current) || !float.IsFinite(next) || MathF.Abs(current - next) < 0.5f) return false;
+        if (!anim.TryGetTransition(node, out var spec) || spec.Size != SizeMode.Reflow || (spec.Channels & TransitionChannels.Size) == 0) return false;
+        if ((spec.Axes & (ch == AnimChannel.LayoutW ? SizeAxes.Width : SizeAxes.Height)) == 0) return false;
+        anim.ReflowSize(node, ch, current, next, spec);
+        if (!anim.RecordDeclaredSize(node, ch, next)) return false;   // no row (a snap tween): write the size as before
+        _scene.Mark(node, NodeFlags.LayoutDirty);
+        RemirrorAncestors(node);
+        MarkParentLayoutDirty(node);
+        return true;
+    }
+
     private void FireBoxWidth(BindEffect<float> fx)
     {
         NodeHandle node = fx.Node;
@@ -3024,7 +3046,9 @@ public sealed partial class TreeReconciler
         if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the size this frame
         ref var li = ref _scene.Layout(node);
         if (fx.Primed && li.Width.Equals(next)) return;
+        bool primed = fx.Primed;
         fx.Primed = true;
+        if (primed && EaseBoundSize(node, AnimChannel.LayoutW, li.Width, next)) { NodeBindingWriteCount++; return; }
         li.Width = next;
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.LayoutDirty);
@@ -3041,7 +3065,9 @@ public sealed partial class TreeReconciler
         if (_scene.IsFollowing(node)) return;   // F169: the host's follow pass owns the size this frame
         ref var li = ref _scene.Layout(node);
         if (fx.Primed && li.Height.Equals(next)) return;
+        bool primed = fx.Primed;
         fx.Primed = true;
+        if (primed && EaseBoundSize(node, AnimChannel.LayoutH, li.Height, next)) { NodeBindingWriteCount++; return; }
         li.Height = next;
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.LayoutDirty);
