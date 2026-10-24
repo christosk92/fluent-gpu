@@ -202,20 +202,15 @@ public static class PaletteBuilder
         var strokeDiv = ColorRamp.Darken(page, 0.10f);
         var textPrimary = TintInk(seed, 0.12f);
         var textSecondary = TintInk(seed, 0.36f);
-        // Tertiary must clear AA on the LIGHTEST surface it can land on — the opaque card, or the zebra row
-        // flattened over the translucent page on the plate on the brightest assumed Mica — not the mid-tone rail (the
-        // old, inverted target: darker bg = easier ratio for dark-on-light text).
-        // Flattened through BOTH shell rungs (pane on plate on bright Mica) — the same host the palette.contrast gate
-        // builds; solving against a pane-on-Mica host would disagree with the gate by the plate's own lift.
-        // The zebra rung in that stack is now the BLACK-alpha stripe the app really paints (it used to be a white-alpha
-        // value no pixel wore), so the host is painted reality. It also makes the zebra host strictly DARKER than the
-        // bare pane, which means the `lightestHost` pick below can only ever resolve to the card — the honest reading
-        // being that on a light theme the hardest surface for dark ink is the near-white card, not a striped row.
+        // Tertiary must clear AA on the DARKEST surface it can land on: dark ink on a light ground LOSES contrast as the ground darkens, so the
+        // hardest host is the darkest of the opaque card, the zebra row flattened through BOTH shell rungs (pane on plate on bright Mica, the same
+        // host the palette.contrast gate builds; the zebra rung is the BLACK-alpha stripe the app really paints) and the bare Mica a nav pane's
+        // counts sit on. The old target was the LIGHTEST host ("darker bg = easier ratio for dark-on-light text"), the direction backwards: the
+        // tertiary passed on the card and read 3.2-3.3 : 1 on every other light surface (audit B8).
         var shell = BuildLightShell(seed);
         var zebraHost = ColorContrast.Flatten(shell.RowZebra,
             ColorContrast.Flatten(shell.FileArea, ColorContrast.Flatten(shell.Toolbar, MicaRef.LightBright)));
-        var lightestHost = ColorContrast.RelativeLuminance(card) >= ColorContrast.RelativeLuminance(zebraHost) ? card : zebraHost;
-        var textTertiary = SolveTertiaryText(lightestHost, TintInk(seed, 0.40f));
+        var textTertiary = SolveTertiaryText(DarkestHost(card, zebraHost, MicaRef.LightDefault), TintInk(seed, 0.40f));
 
         return new TokenSet
         {
@@ -391,13 +386,35 @@ public static class PaletteBuilder
     static ColorF TintInk(PaletteSeed seed, float lightness)
         => ColorRamp.Neutral(lightness, seed.NeutralHueDeg, seed.NeutralChroma * 0.3f);
 
-    /// <summary>Darken <paramref name="start"/> until it meets AA against the lightest surface it can host on.</summary>
-    static ColorF SolveTertiaryText(ColorF lightestHostingBg, ColorF start)
+    /// <summary>Strengthen <paramref name="start"/> until it meets AA against <paramref name="darkestHostingBg"/>, the darkest surface it can host on
+    /// (an opaque colour; see <see cref="DarkestHost"/>). The ink is measured as it COMPOSITES over the host: a translucent neutral (WinUI's black at
+    /// 0x72) gains alpha, an opaque tinted ink darkens. The solve used to measure the ink's colour as if opaque, which passed black at 0x72 at once
+    /// (3.3 : 1 on the light pane as painted; audit B8).</summary>
+    static ColorF SolveTertiaryText(ColorF darkestHostingBg, ColorF start)
     {
         var c = start;
-        for (int i = 0; i < 12 && !ColorContrast.MeetsAaText(c, lightestHostingBg); i++)
-            c = ColorRamp.Darken(c, 0.06f);
+        for (int i = 0; i < 32 && !ColorContrast.MeetsAaText(ColorContrast.Flatten(c, darkestHostingBg), darkestHostingBg, TertiaryNeed); i++)
+            c = c.A < 1f ? c with { A = MathF.Min(1f, c.A + 0.01f) } : ColorRamp.Darken(c, 0.06f);
         return c;
+    }
+
+    /// <summary>What the tertiary solve aims for: AA's 4.5 and a little headroom, since Mica's tone follows the wallpaper (the typical #EDEDED the
+    /// solve reads; a window without Mica, the headless one included, paints #E9E9E9 under the nav pane's counts).</summary>
+    const float TertiaryNeed = 4.6f;
+
+    /// <summary>The darkest of <paramref name="hosts"/> as painted: each flattened over white first (a translucent card's own tone, never lighter than
+    /// what it lands on), so the darkest is the hardest ground for a dark ink.</summary>
+    static ColorF DarkestHost(params ReadOnlySpan<ColorF> hosts)
+    {
+        ColorF best = ColorF.FromRgba(0xFF, 0xFF, 0xFF);
+        float lum = float.MaxValue;
+        foreach (var h in hosts)
+        {
+            var flat = h.A < 1f ? ColorContrast.Flatten(h, ColorF.FromRgba(0xFF, 0xFF, 0xFF)) : h;
+            float l = ColorContrast.RelativeLuminance(flat);
+            if (l < lum) { lum = l; best = flat; }
+        }
+        return best;
     }
 
     /// <summary>WinUI-faithful neutral light tokens (Files / WaveeMusic default palette baseline).</summary>
@@ -413,8 +430,7 @@ public static class PaletteBuilder
         // the BLACK-alpha stripe the app paints (see BuildLight for the same note), so this host is painted reality.
         var fileFlat = ColorContrast.Flatten(shell.FileArea, ColorContrast.Flatten(shell.Toolbar, MicaRef.LightBright));
         var zebraHost = ColorContrast.Flatten(shell.RowZebra, fileFlat);
-        var lightestHost = ColorContrast.RelativeLuminance(card) >= ColorContrast.RelativeLuminance(zebraHost) ? card : zebraHost;
-        var textTertiary = SolveTertiaryText(lightestHost, ColorF.FromRgba(0x00, 0x00, 0x00, 0x72));
+        var textTertiary = SolveTertiaryText(DarkestHost(card, zebraHost, MicaRef.LightDefault), ColorF.FromRgba(0x00, 0x00, 0x00, 0x72));
 
         return new TokenSet
         {
