@@ -5264,6 +5264,8 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.AnimatePopupClose = AnimatePopupCloseWindow;
 
         _reconciler.Anim = _anim;
+        _anim.ReflowSizeWritten = _reconciler.FollowReflowSize;   // an easing template root moves its parent (the anchors mirror it live)
+        _reconciler.OnBoundsTransitionGained = CaptureGainedProjection;   // `Animate = cond ? X : null`: the first flip eases too
         _reconciler.Connected = _connected;   // shared-element (connected-animation) participant registry, fed by Element.MorphId
         _reconciler.RequestFrame = WakeFrame;      // wake-only seam: mutate retained scene state, wake, DON'T re-render
         // KeepAlive park/un-park → quiesce/resume the parked subtree's animation + scroll tickers so a backgrounded tab's
@@ -6377,11 +6379,13 @@ public sealed partial class AppHost : IDisposable
             bool capturedProjections = false;
             long db = 0, dt0 = 0;
             if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt0 = Stopwatch.GetTimestamp(); }
+            _projectionCaptureOpen = false;
             if (willReconcile && _everLaidOut && !_scene.Root.IsNull && !resized)
             {
                 _projectBefore.Clear();
                 CaptureProjections();
                 capturedProjections = _projectBefore.Count > 0;
+                _projectionCaptureOpen = true;   // a node the reconcile below gives a transition is captured as it gains it
             }
             else if (resized && _everLaidOut && !_scene.Root.IsNull)
             {
@@ -6555,6 +6559,8 @@ public sealed partial class AppHost : IDisposable
                 _frameAfterPaint = _runtime.HasPending;
             }
             finally { if (themeChanged) _reconciler.SetThemeTransition(float.NaN); }
+            // The capture window closes before layout; a node that gained a transition in the flush counts as captured.
+            if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
             long tFlush = Stopwatch.GetTimestamp();   // always-on segment timing (FrameStats.*Ms) — see below
             // Spike-gated type roster (RenderCensus): one line when the flush alone exceeded the panel's refresh interval
@@ -7806,14 +7812,29 @@ public sealed partial class AppHost : IDisposable
             NodeHandle n = nodes[i];
             if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
             nodes[w++] = n;
-            // FLIP relativeTarget: capture relative to the resolved shared-layout anchor (if any) instead of the parent,
-            // so the node rides the anchor's motion coherently (its anchor-relative rect is unchanged ⇒ no re-FLIP).
-            NodeHandle anchor = _reconciler.ResolveRelativeTarget(n);
-            _projectBefore[n] = anchor.IsNull
-                ? new ProjCapture(RelRect(n), _scene.Parent(n))
-                : new ProjCapture(RelRectIn(n, anchor), anchor);
+            CaptureProjection(n);
         }
         if (w < nodes.Count) nodes.RemoveRange(w, nodes.Count - w);
+    }
+
+    private void CaptureProjection(NodeHandle n)
+    {
+        // FLIP relativeTarget: capture relative to the resolved shared-layout anchor (if any) instead of the parent,
+        // so the node rides the anchor's motion coherently (its anchor-relative rect is unchanged ⇒ no re-FLIP).
+        NodeHandle anchor = _reconciler.ResolveRelativeTarget(n);
+        _projectBefore[n] = anchor.IsNull
+            ? new ProjCapture(RelRect(n), _scene.Parent(n))
+            : new ProjCapture(RelRectIn(n, anchor), anchor);
+    }
+
+    /// <summary>Open between the commit's FLIP capture and the end of its flush: a reused node the reconcile gives a bounds transition
+    /// (<see cref="TreeReconciler.OnBoundsTransitionGained"/>) is captured from the rect it still holds, as if it had been animated before.</summary>
+    private bool _projectionCaptureOpen;
+
+    private void CaptureGainedProjection(NodeHandle n)
+    {
+        if (!_projectionCaptureOpen || !_scene.IsLive(n) || _projectBefore.ContainsKey(n)) return;
+        CaptureProjection(n);
     }
 
     // --fg motion per-node line (one word of OUTCOME + the captured/live rects). Static → zero capture, and only ever
@@ -7958,12 +7979,15 @@ public sealed partial class AppHost : IDisposable
             if (!_anim.TryGetTransition(n, out var spec)) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "no-transition", from, to); continue; }
             // Inside a container a live reflow is resizing (the page in a card beside a docking panel's reservation): the reflow
             // re-solves this node's layout every tick until it settles. A Reveal re-aims at the live layout after each tick; a
-            // Relayout or a ScaleCorrect would hold this commit's size while the layout moves on, so those land on the layout. The
-            // position FLIP (an offset over the live layout) and a size that runs through layout (Reflow) still play.
+            // Relayout follows it too (each commit re-aims its row over the row's own clock, and a stretched auto-sized one is
+            // re-aimed after every tick: FollowStretchedRelayouts); a ScaleCorrect would hold this commit's size while the layout
+            // moves on, so it lands on the layout. The position FLIP (an offset over the live layout) and a size that runs through
+            // layout (Reflow) still play.
+            bool followLive = relation == ReflowRelation.Resized;
             if (relation == ReflowRelation.Resized)
             {
-                // A Reveal follows the live layout (AnimEngine.FollowLayoutReveals, after every reflow tick); a Relayout or a ScaleCorrect cannot.
-                if (spec.Size is SizeMode.Relayout or SizeMode.ScaleCorrect)
+                // A Reveal follows the live layout (AnimEngine.FollowLayoutReveals, after every reflow tick); a ScaleCorrect cannot.
+                if (spec.Size is SizeMode.ScaleCorrect)
                 {
                     _anim.SnapPresentedSizeToLayout(n);
                     from = @from with { W = to.W, H = to.H };
@@ -7975,10 +7999,10 @@ public sealed partial class AppHost : IDisposable
                 }
             }
             if (reduced) spec = spec with { Dynamics = TransitionDynamics.Tween(1f, Easing.Linear) };
-            if (s_motionDiag) LogMotionNode(n.Raw.Index, "animate", from, to);
+            if (s_motionDiag) LogMotionNode(n.Raw.Index, followLive ? "animate-follow" : "animate", from, to);
             // AnimateBounds consumes only deltas, so parent-relative rects feed it directly; for a purely local
             // move this is bit-identical to the old absolute pair (the ancestor sum cancels).
-            _anim.AnimateBounds(n, from, to, spec);
+            _anim.AnimateBounds(n, from, to, spec, followLive);
         }
         _projectionSuppressionRoots.Clear();
         _liveReflowScratch.Clear();
@@ -8156,6 +8180,37 @@ public sealed partial class AppHost : IDisposable
             if (inner > 0.5f && MathF.Abs(inner - to) >= 0.5f) shifted |= _anim.ShiftReflow(r, cross, inner - to);
         }
         return shifted;
+    }
+
+    private readonly List<AnimEngine.LiveRelayout> _liveRelayoutScratch = new(16);
+
+    /// <summary>Re-aim every live SizeMode.Relayout row toward an AUTO size (declared NaN) on its parent's CROSS axis, where the parent stretches it and
+    /// the parent's size comes from above, at the parent's live inner size: the row pins the node's layout input to its interp every tick, so the
+    /// layout can never show the node's live target itself, but a stretched child's target is its parent's inner size, which a live reflow's re-solve
+    /// (a page easing beside a docking pane) moves every tick. Each re-aim departs from where the row is, over the time it has left, so the
+    /// resize lands on the live size instead of the size of the commit that seeded it and then stepping to the layout at its settle. Host-called
+    /// after the reflow re-solve, beside FollowLayoutReveals. Allocates nothing on a frame with no Relayout row.</summary>
+    private void FollowStretchedRelayouts()
+    {
+        _anim.CollectLiveRelayouts(_liveRelayoutScratch);
+        for (int i = 0; i < _liveRelayoutScratch.Count; i++)
+        {
+            var (n, ch, to, declared) = _liveRelayoutScratch[i];
+            if (!float.IsNaN(declared) || !_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.Exiting) != 0) continue;
+            NodeHandle par = _scene.Parent(n);
+            if (par.IsNull || (_scene.Flags(par) & NodeFlags.ZStack) != 0) continue;
+            ref LayoutInput pl = ref _scene.Layout(par);
+            ref LayoutInput nl = ref _scene.Layout(n);
+            bool horizontal = ch == AnimChannel.SizeW;
+            if ((pl.Direction == 1) != horizontal) continue;   // only the parent's cross axis stretches
+            if ((nl.AlignSelf == FlexAlign.Auto ? pl.AlignItems : nl.AlignSelf) != FlexAlign.Stretch || !SizeImposed(par, horizontal)) continue;
+            ref readonly RectF pb = ref _scene.Bounds(par);
+            float inner = horizontal
+                ? pb.W - pl.Padding.Left - pl.Padding.Right - nl.Margin.Left - nl.Margin.Right
+                : pb.H - pl.Padding.Top - pl.Padding.Bottom - nl.Margin.Top - nl.Margin.Bottom;
+            if (inner > 0.5f && MathF.Abs(inner - to) >= 0.5f) _anim.RetargetRelayout(n, ch, inner);
+        }
+        _liveRelayoutScratch.Clear();
     }
 
     /// <summary>Does <paramref name="n"/>'s size on one axis (<paramref name="horizontal"/>: its width) come from above, never from its children: declared,
@@ -8387,6 +8442,7 @@ public sealed partial class AppHost : IDisposable
         // keep their offset from the layout.
         FollowFlowRevealHeights();
         _anim.FollowLayoutReveals();
+        FollowStretchedRelayouts();
         // Natural-extent retarget: a reflow row PINS LayoutInput.Width/Height to its interp every tick, so layout can
         // never expose a changed natural size — but the node's CHILDREN are still arranged at their natural size inside
         // that pinned box, so the re-solve just above hands us the real main-axis extent for free. Async content that
