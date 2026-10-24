@@ -368,6 +368,7 @@ public sealed partial class AnimEngine
             MarkReflowLayoutDirty(node);
             _reflowWrote = true;
             ReflowRoots.Add(node);
+            ReflowSizeWritten?.Invoke(node);
         }
     }
 
