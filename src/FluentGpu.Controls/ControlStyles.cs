@@ -53,6 +53,9 @@ public static class ControlStyles
     public static readonly ControlStyleKey<Func<TextFieldStyle>> TextBoxFieldStyle = new("textbox.field");
     /// <summary>The AutoSuggestBox field surface (Standard chrome; the ElevatedPill keeps its own).</summary>
     public static readonly ControlStyleKey<Func<TextFieldStyle>> AutoSuggestBoxFieldStyle = new("autosuggestbox.field");
+    /// <summary>The AutoSuggestBox suggestion popup's card (WinUI's SuggestionsContainer: the frosted flyout plate); a theme with solid popups
+    /// (square, no frost) hands its own.</summary>
+    public static readonly ControlStyleKey<Func<PopupPlate>> AutoSuggestBoxSuggestionsPlate = new("autosuggestbox.suggestions");
     /// <summary>InfoBar (and the toast card, which is an InfoBar body): plate, icon, text, close button.</summary>
     public static readonly ControlStyleKey<Func<InfoBar.Style>> InfoBarStyle = new("infobar");
     /// <summary>ToolTip: the bubble.</summary>
@@ -109,6 +112,7 @@ public static class ControlStyles
         .With(ComboBoxStyle, ComboBox.FluentStyle)
         .With(TextBoxFieldStyle, TextFieldStyle.Fluent)
         .With(AutoSuggestBoxFieldStyle, AutoSuggestBox.FluentFieldStyle)
+        .With(AutoSuggestBoxSuggestionsPlate, PopupPlate.Fluent)
         .With(InfoBarStyle, InfoBar.FluentStyle)
         .With(ToolTipStyle, ToolTip.FluentStyle)
         .With(ProgressRingStyle, ProgressRing.FluentStyle)

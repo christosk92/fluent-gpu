@@ -198,6 +198,10 @@ public sealed class AutoSuggestBox : Component
     /// not focused, the caret is not at the end, a suggestion is highlighted, or the completion does not start with
     /// the live document.</summary>
     public IReadSignal<string>? Completion;
+    /// <summary>A query SEEDED at mount (the text signal already holds one) is a fresh user edit that opens the list (true, the default: a composer
+    /// that remounts the box mid-typing keeps its list), or a value the box arrives with (false: a field that mounts on a results page with the
+    /// page's query, where nothing was typed into THIS box, opens nothing; the seed is still the typed text Escape and the arrows restore).</summary>
+    public bool OpenOnSeed = true;
 
     /// <summary>The factory. Its scalar arguments are read once, at mount (a propless component), except the live ones: the
     /// <c>*Signal</c> arguments, <paramref name="text"/>, <paramref name="completion"/> and a BOUND <paramref name="placeholder"/>
@@ -230,7 +234,8 @@ public sealed class AutoSuggestBox : Component
         AutoSuggestBoxPresenter? presenter = null,
         AutoSuggestBoxChrome chrome = AutoSuggestBoxChrome.Standard,
         AutoSuggestBoxSuggestionPresentation suggestionPresentation = AutoSuggestBoxSuggestionPresentation.Popup,
-        IReadSignal<string>? completion = null)
+        IReadSignal<string>? completion = null,
+        bool openOnSeed = true)
         => Embed.Comp(() => new AutoSuggestBox
         {
             Suggestions = suggestions, SuggestionsSignal = suggestionsSignal, LoadingSignal = loadingSignal,
@@ -242,7 +247,7 @@ public sealed class AutoSuggestBox : Component
             TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts, Field = field,
             FieldMinHeight = minHeight, FieldRadius = cornerRadius, BoldMatch = boldMatch, ItemGlyph = itemGlyph,
             Presenter = presenter, Chrome = chrome, SuggestionPresentation = suggestionPresentation,
-            Completion = completion,
+            Completion = completion, OpenOnSeed = openOnSeed,
         });
 
     // The rendered width — what sizes the inner editor and the popup. Reading it inside a Render subscribes THAT
@@ -348,7 +353,7 @@ public sealed class AutoSuggestBox : Component
                 // suggestion list appears/disappears instantly. The surface still carries the SuggestionsContainer
                 // chrome (AcrylicBackgroundFillColorDefault + 1px border + OverlayCornerRadius + 0,2 padding,
                 // AutoSuggestBox_themeresources.xaml:283 + generic.xaml:119).
-                new PopupOptions(Chrome: PopupChrome.Static));
+                new PopupOptions(Chrome: PopupChrome.Static) { Plate = ControlStyles.Resolve(ControlStyles.AutoSuggestBoxSuggestionsPlate, PopupPlate.Fluent) });
             opened.ClosedAction = () =>
             {
                 if (handle.Value is { } live && !ReferenceEquals(live, opened)) return;   // reopened before this close finalized
@@ -371,8 +376,9 @@ public sealed class AutoSuggestBox : Component
 
             TextChangeReason reason = first
                 // A mount-SEEDED query behaves like a fresh user edit (cache + open the list) — the established
-                // engine contract; EditableText's first signal→doc sync is reason-silent.
-                ? TextChangeReason.UserInput
+                // engine contract; EditableText's first signal→doc sync is reason-silent. A caller that says the seed
+                // is not an edit (OpenOnSeed false) gets it as a programmatic value: cached, the list left closed.
+                ? (OpenOnSeed ? TextChangeReason.UserInput : TextChangeReason.ProgrammaticChange)
                 : pendingReason.Value
                   ?? _edit?.LastChangeReason
                   ?? TextChangeReason.UserInput;
@@ -387,6 +393,7 @@ public sealed class AutoSuggestBox : Component
                 debouncePending.Value = true;
             }
 
+            if (first && !OpenOnSeed) userTyped.Value = q;   // the seed is what Escape and an arrow past the end restore
             if (reason == TextChangeReason.UserInput)
             {
                 Presenter?.ResetSelection?.Invoke();

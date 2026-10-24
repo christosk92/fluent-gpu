@@ -139,6 +139,10 @@ public readonly record struct PopupOptions(
     /// the anchor-edge reveal. Only meaningful with <see cref="PopupChrome.Dropdown"/>.</summary>
     public float? SeamOffsetY { get; init; }
 
+    /// <summary>The card a frosted chrome draws for THIS popup (null, the default: the chrome's own, <see cref="FlyoutSurface"/>'s plate for it). A
+    /// control whose popup is themed apart from the menus and dropdowns hands its style's card here (the AutoSuggestBox's suggestions).</summary>
+    public PopupPlate? Plate { get; init; }
+
     /// <summary>WinUI <c>FlyoutBase.OverlayInputPassThroughElement</c> (FlyoutBase_Partial.cpp:3922-3938): pointer
     /// input over THIS node's rendered bounds bypasses the light-dismiss scrim while the popup is open — the MenuBar
     /// keeps hover-switching titles with a menu down (MenuBarItem.cpp:64-70 sets the bar as the pass-through).
@@ -271,6 +275,7 @@ internal sealed class OverlayEntry
     public NodeHandle WrapperNode;    // measured + translated for placement
     public NodeHandle SurfaceNode;    // presenter surface: the clip-reveal + translate + opacity animate this node
     public NodeHandle PlateNode;      // menu chrome plate (acrylic+stroke+shadow): the WinUI MenuFlyoutPresenterBorder ScaleY stretch animates this node
+    public PopupPlate? Plate;         // the caller's card (PopupOptions.Plate), null = the chrome's own
     public PopupPlate? PlateStyle;    // the card the surface last rendered (FlyoutSurface reports it): the backdrop sync + corner squaring read it, never re-resolve per frame
     public float? SeamOffsetY;        // Dropdown SplitOpen/SplitClose seam (PopupOptions.SeamOffsetY)
     public Func<NodeHandle>? PassThrough;   // WinUI OverlayInputPassThroughElement (PopupOptions.PassThrough)
@@ -404,6 +409,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
             PreserveFocusOnOpen = options.PreserveFocusOnOpen,
             DismissBehavior = options.DismissBehavior,
             Chrome = options.Chrome,
+            Plate = options.Plate,
             ConstrainToRootBounds = options.ConstrainToRootBounds,
             PinsAnchor = options.PinsAnchor,
             FreezeAtLastRect = options.FreezeAtLastRect,
@@ -1687,6 +1693,7 @@ public sealed class OverlayHost : Component
             {
                 Body = e.Content,
                 Chrome = e.Chrome,
+                Plate = e.Plate,
                 OnSurface = h => e.SurfaceNode = h,
                 OnPlateStyle = p => e.PlateStyle = p,
             }),
@@ -1719,6 +1726,7 @@ public sealed class OverlayHost : Component
                     {
                         Body = () => Ctx.Provide(Overlay.Placement, e.PlacementInfo, e.Content()),
                         Chrome = e.Chrome,
+                        Plate = e.Plate,
                         OnSurface = h => e.SurfaceNode = h,
                         OnPlateStyle = p => e.PlateStyle = p,
                         OnPlate = h => e.PlateNode = h,
@@ -1738,6 +1746,8 @@ internal sealed class FlyoutSurface : Component
 {
     public Func<Element> Body = static () => new BoxEl();
     public PopupChrome Chrome = PopupChrome.Flyout;
+    /// <summary>The caller's card (<see cref="PopupOptions.Plate"/>); null = <see cref="PlateFor"/> the chrome.</summary>
+    public PopupPlate? Plate;
     public Action<NodeHandle>? OnSurface;
     /// <summary>Menu chrome only: the stretch PLATE (acrylic + 1px flyout stroke + elevation shadow) — the engine's
     /// WinUI <c>MenuFlyoutPresenterBorder</c>, whose ScaleY the host animates during the open unfold.</summary>
@@ -1829,7 +1839,7 @@ internal sealed class FlyoutSurface : Component
             // (SceneRecorder draws shadows BEFORE the node's own clip) INSIDE the reveal: the old single-card
             // surface painted both over the anchor for the first 250ms of the unfold (the SplitButton/DropDownButton
             // "menu overlaps the button" mid-open artifact).
-            var menuPlate = PlateFor(Chrome);
+            var menuPlate = Plate ?? PlateFor(Chrome);
             OnPlateStyle?.Invoke(menuPlate);
             return new BoxEl
             {
@@ -1872,7 +1882,7 @@ internal sealed class FlyoutSurface : Component
         }
 
         // The stock card pads 0,2,0,2 for every frosted chrome but the generic Popup flyout (see PlateFor).
-        var plate = PlateFor(Chrome);
+        var plate = Plate ?? PlateFor(Chrome);
         OnPlateStyle?.Invoke(plate);
         return new BoxEl
     {
