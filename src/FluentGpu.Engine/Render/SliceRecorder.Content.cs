@@ -137,7 +137,7 @@ public sealed partial class SliceRecorder
     {
         if ((uint)slot >= (uint)_cOps.Length || _cOps[slot] is null || (uint)slot >= (uint)_scanSegs.Length
             || _scanSegs[slot] is null || _scanGen[slot] != _curGen[slot] || seg > _scanMarkCount[slot]) return 0UL;
-        return TileContentHash.WantKey(_curGen[slot], seg, ox, oy, scale);
+        return TileContentHash.WantKey(_contentGen[slot], seg, ox, oy, scale);
     }
 
     /// <summary>The content hash tile <paramref name="tilePx"/> of segment <paramref name="seg"/> of <paramref name="slot"/>
@@ -186,14 +186,63 @@ public sealed partial class SliceRecorder
 
     /// <summary>BuildComposite: row <paramref name="row"/> is segment <paramref name="segment"/> of <paramref name="slot"/>,
     /// cut on the device grid at (<paramref name="ox"/>, <paramref name="oy"/>).</summary>
-    private void NoteRow(int row, int slot, int segment, float ox, float oy)
+    private void NoteRow(int row, int slot, int segment, float ox, float oy, bool inline)
     {
         if (row >= _rowSlot.Length)
         {
             int n = Math.Max(row + 1, _rowSlot.Length * 2);
             Array.Resize(ref _rowSlot, n); Array.Resize(ref _rowSeg, n); Array.Resize(ref _rowOx, n); Array.Resize(ref _rowOy, n);
+            Array.Resize(ref _rowInline, n);
         }
-        _rowSlot[row] = slot; _rowSeg[row] = segment; _rowOx[row] = ox; _rowOy[row] = oy;
+        _rowSlot[row] = slot; _rowSeg[row] = segment; _rowOx[row] = ox; _rowOy[row] = oy; _rowInline[row] = inline;
+    }
+
+    // ── INLINE SEGMENTS' OP LISTS (partial present of an inline item) ─────────────────────────────────────────────────
+    // An inline segment (InlineSegment) holds no tiles: the backend replays its ops into the back buffer every composite.
+    // Its pixels are still a pure function of its ops, so the partial present diffs them exactly as a tile's sub-tile
+    // damage does (TileDamage.Diff): per inline row the recorder hands the op records of the WHOLE segment (one frame for
+    // every inline row, InlineOpsOrigin / InlineOpsExtent, slice px relative to the row's grid), and the backend keeps the
+    // previous composite's list per slice and dirties only the footprints of the ops that changed. Without it an inline
+    // item's only answer was "its bytes moved or a damage rect touched it: repaint its whole footprint" — and the shell's
+    // static band (window background, title, player bar) is window-sized, so a seek-bar step or an equalizer bar recomposited
+    // and presented the whole window (audit PERF, 2026-10-24: ~3 ms of GPU per present at 3444x1620 for a 0.1 % change).
+
+    /// <summary>The op-record frame of every inline row: slice px relative to the row's grid, offset by this much (content may
+    /// overflow its origin to the left / top) and this wide, inside a <see cref="TileOpRec"/>'s 16-bit coordinates.</summary>
+    public const float InlineOpsOrigin = -8192f;
+    public const int InlineOpsExtent = 24576;
+
+    private bool[] _rowInline = new bool[64];
+    private TileOpRec[] _inlineOps = new TileOpRec[256];
+    private TileOpRec[] _inlineScratch = new TileOpRec[256];
+    private int _inlineOpCount;
+    private int[] _rowInlineRange = new int[128];   // 2 per row: start, count (count −1 = no list: the backend repaints the whole item)
+
+    /// <summary>BuildComposite: the op records of every inline row (see above); a row whose content table is unknown gets none.</summary>
+    private void CollectInlineOps(float scale)
+    {
+        _inlineOpCount = 0;
+        if (_rowInlineRange.Length < 2 * _rowCount) _rowInlineRange = new int[Math.Max(2 * _rowCount, _rowInlineRange.Length * 2)];
+        var frame = new RectF(InlineOpsOrigin, InlineOpsOrigin, InlineOpsExtent, InlineOpsExtent);
+        for (int row = 0; row < _rowCount; row++)
+        {
+            _rowInlineRange[2 * row] = 0;
+            _rowInlineRange[2 * row + 1] = -1;
+            if (row >= _rowInline.Length || !_rowInline[row]) continue;
+            int slot = _rowSlot[row], seg = _rowSeg[row];
+            float ox = _rowOx[row], oy = _rowOy[row];
+            if (ContentKey(slot, seg, ox, oy, scale) == 0) continue;
+            ref ScanSeg sg = ref _scanSegs[slot][seg];
+            ReadOnlySpan<TileOp> ops = _cOps[slot].AsSpan(0, _cOpCount[slot]);
+            ReadOnlySpan<int> open = seg < _cSegScopeStart[slot].Length
+                ? _cSegScopeIdx[slot].AsSpan(_cSegScopeStart[slot][seg], _cSegScopeCount[slot][seg]) : default;
+            int n = TileContentHash.CollectTileOps(ops, open, sg.ByteStart, sg.ByteEnd, in frame, scale, ox, oy, ref _inlineScratch);
+            if (_inlineOpCount + n > _inlineOps.Length) Array.Resize(ref _inlineOps, Math.Max(_inlineOpCount + n, _inlineOps.Length * 2));
+            _inlineScratch.AsSpan(0, n).CopyTo(_inlineOps.AsSpan(_inlineOpCount));
+            _rowInlineRange[2 * row] = _inlineOpCount;
+            _rowInlineRange[2 * row + 1] = n;
+            _inlineOpCount += n;
+        }
     }
 
     /// <summary>One segment's content, as <see cref="SliceTable.Request{TContent}"/> asks for it.</summary>

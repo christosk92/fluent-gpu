@@ -242,6 +242,7 @@ public sealed unsafe partial class D3D12Device
         if (_itemFoot.Length < items.Length) _itemFoot = new PixelRect[System.Math.Max(items.Length, _itemFoot.Length * 2)];
         _ppCurN = 0;
         System.Array.Clear(_ppOcc);
+        PpInlineBeginFrame();
         ulong structure = 0x5747_0000_0000_0001UL;
         ulong fresh = 0xF2E5_0000_0000_0000UL ^ (ulong)(uint)_compositeTurn * 0x9E3779B97F4A7C15UL;   // differs every turn
         int hiddenEnd = -1;   // the members of a hidden group
@@ -326,6 +327,13 @@ public sealed unsafe partial class D3D12Device
                         // signature is its composite parameters and region alone — a member's sub-tile re-raster repaints
                         // that much of the group, not the whole group.
                     }
+                    else if (InlineDirect(in it) && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0 && TileDamage.PrecisePresent
+                        && PpInlineDiff(in frame, in it, in foot, in sci))
+                    {
+                        // An INLINE item whose op list the recorder handed over: the entry matches on its composite parameters and
+                        // place, and what changed inside it was dirtied op by op (PpInlineDiff) — never its whole footprint for a
+                        // seek-bar step or a damage rect that only touches it.
+                    }
                     else if (_itemKey[i] != 0 && (it.Kind != CompositeKind.Direct || it.LowResDown > 1))
                         Mix(ref s, _itemRendered[i] ? fresh : _itemKey[i]);   // a re-render under the same key may differ by an LSB
                     else if (it.Kind == CompositeKind.Direct && it.BlurSigma <= 0f && !PpDamaged(in frame, in foot) && RowOf(it.SliceId) is int row and >= 0)
@@ -345,6 +353,8 @@ public sealed unsafe partial class D3D12Device
         }
 
         _ppDirty = default;
+        if (!_ppInlDirty.IsEmpty) _ppDirty.Union(in _ppInlDirty);
+        PpInlineEndFrame();
         // A different item STRUCTURE (set or order of kind/slice pairs — a navigation, a flyout) takes the whole frame:
         // navigations are rare, and a whole frame is the guard against any entry the diff could under-report there. The
         // painter-order match (PpMatch) still serves every steady-state turn; `--fg present-structure-diff` lets it serve

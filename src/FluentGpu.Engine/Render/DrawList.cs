@@ -545,6 +545,10 @@ public sealed class DrawList
         Reset();
     }
 
+    /// <summary>Does the current buffer hold exactly the bytes the prior one did? (A re-walk whose only change was inside a
+    /// nested slice writes its own arena byte for byte again: the recorder then keeps that arena's scan.)</summary>
+    public bool BytesEqualPrior() => _len == _priorLen && _buf.AsSpan(0, _len).SequenceEqual(_priorBuf.AsSpan(0, _priorLen));
+
     public bool CanCopyPriorSpan(int byteStart, int byteLength, int sortStart, int sortCount)
         => byteStart >= 0 && byteLength >= 0 && byteStart + byteLength <= _priorLen
            && sortStart >= 0 && sortCount >= 0 && sortStart + sortCount <= _priorSortLen;

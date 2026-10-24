@@ -166,6 +166,11 @@ public readonly ref struct CompositeFrame
     /// 0 = unstamped, e.g. a hand-built test frame). A backend's tile pool is indexed by those numbers alone, so it records the
     /// first owner after a (re)build and flags any other owner compositing into the same pool.</summary>
     public readonly int OwnerToken;
+    /// <summary>The op records of every INLINE row's whole segment (<see cref="InlineOpsOf"/>; SliceRecorder.Content.cs): what a
+    /// backend's partial present diffs to dirty only the ops of an inline item that changed.</summary>
+    public readonly ReadOnlySpan<TileOpRec> InlineOps;
+    /// <summary>Two per row of <see cref="Slices"/>: the start and count of its range in <see cref="InlineOps"/> (count −1 = none).</summary>
+    public readonly ReadOnlySpan<int> InlineOpRanges;
 
     public CompositeFrame(in FrameInfo info, ReadOnlySpan<SliceRow> slices, ReadOnlySpan<byte> sliceStreams,
         ReadOnlySpan<TileRaster> rasters, ReadOnlySpan<TilePlacement> placements, ReadOnlySpan<CompositeItem> items,
@@ -177,12 +182,26 @@ public readonly ref struct CompositeFrame
         PresentParams present, ReadOnlySpan<SliceSpan> sliceSpans,
         ReadOnlySpan<PushLayerCmd> itemLayers, Span<byte> rasterDone, ReadOnlySpan<PushLayerCmd> itemInherited = default,
         Span<byte> rasterFlags = default, Span<byte> itemFlags = default, ReadOnlySpan<int> trimSurfaces = default,
-        int ownerToken = 0)
+        int ownerToken = 0, ReadOnlySpan<TileOpRec> inlineOps = default, ReadOnlySpan<int> inlineOpRanges = default)
     {
         Info = info; Slices = slices; SliceStreams = sliceStreams; Rasters = rasters; Placements = placements;
         Items = items; Present = present; SliceSpans = sliceSpans;
         ItemLayers = itemLayers; RasterDone = rasterDone; ItemInherited = itemInherited;
         RasterFlags = rasterFlags; ItemFlags = itemFlags; TrimSurfaces = trimSurfaces; OwnerToken = ownerToken;
+        InlineOps = inlineOps; InlineOpRanges = inlineOpRanges;
+    }
+
+    /// <summary>Row <paramref name="row"/>'s inline op records (slice px relative to its grid, offset by
+    /// <c>SliceRecorder.InlineOpsOrigin</c>); false when the recorder listed none for it.</summary>
+    public bool InlineOpsOf(int row, out ReadOnlySpan<TileOpRec> ops)
+    {
+        ops = default;
+        int at = 2 * row;
+        if (row < 0 || at + 1 >= InlineOpRanges.Length) return false;
+        int start = InlineOpRanges[at], count = InlineOpRanges[at + 1];
+        if (count < 0 || start < 0 || start + count > InlineOps.Length) return false;
+        ops = InlineOps.Slice(start, count);
+        return true;
     }
 
     /// <summary>The <paramref name="k"/>-th (0 or 1) distributed ancestor fade of item <paramref name="i"/> (default when
