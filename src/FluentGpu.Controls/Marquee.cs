@@ -4,6 +4,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Scene;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
@@ -34,7 +35,7 @@ namespace FluentGpu.Controls;
 /// glides the line home.</item>
 /// <item><b>Unseen, it stops.</b> A covered, minimised or hidden window, a parked page or a collapsed subtree (and an
 /// <c>allowed</c> gate that reads false) send the line home and hold its passes; when it is seen again it starts over from the start
-/// pause.</item>
+/// pause. A line scrolled out of the window spends its passes unseen, on the timer alone (no row, no frame).</item>
 /// <item><b>Free at rest, zero allocation while moving.</b> A pass is one keyframe row on the scroller's TranslateX (composited on the
 /// render thread, frame-rate independent and sub-pixel); the edge fade follows it there (<see cref="EdgeFadeSpec.OverflowPeriod"/>). The
 /// pauses are host timers, so between passes and at rest the line asks for no frame and holds no wake reason.</item>
@@ -174,12 +175,13 @@ internal sealed class MarqueeView : Component
         var copyAt = UseSignal(0f);     // where the copy starts in the strip: the pass's distance, as laid out
         var moving = UseSignal(false);  // a pass (or a glide home) is under way: the copy stays while it is
         var strip = UseRef(NodeHandle.Null);
+        var clip = UseRef(NodeHandle.Null);
         var cell = UseRef<MarqueeRunner?>(null);
         bool mount = cell.Value is null;
-        var run = cell.Value ??= new MarqueeRunner(moving, strip);
+        var run = cell.Value ??= new MarqueeRunner(moving, strip, clip);
         var timer = UseTimeout(run.Fire, 1f);
         if (mount) timer.Cancel();      // armed only by the runner
-        run.Bind(Context.Anim, timer, sty, p.Order);
+        run.Bind(Context.Anim, Context.Scene, timer, sty, p.Order);
         UseLayoutEffect(() =>
         {
             var g = p.Group;
@@ -236,6 +238,7 @@ internal sealed class MarqueeView : Component
             // would otherwise ellipsize against the slot and never overflow), centred in the slot's height, cut by the clip.
             ZStack = true, AlignItems = FlexAlign.Center, MinWidth = 0f, Shrink = 1f, ClipToBounds = true, EdgeFade = fade,
             HoverScopeTransparent = true,
+            OnRealized = h => clip.Value = h,
             OnBoundsChanged = b => { if (b.W != viewW.Peek()) viewW.Value = b.W; },
             OnHoverMove = run.HoverEnter, OnPointerExit = run.HoverLeave,
             Children =
@@ -278,8 +281,9 @@ internal sealed class MarqueeRunner
     const float HandoffMs = 700f, OrderStepMs = 120f;
 
     readonly Signal<bool> _moving;
-    readonly Ref<NodeHandle> _strip;
+    readonly Ref<NodeHandle> _strip, _clip;
     AnimEngine? _anim;
+    SceneStore? _scene;
     TimerHandle _timer;
     Marquee.Style _sty = Marquee.Default;
     internal Marquee.Group? Group;
@@ -296,10 +300,11 @@ internal sealed class MarqueeRunner
     internal readonly Action<Point2> HoverEnter;
     internal readonly Action HoverLeave;
 
-    public MarqueeRunner(Signal<bool> moving, Ref<NodeHandle> strip)
+    public MarqueeRunner(Signal<bool> moving, Ref<NodeHandle> strip, Ref<NodeHandle> clip)
     {
         _moving = moving;
         _strip = strip;
+        _clip = clip;
         Fire = OnTimer;
         HoverEnter = _ => OnHover(true);
         HoverLeave = () => OnHover(false);
@@ -308,9 +313,10 @@ internal sealed class MarqueeRunner
     bool Live => _overflow && _canMove && _seen && _period > 0f;
     internal bool IsWaiting => _phase == Phase.Waiting;
 
-    internal void Bind(AnimEngine? anim, TimerHandle timer, Marquee.Style sty, int order)
+    internal void Bind(AnimEngine? anim, SceneStore? scene, TimerHandle timer, Marquee.Style sty, int order)
     {
         _anim = anim;
+        _scene = scene;
         _timer = timer;
         _sty = sty;
         Order = order;
@@ -405,9 +411,18 @@ internal sealed class MarqueeRunner
     void StartPass()
     {
         if (!Live || (!_hovered && _passesLeft <= 0) || _anim is null || _strip.Value.IsNull) { Stop(); return; }
+        float ms = _period / MathF.Max(1f, _sty.Speed) * 1000f;
+        if (!OnScreen())
+        {
+            // Scrolled out of the window (a list's now-playing row in the overscan): the pass is spent unseen, on the timer alone, so the
+            // budget still runs out and nothing is drawn or woken per frame for a line nobody can see.
+            if (_passesLeft > 0) _passesLeft--;
+            _phase = Phase.Pass;
+            _timer.RestartIn(ms);
+            return;
+        }
         if (Group is { } g && !g.TryTake(this)) { _phase = Phase.Waiting; return; }
         if (_passesLeft > 0) _passesLeft--;
-        float ms = _period / MathF.Max(1f, _sty.Speed) * 1000f;
         // Run and copy travel one period left; the last key puts the run back where the copy now stands (the same pixels), so the pass
         // ends at the start with no jump. One-shot: the row frees itself when it lands.
         _anim.Keyframes(_strip.Value, AnimChannel.TranslateX,
@@ -419,6 +434,15 @@ internal sealed class MarqueeRunner
         if (!_moving.Peek()) _moving.Value = true;
         _phase = Phase.Pass;
         _timer.RestartIn(ms);
+    }
+
+    /// <summary>Whether any of the line's clip lies inside the window (its laid-out, scrolled rect against the root's).</summary>
+    bool OnScreen()
+    {
+        if (_scene is not { } scene || _clip.Value.IsNull || !scene.IsLive(_clip.Value) || scene.Root.IsNull) return true;
+        RectF r = scene.AbsoluteRect(_clip.Value);
+        RectF win = scene.Bounds(scene.Root);
+        return r.W > 0f && r.Right > win.X && r.X < win.Right && r.Bottom > win.Y && r.Y < win.Bottom;
     }
 
     /// <summary>Ease back to the start from wherever the pass stands (the overflow ended, or the run was re-measured mid-pass).</summary>
