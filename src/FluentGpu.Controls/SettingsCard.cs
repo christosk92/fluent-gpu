@@ -130,7 +130,7 @@ public static partial class SettingsCard
            // so the deriver recurses into the actual icon/header/description subtree instead.
            with
            {
-               SkeletonProxy = () => Embed.Comp(new ResponsiveBox.Props(w => Build(options, w), 0f, 0f),
+               SkeletonProxy = () => Embed.Comp(new ResponsiveBox.Props(w => Build(options, FormOf(options, w)), 0f, 0f),
                        static () => new ResponsiveBox()) with { DeriveRenderedOutput = true },
            };
 
@@ -140,15 +140,25 @@ public static partial class SettingsCard
         MinHeight = 36f,
     };
 
-    internal static Element Build(Options o, float width)
+    /// <summary>The card's FORM at <paramref name="width"/>: the only thing its tree reads from the width (bit 0 = the content
+    /// wraps under the header, bit 1 = the icon hides). The host re-renders on a form flip, never on a width that keeps it.</summary>
+    internal static int FormOf(Options o, float width)
+    {
+        var s = o.Style ?? DefaultStyle;
+        bool wrap = width < s.WrapThreshold || o.Alignment == ContentAlignment.Vertical;
+        bool hideIcon = width < s.WrapNoIconThreshold && o.Alignment == ContentAlignment.Right;
+        return (wrap ? 1 : 0) | (hideIcon ? 2 : 0);
+    }
+
+    internal static Element Build(Options o, int form)
     {
         var s = o.Style ?? DefaultStyle;
         if (o.Alignment == ContentAlignment.Left)
             return Root(o, s, BuildLeftContent(o, s));
 
         bool hasContent = o.Content is not null;
-        bool wrap = width < s.WrapThreshold || o.Alignment == ContentAlignment.Vertical;
-        bool hideIcon = width < s.WrapNoIconThreshold && o.Alignment == ContentAlignment.Right;
+        bool wrap = (form & 1) != 0;
+        bool hideIcon = (form & 2) != 0;
 
         Element header = BuildHeader(o, s, hideIcon, fillMain: !wrap);
         Element? content = hasContent ? BuildContent(o, wrap) : null;
@@ -343,25 +353,42 @@ public static partial class SettingsCard
     }
 }
 
+/// <summary>The card host. It measures its slot but renders from the card's FORM (<see cref="SettingsCard.FormOf"/>), so a
+/// width that keeps the form (every tick of a docking pane's reflow, a window drag inside one band) re-renders nothing: the
+/// tree is fluid and the layout follows the width.</summary>
 sealed class SettingsCardCore : Component
 {
-    readonly Signal<float> _w = new(0f);
+    const float UnmeasuredWidth = 720f;
+    // Notified only when a measured width calls for a form other than the one on screen.
+    readonly Signal<int> _formEdge = Signal.AlwaysNotify(0);
+    SettingsCard.Options? _options;
+    float _w;
+    int _rendered = -1;
+    readonly Action<RectF> _onBounds;
+
+    public SettingsCardCore()
+    {
+        _onBounds = r =>
+        {
+            if (r.W <= 0f || MathF.Abs(r.W - _w) <= 0.5f) return;
+            _w = r.W;
+            if (_options is { } o && SettingsCard.FormOf(o, _w) != _rendered) _formEdge.Value = 0;
+        };
+    }
 
     public override Element Render()
     {
         var options = UseProps<SettingsCard.Options>();
-        float w = _w.Value;
-        float effective = w > 0.5f ? w : 720f;
+        _ = _formEdge.Value;
+        _options = options;
+        int form = SettingsCard.FormOf(options, _w > 0.5f ? _w : UnmeasuredWidth);
+        _rendered = form;
         return new BoxEl
         {
             Direction = 1,
             AlignSelf = FlexAlign.Stretch,
-            OnBoundsChanged = r =>
-            {
-                if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f)
-                    _w.Value = r.W;
-            },
-            Children = [SettingsCard.Build(options, effective)],
+            OnBoundsChanged = _onBounds,
+            Children = [SettingsCard.Build(options, form)],
         };
     }
 }

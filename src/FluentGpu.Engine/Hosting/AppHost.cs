@@ -1498,6 +1498,23 @@ public sealed partial class AppHost : IDisposable
     /// subscribers raise <see cref="WakeReasons.FrameClockPaceable"/>, which the GPU governor may pace.</summary>
     private readonly Signal<object?> _frameClockPaceableSig = new(0L);
     private long _frameClock;
+    // The frame counter reaches the ambient channels as an object (an ambient is a Signal<object?>), and boxing a long per
+    // frame was the stage's last steady-frame allocation (audit B3bc). Each channel owns two boxes it alternates between,
+    // rewritten in place: the box written this frame is never the channel's current value, so the write always notifies.
+    private readonly FrameClockBoxes _frameClockBoxes = new(), _frameClockPaceableBoxes = new();
+
+    private sealed class FrameClockBoxes
+    {
+        private readonly object _a = 0L, _b = 0L;
+        private bool _useB;
+        public object Next(long frame)
+        {
+            _useB = !_useB;
+            object box = _useB ? _b : _a;
+            System.Runtime.CompilerServices.Unsafe.Unbox<long>(box) = frame;
+            return box;
+        }
+    }
     // Drag epoch → UseDragState. EDGE-triggered (session begin/end, OverTarget / Effect / Caption change, settle
     // start+expiry): the chip FOLLOWS through the DragPosX/Y binds below, so bumping this per frame — as it used to —
     // re-rendered the whole preview subtree at pointer rate for a value nothing read.
@@ -6438,8 +6455,8 @@ public sealed partial class AppHost : IDisposable
             if (_snapDepth == 0 && (_frameClockSig.HasSubscribers || _frameClockPaceableSig.HasSubscribers))
             {
                 ++_frameClock;
-                if (_frameClockSig.HasSubscribers) _frameClockSig.Value = _frameClock;
-                if (_frameClockPaceableSig.HasSubscribers) _frameClockPaceableSig.Value = _frameClock;
+                if (_frameClockSig.HasSubscribers) _frameClockSig.Value = _frameClockBoxes.Next(_frameClock);
+                if (_frameClockPaceableSig.HasSubscribers) _frameClockPaceableSig.Value = _frameClockPaceableBoxes.Next(_frameClock);
             }
             // ── Live drag publication (see the _dragEpoch field comment) ────────────────────────────────────────────
             // POSITION goes out as two float SIGNALS every frame: a bound preview transform is a compositor write, so a

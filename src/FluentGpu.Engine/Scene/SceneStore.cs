@@ -58,6 +58,10 @@ public sealed partial class SceneStore : ISceneBackend
     }
     private readonly List<OrphanEntry> _orphans = new();
     private readonly Dictionary<NodeHandle, List<NodeHandle>> _orphansByParent = new();
+    // The orphans whose exit asked to keep their layout space (a SizeMode.Reflow exit, which eases the main extent to 0
+    // through real layout): the only ones FlexLayout.AddOrphanMain folds into the parent's Measure. An authored size on an
+    // opacity-only exit is no such request (audit B3bc: a fixed-height line held its slot through its fade).
+    private readonly HashSet<NodeHandle> _spaceHoldingOrphans = new();
     private const int MaxOrphans = 64;
 
     /// <summary>The ANIMATION timebase in ms (monotonic sum of the per-frame deltas the host feeds the animator),
@@ -743,8 +747,9 @@ public sealed partial class SceneStore : ISceneBackend
     /// ClipsToBounds follows the Size track.</para>
     /// <paramref name="maxAgeMs"/> is this orphan's OWN hard deadline on the <see cref="AnimClockMs"/> timebase (see
     /// <see cref="OrphanMaxAgeMs"/>): the host force-reclaims it past that age even while tracks remain. 0 ⇒ only the
-    /// host's global settle-timeout applies.</summary>
-    public void Orphan(NodeHandle node, float maxAgeMs = 0f)
+    /// host's global settle-timeout applies. <paramref name="holdsSpace"/>: the exit eases its own layout size (a SizeMode.Reflow
+    /// exit), so it keeps occupying its parent's layout until that track closes it; false for every other exit.</summary>
+    public void Orphan(NodeHandle node, float maxAgeMs = 0f, bool holdsSpace = false)
     {
         if (!IsLive(node)) return;
         if (_orphans.Count >= MaxOrphans) DropOrphanAt(0);   // budget: instant-free oldest
@@ -760,6 +765,7 @@ public sealed partial class SceneStore : ISceneBackend
             EnqueuedTicks = Stopwatch.GetTimestamp(), EnqueuedAnimMs = AnimClockMs,
             MaxAgeMs = maxAgeMs > 0f ? maxAgeMs : 0f,
         });
+        if (holdsSpace) _spaceHoldingOrphans.Add(node);
         if (!visualParent.IsNull)
         {
             if (!_orphansByParent.TryGetValue(visualParent, out var children))
@@ -794,8 +800,12 @@ public sealed partial class SceneStore : ISceneBackend
     internal List<NodeHandle>? OrphanChildrenOf(NodeHandle visualParent)
         => _orphansByParent.TryGetValue(visualParent, out var children) ? children : null;
 
+    /// <summary>Whether exit orphan <paramref name="node"/> still occupies its parent's layout space (see <see cref="Orphan"/>).</summary>
+    internal bool OrphanHoldsSpace(NodeHandle node) => _spaceHoldingOrphans.Count != 0 && _spaceHoldingOrphans.Contains(node);
+
     private void UnindexOrphan(in OrphanEntry entry)
     {
+        _spaceHoldingOrphans.Remove(entry.Node);
         if (entry.VisualParent.IsNull || !_orphansByParent.TryGetValue(entry.VisualParent, out var children)) return;
         children.Remove(entry.Node);
         if (children.Count == 0) _orphansByParent.Remove(entry.VisualParent);
@@ -821,6 +831,7 @@ public sealed partial class SceneStore : ISceneBackend
             NodeHandle child = children[i];
             for (int j = _orphans.Count - 1; j >= 0; j--)
                 if (_orphans[j].Node == child) { _orphans.RemoveAt(j); break; }
+            _spaceHoldingOrphans.Remove(child);
             FreeSubtree(child);
         }
     }

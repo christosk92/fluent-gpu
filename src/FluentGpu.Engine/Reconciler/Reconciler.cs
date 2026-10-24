@@ -4808,7 +4808,8 @@ public sealed partial class TreeReconciler
             // Hand the orphan its OWN hard deadline (see ExitMaxAgeMs) on top of the host's global 2s backstop: a wedged
             // exit track on a page-sized subtree (the skeleton shimmer) must not keep painting over the live content for
             // two seconds.
-            _scene.Orphan(node, ExitMaxAgeMs(spec));
+            _scene.Orphan(node, ExitMaxAgeMs(spec),
+                holdsSpace: spec.Size == SizeMode.Reflow && (spec.Channels & TransitionChannels.Size) != 0);
             anim.SeedExitOver(node, spec.Exit, spec, anim.RestPoseOf(node));
             if (flowReveal)
             {
