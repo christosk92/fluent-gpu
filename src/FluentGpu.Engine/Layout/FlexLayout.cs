@@ -962,10 +962,12 @@ public sealed partial class FlexLayout
     /// OVER live content that is already measured, so adding its extent double-counts the same band. Inside a measured
     /// virtual row that doubling is not merely a wrong height: it is committed into the ExtentTable through
     /// SetMeasured and ballooned every row below for the exit duration.</para>
-    /// <para>The discriminator available to layout is the reflow track's own layout-visible product: it writes the
-    /// eased extent straight into the orphan's LayoutInput main axis every tick (AnimScheduler compose), so a definite
-    /// main size on a detached node means a live Size track owns it. A frozen last-arranged Bounds is NOT that signal
-    /// and is deliberately no longer read here — it is exactly what an opacity-only orphan still carries.</para></summary>
+    /// <para>Which orphans hold space is the exit's own request, recorded when it was orphaned
+    /// (<see cref="SceneStore.OrphanHoldsSpace"/>: a SizeMode.Reflow exit). A definite main size alone is not that signal:
+    /// an authored Width/Height reads the same as the reflow track's eased extent, and an opacity-only exit of a
+    /// fixed-height line used to keep its slot for the whole fade (audit B3bc). The extent itself is still the live
+    /// LayoutInput main axis the reflow track writes every tick (AnimScheduler compose); a frozen last-arranged Bounds is
+    /// never read, it is exactly what an opacity-only orphan still carries.</para></summary>
     private void AddOrphanMain(NodeHandle node, bool row, ref float main, ref float cross, ref int n)
     {
         if (_scene.OrphanCount == 0) return;
@@ -974,7 +976,7 @@ public sealed partial class FlexLayout
         for (int i = 0; i < orphans.Count; i++)
         {
             var o = orphans[i];
-            if (!_scene.IsLive(o)) continue;
+            if (!_scene.IsLive(o) || !_scene.OrphanHoldsSpace(o)) continue;
             ref LayoutInput oli = ref _scene.Layout(o);
             float oMain = row ? oli.Width : oli.Height;
             if (float.IsNaN(oMain)) continue;   // no Size track on this axis ⇒ the orphan holds no layout space
