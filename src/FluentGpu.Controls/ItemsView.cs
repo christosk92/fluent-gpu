@@ -32,6 +32,7 @@ public sealed class ItemsViewController
     internal Func<float>? GetOffsetImpl;
     internal Func<NodeHandle>? GetViewportImpl;
     internal Action<IReadOnlyList<int>, Action>? BeginRemovalImpl;
+    internal Action<Func<int, int>, Action>? RemapImpl;
     internal Action<object>? ObserveInsertionMembershipImpl;
     internal Action<int>? ClearBandImpl;
     /// <summary>Marks the engine band committed (AnimEngine.CommitRevealBand) right before a collapse commit runs.</summary>
@@ -194,6 +195,19 @@ public sealed class ItemsViewController
         var begin = BeginRemovalImpl;
         if (begin is null) commit();
         else begin(normalized, commit);
+    }
+
+    /// <summary>Commit a REORDER of the backing items (the same items at other indices) so every realized item keeps its slot: <paramref name="commit"/>
+    /// runs exactly once to mutate the collection, then each realized slot moves to its item's new index, and the keyboard-current item and
+    /// the selection follow their items. <paramref name="newIndexOf"/> answers an OLD index with the item's new one, or -1 for an item that
+    /// is gone (it is called after the commit, so it must read a snapshot of the old order). Without the bound seam (a non-virtual or a
+    /// keyed list) the operation degrades to the commit alone.</summary>
+    public void RemapItems(Func<int, int> newIndexOf, Action commit)
+    {
+        ArgumentNullException.ThrowIfNull(newIndexOf);
+        ArgumentNullException.ThrowIfNull(commit);
+        if (RemapImpl is { } remap) remap(newIndexOf, commit);
+        else commit();
     }
 
     /// <summary>The optimistic-membership HANDOFF edge for a configured <see cref="InsertionOptions"/>: call it from a
@@ -1716,6 +1730,16 @@ public sealed class ItemsView : Component, IPropsHost
                 ? null
                 : (indices, commit) => beginRemoval(
                     viewportNode.Value, indices, removal.Exit, removal.Motion, removal.StaggerMs, commit);
+            var beginRemap = Context.BeginVirtualRemap;
+            ctl.RemapImpl = beginRemap is null ? null : (newIndexOf, commit) => beginRemap(viewportNode.Value, newIndexOf, () =>
+            {
+                commit();
+                // The keyboard-current item and the selection are indices too: they follow their items, never the slot positions.
+                int cur = current.Peek();
+                int moved = cur >= 0 ? newIndexOf(cur) : -1;
+                if (moved >= 0 && moved != cur) current.Value = moved;
+                model.Remap(newIndexOf);
+            });
             ctl.ClearBandImpl = slot => Context.Anim?.ClearRevealBand(viewportNode.Value, slot);
             ctl.CommitBandImpl = slot => Context.Anim?.CommitRevealBand(viewportNode.Value, slot);
             ctl.RetireBandImpl = slot => Context.Anim?.RetireRevealBand(viewportNode.Value, slot);
@@ -1747,6 +1771,7 @@ public sealed class ItemsView : Component, IPropsHost
                 ctl.GetViewportImpl = null;
                 ctl.GetOffsetImpl = null;
                 ctl.BeginRemovalImpl = null;
+                ctl.RemapImpl = null;
                 ctl.ObserveInsertionMembershipImpl = null;
                 ctl.ClearBandImpl = null;
                 ctl.CommitBandImpl = null;

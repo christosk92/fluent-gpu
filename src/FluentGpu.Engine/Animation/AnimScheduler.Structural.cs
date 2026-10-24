@@ -295,6 +295,24 @@ public sealed partial class AnimEngine
     /// Relayout re-solves the subtree each tick (live re-wrap); Reflow runs through the host's boundary worklist.</summary>
     public void AnimateBounds(NodeHandle node, in RectF fromAbs, in RectF toAbs, in LayoutTransition spec) => AnimateBounds(node, fromAbs, toAbs, spec, followLive: false);
 
+    /// <summary>A position FLIP seeded AFTER this frame's animation tick (a node a late re-solve moved, a paged shelf's re-fit glide measured on
+    /// the layout the frame presents): <see cref="AnimateBounds(NodeHandle, in RectF, in RectF, in LayoutTransition)"/>, then the start pose is
+    /// written into the node's transform now (the tick that composes the rows has run) and the rows start advancing on the next tick. A plain
+    /// seed holds its first tick at the start, which here would be the SECOND frame at the start, and a destination still moving under it
+    /// (a page a docking panel's reflow narrows) would carry the node away from where it was drawn for that frame.</summary>
+    public void AnimateBoundsPresented(NodeHandle node, in RectF fromAbs, in RectF toAbs, in LayoutTransition spec)
+    {
+        AnimateBounds(node, fromAbs, toAbs, spec, followLive: false);
+        if ((spec.Channels & TransitionChannels.Position) == 0 || !_scene.IsLive(node)) return;
+        float dx = fromAbs.X - toAbs.X, dy = fromAbs.Y - toAbs.Y;
+        ref NodePaint p = ref _scene.Paint(node);
+        p.LocalTransform = p.LocalTransform with { Dx = p.LocalTransform.Dx + dx, Dy = p.LocalTransform.Dy + dy };
+        _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        int sx = Find(node, AnimChannel.TranslateX), sy = Find(node, AnimChannel.TranslateY);
+        if (sx >= 0) _slab.At(sx).Flags &= ~AnimFlags.JustSeeded;
+        if (sy >= 0) _slab.At(sy).Flags &= ~AnimFlags.JustSeeded;
+    }
+
     /// <summary><see cref="AnimateBounds(NodeHandle, in RectF, in RectF, in LayoutTransition)"/> for a commit inside a container a live reflow is
     /// resizing (<paramref name="followLive"/>): a SizeMode.Relayout row already in flight is re-aimed at the new size over the time it has left (its
     /// remaining delay kept) instead of restarting, so a target the live layout moves every commit (a column whose share follows a page easing

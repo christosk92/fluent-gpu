@@ -78,6 +78,8 @@ public sealed partial class TreeReconciler
         // only for cold grow/shrink or defensive invariant repair and grows only with the viewport high-water mark.
         public List<BoundSlot>? SlotScratch;
         public bool[]? SlotUsed;
+        // BeginVirtualRemap's per-slot target index (grows with the slot count; a reorder is a data edge, never a frame).
+        public int[]? RemapTarget;
         // Opt-in retained prefix: fixed-index slots stay attached ahead of Slots while the latter keep their ordinary
         // overlap/extended recycler semantics. Roots are stored because prefix nodes are temporarily detached while
         // the existing recycler operates on the normal child band, then restored before layout.
@@ -894,6 +896,7 @@ public sealed partial class TreeReconciler
     // The seams every component's context is handed. A method-group conversion allocates a delegate each time it is evaluated,
     // so converting them per mount cost five delegates (~320 bytes) per component; they are built once per reconciler.
     private Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? _beginVirtualRemovalSeam;
+    private Action<NodeHandle, Func<int, int>, Action>? _beginVirtualRemapSeam;
     private Func<NodeHandle, object, Signal<object?>?>? _resolveContextSeam;
 
     private Action? _armSuppressionSeam;
@@ -916,6 +919,7 @@ public sealed partial class TreeReconciler
         ctx.Scene = _scene;
         ctx.RequestFrame = RequestFrame;
         ctx.BeginVirtualRemoval = _beginVirtualRemovalSeam ??= BeginVirtualRemoval;
+        ctx.BeginVirtualRemap = _beginVirtualRemapSeam ??= BeginVirtualRemap;
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = _resolveContextSeam ??= ResolveContext;
         ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
@@ -5239,6 +5243,78 @@ public sealed partial class TreeReconciler
             if (!current.ContentNode.IsNull && _scene.IsLive(current.ContentNode))
                 MarkLayoutShape(current.ContentNode);
         }
+        _scene.Mark(viewport, NodeFlags.VirtualRangeDirty);
+        _realizeProgress = true;
+    }
+
+    /// <summary>A reorder of a bound list's backing items (the same items at other indices: a reading order that changes with the
+    /// column count, an item moved): commit the mutation, then move every realized slot to its item's new logical index, so the item
+    /// keeps its slot, its subtree and its state. Without this a slot keeps its INDEX and shows whatever item now sits there, so a
+    /// reordered item's card is rebuilt in another slot. <paramref name="newIndexOf"/> answers an old index with the new one, or -1
+    /// for an item that is gone. A slot whose item is gone keeps its index unless a moved item claimed it; the next realize (marked
+    /// here) puts the window back in logical order and recycles whatever is left over, exactly as after a removal. Like the removal,
+    /// the commit runs BEFORE the slot writes, so the owning count/plan computation queues ahead of the rows. Prefix and keep-alive
+    /// slots are fixed-index and stay as they are. Allocates only to grow its per-slot scratch (a data edge, never a frame).</summary>
+    private void BeginVirtualRemap(NodeHandle viewport, Func<int, int> newIndexOf, Action commit)
+    {
+        if (viewport.IsNull || !_scene.IsLive(viewport) || !_virtuals.TryGetValue(viewport, out var entry)
+            || entry.El?.RowBind is null || entry.Slots is not { Count: > 0 } slots)
+        {
+            commit();
+            return;
+        }
+
+        var ve = entry.El!;
+        commit();
+
+        int n = slots.Count;
+        var target = entry.RemapTarget is { } t && t.Length >= n ? t : entry.RemapTarget = new int[Math.Max(8, n)];
+        // Pass 1: where each slot's item went (-1: gone). Two slots may not claim one index (an item listed twice): the later loses.
+        for (int i = 0; i < n; i++)
+        {
+            int mapped = newIndexOf(slots[i].Index.Peek());
+            for (int j = 0; mapped >= 0 && j < i; j++)
+                if (target[j] == mapped) mapped = -1;
+            target[i] = mapped;
+        }
+        // Pass 2: a slot whose item is gone keeps its index unless a moved item claimed it (then the realize recycles it).
+        for (int i = 0; i < n; i++)
+        {
+            if (target[i] >= 0) continue;
+            int old = slots[i].Index.Peek();
+            bool claimed = false;
+            for (int j = 0; j < n && !claimed; j++) claimed = target[j] == old;
+            target[i] = claimed ? -1 : old;
+        }
+
+        bool moved = false;
+        for (int i = 0; i < n; i++)
+        {
+            int old = slots[i].Index.Peek(), mapped = target[i];
+            if (mapped < 0 || mapped == old) continue;
+            slots[i].Index.Value = mapped;   // the same item: no hover/press/focus hygiene, the slot's state is still its own
+            ve.OnItemIndexChanged?.Invoke(old, mapped);
+            moved = true;
+        }
+        if (!moved) return;
+
+        // A displaced slot (its item gone, its index claimed) still holds that index until the realize recycles it, and the realize's
+        // overlap pass gives an index to the FIRST slot holding it: list the displaced slots last so the moved item keeps its slot.
+        var displaced = entry.SlotScratch ??= new List<BoundSlot>(Math.Max(4, n));
+        displaced.Clear();
+        int keep = 0;
+        for (int i = 0; i < n; i++)
+        {
+            if (target[i] >= 0) slots[keep++] = slots[i];
+            else displaced.Add(slots[i]);
+        }
+        for (int i = 0; i < displaced.Count; i++) slots[keep + i] = displaced[i];
+        displaced.Clear();
+
+        // The slots are no longer in logical order: the next realize repairs the chain (RealizeBoundWindow's cold path keeps every
+        // exact index overlap, so each moved slot stays with its item) and the arrange places every slot at its item's new rect.
+        if (_scene.TryGetScroll(viewport, out var current) && !current.ContentNode.IsNull && _scene.IsLive(current.ContentNode))
+            MarkLayoutShape(current.ContentNode);
         _scene.Mark(viewport, NodeFlags.VirtualRangeDirty);
         _realizeProgress = true;
     }
