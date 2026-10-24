@@ -643,14 +643,14 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // one that arrives fades in; the multi-row cell's width eases through layout meanwhile (_resizeArmed). It is measured once the frame's
     // layout has settled (InputHooks.QueueAfterFrameLayout): a commit during a live reflow (a docking panel's reservation) is laid out at the
     // reflow's target first and re-solved at its live width after the animation tick, and the slots are drawn where THAT layout puts them.
-    // So the start is presented at once (the RunReflowLayout wrap-watch pattern: the tick that composes the row has run). Seeds on the edge
-    // only: nothing runs per frame, and the keyframes are shared.
+    // So the start is presented at once and advances from the next tick (AnimEngine.AnimateBoundsPresented). Seeds on the edge only: nothing
+    // runs per frame, and the keyframes are shared.
     const float GlideMs = 300f;                    // MotionRecipes.CardRefit's clock: the house responsive re-fit
     const float ResizeArmSlackMs = 120f;           // the slot resize stays armed a little past the glide, so a late commit still eases
     static readonly LayoutTransition s_glide = MotionRecipes.CardRefit with { Channels = TransitionChannels.Position };
     static readonly LayoutTransition s_slotResize = MotionRecipes.CardResizeWidth;   // the same 300 ms SmoothOut clock, through layout
     // Leaving: gone before it crosses the cells it passes over, back to full opacity once it rests off the page (a later page shows it).
-    static readonly Keyframe[] s_leaveKeys = [new(0f, 1f), new(0.4f, 0f, Easing.EaseOut), new(0.97f, 0f), new(1f, 1f)];
+    static readonly Keyframe[] s_leaveKeys = [new(0f, 1f), new(0.25f, 0f, Easing.EaseOut), new(0.97f, 0f), new(1f, 1f)];
     // Arriving: unseen while it travels in from its page, then up as it settles.
     static readonly Keyframe[] s_arriveKeys = [new(0f, 0f), new(0.35f, 0f), new(1f, 1f, Easing.EaseOut)];
     FillRowGeometry _glideFrom;                    // the geometry the decided glide starts from (Render), consumed by RunGlide
@@ -694,23 +694,17 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             bool before = a.X - oldOffset < viewW && a.X - oldOffset + a.W > 0f;
             bool after = b.X - newOffset < viewW && b.X - newOffset + b.W > 0f;
             if (!before && !after) continue;      // off the page both times: nobody sees it move
-            ref NodePaint paint = ref scene.Paint(slot);
-            bool wrote = false;
             if (!reduced && (MathF.Abs(dx) >= 0.5f || MathF.Abs(dy) >= 0.5f))
-            {
-                anim.AnimateBounds(slot, new RectF(b.X + dx, b.Y + dy, b.W, b.H), b, s_glide);
-                paint.LocalTransform = paint.LocalTransform with { Dx = paint.LocalTransform.Dx + dx, Dy = paint.LocalTransform.Dy + dy };
-                wrote = true;
-            }
+                anim.AnimateBoundsPresented(slot, new RectF(b.X + dx, b.Y + dy, b.W, b.H), b, s_glide);
             if (before && !after && !reduced)
                 anim.KeyframesMotion(slot, AnimChannel.Opacity, s_leaveKeys, GlideMs, ReducedMotionPolicy.KeepFade);
             else if (!before && after)
             {
+                // Its first keyframe is 0 and the tick has run: hide it now, or this frame shows it at full opacity where it arrives from.
                 anim.KeyframesMotion(slot, AnimChannel.Opacity, s_arriveKeys, GlideMs, ReducedMotionPolicy.KeepFade);
-                paint.Opacity = 0f;
-                wrote = true;
+                scene.Paint(slot).Opacity = 0f;
+                scene.Mark(slot, NodeFlags.PaintDirty);
             }
-            if (wrote) scene.Mark(slot, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
         }
     }
 
