@@ -24,6 +24,13 @@ public sealed partial class FlexLayout
     /// every standalone layout run (unchanged behaviour).</summary>
     public bool DeferOffsetClamp { get; set; }
 
+    /// <summary>Host-set around a re-solve of a layout this same frame already arranged at OTHER sizes (the commit laid out at its targets, then
+    /// again at its reflows' start, <c>AppHost.SeedReflowsFirst</c>): the cross-pass measure ring is not consulted. A ring slot stored at the
+    /// start's width (the frame before) is clean and its version unchanged, but a hit does not descend, so the node's children keep the Bounds
+    /// that pass at the TARGET left them, and the arrange reads those as their base sizes: a command bar laid out at its start width with its
+    /// trailing group at the target's x, a list's rows at the target width, for one frame. False otherwise.</summary>
+    public bool BypassMeasureRing { get; set; }
+
     // `--fg layout` (EngineSwitches.LayoutDiag): per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
     // measure≫arrange flags a redundant-measure blow-up. Gated to a single bool check (zero work/alloc) when off.
@@ -226,7 +233,7 @@ public sealed partial class FlexLayout
     private bool TryRingHit(NodeHandle node, float availW, out Size2 size)
     {
         size = default;
-        if (Verifying) return false;   // --fg layout-verify: the oracle's re-solve descends for real, it never rides the ring
+        if (Verifying || BypassMeasureRing) return false;   // --fg layout-verify: the oracle's re-solve descends for real, it never rides the ring
         uint i = node.Raw.Index;
         if (i >= (uint)_memo.Length) return false;
         // Two complementary validators, both required (P4 fix, 2026-09-19):

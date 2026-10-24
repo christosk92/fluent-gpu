@@ -283,6 +283,12 @@ public sealed class TitleBar : Component
     /// that reads a signal (a window tier) re-renders the bar and re-reports its regions when it changes. Null keeps
     /// <see cref="TitleBarSpacing.Default"/> (WinUI's 14 and 48).</summary>
     public Func<TitleBarSpacing>? RowSpacing;
+    /// <summary>The lead pad's width ease when <see cref="RowSpacing"/> changes it (a window tier that moves the app's gutter): null snaps it, the
+    /// default. A size channel through real layout (a <see cref="SizeMode.Reflow"/> on the width axis), so the islands after it ride the re-solve;
+    /// while the pad eases the non-client regions re-push from its bounds, so the islands' hit regions follow it frame by frame.</summary>
+    public LayoutTransition? LeadPadMotion;
+    /// <summary>The same for the drag strip before the caption cluster (<see cref="TitleBarSpacing.MinDragStrip"/>): null snaps it, the default.</summary>
+    public LayoutTransition? DragStripMotion;
     /// <summary>The bar's height, read at EVERY render (a static value, a thunk or a signal; <see cref="TitleBarOptions.Height"/>):
     /// <see cref="ExpandedHeight"/> (48) by default. The caption buttons are this tall, the back / pane buttons are 4 shorter (WinUI's
     /// 44 in 48), the islands and drag bands take it, and a change re-reports the non-client regions in the same frame.</summary>
@@ -382,6 +388,7 @@ public sealed class TitleBar : Component
     public override Element Render()
     {
         var hooks = UseContext(InputHooks.Current);
+        _rowHooks = hooks;
         int epoch = hooks.WindowChromeEpoch?.Value ?? 0;          // subscribe: re-render on activation/placement change
         var viewport = UseContext(Viewport.Size);                 // subscribe: re-report regions on window resize/DPI hop
         bool active = hooks.IsWindowActive?.Invoke() ?? true;
@@ -556,9 +563,13 @@ public sealed class TitleBar : Component
         // The guaranteed-grabbable drag strip. It stays FIXED even under TabsElasticLane: a CaptionLeading control is
         // already flush against Minimize with the strip at full width, so shrinking it would trade real drag space for
         // nothing.
-        kids.Add(Tabs is not null || merged
+        kids.Add((Tabs is not null || merged
             ? Band(dragStrip, 0f, 0f)
-            : new BoxEl { Width = dragStrip });
+            : new BoxEl { Width = dragStrip }) with
+            {
+                Animate = DragStripMotion,
+                OnBoundsChanged = DragStripMotion is null ? null : _leadPadBounds ??= _ => RequestRegionPush(),
+            });
 
         if (CaptionLeading is { } captionLeadingFunc)
         {
@@ -643,6 +654,24 @@ public sealed class TitleBar : Component
         int h = items.Count;
         for (int i = 0; i < items.Count; i++) h = unchecked(h * 397 ^ StringComparer.Ordinal.GetHashCode(items[i].Key));
         return h;
+    }
+
+    InputHooks? _rowHooks;
+    Action<RectF>? _leadPadBounds;
+    bool _rowPushQueued;
+    Action? _rowPushQueuedAction;
+
+    /// <summary>Re-push the regions after this frame's layout (the lead pad eased: every island after it moved). Coalesced to one push a frame.</summary>
+    void RequestRegionPush()
+    {
+        if (_shellMode) { RequestShellPush(); return; }
+        if (_rowPushQueued || _rowHooks?.QueueAfterLayout is not { } queue) return;
+        _rowPushQueued = true;
+        queue(_rowPushQueuedAction ??= () =>
+        {
+            _rowPushQueued = false;
+            if (!_shellMode && _rowHooks is { } h) PushRegions(h);
+        });
     }
 
     void RequestShellPush()
@@ -1007,7 +1036,11 @@ public sealed class TitleBar : Component
         }
 
         if (alwaysLeadPad || ShowBackButton || ShowPaneToggle || IconGlyph.Length > 0 || Title.Length > 0)
-            kids.Add(new BoxEl { Width = leadPad });
+            kids.Add(new BoxEl
+            {
+                Width = leadPad, Animate = LeadPadMotion,
+                OnBoundsChanged = LeadPadMotion is null ? null : _leadPadBounds ??= _ => RequestRegionPush(),
+            });
 
         if (IconGlyph.Length > 0)
         {

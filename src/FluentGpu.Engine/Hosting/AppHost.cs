@@ -7884,7 +7884,12 @@ public sealed partial class AppHost : IDisposable
         if (!suppressed)
         {
             DiscoverProjectionRoots(PosEps, SizeEps);
-            if (SeedReflowsFirst(layoutSize, reduced, PosEps, SizeEps)) DiscoverProjectionRoots(PosEps, SizeEps);
+            // Again while a pass started any: a reflow below a root that the previous pass's starts took back (the page column beside the
+            // title bar's and the play bar's reflows at 3200: the detail page's columns under it) was skipped as below a root; seeded in the
+            // main pass instead, the commit laid its subtree out at its target (the list's rows at their final width for one frame).
+            // A seeded node is laid out at its start by then, so a later pass finds it unchanged and seeds only what became free.
+            for (int pass = 0; pass < SeedReflowPasses && SeedReflowsFirst(layoutSize, reduced, PosEps, SizeEps); pass++)
+                DiscoverProjectionRoots(PosEps, SizeEps);
         }
 
         foreach (var kv in _projectBefore)
@@ -8030,6 +8035,10 @@ public sealed partial class AppHost : IDisposable
         return true;
     }
 
+    /// <summary>How many times a commit runs <see cref="SeedReflowsFirst"/>: again while a pass starts any, since its starts can free a reflow the
+    /// pass before skipped (one under a projection root that those starts took back). Bounded; two passes cover every case seen.</summary>
+    private const int SeedReflowPasses = 3;
+
     /// <summary>Start the SizeMode.Reflow rows this commit seeds BEFORE any other projection is measured, and lay the commit out at their
     /// start. A reflow's first tick puts its captured size back into layout (the seed frame presents t = 0), so everything its extent moves or
     /// sizes (the zone under a hero whose height eases, the page above a play bar's slot, a box that holds the reflow) is drawn this frame where
@@ -8056,7 +8065,11 @@ public sealed partial class AppHost : IDisposable
         }
         if (!started || !_scene.AnyLayoutDirty) return false;
         NoteFlowRevealHeights();
-        _invalidator.RunDirty(layoutSize);
+        // The commit's own pass arranged these subtrees at their targets: the ring's slots for the start (the frame before) would answer without
+        // descending and leave the children at the targets' Bounds (FlexLayout.BypassMeasureRing).
+        _layout.BypassMeasureRing = true;
+        try { _invalidator.RunDirty(layoutSize); }
+        finally { _layout.BypassMeasureRing = false; }
         _scene.ClearLayoutDirty();
         FollowFlowRevealHeights();
         return true;
