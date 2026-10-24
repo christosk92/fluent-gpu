@@ -664,6 +664,10 @@ public sealed partial class RenderContext
     /// <summary>Reconciler-injected bound-list removal seam: detach realized logical indices into the exit-orphan layer,
     /// commit the backing mutation, then remap surviving slot indices without remounting them.</summary>
     public Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? BeginVirtualRemoval;
+    /// <summary>Reconciler-injected bound-list reorder seam: commit the backing mutation, then move every realized slot to its
+    /// item's new logical index (the map answers an old index with the new one, or -1 for an item that is gone), so a reordered
+    /// item keeps its slot, its subtree and its state instead of its old slot showing another item.</summary>
+    public Action<NodeHandle, Func<int, int>, Action>? BeginVirtualRemap;
     public NodeHandle HostNode;                 // this component's rendered child (animation hooks target it)
     private List<Action>? _hostBound;           // registrations installed ON HostNode (UseMeasuredBounds/Width, UseGesture)
 

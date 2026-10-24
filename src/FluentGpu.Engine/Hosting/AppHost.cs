@@ -1460,6 +1460,8 @@ public sealed partial class AppHost : IDisposable
     // InputHooks.QueueAfterLayout: one-shot post-layout callbacks (a keyed TitleBar child re-pushing the NC regions in the
     // frame it moved). Double-buffered so a callback that queues another one lands in the NEXT drain, never re-entrantly.
     private List<Action> _afterLayout = new(), _afterLayoutDrain = new();
+    // InputHooks.QueueAfterFrameLayout: one-shot callbacks run once the frame's LAST layout pass is done (7.06, after the reflow re-solve).
+    private List<Action> _afterFrameLayout = new(), _afterFrameLayoutDrain = new();
 
     /// <summary>FLIP "First" snapshot of a BoundsAnimated node, in PARENT-RELATIVE presented space (its own layout
     /// origin + in-flight LocalTransform). Parent-relative is what makes projections respond only to LOCAL movement:
@@ -5132,6 +5134,7 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;
         _inputHooks.SetMinHitSize = size => _dispatcher.MinHitSize = MathF.Max(0f, size);
         _inputHooks.QueueAfterLayout = a => _afterLayout.Add(a);
+        _inputHooks.QueueAfterFrameLayout = a => _afterFrameLayout.Add(a);
         var chromeEpoch = new Signal<int>(0);
         _inputHooks.WindowChromeEpoch = chromeEpoch;
         _inputHooks.WindowOccluded = _windowOccluded;
@@ -6728,6 +6731,7 @@ public sealed partial class AppHost : IDisposable
             RunFlowPass(layoutSize);
             _layout.DeferOffsetClamp = false;
             DrainAfterLayout();                                // 7.06 rects moved by the late scoped relayouts above publish this frame too
+            DrainAfterFrameLayout();                           // 7.06 motion seeded against the layout this frame presents
             // 7.15 follow-rect (F169): a node that must cover ANOTHER node's rect this frame (the docked video overlay over its
             // hollow reservation) takes size and position from the target's PAINTED rect here: after layout AND the animation
             // tick (so a paint-only slide of the target is already in its transform), before the video geometry scan and
@@ -8232,6 +8236,16 @@ public sealed partial class AppHost : IDisposable
 
     /// <summary>Does <paramref name="n"/>'s size on one axis (<paramref name="horizontal"/>: its width) come from above, never from its children: declared,
     /// a share of its parent's free space on that main axis, or stretched across its parent's cross axis by a parent whose size is imposed in turn?</summary>
+    /// <summary>Is <paramref name="content"/> a virtualizing viewport's content node, whose children are the realized rows the viewport's item
+    /// layout places AND sizes (a paged shelf's cells, a grid's tiles)? Their size never comes from their children.</summary>
+    private bool IsVirtualContent(NodeHandle content)
+    {
+        NodeHandle vp = _scene.Parent(content);
+        if (vp.IsNull || !_scene.HasScroll(vp)) return false;
+        ref ScrollState sc = ref _scene.ScrollRef(vp);
+        return sc.ItemCount > 0 && sc.ContentNode == content;
+    }
+
     private bool SizeImposed(NodeHandle n, bool horizontal)
     {
         for (; !n.IsNull; n = _scene.Parent(n))
@@ -8240,6 +8254,7 @@ public sealed partial class AppHost : IDisposable
             if (!float.IsNaN(horizontal ? li.Width : li.Height)) return true;
             NodeHandle p = _scene.Parent(n);
             if (p.IsNull) return true;   // the root: the window's size
+            if (IsVirtualContent(p)) return true;   // a realized virtual row: its viewport's item layout sizes it (ArrangeVirtual)
             if ((_scene.Flags(p) & NodeFlags.ZStack) != 0) return false;
             ref LayoutInput pl = ref _scene.Layout(p);
             if ((pl.Direction == 0) == horizontal) return li.FlexGrow > 0f || li.FlexShrink > 0f;   // its parent's main axis: a share of the free space
@@ -8897,6 +8912,16 @@ public sealed partial class AppHost : IDisposable
         (_afterLayout, _afterLayoutDrain) = (_afterLayoutDrain, _afterLayout);
         for (int i = 0; i < _afterLayoutDrain.Count; i++) _afterLayoutDrain[i]();
         _afterLayoutDrain.Clear();
+    }
+
+    /// <summary>Run the <see cref="InputHooks.QueueAfterFrameLayout"/> callbacks: after the frame's last layout pass (the commit's, the
+    /// reflow re-solve, the presented flow), so they read the geometry this frame presents.</summary>
+    private void DrainAfterFrameLayout()
+    {
+        if (_afterFrameLayout.Count == 0) return;
+        (_afterFrameLayout, _afterFrameLayoutDrain) = (_afterFrameLayoutDrain, _afterFrameLayout);
+        for (int i = 0; i < _afterFrameLayoutDrain.Count; i++) _afterFrameLayoutDrain[i]();
+        _afterFrameLayoutDrain.Clear();
     }
 
     private void DrainPassiveEffects()

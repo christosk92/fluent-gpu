@@ -459,6 +459,9 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // viewport shifted −Bleed cancels); the fitted cardW still uses the shelf width (Fit is fed the un-widened _w).
     // NOTE the gutter shows scrolled-out neighbor content ATTENUATED BY THE EDGE FADE at non-page-aligned rests, so a
     // shelf that enables the bleed should carry an edge fade ≥ the bleed (the fade is what keeps the gutter soft).
+    // ONLY a shelf that lifts its cards gets the gutter (single-row or measured, `_bleed`): a multi-row grid is a dense
+    // chart with no lift and no halo, and there the gutter only showed the next page's first column (a rank numeral cut
+    // to a sliver) at every page-aligned rest. Its clip is the shelf's own edge.
     const float HaloBleed = 12f;
     // Probe-lock granularity: two measured values this close are the SAME lock (see _measuredH/_measuredForCardW). Used
     // by both the re-probe predicate (Render) and the signals' equality comparer, so they can never disagree.
@@ -571,9 +574,138 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         _leadSpanSig.SetIfChanged(Math.Max(1, next.LeadSpan));   // E7 — live, never gated by the data-props check below
         if (ApplyFit(next.Fit, next.CardHeight)) _fitRev.Value = _fitRev.Peek() + 1;   // live band — a re-fit re-renders the shelf once
         // ONE compare decides both: the equality-gated write returns false for a rebuilt-but-equal snapshot, and the
-        // content revision (which invalidates the measured-height lock) must move exactly when that write does. Call it
-        // FIRST and unconditionally — a `previous is null ||` short-circuit here would skip the mount write entirely.
-        if (_props.SetIfChanged(next)) _contentRevision.Value = _contentRevision.Peek() + 1;
+        // content revision (which invalidates the measured-height lock) must move exactly when that write does. It runs
+        // unconditionally (CommitProps) — a `previous is null ||` short-circuit here would skip the mount write entirely.
+        // A list whose items moved (the same items at other indices: a chart's reading order that changes with its column
+        // count) commits through the strip's REORDER seam: each realized slot then follows its item to its new index, so the
+        // item's card keeps its node and glides (the render's re-fit glide) instead of the old slot showing another item.
+        _pendingProps = next;
+        if (_liveStrip is not null && previous is not null && ItemsMoved(previous, next))
+        {
+            _remapFrom = previous;
+            _remapTo = next;
+            _remapPending = true;
+            _ctl.RemapItems(_newIndexOf, _commitProps);
+        }
+        else CommitProps();
+    }
+
+    // ── REORDER (B12): the strip's slots follow their items across a reorder (ItemsViewController.RemapItems). ──
+    ShelfProps<T>? _pendingProps;                 // the push CommitProps writes (a field, so the commit delegate is cached)
+    ShelfProps<T>? _remapFrom, _remapTo;          // the last reorder's two snapshots: NewIndexOf / OldIndexOf read them
+    bool _remapPending;                           // a reorder the next render's glide has not taken yet
+    readonly Action _commitProps;
+    readonly Func<int, int> _newIndexOf;
+
+    void CommitProps()
+    {
+        if (_props.SetIfChanged(_pendingProps)) _contentRevision.Value = _contentRevision.Peek() + 1;
+    }
+
+    /// <summary>Did a push move an item the strip may have realized: any shared index whose item differs (an append or a cut tail moves
+    /// nothing). O(n) over the shorter list, the same walk the props gate already paid for.</summary>
+    static bool ItemsMoved(ShelfProps<T> previous, ShelfProps<T> next)
+    {
+        if (ReferenceEquals(previous.Items, next.Items)) return false;
+        int n = Math.Min(previous.VisibleCount, next.VisibleCount);
+        var cmp = EqualityComparer<T>.Default;
+        for (int i = 0; i < n; i++) if (!cmp.Equals(previous.Items[i], next.Items[i])) return true;
+        return false;
+    }
+
+    /// <summary>Where the item at <paramref name="index"/> of <paramref name="from"/> sits in <paramref name="to"/>, or -1. The SAME index
+    /// first, then outward (a reorder is local, and of two equal items the nearer one keeps the slot). Item equality is the shelf's
+    /// identity contract (see <see cref="ShelfProps{T}"/>): what a card renders is a function of its item.</summary>
+    static int IndexIn(ShelfProps<T> from, ShelfProps<T> to, int index)
+    {
+        if ((uint)index >= (uint)from.VisibleCount) return -1;
+        var item = from.Items[index];
+        var cmp = EqualityComparer<T>.Default;
+        int n = to.VisibleCount;
+        if (index < n && cmp.Equals(to.Items[index], item)) return index;
+        for (int d = 1; d < n + index; d++)
+        {
+            int a = index - d, b = index + d;
+            if (a < 0 && b >= n) break;
+            if (a >= 0 && a < n && cmp.Equals(to.Items[a], item)) return a;
+            if (b < n && cmp.Equals(to.Items[b], item)) return b;
+        }
+        return -1;
+    }
+
+    int NewIndexOf(int oldIndex) => _remapFrom is { } from && _remapTo is { } to ? IndexIn(from, to, oldIndex) : -1;
+    int OldIndexOf(int newIndex) => _remapFrom is { } from && _remapTo is { } to ? IndexIn(to, from, newIndex) : newIndex;
+
+    // ── RE-FIT GLIDE (B12). The virtual arrange places a slot at its item's cell in one layout, and a re-fit also re-seats the page (the
+    // content's scroll transform), so no parent-relative FLIP can see where an item was ON SCREEN. The glide works in viewport space instead:
+    // from the old geometry at the item's old index minus the offset last shown, to the new geometry at its index minus the re-seated
+    // offset. A position FLIP on the slot root (velocity-continuous over a running one); an item that leaves the page fades out on its way,
+    // one that arrives fades in; the multi-row cell's width eases through layout meanwhile (_resizeArmed). It is measured once the frame's
+    // layout has settled (InputHooks.QueueAfterFrameLayout): a commit during a live reflow (a docking panel's reservation) is laid out at the
+    // reflow's target first and re-solved at its live width after the animation tick, and the slots are drawn where THAT layout puts them.
+    // So the start is presented at once and advances from the next tick (AnimEngine.AnimateBoundsPresented). Seeds on the edge only: nothing
+    // runs per frame, and the keyframes are shared.
+    const float GlideMs = 300f;                    // MotionRecipes.CardRefit's clock: the house responsive re-fit
+    const float ResizeArmSlackMs = 120f;           // the slot resize stays armed a little past the glide, so a late commit still eases
+    static readonly LayoutTransition s_glide = MotionRecipes.CardRefit with { Channels = TransitionChannels.Position };
+    static readonly LayoutTransition s_slotResize = MotionRecipes.CardResizeWidth;   // the same 300 ms SmoothOut clock, through layout
+    // Leaving: gone before it crosses the cells it passes over, back to full opacity once it rests off the page (a later page shows it).
+    static readonly Keyframe[] s_leaveKeys = [new(0f, 1f), new(0.25f, 0f, Easing.EaseOut), new(0.97f, 0f), new(1f, 1f)];
+    // Arriving: unseen while it travels in from its page, then up as it settles.
+    static readonly Keyframe[] s_arriveKeys = [new(0f, 0f), new(0.35f, 0f), new(1f, 1f, Easing.EaseOut)];
+    FillRowGeometry _glideFrom;                    // the geometry the decided glide starts from (Render), consumed by RunGlide
+    bool _glideRemap;                              // that glide also follows a reorder (old index = OldIndexOf)
+    int _glideRev, _armRev;
+    readonly Signal<bool> _resizeArmed = new(false);
+    readonly Action _runGlide, _queueGlide, _disarmResize;
+
+    void RunGlide()
+    {
+        var from = _glideFrom;
+        bool remapped = _glideRemap;
+        _glideFrom = default;
+        _glideRemap = false;
+        if (from.IsSet && _layout is { } layout) SeedGlide(in from, layout.Geometry, remapped);
+        _remapFrom = _remapTo = null;   // the snapshots served the reorder and this glide: let them go
+    }
+
+    void SeedGlide(in FillRowGeometry from, in FillRowGeometry to, bool remapped)
+    {
+        if (Context.Scene is not { } scene || Context.Anim is not { } anim) return;
+        if (Motion.LayoutTransitionsSuppressed) return;   // a live resize or a scroll owns geometry: everything lands, as every FLIP does
+        var vp = ShelfViewport;
+        if (vp.IsNull || !scene.IsLive(vp) || !scene.TryGetScroll(vp, out var sc)) return;
+        var content = sc.ContentNode;
+        if (content.IsNull || !scene.IsLive(content)) return;
+        float oldOffset = (float)_shelfHandle.Offset.Peek();   // the offset last shown (this frame's feedback lands after it)
+        float newOffset = (float)_shelfHandle.OffsetNow;        // the re-seat the bring-into-view effect posted, if any
+        float viewW = sc.ViewportW;
+        // Reduced motion lands every item where it is laid out (a FLIP there is a 1 ms tween); an arriving item still fades in.
+        bool reduced = Motion.ReducedMotion;
+        int ord = 0;
+        for (var slot = scene.FirstChild(content); !slot.IsNull; slot = scene.NextSibling(slot), ord++)
+        {
+            int index = sc.FirstRealized + ord;   // a shelf has no persistent prefix: the chain is the window in logical order
+            if ((uint)index >= (uint)sc.ItemCount) continue;
+            int oldIndex = remapped ? OldIndexOf(index) : index;
+            if (oldIndex < 0) continue;           // an item the list did not hold: it simply is where it lands
+            RectF a = from.ItemRect(oldIndex), b = to.ItemRect(index);
+            float dx = (a.X - oldOffset) - (b.X - newOffset), dy = a.Y - b.Y;
+            bool before = a.X - oldOffset < viewW && a.X - oldOffset + a.W > 0f;
+            bool after = b.X - newOffset < viewW && b.X - newOffset + b.W > 0f;
+            if (!before && !after) continue;      // off the page both times: nobody sees it move
+            if (!reduced && (MathF.Abs(dx) >= 0.5f || MathF.Abs(dy) >= 0.5f))
+                anim.AnimateBoundsPresented(slot, new RectF(b.X + dx, b.Y + dy, b.W, b.H), b, s_glide);
+            if (before && !after && !reduced)
+                anim.KeyframesMotion(slot, AnimChannel.Opacity, s_leaveKeys, GlideMs, ReducedMotionPolicy.KeepFade);
+            else if (!before && after)
+            {
+                // Its first keyframe is 0 and the tick has run: hide it now, or this frame shows it at full opacity where it arrives from.
+                anim.KeyframesMotion(slot, AnimChannel.Opacity, s_arriveKeys, GlideMs, ReducedMotionPolicy.KeepFade);
+                scene.Paint(slot).Opacity = 0f;
+                scene.Mark(slot, NodeFlags.PaintDirty);
+            }
+        }
     }
 
     // The live band's revision (see ShelfFit): bumped by ApplyProps when a push changed the band, the pager or the card height. Render
@@ -826,15 +958,26 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             }
             string key = d.KeyOf?.Invoke(item, index) ?? index.ToString(System.Globalization.CultureInfo.InvariantCulture);
             if (lead) key += LeadKeySuffix;
-            return new BoxEl { Direction = 1, Grow = 1f,
-                Children = [template(item, index, width) with { Key = key }] };
+            var card = template(item, index, width) with { Key = key };
+            // B12: a multi-row cell's width changes with the column count; while the shelf's re-fit glide runs the content eases to it
+            // (the slot root itself is placed by the virtual arrange, so its child carries the resize). A card that declares its own size
+            // transition owns its size (a second reflow around it would rebase the card's own row onto this one's live width). Only a
+            // multi-row strip's plain cards read the arm.
+            LayoutTransition? resize = owner._rows > 1 && !owner._measured && !OwnsSize(card) && owner._resizeArmed.Value ? s_slotResize : null;
+            return new BoxEl { Direction = 1, Grow = 1f, Layout = resize, Children = [card] };
         }
     }
+    /// <summary>Does a card animate its own size (a <c>Layout</c> or <c>Animate</c> transition with a Size channel)?</summary>
+    static bool OwnsSize(Element card)
+        => card.Layout is { } layout && (layout.Channels & TransitionChannels.Size) != 0
+           || card is BoxEl { Animate: { } animate } && (animate.Channels & TransitionChannels.Size) != 0;
+
     Func<float, float>? _cardHeight;              // null in measured mode (the engine measures instead); live (ApplyFit)
     readonly bool _measured;
     ShelfPager _pager;                            // live (ApplyFit)
     float _minCardW, _maxCardW, _gap;             // live (ApplyFit)
     int _rows;                                    // live between two multi-row counts (ApplyFit, LiveRowsFor)
+    readonly float _bleed;                        // the main-axis halo gutter: HaloBleed for a lifting shelf, 0 for a multi-row grid (frozen at mount)
     readonly int _perPageOverride;
     int _maxColumns;                              // live (ApplyFit)
     float _fixedCardW;                            // live (ApplyFit)
@@ -975,12 +1118,23 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         _cardHeight = cardHeight; _measured = measured;
         _pager = pager; _minCardW = minCardW; _maxCardW = maxCardW; _gap = gap;
         _rows = Math.Max(1, rows); _perPageOverride = perPageOverride; _fixedCardW = fixedCardW;
+        _bleed = measured || _rows == 1 ? HaloBleed : 0f;   // rows stays multi-row or single for the mount's life (see _rows)
         _headerGap = headerGap; _edgeFade = edgeFade; _prevGlyph = prevGlyph; _nextGlyph = nextGlyph;
         _parts = parts; _overscan = overscan;
         _cardWidthAgnostic = cardWidthAgnostic;
         _maxColumns = Math.Max(0, maxColumns);
         _snap = snap;
         _commitPendingSnap = CommitPendingSnap;
+        _commitProps = CommitProps;
+        _newIndexOf = NewIndexOf;
+        _disarmResize = () => _resizeArmed.Value = false;
+        _runGlide = RunGlide;
+        _queueGlide = () =>
+        {
+            if (!_glideFrom.IsSet) { _remapFrom = _remapTo = null; return; }
+            if (_inputHooks?.QueueAfterFrameLayout is { } queue) queue(_runGlide);
+            else RunGlide();
+        };
         _onShelfScroll = OnShelfScroll;
         _advanceProbe = AdvanceProbe;
         _captureProbeHost = h => _probeHostNode = h;
@@ -1044,6 +1198,9 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                                                         // the controller/pips, and _layout.SetLeadSpan below all follow
         int fitRev = _fitRev.Value;                     // subscribe — a live band push (ShelfFit) re-fits below
         _ = _fitMeasuredRev.Value;                      // subscribe — the held band's layout re-renders the header at its measured fit
+        // The geometry the strip was last laid out at, before this render re-fits it: where every realized item IS (the re-fit glide's start).
+        FillRowGeometry laidOut = _layout?.Geometry ?? default;
+        bool bandPushed = fitRev != _appliedFitRev;
         if (fitRev != _appliedFitRev)
         {
             _appliedFitRev = fitRev;
@@ -1058,6 +1215,17 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
 
         // Compute the fit the layout will land at (count-independent), to size the strip + page math.
         var (perPageColumns, cardW) = FillRowVirtualLayout.Fit(w, _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns);
+        // B12: a multi-row strip's columns are THIS render's decision from the width it measured (FillRowVirtualLayout.HoldColumns): a width
+        // that crosses a column threshold between two renders (a docking panel easing the page) only re-sizes the cells there, and the next
+        // render re-fits the strip on a commit, where the cells' own resize and the re-fit glide below are measured.
+        // A push that RAISES the column cap past what this width fits (a tier crossing a docking panel causes, decided at the width the page
+        // settles at) re-fits once the width does, on a later render; until that render the cells keep the width they are drawn at, so the
+        // panel's next re-solve does not widen them once just before they re-fit.
+        bool raisePending = bandPushed && _maxColumns > perPageColumns && laidOut.IsSet && laidOut.PerPage == perPageColumns;
+        if (!_measured && _rows > 1 && _layout is { } held
+            && held.HoldColumns(w > 1f ? perPageColumns : 0, raisePending ? laidOut.CardW : 0f)
+            && Context.Scene is { } holdScene && ShelfViewport is { IsNull: false } holdVp && holdScene.IsLive(holdVp) && holdScene.HasScroll(holdVp))
+            holdScene.Mark(holdVp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
         UseLayoutEffect(() =>
         {
             if (!_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
@@ -1097,6 +1265,30 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // or a shelf with no lead notifies nobody.
         int effSpan = EffectiveSpanFor(perPageColumns, leadSpan);
         _effSpanSig.SetIfChanged(effSpan);
+
+        // ── RE-FIT GLIDE (B12). A re-fit that moves items to other cells (columns per page, rows, the lead's span) or a reorder (the
+        // slots followed their items, ApplyProps) lands every slot at its new place in ONE layout; the glide effect below takes each
+        // realized item from where it was drawn to where it is now. Decided here, where the old geometry (`laidOut`, read before the
+        // band re-fit above) and the new placement are both known; a width that only resizes the cards follows the layout as before.
+        int rowsNow = _measured ? 1 : _rows;
+        // Not before the strip's first seat: until then the layout holds a provisional fit (a hint width), never a drawn one.
+        if (!_firstRealize && laidOut.IsSet && laidOut.RowH > 0f
+            && (_remapPending || laidOut.PerPage != perPageColumns || laidOut.Rows != rowsNow || laidOut.LeadSpan != effSpan))
+        {
+            _glideFrom = laidOut;
+            _glideRemap = _remapPending;
+            _glideRev++;
+            // A multi-row cell changes its width with the column count: while the glide runs, each slot's content eases to its new width
+            // through layout (ShelfCardSlot). Written here, never read by this render (the _effSpanSig shape above).
+            if (rowsNow > 1)
+            {
+                _resizeArmed.Value = true;
+                _armRev++;
+            }
+        }
+        else if (_remapPending) _remapFrom = _remapTo = null;   // a reorder before the first seat: the slots followed, nothing glides
+        _remapPending = false;
+        UseTimeout(_disarmResize, GlideMs + ResizeArmSlackMs, DepKey.From(_armRev));
         // E21 — a span flip re-lays the strip out. `_layout.SetLeadSpan` (below) is a plain field write the layout only
         // consults on its NEXT geometry query, and a span-only change dirties nothing by itself (the ItemsView element
         // is the same cached instance, so the reconciler skips it; the lead slot's own re-render is scoped inside its
@@ -1318,6 +1510,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                 ? lay.FirstItemOfPage(targetPage) : targetPage * perPageItems;
             _ctl.StartBringItemIntoView(startIndex, 0f, animate && !Motion.ReducedMotion);
         }, DepKey.From(HashCode.Combine(nav, perPageColumns, cardW, needProbe, leadSpan, _rows)));
+
+        // The re-fit glide (decided above), queued from the layout effect after the one above re-seated the page (layout effects run in
+        // order) to run once this frame's layout has settled (see SeedGlide).
+        UseLayoutEffect(_queueGlide, DepKey.From(_glideRev));
 
         Element body = _measured
             ? MeasuredVirtualBody(perPageItems, cardW, fade, stripMounted)
@@ -1828,9 +2024,9 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     {
         if (_liveStrip is { } cached) return cached;
         // The SAME stateful layout instance the engine drives via SetViewport; hoisted so its fit cache survives renders.
-        // Lead/Trail = HaloBleed carve the halo gutters INSIDE the viewport (widened below by the same amount).
+        // Lead/Trail = the halo gutters INSIDE the viewport (widened below by the same amount; none on a multi-row grid).
         var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, _rows, _perPageOverride, _fixedCardW, _maxColumns,
-            leadInset: HaloBleed, trailInset: HaloBleed, leadMinColumns: _leadMinColumns);
+            leadInset: _bleed, trailInset: _bleed, leadMinColumns: _leadMinColumns);
         // ItemsView is an Embed.Comp → its template closure FREEZES at first mount (when width was 0 ⇒ cardW=min). Read
         // the layout's LIVE fitted width at realize time (the engine sets it via SetViewport every arrange) so the card
         // always matches its cell — otherwise cards stay min-width inside full-width cells (huge gaps + short cards).
@@ -1894,7 +2090,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             // horizontal margin on a cross-STRETCH child resolves to width = availCross − crossMargin (= _w + 2·Bleed)
             // at x = −Bleed (FlexLayout arrange). The ItemsView (grow:1) fills it, so SetViewport is fed _w+2·Bleed and
             // the layout subtracts the gutters back to _w for the fit — cards keep their width and rest positions.
-            Margin = new Edges4(-HaloBleed, 0f, -HaloBleed, 0f),
+            Margin = new Edges4(-_bleed, 0f, -_bleed, 0f),
             Children = [ items ],
         });
     }
