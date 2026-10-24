@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 
 namespace FluentGpu.Foundation;
@@ -65,11 +66,41 @@ public static class Diag
         lock (Gate) { Counters.TryGetValue(k, out long v); Counters[k] = v + delta; }
     }
 
+    // The typed overloads take a counter by value: an `object` parameter would box it at the call site before the
+    // `Enabled` check, and the device publishes ~30 counters per submit (~1 KB a frame on a DEBUG build with
+    // diagnostics off). They format only when diagnostics are on.
+
+    [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
+    public static void Set(string category, string key, long value)
+    {
+        if (!Enabled) return;
+        Store(category, key, value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
+    public static void Set(string category, string key, double value)
+    {
+        if (!Enabled) return;
+        Store(category, key, value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
+    public static void Set(string category, string key, string? value)
+    {
+        if (!Enabled) return;
+        Store(category, key, value ?? "null");
+    }
+
     [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
     public static void Set(string category, string key, object? value)
     {
         if (!Enabled) return;
-        lock (Gate) Values[category + "." + key] = value?.ToString() ?? "null";
+        Store(category, key, value?.ToString() ?? "null");
+    }
+
+    static void Store(string category, string key, string value)
+    {
+        lock (Gate) Values[category + "." + key] = value;
     }
 
     [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
