@@ -111,6 +111,10 @@ public sealed class EditableText : Component
     /// so a field whose width must track runtime layout (the titlebar search box giving way as the window narrows)
     /// subscribes here; the Render read re-renders this component when the value moves.</summary>
     public IReadSignal<float>? WidthSignal;
+
+    /// <summary>The width a composer RE-PUSHES on every render (<c>Embed.Comp(new LiveWidth(w), () => new EditableText { ... })</c>), so the
+    /// field follows its prop instead of the value it mounted with (<see cref="TextBox.Create"/>: a field whose width a tier or a page changes).</summary>
+    public sealed record LiveWidth(float Width);
     public float Height = 32f;
     public float FontSize = 14f;
     private ColorF? _foreground;
@@ -352,8 +356,9 @@ public sealed class EditableText : Component
         _core.IsReadOnly = IsReadOnly;
         _core.AcceptsReturn = AcceptsReturn;
 
-        // Effective width: the live signal (subscribed — a write re-renders this field) over the frozen mount value.
-        float width = WidthSignal?.Value ?? Width;
+        // Effective width: the live signal (subscribed — a write re-renders this field), else the composer's re-pushed width, over the frozen mount value.
+        var pushed = UsePropsOrDefault<LiveWidth>();
+        float width = WidthSignal?.Value ?? pushed?.Width ?? Width;
 
         // The visible text node. TextBind/ColorBind read the SIGNAL + the display epoch, so a keystroke (signal write)
         // or a doc-only change (epoch bump) updates exactly this node — no component re-render. The bind evaluation is

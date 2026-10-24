@@ -79,7 +79,8 @@ public static class TextBox
         float w = Math.Max(o.Width, MinWidth);
         float h = Math.Max(o.Height, 32f);       // TextControlThemeMinHeight = 32 (generic.xaml:96)
 
-        Element editor = Embed.Comp(() => new EditableText
+        // The width is RE-PUSHED (a propless embed freezes its fields at mount): a field whose Width option changes follows it.
+        Element editor = Embed.Comp(new EditableText.LiveWidth(w), () => new EditableText
         {
             Placeholder = placeholder, Width = w, Height = h,
             Text = text, MaxLength = maxLength, IsReadOnly = isReadOnly, AcceptsReturn = acceptsReturn,
