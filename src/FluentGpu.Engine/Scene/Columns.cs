@@ -334,6 +334,7 @@ public struct NodePaintCold : IEquatable<NodePaintCold>
     public ColorF TextDisabledColor;
     public ColorF TextFocusedColor;
     public float ImageFocusX, ImageFocusY;   // VisualKind.Image: content-fit crop focus (0..1; default centre)
+    public float ImageFrameX, ImageFrameY;   // VisualKind.Image: where in the box the crop places that focus (0..1; default centre)
 
     /// <summary>What every node without a cold row reads.</summary>
     public static NodePaintCold Default => new()
@@ -343,6 +344,8 @@ public struct NodePaintCold : IEquatable<NodePaintCold>
         TabFlareRadius = 4f,
         ImageFocusX = 0.5f,
         ImageFocusY = 0.5f,
+        ImageFrameX = 0.5f,
+        ImageFrameY = 0.5f,
     };
 
     /// <summary>Field-wise and NaN-safe (<c>float.Equals</c>: an unset NaN opacity equals itself).</summary>
@@ -354,13 +357,14 @@ public struct NodePaintCold : IEquatable<NodePaintCold>
            && BorderDashOn.Equals(o.BorderDashOn) && BorderDashOff.Equals(o.BorderDashOff) && TabFlareRadius.Equals(o.TabFlareRadius)
            && TextHoverColor.Equals(o.TextHoverColor) && TextPressedColor.Equals(o.TextPressedColor)
            && TextDisabledColor.Equals(o.TextDisabledColor) && TextFocusedColor.Equals(o.TextFocusedColor)
-           && ImageFocusX.Equals(o.ImageFocusX) && ImageFocusY.Equals(o.ImageFocusY);
+           && ImageFocusX.Equals(o.ImageFocusX) && ImageFocusY.Equals(o.ImageFocusY)
+           && ImageFrameX.Equals(o.ImageFrameX) && ImageFrameY.Equals(o.ImageFrameY);
     public override readonly bool Equals(object? obj) => obj is NodePaintCold o && Equals(o);
     public override readonly int GetHashCode()
         => HashCode.Combine(
             HashCode.Combine(HoverOpacity, PressedOpacity, HoverFill, PressedFill, HoverBorderColor, PressedBorderColor, ValidationBorder),
             HashCode.Combine(BorderDashOn, BorderDashOff, TabFlareRadius, TextHoverColor, TextPressedColor, TextDisabledColor, TextFocusedColor),
-            ImageFocusX, ImageFocusY);
+            HashCode.Combine(ImageFocusX, ImageFocusY, ImageFrameX, ImageFrameY));
 }
 
 /// <summary>One container's cold paint rows: a packed slab indexed by <see cref="NodePaint.ColdRef"/> whose row 0 is the
