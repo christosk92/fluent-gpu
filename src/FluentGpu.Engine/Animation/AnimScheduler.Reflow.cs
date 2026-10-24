@@ -439,6 +439,34 @@ public sealed partial class AnimEngine
     /// <summary>Dirty the node whose Measure must see this reflow write. A live node's topological parent is that
     /// scope; an exit orphan's Parent is null (detached), so the former visual parent is the one that still measures
     /// it — marking the orphan itself would RunSubtree a rootless node and never update the virtual row's extent.</summary>
+    /// <summary>Shift a live reflow row's start and target alike by <paramref name="delta"/>, over the time it has left: a stretched, auto-sized box
+    /// whose parent the live layout re-sizes (a card filling a chapter while a docking panel's reflow eases the page) keeps its planned offset from the
+    /// parent's size while the parent moves on, instead of landing on the size of the commit that seeded it. Writes the shifted interp into the layout
+    /// input at once and dirties the parent (the caller re-solves). False when no row is in flight.</summary>
+    internal bool ShiftReflow(NodeHandle node, AnimChannel ch, float delta)
+    {
+        int ex = Find(node, ch);
+        if (ex < 0) return false;
+        AnimValue cur = _slab.At(ex);          // copy: Animate/Spring may grow the slab's backing array
+        if (cur.Has(AnimFlags.Done)) return false;
+        float from = cur.Position + delta, to = cur.To + delta;
+        AnimFlags carried = cur.Flags & ReflowOwnedFlags;
+        if (!TryGetTransition(node, out LayoutTransition spec)) spec = default;
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if (cur.Kind == GenKind.Spring)
+            Spring(node, ch, to, SpringParams.FromResponse(dyn.Kind == DynamicsKind.Spring ? dyn.Response : 0.30f,
+                dyn.Kind == DynamicsKind.Spring ? dyn.DampingRatio : 1f), initial: from);
+        else
+            Animate(node, ch, from, to, MathF.Max(1f, cur.Gen.DurationMs - cur.ElapsedMs), dyn.Easing, delayMs: cur.DelayRemainingMs);
+        int s = FinishReflowRow(node, ch, cur.RestoreTo, in spec, hadRow: true, carried);
+        if (s < 0) return false;
+        _slab.At(s).Flags &= ~AnimFlags.JustSeeded;   // a shift keeps moving (the row was presented already)
+        ref LayoutInput li = ref _scene.Layout(node);
+        if (ch == AnimChannel.LayoutW) li.Width = from; else li.Height = from;
+        MarkReflowLayoutDirty(node);
+        return true;
+    }
+
     /// <summary>Write the START of <paramref name="node"/>'s reflow rows (a seed that has not ticked: its from) into its layout input and dirty
     /// the parent, as the seed frame's tick would: the host re-solves the commit at it before measuring the other projections
     /// (AppHost.SeedReflowsFirst). False when the node has no reflow row. Allocates nothing.</summary>

@@ -8112,6 +8112,50 @@ public sealed partial class AppHost : IDisposable
         _revealHeights.Clear();
     }
 
+    /// <summary>The stretch follow of <see cref="RunReflowLayout"/>: each reflow node this tick wrote whose row runs across its parent's cross axis
+    /// toward an auto size the parent imposes (<see cref="SizeImposed"/>) is shifted by the parent's change. True when a row moved.</summary>
+    private bool FollowStretchedReflows(List<NodeHandle> roots)
+    {
+        bool shifted = false;
+        for (int i = 0; i < roots.Count; i++)
+        {
+            var r = roots[i];
+            NodeHandle par = _scene.IsLive(r) ? _scene.Parent(r) : NodeHandle.Null;
+            if (par.IsNull || (_scene.Flags(par) & NodeFlags.ZStack) != 0 || (_scene.Flags(r) & NodeFlags.Exiting) != 0) continue;
+            ref LayoutInput pl = ref _scene.Layout(par);
+            ref LayoutInput rl = ref _scene.Layout(r);
+            if ((rl.AlignSelf == FlexAlign.Auto ? pl.AlignItems : rl.AlignSelf) != FlexAlign.Stretch) continue;
+            bool horizontal = pl.Direction == 1;   // a column stretches its children's width
+            AnimChannel cross = horizontal ? AnimChannel.LayoutW : AnimChannel.LayoutH;
+            if (!_anim.TryGetLiveReflow(r, cross, out float to, out bool natural, out float declared) || natural || !float.IsNaN(declared)) continue;
+            if (!SizeImposed(par, horizontal)) continue;
+            ref readonly RectF pb = ref _scene.Bounds(par);
+            float inner = horizontal
+                ? pb.W - pl.Padding.Left - pl.Padding.Right - rl.Margin.Left - rl.Margin.Right
+                : pb.H - pl.Padding.Top - pl.Padding.Bottom - rl.Margin.Top - rl.Margin.Bottom;
+            if (inner > 0.5f && MathF.Abs(inner - to) >= 0.5f) shifted |= _anim.ShiftReflow(r, cross, inner - to);
+        }
+        return shifted;
+    }
+
+    /// <summary>Does <paramref name="n"/>'s size on one axis (<paramref name="horizontal"/>: its width) come from above, never from its children: declared,
+    /// a share of its parent's free space on that main axis, or stretched across its parent's cross axis by a parent whose size is imposed in turn?</summary>
+    private bool SizeImposed(NodeHandle n, bool horizontal)
+    {
+        for (; !n.IsNull; n = _scene.Parent(n))
+        {
+            ref LayoutInput li = ref _scene.Layout(n);
+            if (!float.IsNaN(horizontal ? li.Width : li.Height)) return true;
+            NodeHandle p = _scene.Parent(n);
+            if (p.IsNull) return true;   // the root: the window's size
+            if ((_scene.Flags(p) & NodeFlags.ZStack) != 0) return false;
+            ref LayoutInput pl = ref _scene.Layout(p);
+            if ((pl.Direction == 0) == horizontal) return li.FlexGrow > 0f || li.FlexShrink > 0f;   // its parent's main axis: a share of the free space
+            if ((li.AlignSelf == FlexAlign.Auto ? pl.AlignItems : li.AlignSelf) != FlexAlign.Stretch) return false;
+        }
+        return true;
+    }
+
     /// <summary>Map every hop of <paramref name="carrier"/>'s chain (starting at <paramref name="parent"/>, its parent or an
     /// exit orphan's former visual parent) to the child that carries the move — IsReflowShoved's frame map.</summary>
     private void AddShoveCarrier(NodeHandle carrier, NodeHandle parent)
@@ -8281,6 +8325,15 @@ public sealed partial class AppHost : IDisposable
                 _scene.Mark(n, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
             }
             _wrapMovers.Clear();
+        }
+        // An AUTO-sized reflow across its parent's cross axis, where the parent stretches it (a card filling a chapter that a docking panel's reflow
+        // re-sizes as it eases), was aimed at the parent's size on the commit that seeded it. The parent moves on with the live layout: shift the
+        // row by the parent's change (start and target alike, over the time it has left), so it lands on the parent's live size instead of the
+        // commit's and turning back. Only where the parent's size on that axis never comes from this child, or the row would chase itself.
+        if (FollowStretchedReflows(roots) && _scene.AnyLayoutDirty)
+        {
+            _invalidator.RunDirty(layoutSize);
+            _scene.ClearLayoutDirty();
         }
         // A reflow toward an AUTO size that landed this tick on a size its content has since left (it re-wrapped under the row: a hero whose title
         // re-sets at the widths a docked panel's slide passes through) would show the difference as a one-frame snap now that the restore solved
