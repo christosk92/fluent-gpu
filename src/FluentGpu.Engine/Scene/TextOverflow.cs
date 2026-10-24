@@ -89,4 +89,33 @@ public static class TextOverflowQuery
     /// <summary>True when text node <paramref name="node"/> does not show all of its content (see <see cref="Query"/>).
     /// False for a non-text node.</summary>
     public static bool IsTrimmed(SceneStore scene, IFontSystem fonts, NodeHandle node) => Query(scene, fonts, node).Trimmed;
+
+    /// <summary>The glyph INK of text node <paramref name="node"/> as it is drawn (<see cref="IFontSystem.TryMeasureInk"/>): the run at
+    /// its laid style (the auto-fit size when <c>MinSize</c> shrank it, its trim and line cap) laid out at its box width, in DIP
+    /// relative to the node's box. False for a dead handle, a non-text node, a backend without glyph metrics or a run with no ink.
+    /// Cold path (one layout per call): inspection and lint. Call on the UI thread between frames.</summary>
+    public static bool TryInk(SceneStore scene, IFontSystem fonts, NodeHandle node, out RectF ink)
+    {
+        ink = default;
+        ArgumentNullException.ThrowIfNull(scene);
+        ArgumentNullException.ThrowIfNull(fonts);
+        if (node.IsNull || !scene.IsLive(node)) return false;
+        ref NodePaint paint = ref scene.Paint(node);
+        if (paint.VisualKind != VisualKind.Text) return false;
+        TextStyle style = scene.Layout(node).TextStyle;
+        RectF bounds = scene.Bounds(node);
+        if (scene.TryGetMeasureCache(node, out TextMeasureCache cache))
+        {
+            TextMeasureEntry entry = cache.ResolveForWidth(bounds.W);
+            if (entry.Valid && entry.FitSize > 0f && entry.FitSize < style.SizeDip) style = style.AtFitSize(entry.FitSize);
+        }
+        // A pure measure: a span run's artifacts stay the ones the layout published.
+        bool found = fonts.TryMeasureInk(paint.Text, style with { MinSizeDip = 0f }, MathF.Max(0f, bounds.W) + Tolerance, out ink);
+        if (style.SpanRunId != 0)
+        {
+            float drawnW = cache.Valid ? cache.ResolveForWidth(bounds.W).MaxW : bounds.W;
+            fonts.Measure(paint.Text, style, drawnW);
+        }
+        return found;
+    }
 }

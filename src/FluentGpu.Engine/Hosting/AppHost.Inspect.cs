@@ -20,6 +20,10 @@ public sealed partial class AppHost
     /// non-text node.</summary>
     public bool IsTextTrimmed(NodeHandle node) => QueryTextOverflow(node).Trimmed;
 
+    /// <summary>The glyph ink of text node <paramref name="node"/> as drawn, relative to its box (<see cref="TextOverflowQuery.TryInk"/>
+    /// over this host's scene and font system): false under the headless text model or for a run with no ink. UI thread, between frames.</summary>
+    public bool TryQueryTextInk(NodeHandle node, out RectF ink) => TextOverflowQuery.TryInk(_scene, _fonts, node, out ink);
+
     /// <summary>Append every live view slot (<see cref="FluentGpu.Theming.Slots.View{TProps}"/>) that resolved a template: its
     /// host's anchor node, the view key id and the template id, so an inspector can say which theme's template drew a subtree.
     /// A slot rendering nothing (no registry, an unregistered key) is left out. UI thread, between frames.</summary>
