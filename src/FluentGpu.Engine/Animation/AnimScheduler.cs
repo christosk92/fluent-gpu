@@ -265,9 +265,31 @@ public sealed partial class AnimEngine
                 if (_scene.TryGetRevealBand(owner, slot, out var band) && band.Opening) _scene.ClearRevealBand(owner, slot);
                 QueueSettled(owner, ch);
             }
+            // A reflow that eased toward the node's AUTO size (declared NaN) lands on the size solved when it was seeded: content that changed
+            // under it since (a title that re-sets at the widths a docked panel's slide passes through) would snap the difference on the
+            // restore. The host glides on from here instead (AppHost.RunReflowLayout, SettledToAuto).
+            if (ch is AnimChannel.LayoutW or AnimChannel.LayoutH && float.IsNaN(_slab.At(s).RestoreTo) && _scene.IsLive(owner)
+                && (_scene.Flags(owner) & NodeFlags.Exiting) == 0)
+                SettledToAuto.Add((owner, ch, _slab.At(s).To));
             SettleRestore(s);
             FreeSlot(s);
         }
+    }
+
+    /// <summary>Reflow rows toward an AUTO size (declared NaN) that completed this tick: the node, the axis and the size the row landed on. The host
+    /// compares each with the size the restore solves and, where the content changed under the row, glides on from the landed size
+    /// (<see cref="ReflowContinue"/>) instead of letting the difference snap. Cleared by the host.</summary>
+    public List<(NodeHandle Node, AnimChannel Channel, float Landed)> SettledToAuto { get; } = new();
+
+    /// <summary>Glide a node whose reflow toward its auto size just landed on <paramref name="landed"/> on to <paramref name="solved"/>, the size its
+    /// content now solves to, on the node's own reflow dynamics. False where the node no longer carries a reflow transition.</summary>
+    internal bool ReflowContinue(NodeHandle node, AnimChannel ch, float landed, float solved)
+    {
+        if (!TryGetTransition(node, out var spec) || spec.Size != SizeMode.Reflow) return false;
+        // From rest, critically damped: the row it continues has stopped, so the glide on starts slow instead of carrying most of a small residual
+        // in its first frame (an eased tween of a short distance reads as a step).
+        ReflowSize(node, ch, landed, solved, spec with { Dynamics = TransitionDynamics.Spring(0.30f, 1f), ExitDynamics = null, DelayMs = 0f });
+        return Find(node, ch) >= 0;
     }
 
     private void FreeSlot(int slot)

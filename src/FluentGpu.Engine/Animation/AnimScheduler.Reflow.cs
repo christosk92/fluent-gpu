@@ -394,6 +394,38 @@ public sealed partial class AnimEngine
         _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
     }
 
+    /// <summary>Cancel a node's in-flight PRESENTED-size rows (a Reveal's or a Relayout's SizeW/SizeH, a ScaleCorrect's ScaleX/ScaleY) and land
+    /// it on its laid-out size, leaving its position, layout-size (Reflow) and every other row running: the host's answer for a part inside a
+    /// container a live reflow is resizing, whose layout moves on every tick (a presented size seeded at a commit would keep that commit's
+    /// target). Gesture-owned and looping rows are skipped, as <see cref="SnapStructuralToLayout"/> skips them.</summary>
+    public void SnapPresentedSizeToLayout(NodeHandle node)
+    {
+        int idx = (int)node.Raw.Index;
+        if (!_slab.NodeHasRows(idx)) return;
+        bool live = _scene.IsLive(node);
+        bool damaged = false, resetScale = false;
+        int s = _slab.HeadOnNode(idx);
+        while (s >= 0)
+        {
+            int next = _slab.At(s).NextOnNode;   // read the link BEFORE FreeSlot unlinks the row
+            AnimChannel ch = _slab.At(s).Channel;
+            if ((ch is AnimChannel.SizeW or AnimChannel.SizeH or AnimChannel.ScaleX or AnimChannel.ScaleY)
+                && !IsGestureOwnedTransform(idx, ch) && !_slab.At(s).Has(AnimFlags.Loop))
+            {
+                if (live && !damaged) { CaptureLastPresentedDamage(node); damaged = true; }
+                if (ch is AnimChannel.ScaleX or AnimChannel.ScaleY) resetScale = true;
+                SettleRestore(s);
+                FreeSlot(s);
+            }
+            s = next;
+        }
+        if (!resetScale || !live) return;
+        ref NodePaint p = ref _scene.Paint(node);
+        Affine2D rest = RestTransformOf(idx);
+        p.LocalTransform = p.LocalTransform with { M11 = rest.M11, M12 = rest.M12, M21 = rest.M21, M22 = rest.M22 };
+        _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+    }
+
     /// <summary>Take back the <see cref="NodeFlags.ClipsToBounds"/> a reflow row added (see
     /// <see cref="AnimFlags.ClipAdded"/>). Called from the ONE row-teardown sink (<c>FreeSlot</c>) plus
     /// <c>CancelAll</c>'s bulk clear, so no path — settle, Cancel, or a structural snap — can leak the clip.</summary>
@@ -407,6 +439,48 @@ public sealed partial class AnimEngine
     /// <summary>Dirty the node whose Measure must see this reflow write. A live node's topological parent is that
     /// scope; an exit orphan's Parent is null (detached), so the former visual parent is the one that still measures
     /// it — marking the orphan itself would RunSubtree a rootless node and never update the virtual row's extent.</summary>
+    /// <summary>Shift a live reflow row's start and target alike by <paramref name="delta"/>, over the time it has left: a stretched, auto-sized box
+    /// whose parent the live layout re-sizes (a card filling a chapter while a docking panel's reflow eases the page) keeps its planned offset from the
+    /// parent's size while the parent moves on, instead of landing on the size of the commit that seeded it. Writes the shifted interp into the layout
+    /// input at once and dirties the parent (the caller re-solves). False when no row is in flight.</summary>
+    internal bool ShiftReflow(NodeHandle node, AnimChannel ch, float delta)
+    {
+        int ex = Find(node, ch);
+        if (ex < 0) return false;
+        AnimValue cur = _slab.At(ex);          // copy: Animate/Spring may grow the slab's backing array
+        if (cur.Has(AnimFlags.Done)) return false;
+        float from = cur.Position + delta, to = cur.To + delta;
+        AnimFlags carried = cur.Flags & ReflowOwnedFlags;
+        if (!TryGetTransition(node, out LayoutTransition spec)) spec = default;
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if (cur.Kind == GenKind.Spring)
+            Spring(node, ch, to, SpringParams.FromResponse(dyn.Kind == DynamicsKind.Spring ? dyn.Response : 0.30f,
+                dyn.Kind == DynamicsKind.Spring ? dyn.DampingRatio : 1f), initial: from);
+        else
+            Animate(node, ch, from, to, MathF.Max(1f, cur.Gen.DurationMs - cur.ElapsedMs), dyn.Easing, delayMs: cur.DelayRemainingMs);
+        int s = FinishReflowRow(node, ch, cur.RestoreTo, in spec, hadRow: true, carried);
+        if (s < 0) return false;
+        _slab.At(s).Flags &= ~AnimFlags.JustSeeded;   // a shift keeps moving (the row was presented already)
+        ref LayoutInput li = ref _scene.Layout(node);
+        if (ch == AnimChannel.LayoutW) li.Width = from; else li.Height = from;
+        MarkReflowLayoutDirty(node);
+        return true;
+    }
+
+    /// <summary>Write the START of <paramref name="node"/>'s reflow rows (a seed that has not ticked: its from) into its layout input and dirty
+    /// the parent, as the seed frame's tick would: the host re-solves the commit at it before measuring the other projections
+    /// (AppHost.SeedReflowsFirst). False when the node has no reflow row. Allocates nothing.</summary>
+    internal bool PresentReflowStart(NodeHandle node)
+    {
+        bool wrote = false;
+        int s = Find(node, AnimChannel.LayoutW);
+        if (s >= 0) { _scene.Layout(node).Width = _slab.At(s).Position; wrote = true; }
+        s = Find(node, AnimChannel.LayoutH);
+        if (s >= 0) { _scene.Layout(node).Height = _slab.At(s).Position; wrote = true; }
+        if (wrote) MarkReflowLayoutDirty(node);
+        return wrote;
+    }
+
     private void MarkReflowLayoutDirty(NodeHandle node)
     {
         var rp = _scene.Parent(node);

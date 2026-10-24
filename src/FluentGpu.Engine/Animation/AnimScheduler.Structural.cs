@@ -401,6 +401,54 @@ public sealed partial class AnimEngine
         }
     }
 
+    /// <summary>Re-aim every live presented-size REVEAL (SizeW / SizeH, not a Relayout's) whose node a re-solve that was no commit (a live reflow's
+    /// tick) laid out at another size than the row aims at: the row shifts by the layout's change (start and target alike, over the time it has
+    /// left), so the presented extent keeps its offset from the LIVE layout instead of easing toward the size of the commit that seeded it (a part
+    /// inside a page a docking panel's reflow narrows or widens: a widening page was clipped at the seeding commit's width until the reveal ended).
+    /// Host-called right after the reflow re-solve; a commit re-aims its rows itself (AnimateBounds). Allocates nothing.</summary>
+    public void FollowLayoutReveals()
+    {
+        for (int n = _slab.FirstActiveNode; n >= 0; n = _slab.NextActiveNode(n))
+            for (int s = _slab.HeadOnNode(n); s >= 0; s = _slab.At(s).NextOnNode)
+            {
+                ref readonly AnimValue r = ref _slab.At(s);
+                if (r.Channel is not (AnimChannel.SizeW or AnimChannel.SizeH)) continue;
+                if (r.Has(AnimFlags.Done) || r.Has(AnimFlags.Parked) || r.Has(AnimFlags.Driven) || r.Has(AnimFlags.Additive) || r.Has(AnimFlags.Loop)) continue;
+                NodeHandle node = r.Node;
+                if (!_scene.IsLive(node) || (_scene.Flags(node) & (NodeFlags.Relayouting | NodeFlags.Exiting)) != 0) continue;
+                float laid = r.Channel == AnimChannel.SizeW ? _scene.Bounds(node).W : _scene.Bounds(node).H;
+                float delta = laid - r.To;
+                if (MathF.Abs(delta) < 0.5f || !float.IsFinite(laid)) continue;
+                AnimChannel ch = r.Channel;
+                float uiBase = r.Position;
+                if (r.Kind == GenKind.Spring)
+                {
+                    TryGetTransition(node, out var sspec);
+                    var dyn = Normalize(sspec.Dynamics);
+                    Spring(node, ch, laid, SpringParams.FromResponse(dyn.Kind == DynamicsKind.Spring ? dyn.Response : 0.30f,
+                        dyn.Kind == DynamicsKind.Spring ? dyn.DampingRatio : 0.85f), initial: uiBase + delta);
+                }
+                else if (r.Kind is GenKind.Eased or GenKind.Keyframes)
+                {
+                    TryGetTransition(node, out var tspec);
+                    var dyn = Normalize(tspec.Dynamics);
+                    float remaining = MathF.Max(1f, r.Gen.DurationMs - r.ElapsedMs);
+                    float pendingDelay = r.DelayRemainingMs;
+                    Animate(node, ch, uiBase + delta, laid, remaining, dyn.Easing, delayMs: pendingDelay);
+                }
+                else continue;
+                int ns = Find(node, ch);
+                if (ns < 0) continue;
+                _slab.At(ns).Flags &= ~AnimFlags.JustSeeded;   // a re-aim keeps moving (as ReframePosition's retarget)
+                MarkSeedRelative(ns, uiBase);
+                // This frame's tick has run: present the re-aimed start NOW, or the frame draws the size the layout just left.
+                ref NodePaint pp = ref _scene.Paint(node);
+                if (ch == AnimChannel.SizeW) pp.PresentedW = uiBase + delta; else pp.PresentedH = uiBase + delta;
+                _scene.Mark(node, NodeFlags.PaintDirty);
+                s = ns;   // the walk continues from the row now on the node (Animate/Spring reuse the channel's slot)
+            }
+    }
+
     // Presented-extent reveal: spring/tween the recorder's drawn size old→new (works for grow and shrink).
     private void RevealSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn, float delayMs = 0f)
     {
