@@ -248,6 +248,25 @@ public sealed partial class AnimEngine
     // ── layout-transition side-table (node index → spec) ──────────────────────────────────────────
     public void SetTransition(NodeHandle node, in LayoutTransition t) => _transitions[(int)node.Raw.Index] = t;
     public bool TryGetTransition(NodeHandle node, out LayoutTransition t) => _transitions.TryGetValue((int)node.Raw.Index, out t);
+
+    /// <summary>The node indices whose transition carries a POSITION channel, into <paramref name="into"/> (cleared first). The host's reflow pass
+    /// uses it to find the children of a wrapping box before a re-solve (AppHost.RunReflowLayout). Allocates nothing past the list's capacity.</summary>
+    public void CollectPositionTransitions(List<int> into)
+    {
+        into.Clear();
+        foreach (var kv in _transitions)
+            if ((kv.Value.Channels & TransitionChannels.Position) != 0) into.Add(kv.Key);
+    }
+
+    /// <summary>The node indices whose transition is a height <see cref="SizeMode.FlowReveal"/>, into <paramref name="into"/> (cleared first): the
+    /// host's reflow pass seeds their reveals when a re-solve that was no commit changes their height. Allocates nothing past the list's capacity.</summary>
+    public void CollectFlowRevealTransitions(List<int> into)
+    {
+        into.Clear();
+        foreach (var kv in _transitions)
+            if (kv.Value.Size == SizeMode.FlowReveal && (kv.Value.Channels & TransitionChannels.Size) != 0 && (kv.Value.Axes & SizeAxes.Height) != 0)
+                into.Add(kv.Key);
+    }
     public void ClearTransition(NodeHandle node)
     {
         _transitions.Remove((int)node.Raw.Index);
