@@ -36,10 +36,12 @@ public static class SelectorBar
     /// rendered before the text at 0.8 scale with the −2,0 icon margin, recolored by the same foreground states.
     /// <paramref name="style"/> = an optional non-WinUI look (e.g. a page-title pivot: large semibold labels, no pill,
     /// a subtle hover plate); null keeps the stock WinUI template byte-identical. Behaviour (roving keys, the single
-    /// tab stop, OnChange, parts) is the same in every style.</summary>
+    /// tab stop, OnChange, parts) is the same in every style. <paramref name="itemKeys"/> = optional per-item node keys
+    /// (an item's own <c>Key</c>, so a test driver or an inspector can find and click one item; null leaves the items unkeyed).</summary>
     public static Element Create(IReadOnlyList<string> items, Signal<int>? selectedIndex = null, Action<int>? onChange = null,
-                                 TemplateParts? parts = null, IReadOnlyList<string?>? icons = null, SelectorBarStyle? style = null)
-        => Embed.Comp(new Props(items, icons, selectedIndex, onChange, parts, style), () => new SelectorBarCore());
+                                 TemplateParts? parts = null, IReadOnlyList<string?>? icons = null, SelectorBarStyle? style = null,
+                                 IReadOnlyList<string?>? itemKeys = null)
+        => Embed.Comp(new Props(items, icons, selectedIndex, onChange, parts, style, itemKeys), () => new SelectorBarCore());
 
     /// <summary>Controlled props are RE-PUSHED live to the reused core (<c>Embed.Comp(props, …)</c>) — a reused
     /// ComponentEl never re-runs its factory, so the items stay LIVE across parent re-renders via the props channel.
@@ -51,7 +53,8 @@ public static class SelectorBar
         => Tok.Definition.Controls.TryGet(ControlStyles.SelectorBarStyle, out var provider) ? provider() : null;
 
     internal sealed record Props(IReadOnlyList<string> Items, IReadOnlyList<string?>? Icons, Signal<int>? Selected,
-                                 Action<int>? OnChange, TemplateParts? Parts, SelectorBarStyle? Style = null);
+                                 Action<int>? OnChange, TemplateParts? Parts, SelectorBarStyle? Style = null,
+                                 IReadOnlyList<string?>? ItemKeys = null);
 }
 
 /// <summary>Optional look for SelectorBar. null = the stock WinUI look, byte-identical.</summary>
@@ -233,6 +236,7 @@ internal sealed class SelectorBarCore : Component
 
             var item = new BoxEl
             {
+                Key = p.ItemKeys is { } keys && index < keys.Count ? keys[index] : null,
                 Direction = 1,
                 AlignItems = FlexAlign.Center,
                 Corners = Radii.ControlAll,          // ControlCornerRadius (SelectorBar.xaml:53)
