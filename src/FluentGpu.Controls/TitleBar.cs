@@ -851,16 +851,24 @@ public sealed class TitleBar : Component
             OnRealized = h => _rightCluster = h, OnBoundsChanged = _islandBounds, Children = right.ToArray(),
         };
         Element[] rightKids = captionGroup.Length == 0 ? [rightCluster] : [rightCluster, .. captionGroup];
-        Element[] toolbarKids = windowCentred
-            ? [
-                // CSS `1fr auto 1fr`: equal zero-basis sides keep the centre on the window's centre line.
-                new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Grow = 1f, Basis = 0f, Shrink = 1f, MinWidth = 0f, Height = barH,
-                            Children = [leftCluster] },
-                center,
-                new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Grow = 1f, Basis = 0f, Shrink = 1f,
-                            MinWidth = 0f, Height = barH, Children = rightKids },
-              ]
-            : [leftCluster, center, .. rightKids];
+        // ONE shape for both alignments, so a tier that moves the centre (window-centred <-> between the clusters) keeps every
+        // cluster's node: each side is a box that either takes an equal zero-basis share (CSS `1fr auto 1fr`: equal sides keep the
+        // centre on the window's centre line) or hugs its cluster while the centre column takes the slack. A side swapped in and out
+        // around the clusters re-mounted every button in them on that crossing.
+        Element[] toolbarKids =
+        [
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Grow = windowCentred ? 1f : 0f, Basis = windowCentred ? 0f : float.NaN,
+                Shrink = windowCentred ? 1f : leftCluster.Shrink, MinWidth = 0f, Height = barH, Children = [leftCluster],
+            },
+            center,
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Grow = windowCentred ? 1f : 0f,
+                Basis = windowCentred ? 0f : float.NaN, Shrink = windowCentred ? 1f : 0f, MinWidth = 0f, Height = barH, Children = rightKids,
+            },
+        ];
         var toolbar = new BoxEl
         {
             Direction = 0, Height = barH, AlignItems = FlexAlign.Center, ClipToBounds = true, Children = toolbarKids,
