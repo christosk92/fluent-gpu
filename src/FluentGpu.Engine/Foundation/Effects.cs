@@ -391,6 +391,16 @@ public readonly record struct EdgeFadeSpec(
     /// behind the text. 0 = off (the authored bands as they are).</summary>
     public float OverflowTail { get; init; }
 
+    /// <summary>With <see cref="OverflowTail"/>: &gt; 0 = the content REPEATS with this period (DIP), a second copy of a run
+    /// <see cref="OverflowRun"/> wide following the first at this distance (a marquee's loop: the run, a gap, the run again). The
+    /// translate is then read modulo the period, and an edge feathers only while GLYPHS of either copy are hidden past it, so the
+    /// left band ramps out again as the copy's start arrives and the wrap at the period's end (translate -period ≡ 0) changes no
+    /// pixel. 0 = one run (the plain tail cue).</summary>
+    public float OverflowPeriod { get; init; }
+
+    /// <summary>With <see cref="OverflowPeriod"/>: the width (DIP) of ONE copy of the repeated run.</summary>
+    public float OverflowRun { get; init; }
+
     /// <summary>How many nodes down the first-child chain an <see cref="OverflowTail"/> cue looks for the translated content.</summary>
     public const int OverflowChainDepth = 4;
 
@@ -407,6 +417,16 @@ public readonly record struct EdgeFadeSpec(
         if (OverflowTail <= 0f) return this;
         float hiddenLeft = MathF.Max(0f, -childTranslateX);
         float hiddenRight = MathF.Max(0f, OverflowTail - hiddenLeft);
+        if (OverflowPeriod > OverflowRun && OverflowRun > OverflowTail)
+        {
+            // A looped run: p = how far into the period the content stands; the left edge cuts the first copy while p < run, the right
+            // edge cuts the first copy while p < tail and the second once its start has crossed in (p >= period - viewport).
+            float p = hiddenLeft % OverflowPeriod;
+            float viewport = OverflowRun - OverflowTail;
+            hiddenLeft = p < OverflowRun ? p : 0f;
+            hiddenRight = p < OverflowTail ? OverflowTail - p
+                : p >= OverflowPeriod - viewport ? OverflowPeriod + OverflowTail - p : 0f;
+        }
         EdgeMask edges = Edges & EdgeMask.Vertical;
         float left = 0f, right = 0f;
         if ((Edges & EdgeMask.Left) != 0 && hiddenLeft > 0.5f)
@@ -419,7 +439,7 @@ public readonly record struct EdgeFadeSpec(
             edges |= EdgeMask.Right;
             right = BandRight * MathF.Min(1f, hiddenRight / OverflowRunway);
         }
-        return this with { Edges = edges, BandLeft = left, BandRight = right, OverflowTail = 0f };
+        return this with { Edges = edges, BandLeft = left, BandRight = right, OverflowTail = 0f, OverflowPeriod = 0f, OverflowRun = 0f };
     }
 
     public static EdgeFadeSpec Horizontal(float band = 24f) => new(EdgeMask.Horizontal, band);
