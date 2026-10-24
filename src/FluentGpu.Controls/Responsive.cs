@@ -92,6 +92,25 @@ public static class Responsive
            };
     }
 
+    /// <summary>The keyed <b>form-gated</b> size-reactive box: <paramref name="formOf"/> maps the measured width to the only thing
+    /// <paramref name="build"/> reads from it (a column count, a wrap bit), and the child is rebuilt only when that FORM changes
+    /// (by <c>Equals</c>), never for a width that keeps it. The tree is fluid in between (a grid's own column fit, a stretched
+    /// row), so a width that keeps the form re-lays the child out and re-renders nothing: every tick of a docking pane's reflow
+    /// used to rebuild the box's whole subtree (audit B3bc). <paramref name="key"/> remembers the width (<see cref="MeasureMemory"/>)
+    /// as <see cref="Of(string,Func{float,Element},float,float)"/> does. Both delegates are live closures: a parent re-render
+    /// pushes new ones and rebuilds the child, exactly as the ungated overload.</summary>
+    public static Element Of<TForm>(string key, Func<float, TForm> formOf, Func<TForm, Element> build, float fallback = 0f, float grow = 0f)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        var props = new FormBox<TForm>.Props(formOf, build, fallback, grow, key);
+        return Embed.Comp(props, static () => new FormBox<TForm>())
+           with
+           {
+               Key = key,
+               SkeletonProxy = () => Embed.Comp(props, static () => new FormBox<TForm>()) with { DeriveRenderedOutput = true },
+           };
+    }
+
     /// <summary>The <b>tier-gated, estimate-seeded</b> size-reactive box (E22): <paramref name="build"/> receives the TIER
     /// index of <paramref name="ladder"/> (the caller's own enum value) and is re-invoked only when the tier CROSSES, never for
     /// a width that stays inside its tier. There is no fixed fallback width: the first frame resolves the tier from
@@ -198,6 +217,56 @@ public sealed class ResponsiveBox : Component
                 if (r.W > 0f && MathF.Abs(r.W - wSig.Peek()) > 0.5f) wSig.Value = r.W;
             },
             Children = [ props.Build(effective) ],
+        };
+    }
+}
+
+/// <summary>The form-gated <see cref="Responsive.Of{TForm}(string,Func{float,TForm},Func{TForm,Element},float,float)"/> component. It
+/// measures its slot into a field (never a signal its render reads) and re-renders only when the measured width maps to a form
+/// other than the one on screen, through an always-notify edge.</summary>
+public sealed class FormBox<TForm> : Component
+{
+    /// <summary>The re-pushed props. The delegates compare as delegates (a fresh closure rebuilds the child with its parent, as
+    /// the ungated <see cref="ResponsiveBox"/>); the fallback, the grow and the memory role by value.</summary>
+    public sealed record Props(Func<float, TForm> FormOf, Func<TForm, Element> Build, float Fallback, float Grow, string MemoryKey);
+
+    readonly Signal<int> _edge = Signal.AlwaysNotify(0);
+    readonly Action<RectF> _onBounds;
+    Props? _p;
+    float _w;
+    bool _seeded;
+    TForm? _rendered;
+    string? _memKey;
+
+    public FormBox()
+    {
+        _onBounds = r =>
+        {
+            if (_memKey is not null && r.W > 0f) MeasureMemory.Capture(_memKey, new Size2(r.W, r.H));
+            if (r.W <= 0f || MathF.Abs(r.W - _w) <= 0.5f) return;
+            _w = r.W;
+            if (_p is { } p && !EqualityComparer<TForm>.Default.Equals(p.FormOf(_w), _rendered)) _edge.Value = 0;
+        };
+    }
+
+    public override Element Render()
+    {
+        var props = UseProps<Props>();
+        if (!_seeded)
+        {
+            _seeded = true;
+            _memKey = MeasureMemory.Compose(UseContext(MeasureMemory.Scope), props.MemoryKey);
+            if (MeasureMemory.TryGetSize(_memKey, out var remembered)) _w = remembered.Width;
+        }
+        _ = _edge.Value;
+        _p = props;
+        var form = props.FormOf(_w > 0.5f ? _w : props.Fallback);
+        _rendered = form;
+        return new BoxEl
+        {
+            Direction = 1, Grow = props.Grow,   // as ResponsiveBox: the parent sizes this box, the child cross-stretches to it
+            OnBoundsChanged = _onBounds,
+            Children = [props.Build(form)],
         };
     }
 }
