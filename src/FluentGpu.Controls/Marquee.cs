@@ -26,7 +26,8 @@ namespace FluentGpu.Controls;
 /// changes), <see cref="Style.PauseMs"/> at the start between passes.</item>
 /// <item><b>Bounded.</b> <see cref="Style.Passes"/> passes after a content change, then the line rests at its start (no endless ticker:
 /// WCAG 2.2.2). Hovering a line runs a fresh pass after <see cref="Style.HoverDelayMs"/> and keeps passing while the pointer stays; when
-/// it leaves, the pass under way finishes and the line rests. Both edges fade only while the line is moving and cut on both sides.</item>
+/// it leaves, the pass under way finishes and the line rests. Both edges fade only while the line is moving and cut on both sides. (A
+/// skin whose identity is an endless ticker opts into <see cref="Style.Ticker"/>: it loops while its <c>allowed</c> gate holds.)</item>
 /// <item><b>One mover per surface.</b> Marquees that share a <see cref="Group"/> (a bar's title and artists) never move at once: the
 /// lower <c>order</c> goes first, the next takes its turn when the line is free.</item>
 /// <item><b>Restart on a real content change only</b>: a new text or a new <c>identity</c> (a new track of the same name); in a group a change
@@ -73,6 +74,10 @@ public static class Marquee
         public int Passes { get; init; } = 2;
         /// <summary>The pointer over a resting, overflowing line: a fresh pass after this.</summary>
         public float HoverDelayMs { get; init; } = 450f;
+        /// <summary>An endless ticker instead of bounded passes: the run and its copy loop back to back (no pause, no budget) for as long as
+        /// the line may move, its <c>allowed</c> gate included, and glide home when the gate closes. Only for a face whose identity IS the
+        /// ticker (the deck's LCD skin, production's Winamp title); every other line keeps the bounded passes.</summary>
+        public bool Ticker { get; init; }
 
         internal float GapDip => float.IsNaN(Gap) ? 3f * FontSize : MathF.Max(0f, Gap);
     }
@@ -194,12 +199,13 @@ internal sealed class MarqueeView : Component
         float cw = viewW.Value, tw = runW.Value, at = copyAt.Value;
         bool overflow = cw > 0f && tw > cw + 0.5f;
         bool canMove = !Motion.ReducedMotion;
-        bool seen = hooks.WindowOccluded?.Value != true && active.Value && (p.Allowed?.Value ?? true);
+        bool seen = hooks.WindowOccluded?.Value != true && active.Value;   // can anybody see it
+        bool allowed = p.Allowed?.Value ?? true;                             // may it move (a gate the caller holds)
         bool copy = canMove && (overflow || moving.Value);
         float period = copy && at > tw ? at : 0f;
-        int flags = (overflow ? 1 : 0) | (canMove ? 2 : 0) | (seen ? 4 : 0);
+        int flags = (overflow ? 1 : 0) | (canMove ? 2 : 0) | (seen ? 4 : 0) | (allowed ? 8 : 0);
         long identity = p.Identity;
-        UseLayoutEffect(() => run.Sync(text, identity, overflow, period, canMove, seen),
+        UseLayoutEffect(() => run.Sync(text, identity, overflow, period, canMove, seen, allowed),
                         DepKey.Combine(DepKey.From(text.GetHashCode(), BitConverter.SingleToInt32Bits(period), flags, 0), DepKey.From(identity)));
 
         float band = overflow ? MathF.Min(sty.FadeBand, cw * MaxFadeViewportFraction) : 0f;
@@ -292,7 +298,7 @@ internal sealed class MarqueeRunner
     Phase _phase;
     string? _text;
     long _identity;
-    bool _overflow, _canMove, _seen, _hovered;
+    bool _overflow, _canMove, _seen, _allowed, _hovered;
     float _period;
     int _passesLeft;
 
@@ -310,7 +316,7 @@ internal sealed class MarqueeRunner
         HoverLeave = () => OnHover(false);
     }
 
-    bool Live => _overflow && _canMove && _seen && _period > 0f;
+    bool Live => _overflow && _canMove && _seen && _allowed && _period > 0f;
     internal bool IsWaiting => _phase == Phase.Waiting;
 
     internal void Bind(AnimEngine? anim, SceneStore? scene, TimerHandle timer, Marquee.Style sty, int order)
@@ -323,12 +329,13 @@ internal sealed class MarqueeRunner
     }
 
     /// <summary>The line's facts after a render's layout: its text and identity, whether it overflows, the pass distance (0 until the copy is
-    /// laid out), whether motion is allowed and whether the line can be seen. Diffs them against the last and moves the state machine.</summary>
-    internal void Sync(string text, long identity, bool overflow, float period, bool canMove, bool seen)
+    /// laid out), whether motion is possible, whether the line can be seen and whether its gate allows it. Diffs them against the last and
+    /// moves the state machine.</summary>
+    internal void Sync(string text, long identity, bool overflow, float period, bool canMove, bool seen, bool allowed)
     {
         bool changed = !string.Equals(text, _text, StringComparison.Ordinal) || identity != _identity;
         float oldPeriod = _period;
-        _text = text; _identity = identity; _overflow = overflow; _period = period; _canMove = canMove; _seen = seen;
+        _text = text; _identity = identity; _overflow = overflow; _period = period; _canMove = canMove; _seen = seen; _allowed = allowed;
 
         if (changed)
         {
@@ -342,7 +349,7 @@ internal sealed class MarqueeRunner
             {
                 _passesLeft++;                          // the interrupted pass is owed
                 if (!seen) { Snap(); Stop(); }      // nobody sees it: straight home
-                else GlideHome();                       // still on screen (the overflow or the motion ended): ease back to the start
+                else GlideHome();                       // still on screen (the overflow ended, the gate closed): ease back to the start
             }
             else if (_phase != Phase.Home) Stop();
             return;
@@ -352,7 +359,7 @@ internal sealed class MarqueeRunner
             GlideHome();                                // the run was re-measured mid-pass (a theme's type): back to the start, then on
             return;
         }
-        if (_phase == Phase.Rest && (_passesLeft > 0 || _hovered)) Arm(Phase.Delay, _sty.StartDelayMs + Order * OrderStepMs);
+        if (_phase == Phase.Rest && (_passesLeft > 0 || _hovered || _sty.Ticker)) Arm(Phase.Delay, _sty.StartDelayMs + Order * OrderStepMs);
     }
 
     /// <summary>A new text or identity: back at its start, a fresh budget of passes after the start delay.</summary>
@@ -385,7 +392,7 @@ internal sealed class MarqueeRunner
         {
             if (_phase == Phase.Rest && Live) Arm(Phase.Delay, _sty.HoverDelayMs);
         }
-        else if (_passesLeft <= 0 && _phase is Phase.Delay or Phase.Pause or Phase.Waiting)
+        else if (_passesLeft <= 0 && !_sty.Ticker && _phase is Phase.Delay or Phase.Pause or Phase.Waiting)
             Stop();                                     // the pointer left before the next pass: rest (a pass under way finishes)
     }
 
@@ -399,7 +406,7 @@ internal sealed class MarqueeRunner
                 break;
             case Phase.Pass:
                 Group?.Release(this);
-                if (Live && (_hovered || _passesLeft > 0)) Arm(Phase.Pause, _sty.PauseMs);
+                if (Live && (_hovered || _passesLeft > 0 || _sty.Ticker)) Arm(Phase.Pause, _sty.PauseMs);
                 else Settle();
                 break;
             case Phase.Home:
@@ -410,8 +417,17 @@ internal sealed class MarqueeRunner
 
     void StartPass()
     {
-        if (!Live || (!_hovered && _passesLeft <= 0) || _anim is null || _strip.Value.IsNull) { Stop(); return; }
+        if (!Live || (!_hovered && _passesLeft <= 0 && !_sty.Ticker) || _anim is null || _strip.Value.IsNull) { Stop(); return; }
         float ms = _period / MathF.Max(1f, _sty.Speed) * 1000f;
+        if (_sty.Ticker && OnScreen())
+        {
+            // The endless ticker: one looping row over a period (the copy where the run began at its end, so the wrap is seamless), no timer;
+            // it runs until the gate closes or the line goes unseen (Sync glides or snaps it home).
+            _anim.Keyframes(_strip.Value, AnimChannel.TranslateX, [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, -_period, Easing.Linear)], ms, loop: true);
+            if (!_moving.Peek()) _moving.Value = true;
+            _phase = Phase.Pass;
+            return;
+        }
         if (!OnScreen())
         {
             // Scrolled out of the window (a list's now-playing row in the overscan): the pass is spent unseen, on the timer alone, so the
@@ -469,7 +485,7 @@ internal sealed class MarqueeRunner
     void Settle()
     {
         Stop();
-        if (Live && (_passesLeft > 0 || _hovered)) Arm(Phase.Delay, _sty.PauseMs);
+        if (Live && (_passesLeft > 0 || _hovered || _sty.Ticker)) Arm(Phase.Delay, _sty.PauseMs);
     }
 
     void Stop()
