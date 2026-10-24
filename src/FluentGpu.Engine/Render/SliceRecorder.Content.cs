@@ -137,7 +137,7 @@ public sealed partial class SliceRecorder
     {
         if ((uint)slot >= (uint)_cOps.Length || _cOps[slot] is null || (uint)slot >= (uint)_scanSegs.Length
             || _scanSegs[slot] is null || _scanGen[slot] != _curGen[slot] || seg > _scanMarkCount[slot]) return 0UL;
-        return TileContentHash.WantKey(_curGen[slot], seg, ox, oy, scale);
+        return TileContentHash.WantKey(_contentGen[slot], seg, ox, oy, scale);
     }
 
     /// <summary>The content hash tile <paramref name="tilePx"/> of segment <paramref name="seg"/> of <paramref name="slot"/>

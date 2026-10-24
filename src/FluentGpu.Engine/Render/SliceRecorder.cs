@@ -210,6 +210,11 @@ public sealed partial class SliceRecorder
     private Rec[] _recs = new Rec[32];
     private DrawList?[] _arenas = new DrawList?[32];
     private ulong[] _curGen = new ulong[32];
+    // The generation of the BYTES a slot's scan and its tiles' wants describe: the buffer generation that last changed them.
+    // A re-walk that writes the arena byte for byte again (an equalizer bar or a lyrics glow moved inside a NESTED slice: the
+    // containing arena only re-registers the same marker) gets a new buffer generation for span reuse, but keeps this one,
+    // so the scan, the content table and every resident tile's want stay as they are (audit PERF).
+    private ulong[] _contentGen = new ulong[32];
     private ulong[] _priorGen = new ulong[32];
     private SliceSpan[][] _index = new SliceSpan[32][];
     private int[] _indexCount = new int[32];
@@ -307,6 +312,7 @@ public sealed partial class SliceRecorder
         Array.Resize(ref _recs, n);
         Array.Resize(ref _arenas, n);
         Array.Resize(ref _curGen, n);
+        Array.Resize(ref _contentGen, n);
         Array.Resize(ref _priorGen, n);
         Array.Resize(ref _index, n);
         Array.Resize(ref _indexCount, n);
@@ -1200,7 +1206,15 @@ public sealed partial class SliceRecorder
     {
         EnsureScanStorage(_recs.Length);
         if (_scanGen[s] == _curGen[s] && _scanSegs[s] is not null) return;
+        // The walk rewrote the arena byte for byte (its scan was of the prior buffer, which holds the same bytes): everything
+        // the scan derives is a function of the bytes, so it carries over, under the content generation it already had.
+        if (_scanSegs[s] is not null && _scanGen[s] != 0 && _scanGen[s] == _priorGen[s] && _arenas[s]!.BytesEqualPrior())
+        {
+            _scanGen[s] = _curGen[s];
+            return;
+        }
         _scanGen[s] = _curGen[s];
+        _contentGen[s] = _curGen[s];
         _scanMarks[s] ??= new ScanMark[8];
         _scanSegs[s] ??= new ScanSeg[9];
         _scanVideos[s] ??= new ScanVideo[2];
