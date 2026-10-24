@@ -158,6 +158,9 @@ public sealed class ContentDialog : Component
         public float Width { get; init; } = float.NaN;
         /// <summary>The content region (DialogSpace): its padding (ContentDialogPadding 24) and fill (LayerFillColorAlt).</summary>
         public Edges4 ContentPadding { get; init; } = Edges4.All(Pad);
+        /// <summary>A long body that scrolls inside the card feathers the edges it overflows (<see cref="ScrollEl.AutoEdgeFade"/>), so a cut field reads as
+        /// more below, never as a stray sliver. False = WinUI's ContentScrollViewer, which draws no cue.</summary>
+        public bool ContentEdgeFade { get; init; }
         public ColorF ContentFill { get; init; } = Tok.FillLayerAlt;
         /// <summary>The title (SubtitleTextBlockStyle 20 SemiBold, TextFillColorPrimary) and its gap to the body (ContentDialogTitleMargin 12).</summary>
         public float TitleSize { get; init; } = ContentDialog.TitleSize;
@@ -432,9 +435,10 @@ public sealed class ContentDialog : Component
         // (the WinUI ContentScrollViewer) instead of overflowing MaxHeight.
         //
         // No edge cue on the dialog body: WinUI's ContentScrollViewer draws none. (The cue is the analytic edge feather
-        // now — colour-independent — so this is a fidelity choice, not the old painted band's wrong-plate hazard.)
+        // now — colour-independent — so this is a fidelity choice, not the old painted band's wrong-plate hazard.) A style that
+        // wants the overflow seen feathers it (Style.ContentEdgeFade).
         Element contentBody = Content is not null
-            ? new ScrollEl { Content = Content, ContentSized = true, MaxHeight = st.MaxHeight - 200f, EdgeCues = ScrollEdgeCues.None }
+            ? new ScrollEl { Content = Content, ContentSized = true, MaxHeight = st.MaxHeight - 200f, EdgeCues = ScrollEdgeCues.None, AutoEdgeFade = st.ContentEdgeFade }
             : new TextEl(Message) { Size = st.MessageSize, Color = st.MessageColor, Wrap = TextWrap.Wrap };
 
         Element TitleRow(Style st, Action close)
