@@ -2416,6 +2416,7 @@ public sealed partial class SliceRecorder
             if (id < 0) continue;
 
             ref SliceRow row = ref table.Row(id);
+            row.ContentKey = ContentKey(e.Slot, e.Segment, ox, oy, scale);
             int arenaBase = withStreams ? StreamOffsetOf(e.Slot) : 0;
             row.StreamBase = arenaBase;
             row.DrawListStart = arenaBase + sg.ByteStart;

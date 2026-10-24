@@ -277,18 +277,38 @@ public sealed unsafe partial class D3D12Device
     }
 
     /// <summary>Every stream this frame DECODES (a rastered tile's segment, a degraded segment) is glyph-prepared before
-    /// the list opens — the atlas band then uploads once, outside every render pass.</summary>
+    /// the list opens — the atlas band then uploads once, outside every render pass.
+    /// <para>A stream whose bytes are unchanged (<see cref="SliceRow.ContentKey"/>) since it was last prepared, while the glyph
+    /// cache dropped no run (<see cref="GlyphRenderer.RunCacheEpoch"/>), still has every run it shapes cached: preparing it again
+    /// would only look each one up. An inline segment is decoded by every composite that reaches it, and the shell's static band
+    /// is one window-sized inline segment, so that lookup pass ran over all of the shell's text on every turn (audit PERF r2).
+    /// Such a stream is skipped, and re-prepared every <see cref="GlyphPrepRefreshFrames"/> frames so its runs never age out of
+    /// the cache. A run evicted or a cache cleared while this pass shapes (an atlas growth) re-prepares everything.</para></summary>
     private void PrepareCompositeGlyphs(in CompositeFrame frame)
     {
         int stamp = _compositeTurn + 1;
         bool allDirect = ((GpuKnockouts)_knockouts & GpuKnockouts.ForceFullDirect) != 0;
+        _glyphs!.SyncBodyFontNow();   // a body-font change evicts every run: the skip below must already see it
+        int epoch = _glyphs.RunCacheEpoch;
+        PrepareCompositeRows(in frame, stamp, allDirect, epoch, skipPrepared: true);
+        if (_glyphs.RunCacheEpoch != epoch)
+            PrepareCompositeRows(in frame, -stamp, allDirect, _glyphs.RunCacheEpoch, skipPrepared: false);   // runs left mid-pass
+    }
+
+    /// <summary>A prepared stream is re-prepared at least this often (in glyph frames), so the runs it holds stay young: the run
+    /// sweep evicts after 60 idle frames at the earliest.</summary>
+    private const int GlyphPrepRefreshFrames = 32;
+    private ulong[] _glyphPrepKey = new ulong[256];
+    private int[] _glyphPrepEpoch = new int[256], _glyphPrepFrame = new int[256];
+
+    private void PrepareCompositeRows(in CompositeFrame frame, int stamp, bool allDirect, int epoch, bool skipPrepared)
+    {
         for (int i = 0; i < frame.Rasters.Length; i++)
         {
             int r = RowOf(frame.Rasters[i].Key.SliceId);
             if (r < 0 || _rowPrepared[r] == stamp) continue;
             _rowPrepared[r] = stamp;
-            SliceRow row = frame.Slices[r];
-            PrepareGlyphs(frame.StreamOf(in row));
+            PrepareRowGlyphs(in frame, in frame.Slices[r], epoch, skipPrepared);
         }
         for (int i = 0; i < frame.Items.Length; i++)
         {
@@ -298,9 +318,25 @@ public sealed unsafe partial class D3D12Device
             int r = RowOf(it.SliceId);
             if (r < 0 || _rowPrepared[r] == stamp) continue;
             _rowPrepared[r] = stamp;
-            SliceRow row = frame.Slices[r];
-            PrepareGlyphs(frame.StreamOf(in row));
+            PrepareRowGlyphs(in frame, in frame.Slices[r], epoch, skipPrepared);
         }
+    }
+
+    private void PrepareRowGlyphs(in CompositeFrame frame, in SliceRow row, int epoch, bool skipPrepared)
+    {
+        int id = row.Id;
+        if (id < 0) return;
+        if (_glyphPrepKey.Length <= id)
+        {
+            int n = Math.Max(id + 1, _glyphPrepKey.Length * 2);
+            Array.Resize(ref _glyphPrepKey, n); Array.Resize(ref _glyphPrepEpoch, n); Array.Resize(ref _glyphPrepFrame, n);
+        }
+        if (skipPrepared && row.ContentKey != 0 && _glyphPrepKey[id] == row.ContentKey && _glyphPrepEpoch[id] == epoch
+            && _glyphs!.Frame - _glyphPrepFrame[id] < GlyphPrepRefreshFrames) return;
+        PrepareGlyphs(frame.StreamOf(in row));
+        _glyphPrepKey[id] = row.ContentKey;
+        _glyphPrepEpoch[id] = epoch;
+        _glyphPrepFrame[id] = _glyphs!.Frame;
     }
 
     // ── 1. tile raster ────────────────────────────────────────────────────────────────────────────────────────────

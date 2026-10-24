@@ -26,6 +26,9 @@ public sealed unsafe partial class D3D12Device
     private int[] _ppInlSeq = new int[64], _ppInlSeqPrev = new int[64];
     private ulong[] _ppInlKey = new ulong[64], _ppInlKeyPrev = new ulong[64];
     private ulong[] _ppInlImg = new ulong[64], _ppInlImgPrev = new ulong[64];
+    // The row's SliceRow.ContentKey the snapshot was taken from: an unchanged key (and framing key) means the very same op
+    // records, so the diff is known empty without comparing them op by op (audit PERF r2).
+    private ulong[] _ppInlContent = new ulong[64], _ppInlContentPrev = new ulong[64];
     private int _ppInlFrameSeq = 1;
     private RepaintDamageRegion _ppInlDirty;   // window px, merged into the frame's dirty set after the entry pass
 
@@ -45,6 +48,7 @@ public sealed unsafe partial class D3D12Device
         (_ppInlSeq, _ppInlSeqPrev) = (_ppInlSeqPrev, _ppInlSeq);
         (_ppInlKey, _ppInlKeyPrev) = (_ppInlKeyPrev, _ppInlKey);
         (_ppInlImg, _ppInlImgPrev) = (_ppInlImgPrev, _ppInlImg);
+        (_ppInlContent, _ppInlContentPrev) = (_ppInlContentPrev, _ppInlContent);
     }
 
     private void PpInlineEnsure(int sliceId)
@@ -56,6 +60,7 @@ public sealed unsafe partial class D3D12Device
         System.Array.Resize(ref _ppInlSeq, n); System.Array.Resize(ref _ppInlSeqPrev, n);
         System.Array.Resize(ref _ppInlKey, n); System.Array.Resize(ref _ppInlKeyPrev, n);
         System.Array.Resize(ref _ppInlImg, n); System.Array.Resize(ref _ppInlImgPrev, n);
+        System.Array.Resize(ref _ppInlContent, n); System.Array.Resize(ref _ppInlContentPrev, n);
     }
 
     /// <summary>Inline item <paramref name="it"/>: snapshot its op list, and when the previous composite left a trusted one,
@@ -94,11 +99,21 @@ public sealed unsafe partial class D3D12Device
             _ppInlSeq[sliceId] = _ppInlFrameSeq;
             _ppInlKey[sliceId] = key;
             _ppInlImg[sliceId] = img;
+            _ppInlContent[sliceId] = sr.ContentKey;
         }
         if (dup || _ppInlSeqPrev[sliceId] != _ppInlFrameSeq - 1 || _ppInlKeyPrev[sliceId] != key) return false;
 
-        ReadOnlySpan<TileOpRec> prev = _ppInlOpsPrev.AsSpan(_ppInlOffPrev[sliceId], _ppInlNPrev[sliceId]);
-        if (!TileDamage.Diff(prev, ops, SliceRecorder.InlineOpsExtent, SliceRecorder.InlineOpsExtent, out PixelRect d)) return false;
+        PixelRect d = default;
+        if (sr.ContentKey == 0 || _ppInlContentPrev[sliceId] != sr.ContentKey)
+        {
+            ReadOnlySpan<TileOpRec> prev = _ppInlOpsPrev.AsSpan(_ppInlOffPrev[sliceId], _ppInlNPrev[sliceId]);
+            if (!TileDamage.Diff(prev, ops, SliceRecorder.InlineOpsExtent, SliceRecorder.InlineOpsExtent, out d)) return false;
+        }
+        else
+        {
+            // the same records as last composite: no op changed — but a list Diff cannot vouch for (a spreading op) stays refused
+            for (int i = 0; i < ops.Length; i++) if ((ops[i].Flags & TileOpRec.FlagSpread) != 0) return false;
+        }
         if (!d.IsEmpty)
         {
             // records → window px: + the frame's origin + the item's placement (the grid's sub-pixel residual and the AA slack

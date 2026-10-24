@@ -219,10 +219,25 @@ public sealed partial class SliceRecorder
     private int[] _rowInlineRange = new int[128];   // 2 per row: start, count (count −1 = no list: the backend repaints the whole item)
 
     /// <summary>BuildComposite: the op records of every inline row (see above); a row whose content table is unknown gets none.</summary>
+    // The op records of an inline segment are a pure function of its ContentKey (its arena's content generation, the segment,
+    // its grid origin, the scale). The shell's static band is ONE window-sized inline segment: re-hashing every op of it on
+    // every turn was a fixed per-turn cost that no change asked for (audit PERF r2). A segment whose key equals the one it had
+    // LAST turn copies last turn's records (the previous turn's buffer is kept for exactly that); anything else re-collects.
+    private TileOpRec[] _inlineOpsPrev = new TileOpRec[256];
+    private InlineOpsMemo[]?[] _inlineMemo = new InlineOpsMemo[]?[32];
+
+    private struct InlineOpsMemo
+    {
+        public ulong Key;
+        public int Turn, Start, Count;
+    }
+
     private void CollectInlineOps(float scale)
     {
+        (_inlineOps, _inlineOpsPrev) = (_inlineOpsPrev, _inlineOps);   // last turn's records stay readable below
         _inlineOpCount = 0;
         if (_rowInlineRange.Length < 2 * _rowCount) _rowInlineRange = new int[Math.Max(2 * _rowCount, _rowInlineRange.Length * 2)];
+        if (_inlineMemo.Length < _recs.Length) Array.Resize(ref _inlineMemo, _recs.Length);
         var frame = new RectF(InlineOpsOrigin, InlineOpsOrigin, InlineOpsExtent, InlineOpsExtent);
         for (int row = 0; row < _rowCount; row++)
         {
@@ -231,14 +246,27 @@ public sealed partial class SliceRecorder
             if (row >= _rowInline.Length || !_rowInline[row]) continue;
             int slot = _rowSlot[row], seg = _rowSeg[row];
             float ox = _rowOx[row], oy = _rowOy[row];
-            if (ContentKey(slot, seg, ox, oy, scale) == 0) continue;
-            ref ScanSeg sg = ref _scanSegs[slot][seg];
-            ReadOnlySpan<TileOp> ops = _cOps[slot].AsSpan(0, _cOpCount[slot]);
-            ReadOnlySpan<int> open = seg < _cSegScopeStart[slot].Length
-                ? _cSegScopeIdx[slot].AsSpan(_cSegScopeStart[slot][seg], _cSegScopeCount[slot][seg]) : default;
-            int n = TileContentHash.CollectTileOps(ops, open, sg.ByteStart, sg.ByteEnd, in frame, scale, ox, oy, ref _inlineScratch);
+            ulong key = ContentKey(slot, seg, ox, oy, scale);
+            if (key == 0) continue;
+            ref InlineOpsMemo[]? memos = ref _inlineMemo[slot];
+            if (memos is null || memos.Length <= seg) Array.Resize(ref memos, Math.Max(seg + 1, 4));
+            ref InlineOpsMemo memo = ref memos![seg];
+            ReadOnlySpan<TileOpRec> collected;
+            if (memo.Key == key && memo.Turn == _turn - 1)
+                collected = _inlineOpsPrev.AsSpan(memo.Start, memo.Count);   // the same bytes under the same framing: the same records
+            else
+            {
+                ref ScanSeg sg = ref _scanSegs[slot][seg];
+                ReadOnlySpan<TileOp> ops = _cOps[slot].AsSpan(0, _cOpCount[slot]);
+                ReadOnlySpan<int> open = seg < _cSegScopeStart[slot].Length
+                    ? _cSegScopeIdx[slot].AsSpan(_cSegScopeStart[slot][seg], _cSegScopeCount[slot][seg]) : default;
+                int c = TileContentHash.CollectTileOps(ops, open, sg.ByteStart, sg.ByteEnd, in frame, scale, ox, oy, ref _inlineScratch);
+                collected = _inlineScratch.AsSpan(0, c);
+            }
+            int n = collected.Length;
             if (_inlineOpCount + n > _inlineOps.Length) Array.Resize(ref _inlineOps, Math.Max(_inlineOpCount + n, _inlineOps.Length * 2));
-            _inlineScratch.AsSpan(0, n).CopyTo(_inlineOps.AsSpan(_inlineOpCount));
+            collected.CopyTo(_inlineOps.AsSpan(_inlineOpCount));
+            memo = new InlineOpsMemo { Key = key, Turn = _turn, Start = _inlineOpCount, Count = n };
             _rowInlineRange[2 * row] = _inlineOpCount;
             _rowInlineRange[2 * row + 1] = n;
             _inlineOpCount += n;

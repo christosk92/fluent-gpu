@@ -108,6 +108,11 @@ public struct SliceRow
     /// whole cells on that axis (<c>SliceTable.SurfaceExtent</c>). False for every other segment — cut at its painted
     /// bounds on both axes.</summary>
     public bool MainAxisGrows;
+    /// <summary>What the segment's bytes ARE (<c>SliceRecorder.ContentKey</c>: the content generation of its arena, which moves
+    /// only when the arena's bytes change, its segment index, its grid origin and the raster scale); 0 = unknown. Equal keys ⇒
+    /// identical bytes under identical framing, so anything derived from the stream alone (its glyph preparation, its op
+    /// records, their diff) can be reused instead of recomputed every turn.</summary>
+    public ulong ContentKey;
 }
 
 /// <summary>One entry of a slice's span index (§A.4): a clean subtree's slice-space bounds (device px, halos included) and
