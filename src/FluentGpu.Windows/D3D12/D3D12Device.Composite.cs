@@ -277,18 +277,38 @@ public sealed unsafe partial class D3D12Device
     }
 
     /// <summary>Every stream this frame DECODES (a rastered tile's segment, a degraded segment) is glyph-prepared before
-    /// the list opens — the atlas band then uploads once, outside every render pass.</summary>
+    /// the list opens — the atlas band then uploads once, outside every render pass.
+    /// <para>A stream whose bytes are unchanged (<see cref="SliceRow.ContentKey"/>) since it was last prepared, while the glyph
+    /// cache dropped no run (<see cref="GlyphRenderer.RunCacheEpoch"/>), still has every run it shapes cached: preparing it again
+    /// would only look each one up. An inline segment is decoded by every composite that reaches it, and the shell's static band
+    /// is one window-sized inline segment, so that lookup pass ran over all of the shell's text on every turn (audit PERF r2).
+    /// Such a stream is skipped, and re-prepared every <see cref="GlyphPrepRefreshFrames"/> frames so its runs never age out of
+    /// the cache. A run evicted or a cache cleared while this pass shapes (an atlas growth) re-prepares everything.</para></summary>
     private void PrepareCompositeGlyphs(in CompositeFrame frame)
     {
         int stamp = _compositeTurn + 1;
         bool allDirect = ((GpuKnockouts)_knockouts & GpuKnockouts.ForceFullDirect) != 0;
+        _glyphs!.SyncBodyFontNow();   // a body-font change evicts every run: the skip below must already see it
+        int epoch = _glyphs.RunCacheEpoch;
+        PrepareCompositeRows(in frame, stamp, allDirect, epoch, skipPrepared: true);
+        if (_glyphs.RunCacheEpoch != epoch)
+            PrepareCompositeRows(in frame, -stamp, allDirect, _glyphs.RunCacheEpoch, skipPrepared: false);   // runs left mid-pass
+    }
+
+    /// <summary>A prepared stream is re-prepared at least this often (in glyph frames), so the runs it holds stay young: the run
+    /// sweep evicts after 60 idle frames at the earliest.</summary>
+    private const int GlyphPrepRefreshFrames = 32;
+    private ulong[] _glyphPrepKey = new ulong[256];
+    private int[] _glyphPrepEpoch = new int[256], _glyphPrepFrame = new int[256];
+
+    private void PrepareCompositeRows(in CompositeFrame frame, int stamp, bool allDirect, int epoch, bool skipPrepared)
+    {
         for (int i = 0; i < frame.Rasters.Length; i++)
         {
             int r = RowOf(frame.Rasters[i].Key.SliceId);
             if (r < 0 || _rowPrepared[r] == stamp) continue;
             _rowPrepared[r] = stamp;
-            SliceRow row = frame.Slices[r];
-            PrepareGlyphs(frame.StreamOf(in row));
+            PrepareRowGlyphs(in frame, in frame.Slices[r], epoch, skipPrepared);
         }
         for (int i = 0; i < frame.Items.Length; i++)
         {
@@ -298,9 +318,25 @@ public sealed unsafe partial class D3D12Device
             int r = RowOf(it.SliceId);
             if (r < 0 || _rowPrepared[r] == stamp) continue;
             _rowPrepared[r] = stamp;
-            SliceRow row = frame.Slices[r];
-            PrepareGlyphs(frame.StreamOf(in row));
+            PrepareRowGlyphs(in frame, in frame.Slices[r], epoch, skipPrepared);
         }
+    }
+
+    private void PrepareRowGlyphs(in CompositeFrame frame, in SliceRow row, int epoch, bool skipPrepared)
+    {
+        int id = row.Id;
+        if (id < 0) return;
+        if (_glyphPrepKey.Length <= id)
+        {
+            int n = Math.Max(id + 1, _glyphPrepKey.Length * 2);
+            Array.Resize(ref _glyphPrepKey, n); Array.Resize(ref _glyphPrepEpoch, n); Array.Resize(ref _glyphPrepFrame, n);
+        }
+        if (skipPrepared && row.ContentKey != 0 && _glyphPrepKey[id] == row.ContentKey && _glyphPrepEpoch[id] == epoch
+            && _glyphs!.Frame - _glyphPrepFrame[id] < GlyphPrepRefreshFrames) return;
+        PrepareGlyphs(frame.StreamOf(in row));
+        _glyphPrepKey[id] = row.ContentKey;
+        _glyphPrepEpoch[id] = epoch;
+        _glyphPrepFrame[id] = _glyphs!.Frame;
     }
 
     // ── 1. tile raster ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1311,6 +1347,7 @@ public sealed unsafe partial class D3D12Device
             if (it.Kind == CompositeKind.Group) unscopedEnd = Math.Max(unscopedEnd, k + 1 + it.GroupCount);
             Mix(ref h, (ulong)(uint)it.Kind << 32 | (uint)it.SliceId);
             Mix(ref h, (ulong)(uint)(int)it.Transform.Dx << 32 | (uint)(int)it.Transform.Dy);
+            Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.SubPxX) << 32 | BitConverter.SingleToUInt32Bits(it.SubPxY));   // a posed blur between pixels
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Alpha) << 32 | BitConverter.SingleToUInt32Bits(it.BlurSigma));
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Clip.X) << 32 | BitConverter.SingleToUInt32Bits(it.Clip.Y));
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Clip.W) << 32 | BitConverter.SingleToUInt32Bits(it.Clip.H));
@@ -1360,7 +1397,13 @@ public sealed unsafe partial class D3D12Device
             case CompositeKind.Tiles:
             case CompositeKind.Region:
             {
-                if (it.BlurSigma > 0f) return _itemSurface[k] < 0 || Overlaps(in _itemRegion[k], in region);
+                if (it.BlurSigma > 0f)
+                {
+                    if (_itemSurface[k] < 0) return true;
+                    PixelRect rg = _itemRegion[k];
+                    if (it.SubPxX != 0f || it.SubPxY != 0f) rg = new PixelRect(rg.Left - 1, rg.Top - 1, rg.Right + 1, rg.Bottom + 1);   // drawn between pixels
+                    return Overlaps(in rg, in region);
+                }
                 ReadOnlySpan<TilePlacement> placed = frame.PlacementsOf(it.SliceId);
                 for (int p = 0; p < placed.Length; p++)
                     if (Overlaps(PlacementRect(in it, in placed[p]), in region)) return true;
@@ -1533,7 +1576,18 @@ public sealed unsafe partial class D3D12Device
         PixelRect region = _itemRegion[i];
         ItemScissor(in it, ox, oy);
         int down = _itemDown[i];
-        if (down <= 1)
+        if (it.SubPxX != 0f || it.SubPxY != 0f)
+        {
+            // A posed self-blur between whole pixels (CompositeItem.SubPxX): its surface drawn that much further, bilinearly,
+            // clamped to the region it holds (a pooled scratch past it is not this blur's).
+            float fx = it.SubPxX, fy = it.SubPxY;
+            float clampU = ((region.Right - region.Left) / (float)down - 0.5f) / _surfaces!.ScratchW(s);
+            float clampV = ((region.Bottom - region.Top) / (float)down - 0.5f) / _surfaces.ScratchH(s);
+            DrawItemQuad(in it, region.Left - ox + fx, region.Top - oy + fy, region.Right - ox + fx, region.Bottom - oy + fy, ox, oy, feathers,
+                it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.SampleScreen : SliceCompositor.Pso.Sample, _surfaces.ScratchSrv(s),
+                sample: true, 1f / (down * _surfaces.ScratchW(s)), 1f / (down * _surfaces.ScratchH(s)), clampU, clampV);
+        }
+        else if (down <= 1)
             DrawItemQuad(in it, region.Left - ox, region.Top - oy, region.Right - ox, region.Bottom - oy, ox, oy, feathers,
                 it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.LoadScreen : SliceCompositor.Pso.Load, _surfaces!.ScratchSrv(s));
         else

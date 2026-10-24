@@ -165,6 +165,53 @@ internal sealed class WakeDiagnostics
     // timer was DUE, so the queue keeps a per-owner fire tally for this census to print as `timersSeen=` and reopen each window.
     private readonly HostTimerQueue? _timers;
 
+    // ── postsSeen: the cross-thread UI posts (AppHost.Post) drained this window, by owner type. A post is a WAKE the
+    // `kept:` bits never show (a post is not a wake reason: it wakes the loop with a WM_NULL and is drained before the
+    // park and idle gates), so a parked window woken 40 times a second by a background poster printed `kept: frameNeeded`
+    // and nothing that named the poster. Types, not strings: named only when the line prints (no per-post allocation).
+    private const int MaxPostsSeen = 8;
+    private readonly Type?[] _postsSeenTypes = new Type?[MaxPostsSeen];
+    private readonly long[] _postsSeenCounts = new long[MaxPostsSeen];
+    private int _postsSeenCount;
+    private long _postsParked;
+
+    /// <summary>One drained UI post (UI thread): tallied under the type that owns its code — the closure's or lambda
+    /// cache's declaring type, the instance a method group is bound to, or the declaring type of a static method group.
+    /// <paramref name="parked"/> = drained by a parked (minimized / hidden / cloaked) frame.</summary>
+    public void NotePost(Delegate post, bool parked)
+    {
+        if (parked) _postsParked++;
+        Type? t = post.Target?.GetType();
+        if (t is null) { try { t = post.Method.DeclaringType; } catch (NotSupportedException) { } }
+        // A compiler-generated closure / lambda cache (`<>c`, `<>c__DisplayClass…`) names its declaring type.
+        while (t is { DeclaringType: not null } && t.Name.StartsWith('<')) t = t.DeclaringType;
+        if (t is null) return;
+        int idx = -1;
+        for (int j = 0; j < _postsSeenCount; j++)
+            if (_postsSeenTypes[j] == t) { idx = j; break; }
+        if (idx < 0)
+        {
+            if (_postsSeenCount >= MaxPostsSeen) return;   // rare overflow: the window already names 8 distinct posters
+            idx = _postsSeenCount++;
+            _postsSeenTypes[idx] = t;
+            _postsSeenCounts[idx] = 0;
+        }
+        _postsSeenCounts[idx]++;
+    }
+
+    /// <summary>Append <c>postsSeen=N(parked=P):Type×posts,…</c> for the window just closed.</summary>
+    internal void AppendPostsSeen(System.Text.StringBuilder sb)
+    {
+        sb.Append(CultureInfo.InvariantCulture, $" | postsSeen={_postsSeenCount}(parked={_postsParked})");
+        if (_postsSeenCount == 0) return;
+        sb.Append(':');
+        for (int i = 0; i < _postsSeenCount; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(_postsSeenTypes[i]!.Name).Append(CultureInfo.InvariantCulture, $"×{_postsSeenCounts[i]}");
+        }
+    }
+
     // Why each UI frame that PUBLISHED a scene (and so owes the glass a present) ran, one bucket per frame (see
     // ClassifyUiPresent). The `kept:`/`sole:` lists say which wake bits were set; this says what the present was FOR.
     private readonly long[] _uiPresentCause = new long[UiPresentCauseCount];
@@ -445,6 +492,7 @@ internal sealed class WakeDiagnostics
         // Host timers that fired this window, by owner component (the `timer` bit above only says one was due), and what the
         // UI frames that published were for — together they name the autonomous tickers behind a present rate.
         _timers?.AppendTimersSeen(sb);
+        AppendPostsSeen(sb);
         AppendUiPresents(sb);
         // UI desired tracks survive until completion feedback is imported. They do not establish that the
         // renderer is moving: report its actual motion decision and presented-frame delta alongside them.
@@ -463,6 +511,8 @@ internal sealed class WakeDiagnostics
         Array.Clear(_uiPresentCause);
         _timers?.ResetFireCensus();
         _pollersSeenCount = 0;   // names/frames stay stale in the arrays past this index — harmless, count gates reads
+        _postsSeenCount = 0;
+        _postsParked = 0;
         _skipMisses = 0;
         _framesRun = 0;
         _framesReconciledOrLaidOut = 0;

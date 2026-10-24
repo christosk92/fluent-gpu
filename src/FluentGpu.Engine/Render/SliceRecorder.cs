@@ -47,8 +47,11 @@ public enum SliceRole : byte
 /// <param name="FreeFades">Distributable edge fades cut without spending the effect budget.</param>
 /// <param name="SigMissWalks">Slices re-recorded although record-clean because an INPUT of their span changed (inherited
 /// opacity, world, clip, chrome — <c>WalkWhy.SigMiss</c>; evidence-diagnostics §A.4).</param>
+/// <param name="PartialKeeps">Slices whose own arena was kept whole although something below them changed: the change lay only
+/// inside child slices, which were walked directly (<see cref="Reentered"/>) instead of re-walking this one.</param>
+/// <param name="Reentered">Dirty nested slices walked directly under a partially kept parent.</param>
 public readonly record struct SliceRecordStats(int Slices, int Walked, int Kept, int EffectSlices, int Folded, long BytesRecorded, bool KeptAll,
-    int AcrylicSlices = 0, int AcrylicFallbacks = 0, int FreeFades = 0, int SigMissWalks = 0);
+    int AcrylicSlices = 0, int AcrylicFallbacks = 0, int FreeFades = 0, int SigMissWalks = 0, int PartialKeeps = 0, int Reentered = 0);
 
 /// <summary>
 /// The recorder partition of the retained tiled content layer (docs/plans/scroll-gpu-retained-tiles-implementation.md
@@ -231,9 +234,12 @@ public sealed partial class SliceRecorder
     private Baked[][] _bakedPrior = new Baked[32][];
     private int[] _bakedPriorCount = new int[32];
     private int _slotCount;   // high-water of used slots
+    // What each slice's cut handed its root walk the last time its parent walked it (SceneRecordingContext.NoteCut): the
+    // inputs a PARTIAL KEEP re-enters a dirty nested slice with, its parent kept whole (audit PERF r2).
+    private SceneRecordingContext.CutEntry[] _cuts = new SceneRecordingContext.CutEntry[32];
 
     private uint _frame;
-    private int _walked, _kept, _effects, _folded, _acrylics, _acrylicFallbacks, _freeFades;
+    private int _walked, _kept, _effects, _folded, _acrylics, _acrylicFallbacks, _freeFades, _partialKeeps, _reentered;
     private long _bytes;
     private bool _keptAll;
 
@@ -322,6 +328,7 @@ public sealed partial class SliceRecorder
         Array.Resize(ref _bakedCount, n);
         Array.Resize(ref _bakedPrior, n);
         Array.Resize(ref _bakedPriorCount, n);
+        Array.Resize(ref _cuts, n);
         for (int i = old; i < n; i++) { _index[i] = new SliceSpan[16]; _indexPrior[i] = new SliceSpan[16]; _baked[i] = new Baked[4]; _bakedPrior[i] = new Baked[4]; }
     }
 
@@ -348,6 +355,7 @@ public sealed partial class SliceRecorder
         _indexPriorCount[s] = 0;
         _bakedCount[s] = 0;
         _bakedPriorCount[s] = 0;
+        _cuts[s] = default;   // a fresh slice has no cut entry until its parent's walk cuts it
         _recs[s] = new Rec
         {
             Live = true, NodeIndex = nodeIndex, Gen = gen, Role = (int)role, Kind = kind, Parent = -1,
@@ -399,14 +407,118 @@ public sealed partial class SliceRecorder
     /// <summary>Keep the slice whole (arena untouched) with every descendant slice it contains.</summary>
     internal void Keep(int slot)
     {
+        KeepSelf(slot);
+        for (int c = _recs[slot].FirstChild; c >= 0; c = _recs[c].NextSibling) Keep(c);
+    }
+
+    /// <summary>Keep the slice's OWN arena whole (registered, not walked) and leave its child slices to the caller — a partial
+    /// keep (<see cref="SceneRecordingContext"/>) keeps or re-enters each of them itself.</summary>
+    internal void KeepSelf(int slot)
+    {
         ref Rec r = ref _recs[slot];
         r.RegFrame = _frame;
         r.Walked = false;
         _kept++;
         CountBudget(in r);
         _acrylicFallbacks += r.AcrylicFallbacks;
-        for (int c = r.FirstChild; c >= 0; c = _recs[c].NextSibling) Keep(c);
     }
+
+    // ── partial keep (audit PERF r2): the slice tree as the re-entry walks it ──────────────────────────────────────────
+    internal int FirstChildOf(int slot) => _recs[slot].FirstChild;
+    internal int NextSiblingOf(int slot) => _recs[slot].NextSibling;
+    internal int ParentOf(int slot) => _recs[slot].Parent;
+    internal SliceRole RoleOf(int slot) => (SliceRole)(_recs[slot].Role & 7);
+    internal int NodeIndexOf(int slot) => _recs[slot].NodeIndex;
+    internal uint GenOf(int slot) => _recs[slot].Gen;
+    internal bool IsLiveSlot(int slot) => (uint)slot < (uint)_slotCount && _recs[slot].Live;
+    internal PoseKind PoseOf(int slot) => _recs[slot].Pose;
+    internal void NotePartialKeep() => _partialKeeps++;
+    internal void NoteReentered() => _reentered++;
+
+    /// <summary>A slice recorded inside its parent's own walk (an item band, a pinned band, a scrollbar thumb, scroll chrome):
+    /// it has no cut of its own to re-enter, so a partial keep keeps or walks it with its parent.</summary>
+    internal static bool IsSubSlice(SliceRole role) => role is SliceRole.Band or SliceRole.PinnedBand or SliceRole.Thumb or SliceRole.Chrome;
+
+    /// <summary>The cut entry of <paramref name="slot"/> (its parent's last walk wrote it; Frame 0 = none).</summary>
+    internal ref SceneRecordingContext.CutEntry CutOf(int slot) => ref _cuts[slot];
+
+    /// <summary>The slot's accumulated posed offset NOW (window DIP): every slice from it up to the root at its current pose —
+    /// what <see cref="Place"/> places it at, and what a walk of it this pass maps its repaint rects by.</summary>
+    internal void CurrentAcc(int slot, SceneRecordingSnapshot scene, out float dx, out float dy)
+    {
+        dx = dy = 0f;
+        for (int s = slot, guard = 0; s > RootSlot && guard < 64; s = _recs[s].Parent, guard++)
+        {
+            OwnDelta(s, scene, out float odx, out float ody);
+            dx += odx; dy += ody;
+        }
+    }
+
+    // probe scratch: node index -> the independent child slot rooted there (stamped per probe)
+    private int[] _probeStamp = [], _probeSlot = [];
+    private int _probeSerial;
+    // the dirty child slots a successful probe re-enters (stamped with the probe)
+    private int[] _reenterStamp = [];
+
+    /// <summary>Open a probe of <paramref name="slot"/>'s unit: stamp the root node of every child slice the unit's walk would
+    /// CUT (its own children, and the children of its sub-slices, recursively). Returns the probe's serial.</summary>
+    internal int BeginProbe(int slot, int nodeCapacity)
+    {
+        if (_probeStamp.Length < nodeCapacity) { Array.Resize(ref _probeStamp, nodeCapacity); Array.Resize(ref _probeSlot, nodeCapacity); }
+        if (_reenterStamp.Length < _recs.Length) Array.Resize(ref _reenterStamp, _recs.Length);
+        if (++_probeSerial == int.MaxValue) { Array.Clear(_probeStamp); Array.Clear(_reenterStamp); _probeSerial = 1; }
+        StampUnit(slot, 0);
+        return _probeSerial;
+    }
+
+    private void StampUnit(int slot, int depth)
+    {
+        if (depth > 64) return;
+        for (int c = _recs[slot].FirstChild; c >= 0; c = _recs[c].NextSibling)
+        {
+            if (!_recs[c].Live) continue;
+            if (IsSubSlice(RoleOf(c))) { StampUnit(c, depth + 1); continue; }
+            int n = _recs[c].NodeIndex;
+            if ((uint)n >= (uint)_probeStamp.Length) continue;
+            _probeStamp[n] = _probeSerial;
+            _probeSlot[n] = c;
+        }
+    }
+
+    /// <summary>The independent child slot of the probed unit rooted at <paramref name="nodeIndex"/>, or −1.</summary>
+    internal int ProbeBoundary(int nodeIndex)
+        => (uint)nodeIndex < (uint)_probeStamp.Length && _probeStamp[nodeIndex] == _probeSerial ? _probeSlot[nodeIndex] : -1;
+
+    internal void MarkReenter(int slot) => _reenterStamp[slot] = _probeSerial;
+
+    // --fg rewalk-validate: the slots a partial keep would have kept this pass (the slice and its sub-slices), re-walked instead
+    private uint[] _expectSame = [];
+
+    /// <summary>Validation: <paramref name="slot"/> (and the sub-slices recorded in its walk) would have been kept by a partial
+    /// keep this pass; its full re-walk must write exactly the bytes it holds.</summary>
+    internal void ExpectSameBytes(int slot) => StampExpect(slot, 0);
+
+    private void StampExpect(int slot, int depth)
+    {
+        if (_expectSame.Length < _recs.Length) Array.Resize(ref _expectSame, _recs.Length);
+        _expectSame[slot] = _frame;
+        if (depth > 64) return;
+        for (int c = _recs[slot].FirstChild; c >= 0; c = _recs[c].NextSibling)
+            if (_recs[c].Live && IsSubSlice(RoleOf(c))) StampExpect(c, depth + 1);
+    }
+
+    internal bool ExpectingSameBytes(int slot) => (uint)slot < (uint)_expectSame.Length && _expectSame[slot] == _frame;
+
+    /// <summary>Validation, at the end of a re-walk of a slot <see cref="ExpectSameBytes"/> stamped: check it and its sub-slices.</summary>
+    internal void ValidateExpected(int slot, int depth = 0)
+    {
+        if (!ExpectingSameBytes(slot)) return;
+        SceneRecordingContext.ValidateKept(this, slot, _arenas[slot]!);
+        if (depth > 64) return;
+        for (int c = _recs[slot].FirstChild; c >= 0; c = _recs[c].NextSibling)
+            if (_recs[c].Live && IsSubSlice(RoleOf(c)) && _recs[c].RegFrame == _frame) ValidateExpected(c, depth + 1);
+    }
+    internal bool IsMarkedReenter(int slot, int probe) => (uint)slot < (uint)_reenterStamp.Length && _reenterStamp[slot] == probe;
 
     internal RectF BoundsOf(int slot) => _recs[slot].Bounds;
 
@@ -664,7 +776,7 @@ public sealed partial class SliceRecorder
     {
         if (++_frame == 0) _frame = 1;
         _passInlineSticky = ForceInlineStickyClip;
-        _walked = _kept = _effects = _folded = _acrylics = _acrylicFallbacks = _freeFades = 0;
+        _walked = _kept = _effects = _folded = _acrylics = _acrylicFallbacks = _freeFades = _partialKeeps = _reentered = 0;
         _sigMissWalks = 0;
         _bytes = 0;
         _keptAll = false;
@@ -887,7 +999,7 @@ public sealed partial class SliceRecorder
         }
         _recs[RootSlot].RegFrame = _frame;
         LastStats = new SliceRecordStats(LiveSlices, _walked, _kept, _effects, _folded, _bytes, keptAll,
-            _acrylics, _acrylicFallbacks, _freeFades, _sigMissWalks);
+            _acrylics, _acrylicFallbacks, _freeFades, _sigMissWalks, _partialKeeps, _reentered);
     }
 
     /// <summary>A composite-only turn (no pass): the census reports it.</summary>
@@ -1968,7 +2080,11 @@ public sealed partial class SliceRecorder
         {
             layer.HasLayer = true;
             layer.Layer = PosedLayer(in m, pdx, pdy, sticky, in stickyWc);
-            layer.InnerClip = m.Has(CompositeSliceFlags.InnerClip) ? Offset(m.InnerClip.DeviceRect, pdx, pdy) : default;
+            // A POSED layer slice (a self-blur whose own translate is its pose — SceneRecordingContext's layer cut) recorded its
+            // layer rect and blur source pose-free: they ride its own pose too. Its composite clip is its parent's and does not.
+            float ldx = pdx, ldy = pdy;
+            if (c.Pose == PoseKind.Effect) { ldx = cdx; ldy = cdy; layer.Layer = layer.Layer with { DeviceRect = Offset(m.Layer.DeviceRect, cdx, cdy) }; }
+            layer.InnerClip = m.Has(CompositeSliceFlags.InnerClip) ? Offset(m.InnerClip.DeviceRect, ldx, ldy) : default;
         }
 
         // An acrylic slice: its frosted backdrop composites first (from everything painted before it), then its content.
@@ -2416,6 +2532,7 @@ public sealed partial class SliceRecorder
             if (id < 0) continue;
 
             ref SliceRow row = ref table.Row(id);
+            row.ContentKey = ContentKey(e.Slot, e.Segment, ox, oy, scale);
             int arenaBase = withStreams ? StreamOffsetOf(e.Slot) : 0;
             row.StreamBase = arenaBase;
             row.DrawListStart = arenaBase + sg.ByteStart;
@@ -2533,12 +2650,21 @@ public sealed partial class SliceRecorder
             }
             // A Screen-blended or feedback item never hides what is under it: its result depends on the destination.
             bool claimsCover = !r.Screen && !r.HasFeedback;
+            // A POSED self-blur (its own translate is its pose): the whole-px placement above, plus what it falls short of the
+            // exact one — the backend draws the blurred surface that much further, bilinearly (CompositeItem.SubPxX).
+            float subX = 0f, subY = 0f;
+            if (r.Pose == PoseKind.Effect && effect && e.HasLayer && sigma > 0f && !fractional)
+            {
+                subX = e.AccDx * scale - MathF.Round(e.AccDx * scale);
+                subY = e.AccDy * scale - MathF.Round(e.AccDy * scale);
+            }
             AddItem(new CompositeItem(id, posedImage ? CompositeKind.Image : lowRes > 0 || inline ? CompositeKind.Direct : effect ? CompositeKind.Region : CompositeKind.Tiles, transform, alpha,
                 clipPx,
                 RadiiPx(e.RoundR, scale), feather, sigma, default, r.Screen ? CompositeItem.BlendScreen : (byte)0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
                 feather2, default, e.Dist.Count, lowRes,
                 claimsCover && !posedImage ? OpaquePx(in sg.Opaque, in e, scale, alpha, sigma, in feather, in feather2, in clipPx) : default,
-                r.HasFeedback ? r.Feedback.Spec : default, r.HasFeedback ? r.Feedback.Warp : default, r.HasFeedback ? r.Feedback.EffectiveDecay : 0f),
+                r.HasFeedback ? r.Feedback.Spec : default, r.HasFeedback ? r.Feedback.Warp : default, r.HasFeedback ? r.Feedback.EffectiveDecay : 0f,
+                subX, subY),
                 in e.Layer, in e.Dist, in e);
         }
         while (groupDepth > 0) { int at = _groupOpenAt[--groupDepth]; _items[at] = _items[at] with { GroupCount = _itemCount - at - 1 }; }

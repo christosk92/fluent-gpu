@@ -494,7 +494,22 @@ float4 PSMain(VSOutG i) : SV_Target
         _bodyVersionSeen = v;
         foreach (var kv in _runCache) ReturnQuads(kv.Value.Glyphs);
         _runCache.Clear();
+        _runCacheEpoch++;
     }
+
+    /// <summary>Moves whenever a shaped run (or an icon) may have LEFT the caches: a sweep that evicted any run, a body-font
+    /// change, an atlas reset, an atlas growth. A stream prepared (<see cref="BeginPreparation"/>) while it read some value has
+    /// every run and icon it touched still cached for as long as it reads that value — the device skips re-preparing an
+    /// unchanged stream on exactly that (audit PERF r2).</summary>
+    internal int RunCacheEpoch => _runCacheEpoch;
+    private int _runCacheEpoch;
+
+    /// <summary>The frame counter run ages are measured in (<see cref="BeginFrame"/> increments it).</summary>
+    internal int Frame => _frame;
+
+    /// <summary>Apply a pending body-font change NOW (it evicts every run and moves <see cref="RunCacheEpoch"/>), so a caller
+    /// deciding which streams to skip sees the epoch the frame's shaping will run under.</summary>
+    internal void SyncBodyFontNow() => SyncBodyFont();
 
     /// <summary>The glyph realization's size key: the DEVICE em in 10.6 fixed point (canon text.md §3.1 "SizePx: size
     /// AFTER DPI scale, quantized"). The bitmap is rasterized from THIS value, so "same key ⇒ same pixels" holds by
@@ -712,6 +727,7 @@ float4 PSMain(VSOutG i) : SV_Target
         _iconCache.Clear();
         foreach (var kv in _runCache) ReturnQuads(kv.Value.Glyphs);
         _runCache.Clear();
+        _runCacheEpoch++;
         Diag.Count("text.atlas", "generation-reset");
         Diag.Event("text.atlas", $"generation reset #{_atlas.Epoch} (atlas full at {ATLAS}x{ATLAS})");
     }
@@ -1402,6 +1418,7 @@ float4 PSMain(VSOutG i) : SV_Target
         foreach (var k in _evictScratch)
             if (_runCache.Remove(k, out var dead))
                 ReturnQuads(dead.Glyphs);
+        if (_evictScratch.Count != 0) _runCacheEpoch++;
         _evictScratch.Clear();
     }
 
@@ -1545,6 +1562,7 @@ float4 PSMain(VSOutG i) : SV_Target
             _texInitialized = false;
             foreach (var kv in _runCache) ReturnQuads(kv.Value.Glyphs);
             _runCache.Clear(); // coordinates survive; every normalized UV and phase stride must be rebuilt
+            _runCacheEpoch++;
             Diag.Count("text.atlas", "capacityGrow");
         }
         finally

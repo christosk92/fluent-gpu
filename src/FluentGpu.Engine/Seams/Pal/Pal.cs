@@ -751,8 +751,9 @@ public interface IPlatformWindow : IDisposable
     /// show/hide/reorder, location change, cloak/uncloak of a top-level window), so a host re-asks
     /// <see cref="CopyOccluderRectsPx"/> only when it moved. 0 means the backend does not track occlusion (the default:
     /// headless, or a failed hook), and the host never parks the window for being covered. The backend also wakes the host's
-    /// loop (<see cref="Wake"/>) when it changes, so an un-cover is seen at once even by a parked host that blocks on messages.
-    /// Reading it may install the hooks (once, on the calling UI thread).</summary>
+    /// loop (<see cref="Wake"/>) when it changes, so an un-cover is seen at once even by a cover-parked host that blocks on
+    /// messages. Reading it may install the hooks (on the calling UI thread); a minimized or hidden window reads 0 and holds
+    /// none (nothing can cover it, and its restore or show is a message), so desktop activity never wakes it.</summary>
     long OcclusionEpoch => 0;
 
     /// <summary>F118: copy into <paramref name="into"/> the visible bounds (physical virtual-screen px) of the OPAQUE top-level

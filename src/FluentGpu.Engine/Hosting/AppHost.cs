@@ -2292,6 +2292,9 @@ public sealed partial class AppHost : IDisposable
                 else
                 {
                     PathRealizationCache.Shared.NextFrame();   // the slab's only compaction point: before a record, never between it and its encode
+                    // A later record of a publication already recorded (a motion turn) sees only its own poses as dirty: the UI's
+                    // dirt of this publication went into that first record (SceneRecordingSnapshot.ConsumeUiDirt).
+                    if (!fresh) sceneFrame.Scene.ConsumeUiDirt();
                     stats = sceneFrame.Record(_renderCommands, _renderSpans, direct ? null : _renderSlices, publicationGap);
                     _lastRecordedScene = rf.PublishSeq;
                 }
@@ -5574,8 +5577,10 @@ public sealed partial class AppHost : IDisposable
         //    minutes was still drained WHOLE in one frame. Capping the slice turns a pathological backlog into a bounded
         //    per-frame cost; the remainder re-arms _frameNeeded below so the loop keeps producing frames until it drains.
         int budget = Math.Min(_uiPosts.Count, MaxUiPostsPerDrain);
+        bool parked = _wasParked;
         while (budget-- > 0 && _uiPosts.TryDequeue(out var a))
         {
+            _wakeDiag?.NotePost(a, parked);
             // A posted action must never take down the frame — but a swallowed exception must never be SILENT either:
             // until 2026-09-25 this catch was empty, and an app-level fault posted to the UI thread vanished without a
             // trace (Wavee's `--crash-probe throw` ran for 90 s "healthy"). Route it to the diagnostic sink the host

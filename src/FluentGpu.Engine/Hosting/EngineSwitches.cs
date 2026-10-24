@@ -81,6 +81,9 @@ public enum ImageAtlasExperiment : byte
 /// the A/B arm). <c>present-validate</c> — every primary composite is shadow-composited whole and compared with the back
 /// buffer, and every Present1's dirty rects are checked against what changed since the last presented frame.
 /// <c>present-structure-diff</c> — an item-structure change is diffed instead of taking the whole frame (investigation).
+/// <c>no-partial-keep</c> — a slice with a dirty nested slice re-walks whole instead of keeping its own arena and walking only
+/// the nested one (the A/B arm, <c>SceneRecorder.PartialKeep.cs</c>). <c>rewalk-validate</c> — every partial keep is re-walked
+/// instead and checked: the bytes it would have kept, the inputs it would have re-entered with, the offsets it would have used.
 /// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
@@ -270,6 +273,8 @@ public static class EngineSwitches
             case "group-repair-validate": GroupRepairValidate = true; return true;
             case "no-partial-raster": FluentGpu.Render.Tiles.TileDamage.Enabled = false; return true;
             case "damage-validate": FluentGpu.Render.Tiles.TileDamage.Validate = true; return true;
+            case "rewalk-validate": FluentGpu.Render.SceneRecordingContext.PartialKeepValidate = true; return true;
+            case "no-partial-keep": FluentGpu.Render.SceneRecordingContext.PartialKeepEnabled = false; return true;
             case "damage-log": FluentGpu.Render.Tiles.TileDamage.Log = true; return true;
             case "no-precise-present": FluentGpu.Render.Tiles.TileDamage.PrecisePresent = false; return true;
             case "present-structure-diff": FluentGpu.Render.Tiles.TileDamage.PresentStructureDiff = true; return true;

@@ -139,6 +139,7 @@ public sealed unsafe partial class D3D12Device
         PpMixRect(ref h, it.Feather.Rect); PpMixRect(ref h, it.Feather2.Rect);
         Mix(ref h, (ulong)(uint)it.Feather.GetHashCode() << 32 | (uint)it.Feather2.GetHashCode());
         if (it.Kind == CompositeKind.Backdrop) Mix(ref h, (ulong)(uint)it.Acrylic.GetHashCode());
+        Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.SubPxX) << 32 | BitConverter.SingleToUInt32Bits(it.SubPxY));
         return h;
     }
 
@@ -316,7 +317,13 @@ public sealed unsafe partial class D3D12Device
                     // a prepared surface (group, self-blur, degraded / low-resolution segment): its region or its chunks;
                     // an inline segment: its clip ∩ painted bounds (it prepared nothing)
                     if (InlineDirect(in it) && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) foot = PpIntersect(InlineFoot(in frame, in it), in sci);
-                    if (_itemSurface[i] >= 0) foot = PpIntersect(in _itemRegion[i], in sci);
+                    if (_itemSurface[i] >= 0)
+                    {
+                        PixelRect rg = _itemRegion[i];
+                        // a posed self-blur drawn between whole pixels reaches one pixel further on its leading sides
+                        if (it.SubPxX != 0f || it.SubPxY != 0f) rg = new PixelRect(rg.Left - 1, rg.Top - 1, rg.Right + 1, rg.Bottom + 1);
+                        foot = PpIntersect(in rg, in sci);
+                    }
                     int end = _itemChunkStart[i] + _itemChunkCount[i];
                     for (int c = _itemChunkStart[i]; c < end; c++) foot = PpUnion(in foot, PpIntersect(_chunks[c].Rect, in sci));
                     ulong s = sig;
