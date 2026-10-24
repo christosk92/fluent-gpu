@@ -2163,14 +2163,19 @@ public sealed class FakeImageDecoder : IImageDecoder
             var (id, seed, w, h) = _pending.Dequeue();
             int bytes = w * h * 4;
             if (_scratch.Length < bytes) _scratch = new byte[bytes];
-            FillPattern(_scratch, seed, w, h);
+            FillPattern(_scratch.AsSpan(0, bytes), seed, w, h);
             onPixels(id, _scratch.AsSpan(0, bytes), w, h);   // premultiplied BGRA (opaque ⇒ premul == straight)
             onComplete(id, true, w, h, ImageFailureKind.None, 1);
         }
     }
 
+    /// <summary>Paints the pattern this decoder gives <paramref name="source"/> at <paramref name="w"/> x <paramref name="h"/> into <paramref name="bgra"/>
+    /// (premultiplied BGRA, opaque; at least w * h * 4 bytes): what an app that measures an image's own pixels (a scrim's luminance map) must read
+    /// while this decoder paints it, so its measurement agrees with the frame.</summary>
+    public static void Paint(string? source, Span<byte> bgra, int w, int h) => FillPattern(bgra, SeedOf(source), Math.Max(1, w), Math.Max(1, h));
+
     // A stable per-source diagonal gradient with a source-derived hue so each decoded tile looks distinct on screen.
-    private static void FillPattern(byte[] buf, uint seed, int w, int h)
+    private static void FillPattern(Span<byte> buf, uint seed, int w, int h)
     {
         uint s = unchecked(seed * 2654435761u);
         byte br = (byte)(80 + (s & 0x7F)), bg = (byte)(80 + ((s >> 7) & 0x7F)), bb = (byte)(80 + ((s >> 14) & 0x7F));
