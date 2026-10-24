@@ -160,7 +160,7 @@ public sealed partial class SliceTable
         _tiles = new TileState[slab];
         _tx = new short[slab];
         _ty = new short[slab];
-        _used = new bool[slab];
+        _used = new bool[slab];   // only [0, _usedHigh) can hold a used entry: every slab sweep stops there
         _pendingFrame = new int[slab];
         _scheduledFrame = new int[slab];
         _usedMs = new long[slab];
@@ -210,9 +210,14 @@ public sealed partial class SliceTable
         get { int n = 0; for (int s = 0; s < SliceCap; s++) if (_live[s]) n++; return n; }
     }
 
+    /// <summary>One past the highest slab index ever marked used (monotonic): no entry at or above it is used, so the
+    /// per-turn sweeps (the census, the exposed-missing count, eviction scans) stop there instead of walking all
+    /// SliceCap × TileCap entries — 16 384 on the primary host, for a page that uses a few hundred (audit PERF).</summary>
+    private int _usedHigh;
+
     public int LiveTiles
     {
-        get { int n = 0; for (int t = 0; t < _used.Length; t++) if (_used[t]) n++; return n; }
+        get { int n = 0; for (int t = 0; t < _usedHigh; t++) if (_used[t]) n++; return n; }
     }
 
     /// <summary>Σ surface bytes (each charged its real extent) of every VISIBLE (order-0) tile requested in the current
@@ -223,7 +228,7 @@ public sealed partial class SliceTable
         get
         {
             long b = 0;
-            for (int t = 0; t < _tiles.Length; t++)
+            for (int t = 0; t < _usedHigh; t++)
             {
                 if (!_used[t]) continue;
                 ref TileState ts = ref _tiles[t];
@@ -260,7 +265,7 @@ public sealed partial class SliceTable
         Array.Clear(_hasVp);
         if ((frame & 15) == 0)
         {
-            for (int t = 0; t < _tiles.Length; t++)
+            for (int t = 0; t < _usedHigh; t++)
                 if (_used[t] && _tiles[t].Surface >= 0 && (long)frame - _tiles[t].LastUsedFrame > IdleEvictFrames) Evict(t);
         }
         // Idle aging is housekeeping, not this frame's budget pressure: the census starts clean after it.
@@ -282,7 +287,7 @@ public sealed partial class SliceTable
     {
         if (_reqCount == 0) return 0;   // the last turn requested nothing (empty viewport): its protected set is empty, so never judge by it
         int n = 0;
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
         {
             if (!_used[t] || _tiles[t].Surface < 0) continue;
             if (!IsStale(nowMs, _usedMs[t], staleMs, _tiles[t].LastUsedFrame == _frame)) continue;
@@ -300,7 +305,7 @@ public sealed partial class SliceTable
     public int EvictAll()
     {
         int n = 0;
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
         {
             if (!_used[t] || _tiles[t].Surface < 0) continue;
             Evict(t);
@@ -315,7 +320,7 @@ public sealed partial class SliceTable
     {
         if (_reqCount == 0) return -1;
         long best = long.MaxValue;
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
         {
             if (!_used[t] || _tiles[t].Surface < 0 || _tiles[t].LastUsedFrame == _frame) continue;
             long due = _usedMs[t] + staleMs - nowMs;
@@ -729,7 +734,7 @@ public sealed partial class SliceTable
     {
         int n = 0;
         BeginStaleSweep();
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
         {
             if (!_used[t]) continue;
             ref TileState ts = ref _tiles[t];
@@ -792,6 +797,7 @@ public sealed partial class SliceTable
         }
 
         _used[slot] = true;
+        if (slot >= _usedHigh) _usedHigh = slot + 1;
         _tx[slot] = tx;
         _ty[slot] = ty;
         _pendingFrame[slot] = int.MinValue;
@@ -838,7 +844,7 @@ public sealed partial class SliceTable
     {
         int best = -1;
         long bestScore = long.MinValue;
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
         {
             if (!_used[t] || _tiles[t].Surface < 0) continue;
             int cls = ClassOf(t);
@@ -852,7 +858,7 @@ public sealed partial class SliceTable
     private void CountEvictable(int minClass, out int count, out long bytes)
     {
         count = 0; bytes = 0;
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
             if (_used[t] && _tiles[t].Surface >= 0 && ClassOf(t) >= minClass) { count++; bytes += BytesOf(_tiles[t]); }
     }
 

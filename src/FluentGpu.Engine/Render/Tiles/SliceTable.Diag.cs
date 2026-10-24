@@ -19,7 +19,7 @@ public sealed partial class SliceTable
         var perSlice = new Dictionary<int, (int Tiles, long Bytes, int Empty, long EmptyBytes, double Painted, double Area, int Visible, int Ahead, int Behind, int Stale)>();
         long total = 0, empty = 0; double painted = 0, area = 0;
         int tiles = 0, emptyTiles = 0, unknown = 0;
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
         {
             if (!_used[t] || _tiles[t].Surface < 0) continue;
             ref readonly TileState ts = ref _tiles[t];
