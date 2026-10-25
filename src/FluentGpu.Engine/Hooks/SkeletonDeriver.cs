@@ -61,10 +61,13 @@ internal static class SkeletonDeriver
             }
             case BoxEl b:
             {
+                // A BOUND extent is declared too (a gutter that eases, a width a signal sizes): the derived box carries the same binding, never
+                // reads it, so a bound-width spacer keeps its width instead of deriving 0 wide.
+                bool wBound = b.Width.IsBound, hBound = b.Height.IsBound;
                 float w = b.Width.ValueOr(float.NaN);
                 float h = b.Height.ValueOr(float.NaN);
-                if (float.IsNaN(w) && !float.IsNaN(b.MinWidth)) w = b.MinWidth;
-                if (float.IsNaN(h) && !float.IsNaN(b.MinHeight)) h = b.MinHeight;
+                if (!wBound && float.IsNaN(w) && !float.IsNaN(b.MinWidth)) w = b.MinWidth;
+                if (!hBound && float.IsNaN(h) && !float.IsNaN(b.MinHeight)) h = b.MinHeight;
 
                 // A statically invisible leaf is chrome reserved for another interaction state (the canonical case is
                 // MediaCard's Grow=1 hover plate: Opacity=0, HoverOpacity=1). It participates in the real ZStack but is
@@ -76,20 +79,32 @@ internal static class SkeletonDeriver
                 // A box DECLARED zero on an axis (`Height = collapsed ? 0f : h`, a 0-wide strut) has no extent to stand in for: as a bar
                 // its 0 read as "unset" and took the default 14, so a blank row the real page lays out at 0 grew a page-wide stripe and
                 // the page settled up by 14 when the data landed. Keep its slot as declared, as SkeletonMode.Off does.
-                if (w == 0f || h == 0f)
+                if ((!wBound && w == 0f) || (!hBound && h == 0f))
                     return Spacer(b, s);
 
                 // Empty conditional branches (`condition ? real : new BoxEl()`) and paint-only layers such as a hero
                 // gradient are not content. They must remain zero/transparent; mapping them to the default 14px bar
                 // creates phantom full-width rows, while a full-size gradient becomes a second image-sized slab.
-                bool noDeclaredExtent = float.IsNaN(w) && float.IsNaN(h) && float.IsNaN(b.Basis) && b.Grow <= 0f;
+                bool noDeclaredExtent = !wBound && !hBound && float.IsNaN(w) && float.IsNaN(h) && float.IsNaN(b.Basis) && b.Grow <= 0f;
                 if (noDeclaredExtent || b.Gradient is not null || b.Acrylic is not null)
                     return EmptySpacer(b.Margin, b.AlignSelf);
+
+                // AIR: an unpainted box that is not sized on BOTH axes by plain numbers (a strut with only a height, a flexible spacer, a bound-width
+                // gutter) is space, not a placeholder: as a bar its open axis stretched across the column (a page-wide stripe the real page never
+                // draws) and a bound axis read as unset. It keeps its slot as declared. A placeholder is a box that paints (a cover plate, a swatch)
+                // or a slot sized on both axes (a title slot, a verb's circle), which stays a bar of its size.
+                bool paints = b.Fill.IsBound || b.Fill.ValueOr(ColorF.Transparent).A > 0f || b.BorderWidth > 0f || b.BorderBrush is not null;
+                if (!paints && (wBound || hBound || float.IsNaN(w) || float.IsNaN(h)))
+                    return Spacer(b, s);
 
                 // Childless box (avatar/chip/cover/swatch): a shimmer bar of its declared size + corners + grow.
                 // Preserve MorphId so a connected-animation cover slot stays a Hero participant THROUGH the skeleton
                 // (the art flies into the reserved slot immediately, without waiting for the async content to land).
-                return Bar(s, w, h, b.Grow, b.Corners.ValueOr(default), b.Margin, b.AlignSelf, b.MorphId);
+                return Bar(s, w, h, b.Grow, b.Corners.ValueOr(default), b.Margin, b.AlignSelf, b.MorphId) with
+                {
+                    Width = wBound ? b.Width : w,
+                    Height = hBound ? b.Height : (float.IsNaN(h) || h <= 0f ? 14f : h),
+                };
             }
 
             case TextEl t:
@@ -278,12 +293,19 @@ internal static class SkeletonDeriver
         HitTestVisible = false,
     };
 
-    // SkeletonMode.Off: an empty box of the same declared size — keeps the layout slot without a shimmer bar.
+    // SkeletonMode.Off: an empty box of the same declared size — keeps the layout slot without a shimmer bar. A box's extents are copied as they
+    // are declared, a binding included (the spacer follows the same signal), with its flex sizing (grow, shrink, basis, min / max).
     private static Element Spacer(Element real, in SkeletonStyle s)
     {
+        if (real is BoxEl box)
+            return new BoxEl
+            {
+                Width = box.Width, Height = box.Height, Grow = box.Grow, Shrink = box.Shrink, Basis = box.Basis,
+                MinWidth = box.MinWidth, MinHeight = box.MinHeight, MaxWidth = box.MaxWidth, MaxHeight = box.MaxHeight,
+                Margin = box.Margin, AlignSelf = box.AlignSelf, IsEnabled = false, HitTestVisible = false,
+            };
         (float w, float h, float grow, Edges4 m, FlexAlign a) = real switch
         {
-            BoxEl b => (b.Width.ValueOr(float.NaN), b.Height.ValueOr(float.NaN), b.Grow, b.Margin, b.AlignSelf),
             TextEl t => (t.Width, BarHeight(t.Size, s), t.Grow, t.Margin, t.AlignSelf),
             ImageEl img => (img.Width, img.Height, 0f, img.Margin, img.AlignSelf),
             _ => (float.NaN, float.NaN, 0f, default, FlexAlign.Auto),
