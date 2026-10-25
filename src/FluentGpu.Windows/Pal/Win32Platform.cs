@@ -1513,6 +1513,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     public int PumpScroll(in FrameClock clock, InputEventRing ring)
     {
         if (_dm is { Enabled: true } dm && dm.Live) dm.UpdateFrame(in clock);
+        PumpSyntheticScroll(in clock);
         TryEmitFallbackLift();
         return _queue.MoveTo(ring);
     }
@@ -1520,7 +1521,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// <summary>True while DirectManipulation has a contact engaged/pending or RUNNING, or a touchpad wheel-fallback
     /// gesture is live — either way the host must produce one frame per refresh so <see cref="PumpScroll"/> is pumped
     /// every vblank (scroll-v3-plan-2026-08-17.md §5.2).</summary>
-    public bool ScrollProducerLive => (_dm?.Live ?? false) || _fbActive;
+    public bool ScrollProducerLive => (_dm?.Live ?? false) || _fbActive || (_syntheticScroll?.Live ?? false);
 
     private void DispatchQueuedMessage(MSG* msg)
     {
