@@ -23,7 +23,8 @@ public sealed partial class FlexLayout
     private bool _mcArranging;
     private long _mcLastDump;
     private long _mcFrames, _mcReal, _mcFirst, _mcRepeat, _mcNoise, _mcSmall, _mcReal1, _mcInf, _mcArrangePhase, _mcText, _mcRow, _mcCol,
-                 _mcRootSolves, _mcSubtreeSolves, _mcTextNew, _mcRepeatText, _mcNewSame, _mcNewDiff, _mcNewSameText, _mcFlatHits;
+                 _mcRootSolves, _mcSubtreeSolves, _mcTextNew, _mcRepeatText, _mcNewSame, _mcNewDiff, _mcNewSameText, _mcFlatHits,
+                 _mcCleanOtherWidth, _mcCleanOtherWidthFirst;
 
     private void CensusFrameStart()
     {
@@ -37,6 +38,13 @@ public sealed partial class FlexLayout
     private void CensusMeasure(NodeHandle node, float availW, bool text, bool row)
     {
         _mcReal++;
+        // A real measure of a CLEAN subtree whose cross-pass ring holds another width: what a ring that carried intervals could answer.
+        if (_scene.IsLayoutClean(node) && node.Raw.Index < (uint)_memo.Length)
+        {
+            ref MeasureMemo rm = ref _memo[node.Raw.Index];
+            bool other = (rm.Ring0NodeGen == node.Raw.Gen && !rm.Ring0AvailW.Equals(availW)) || (rm.Ring1NodeGen == node.Raw.Gen && !rm.Ring1AvailW.Equals(availW));
+            if (other) { _mcCleanOtherWidth++; if (!_mcNodes.ContainsKey((int)node.Raw.Index)) _mcCleanOtherWidthFirst++; }
+        }
         if (_mcArranging) _mcArrangePhase++;
         if (text) _mcText++; else if (row) _mcRow++; else _mcCol++;
         int i = (int)node.Raw.Index;
@@ -75,9 +83,11 @@ public sealed partial class FlexLayout
             $"[measure-census] frames={_mcFrames} realMeasures={_mcReal} first={_mcFirst} repeatSameWidth={_mcRepeat} (text {_mcRepeatText}) " +
             $"newWidth: noise<0.01={_mcNoise} <1={_mcSmall} >=1={_mcReal1} unbounded={_mcInf} (text {_mcTextNew}) arrangePhase={_mcArrangePhase} " +
             $"kind: text={_mcText} row={_mcRow} col/other={_mcCol} rootSolves={_mcRootSolves} subtreeSolves={_mcSubtreeSolves} nodesCreatedTotal={created} " +
-            $"newWidthResult: same={_mcNewSame} (text {_mcNewSameText}) different={_mcNewDiff} intervalHits={_mcFlatHits}");
+            $"newWidthResult: same={_mcNewSame} (text {_mcNewSameText}) different={_mcNewDiff} intervalHits={_mcFlatHits} " +
+            $"cleanRingOtherWidth={_mcCleanOtherWidth} (first in frame {_mcCleanOtherWidthFirst})");
         _mcFrames = _mcReal = _mcFirst = _mcRepeat = _mcNoise = _mcSmall = _mcReal1 = _mcInf = _mcArrangePhase = _mcText = _mcRow = _mcCol = 0;
         _mcRootSolves = _mcSubtreeSolves = _mcTextNew = _mcRepeatText = _mcNewSame = _mcNewDiff = _mcNewSameText = _mcFlatHits = 0;
+        _mcCleanOtherWidth = _mcCleanOtherWidthFirst = 0;
     }
 
     /// <summary>The general path's result for a real measure: for a NEW-width re-measure, whether it came out the same size as the
