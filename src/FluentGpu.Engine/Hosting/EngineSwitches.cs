@@ -95,7 +95,14 @@ public enum ImageAtlasExperiment : byte
 /// is unchanged (the A/B arm, <c>SceneRecordingSnapshot.TryCaptureLedgered</c>).
 /// <c>shape-census</c> — every text layout engine reports its shape-cache hits and misses (first-ever / already shaped by
 /// another engine / re-shaped after its own eviction), shaping and re-wrap time and retained bytes every 10 s (diagnostic).
-/// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).</item>
+/// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).
+/// <c>raw-phase</c> — a slice under a composited transition layer rasters at its raw float placement even when that is a
+/// whole pixel up to float noise (<c>SliceRecorder.FractionalPx</c>; the A/B arm). <c>phase-validate</c> — every composited
+/// tile whose placement was snapped is re-rastered at the raw phase into a shadow surface and compared.
+/// <c>no-op-footprints</c> — a tile replay decodes every op of its segment instead of skipping the primitives whose
+/// footprint misses the tile (the A/B arm). <c>footprint-validate</c> — composited tiles are re-rastered without the skip
+/// into a shadow surface and compared. <c>no-defer-geometry</c> — a non-visible tile of a slice whose geometry is moving
+/// rasters every turn as before (the A/B arm of <c>SliceTable.DeferMovingGeometry</c>).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -284,6 +291,11 @@ public static class EngineSwitches
             case "group-repair-validate": GroupRepairValidate = true; return true;
             case "no-partial-raster": FluentGpu.Render.Tiles.TileDamage.Enabled = false; return true;
             case "damage-validate": FluentGpu.Render.Tiles.TileDamage.Validate = true; return true;
+            case "phase-validate": FluentGpu.Render.Tiles.TileDamage.PhaseValidate = true; return true;
+            case "footprint-validate": FluentGpu.Render.Tiles.TileDamage.FootprintValidate = true; return true;
+            case "no-op-footprints": FluentGpu.Render.Tiles.TileDamage.OpFootprints = false; return true;
+            case "no-defer-geometry": FluentGpu.Render.Tiles.SliceTable.DeferMovingGeometry = false; return true;
+            case "raw-phase": FluentGpu.Render.SliceRecorder.CanonicalPhase = false; return true;
             case "rewalk-validate": FluentGpu.Render.SceneRecordingContext.PartialKeepValidate = true; return true;
             case "capture-validate": FluentGpu.Scene.SceneRecordingSnapshot.ParityValidateEveryCapture = true; return true;
             case "no-ledgered-capture": FluentGpu.Scene.SceneRecordingSnapshot.LedgeredCaptureEnabled = false; return true;

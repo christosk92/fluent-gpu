@@ -1427,15 +1427,16 @@ internal sealed partial class SceneRecordingContext
         }
         // Inside an inline group layer no slice may be cut (its marker would sit inside a layer the tile replay applies to
         // nothing): the subtree records inline with its pose baked, and re-records when that pose moves.
-        if (stats.InlineLayerDepth > 0 || (pose == SliceRecorder.PoseKind.Effect && !sl.EffectBudgetLeft))
+        if (stats.InlineLayerDepth > 0 || (pose == SliceRecorder.PoseKind.Effect && !sl.EffectBudgetFor(idx, node.Raw.Gen, SliceRole.Main)))
         {
             if (pose == SliceRecorder.PoseKind.Effect) sl.NoteFolded();
+            if (stats.InlineLayerDepth == 0) sl.NoteRefusedCut(stats.CurSlot);   // a budget decision a later pass may reverse
             sl.AddBaked(stats.CurSlot, node, p.LocalTransform);
             return false;
         }
         SliceKind kind = pose == SliceRecorder.PoseKind.Content ? SliceKind.Scroll : SliceKind.Effect;
         int slot = sl.FindOrCreate(idx, node.Raw.Gen, SliceRole.Main, kind);
-        if (slot < 0) { sl.AddBaked(stats.CurSlot, node, p.LocalTransform); return false; }
+        if (slot < 0) { sl.NoteRefusedCut(stats.CurSlot); sl.AddBaked(stats.CurSlot, node, p.LocalTransform); return false; }
         sl.SetBudget(slot, SliceRecorder.BudgetClass.Effect);
 
         float ox = b.W * p.OriginX, oy = b.H * p.OriginY;
@@ -1771,17 +1772,22 @@ internal sealed partial class SceneRecordingContext
             var sl = stats.Slices!;
             var budget = isAcrylic ? SliceRecorder.BudgetClass.Acrylic
                 : distributeFade ? SliceRecorder.BudgetClass.FreeFade : SliceRecorder.BudgetClass.Effect;
+            SliceRole role = selfLayerCut ? SliceRole.Layer : SliceRole.Main;
             bool budgetLeft = budget switch
             {
-                SliceRecorder.BudgetClass.Acrylic => sl.AcrylicBudgetLeft,
+                SliceRecorder.BudgetClass.Acrylic => sl.AcrylicBudgetFor((int)node.Raw.Index, node.Raw.Gen, role),
                 SliceRecorder.BudgetClass.FreeFade => true,
-                _ => sl.EffectBudgetLeft,
+                _ => sl.EffectBudgetFor((int)node.Raw.Index, node.Raw.Gen, role),
             };
-            if (stats.InlineLayerDepth > 0 || !budgetLeft) { if (!isAcrylic) sl.NoteFolded(); }
+            if (stats.InlineLayerDepth > 0 || !budgetLeft)
+            {
+                if (!isAcrylic) sl.NoteFolded();
+                if (stats.InlineLayerDepth == 0) sl.NoteRefusedCut(stats.CurSlot);   // a budget decision a later pass may reverse
+            }
             else
             {
-                SliceRole role = selfLayerCut ? SliceRole.Layer : SliceRole.Main;
                 int slot = sl.FindOrCreate((int)node.Raw.Index, node.Raw.Gen, role, SliceKind.Effect);
+                if (slot < 0) sl.NoteRefusedCut(stats.CurSlot);
                 if (slot >= 0 && HasWalkStackHeadroom(ref stats))
                 {
                     sl.SetBudget(slot, budget);
@@ -1950,7 +1956,8 @@ internal sealed partial class SceneRecordingContext
             // of what is painted under / over it (the parent's segments are content-validated per tile; the marker's
             // identity is its node, not its bounds). Past the budget it records inline — identical pixels.
             var sl = stats.Slices!;
-            int slot = sl.EffectBudgetLeft ? sl.FindOrCreate(nodeIdx, node.Raw.Gen, SliceRole.Main, SliceKind.Effect) : -1;
+            int slot = sl.EffectBudgetFor(nodeIdx, node.Raw.Gen, SliceRole.Main) ? sl.FindOrCreate(nodeIdx, node.Raw.Gen, SliceRole.Main, SliceKind.Effect) : -1;
+            if (slot < 0) sl.NoteRefusedCut(stats.CurSlot);   // folded for want of budget / a slot: a later pass may cut it
             if (slot >= 0 && HasWalkStackHeadroom(ref stats))
             {
                 sl.SetBudget(slot, SliceRecorder.BudgetClass.Effect);

@@ -167,6 +167,7 @@ public sealed unsafe partial class D3D12Device
     private bool ReleaseValidatorsForRecovery()
     {
         ReleaseDamageChecks();
+        ReleasePhaseChecks();
         ReleasePresentChecks();
         bool armed = TileDamage.Validate || TileDamage.PresentValidate;
         if (armed) Console.Error.WriteLine("[damage-validate] device recovered: validator checks released and restarted");

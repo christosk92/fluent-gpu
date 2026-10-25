@@ -116,6 +116,11 @@ internal sealed unsafe class SurfacePool : IDisposable
     }
 
     public ID3D12DescriptorHeap* SrvHeap => _srvHeap;
+
+    /// <summary>Textures this pool created / released since it was built (the raster cost counters: on the owner's UMA
+    /// driver a release zero-fills the texture, so both are real per-turn CPU).</summary>
+    public long TexturesCreated { get; private set; }
+    public long TexturesReleased { get; private set; }
     public int TileCap => _tileCap;
 
     private static void Check(HRESULT hr, string what)
@@ -152,6 +157,7 @@ internal sealed unsafe class SurfacePool : IDisposable
             if (!LayerTargetTrim.CanRelease(_retired[i].Fence, completedFence)) continue;
             D3D12MemoryDiagnostics.Release(_retired[i].Res, "Tiles.Surface");
             _retired[i].Res->Release();
+            TexturesReleased++;
             Interlocked.Add(ref _retiredBytes, -_retired[i].Bytes);
             Interlocked.Decrement(ref _retiredCount);
             _retired.RemoveAt(i);
@@ -557,6 +563,7 @@ internal sealed unsafe class SurfacePool : IDisposable
 
     private ID3D12Resource* CreateTarget(int w, int h, string name)
     {
+        TexturesCreated++;
         D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd = default;
         rd.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_TEXTURE2D;
