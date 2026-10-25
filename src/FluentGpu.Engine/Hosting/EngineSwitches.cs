@@ -83,7 +83,8 @@ public enum ImageAtlasExperiment : byte
 /// <c>present-structure-diff</c> — an item-structure change is diffed instead of taking the whole frame (investigation).
 /// <c>pp-coverage=X</c> — the repaint share of the window from which the composite takes the whole-frame route (default 0.45;
 /// investigation). <c>no-cover-start</c> — a repaint rect inside an opaque occluder clears and composites every item there
-/// instead of starting at the occluder (the A/B arm).
+/// instead of starting at the occluder (the A/B arm). <c>no-zero-cull</c> — the D3D12 decoder draws ops whose effective alpha
+/// is exactly 0 instead of skipping them (the A/B arm).
 /// <c>no-partial-keep</c> — a slice with a dirty nested slice re-walks whole instead of keeping its own arena and walking only
 /// the nested one (the A/B arm, <c>SceneRecorder.PartialKeep.cs</c>). <c>rewalk-validate</c> — every partial keep is re-walked
 /// instead and checked: the bytes it would have kept, the inputs it would have re-entered with, the offsets it would have used.
@@ -282,6 +283,7 @@ public static class EngineSwitches
             case "no-precise-present": FluentGpu.Render.Tiles.TileDamage.PrecisePresent = false; return true;
             case "present-structure-diff": FluentGpu.Render.Tiles.TileDamage.PresentStructureDiff = true; return true;
             case "no-cover-start": FluentGpu.Render.Tiles.TileDamage.CoverStart = false; return true;
+            case "no-zero-cull": FluentGpu.Render.Tiles.TileDamage.ZeroAlphaCull = false; return true;
             case "pp-coverage":
                 if (value is null || !float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float ppc) || !(ppc > 0f) || ppc > 1.01f) return false;
                 FluentGpu.Render.Tiles.TileDamage.PartialPresentMaxCoverage = ppc;

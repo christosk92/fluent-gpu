@@ -2028,6 +2028,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         while (pos + sizeof(int) <= cmds.Length) pos = DecodeOne(cmds, pos);
     }
 
+    /// <summary>An op whose effective alpha is EXACTLY zero (its opacity, or its colour's alpha and the second colour's where the
+    /// op has one) paints nothing and is skipped (audit PERF r3 COMP). Exact by construction: every pipeline it would reach outputs
+    /// premultiplied colour × alpha, so the source is (0, 0, 0, 0), and source-over (dst·(1 − 0) + 0), additive (dst + 0) and
+    /// DestOut (dst·(1 − 0)) all leave the destination unchanged. Nothing else is skipped with it: these ops write no stencil, open
+    /// no clip and feed no counter a later op reads (the rect count is diagnostics; a pending-text flush only batches). An app keeps
+    /// faded-out scrims mounted at opacity 0 (Wavee's sheet scrim, the setup cover): ~5.5 M of home-scroll's 16.5 M composite
+    /// fragments per frame were such fills. <c>--fg no-zero-cull</c> draws them anyway (the A/B arm and identity control).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ZeroAlpha(float opacity, float alpha, float alpha2 = 0f)
+        => FluentGpu.Render.Tiles.TileDamage.ZeroAlphaCull && (opacity == 0f || (alpha == 0f && alpha2 == 0f));
+
     private int DecodeOne(ReadOnlySpan<byte> cmds, int pos)
     {
         int op = MemoryMarshal.Read<int>(cmds.Slice(pos));
@@ -2038,6 +2049,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<FillRoundRectCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<FillRoundRectCmd>();
+                    if (ZeroAlpha(c.Opacity, c.Fill.A, c.FillKind == 1 ? c.ColorB.A : 0f)) break;   // paints nothing (ZeroAlpha)
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
@@ -2154,6 +2166,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawRoundRectStrokeCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>();
+                    if (ZeroAlpha(c.Opacity, c.Color.A)) break;
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
                              RepaintCull.StrokeHalo(c.StrokeWidth))) break;
@@ -2204,6 +2217,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawShadowCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawShadowCmd>();
+                    if (ZeroAlpha(c.Opacity, c.Color.A)) break;
                     // The shadow quad is the caster box TRANSLATED by (OffsetX, OffsetY) and inflated by spread + the
                     // gaussian tail — shift the box, then use the symmetric halo (ShadowPipeline VS).
                     if (Cull(c.Rect.X + c.OffsetX, c.Rect.Y + c.OffsetY, c.Rect.W, c.Rect.H,
@@ -2308,6 +2322,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawGradientRectCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGradientRectCmd>();
+                    if (ZeroAlpha(c.Opacity, 1f)) break;
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
@@ -2334,6 +2349,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawGradientStrokeCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGradientStrokeCmd>();
+                    if (ZeroAlpha(c.Opacity, 1f)) break;
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
                              RepaintCull.StrokeHalo(c.StrokeWidth))) break;

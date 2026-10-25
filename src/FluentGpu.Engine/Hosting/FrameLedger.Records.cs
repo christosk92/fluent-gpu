@@ -200,6 +200,8 @@ public struct LedgerGpuFrame
     public long PsTileRaster, PsOffscreen, PsComposite;
     public int RenderPasses, Draws, CompositeDraws, Reserved;
     public long CompositeQuadPx, CompositeFeatherPx;
+    /// <summary>Back-buffer pixels the composite repainted (the window on the whole-frame route).</summary>
+    public long RepaintPx;
 
     /// <summary>Add <paramref name="ms"/> to the accumulator of <paramref name="kind"/>.</summary>
     public void AddPassMs(GpuPassKind kind, float ms)

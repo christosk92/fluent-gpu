@@ -470,6 +470,7 @@ public sealed unsafe partial class D3D12Device
         if (_ppPartial) for (int k = 0; k < _ppRepaintN; k++) repaintPx += (long)(_ppRepaint[k].Right - _ppRepaint[k].Left) * (_ppRepaint[k].Bottom - _ppRepaint[k].Top);
         else repaintPx = (long)window;
         NoteCompositeCensus(repaintPx, presentPx, dirtyPx, !_ppPartial);
+        _frameRepaintPx = repaintPx;
         LastPartialCoverage = !_ppPartial || window <= 0f ? 1f : RepaintCoverage(window);
         LastPartialRects = _ppPartial ? _ppRepaintN : 0;
         if (_ppPartial) PartialFrameCount++;

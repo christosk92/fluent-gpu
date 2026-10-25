@@ -195,7 +195,7 @@ public sealed partial class AppHost
                 GpuFrameWork wk = ps.Work;
                 gr.PsTileRaster = (long)wk.PsTileRaster; gr.PsOffscreen = (long)wk.PsOffscreen; gr.PsComposite = (long)wk.PsComposite;
                 gr.RenderPasses = wk.RenderPasses; gr.Draws = wk.Draws; gr.CompositeDraws = wk.CompositeDraws;
-                gr.CompositeQuadPx = wk.CompositeQuadPx; gr.CompositeFeatherPx = wk.CompositeFeatherPx;
+                gr.CompositeQuadPx = wk.CompositeQuadPx; gr.CompositeFeatherPx = wk.CompositeFeatherPx; gr.RepaintPx = wk.RepaintPx;
             }
         }
         FrameLedger.RecordGpu(ref gr);

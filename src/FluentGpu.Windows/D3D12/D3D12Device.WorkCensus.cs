@@ -34,7 +34,7 @@ public sealed unsafe partial class D3D12Device
     // the composite pass's draws and quad pixels (CompositeDrawCensus), this submit
     private bool _compositeCensusOn;
     private int _frameCompDraws;
-    private long _frameCompPx, _frameCompFeatherPx;
+    private long _frameCompPx, _frameCompFeatherPx, _frameRepaintPx;
 
     private void EnsureWorkQueries()
     {
@@ -106,7 +106,8 @@ public sealed unsafe partial class D3D12Device
         int issued = _workIssued;
         _workIssued = 0;
         _workIssuedSlot[slot] = issued;
-        _workSlot[slot] = new GpuFrameWork(0, 0, 0, _frameRenderPasses, GpuDrawCount.Frame, _frameCompDraws, _frameCompPx, _frameCompFeatherPx);
+        _workSlot[slot] = new GpuFrameWork(0, 0, 0, _frameRenderPasses, GpuDrawCount.Frame, _frameCompDraws, _frameCompPx, _frameCompFeatherPx,
+            _frameRepaintPx);
         _frameCompDraws = 0; _frameCompPx = 0; _frameCompFeatherPx = 0;
         if (_workHeap == null) return;
         uint b = WorkPhases * (uint)slot;
@@ -163,7 +164,8 @@ public sealed unsafe partial class D3D12Device
     public const int ItemCensusMax = 256;
     /// <summary>One top-level composite item of the latest census frame.</summary>
     public readonly record struct CompositeItemStat(int Item, CompositeKind Kind, int SliceId, int NodeIndex, uint Gen, long FootPx,
-        long PsInvocations, int Draws, bool Inline, bool Opaque, bool Hidden);
+        long PsInvocations, int Draws, bool Inline, bool Opaque, bool Hidden, PixelRect Foot = default, Foundation.RectF Clip = default,
+        Foundation.RectF OpaqueRect = default);
     private volatile int _itemCensusEvery;
     /// <summary>A whole-route composite in this many is a per-item census frame (0 = off). Any thread.</summary>
     public int CompositeItemCensusEvery { get => _itemCensusEvery; set => _itemCensusEvery = value; }
@@ -180,11 +182,13 @@ public sealed unsafe partial class D3D12Device
     private readonly object _itemSnapshotLock = new();
     private int _itemDraws0;
     /// <summary>One painting op of an INLINE census item: its kind and window-px rect (its declared footprint, unclipped).</summary>
-    public readonly record struct CompositeItemOp(int Item, Render.DrawOp Op, float X, float Y, float W, float H);
+    public readonly record struct CompositeItemOp(int Item, Render.DrawOp Op, float X, float Y, float W, float H,
+        float Alpha = 1f, int FillKind = 0, int ClipDepth = 0, Foundation.RectF Clip = default);
     public const int ItemOpsMax = 1024;
     private readonly CompositeItemOp[] _opsPending = new CompositeItemOp[ItemOpsMax];
     private readonly CompositeItemOp[] _opsSnapshot = new CompositeItemOp[ItemOpsMax];
     private int _opsPendingN, _opsSnapshotN;
+    private readonly Foundation.RectF[] _censusClips = new Foundation.RectF[32];
 
     /// <summary>Copy the latest census snapshot's inline ops; returns the count. Any thread.</summary>
     public int CopyCompositeItemOps(Span<CompositeItemOp> dst)
@@ -200,18 +204,42 @@ public sealed unsafe partial class D3D12Device
     /// <summary>List an inline census item's painting ops (SliceOpBounds: the footprint the recorder and the replay cull use).</summary>
     private void ItemCensusOps(in CompositeFrame frame, int i, in Render.Tiles.SliceRow row, in CompositeItem it)
     {
-        ReadOnlySpan<byte> stream = frame.StreamOf(in row);
-        int pos = 0;
         float sc = _frameScale;
-        while (pos + sizeof(int) <= stream.Length && _opsPendingN < ItemOpsMax)
+        float ox = it.Transform.Dx - row.Frame.OriginX, oy = it.Transform.Dy - row.Frame.OriginY;
+        Foundation.RectF[] clips = _censusClips;
+        int depth = 0;
+        Walk(frame.PrefixOf(in row), list: false);
+        Walk(frame.StreamOf(in row), list: true);
+
+        void Walk(ReadOnlySpan<byte> stream, bool list)
         {
-            var op = (Render.DrawOp)System.Runtime.InteropServices.MemoryMarshal.Read<int>(stream[pos..]);
-            int payload = pos + sizeof(int);
-            if (!RepaintStreamSafety.TryBodySize(op, out int body) || payload + body > stream.Length) break;
-            if (Render.Tiles.SliceOpBounds.TryGet(op, stream.Slice(payload, body), out Foundation.RectF b))
-                _opsPending[_opsPendingN++] = new CompositeItemOp(i, op, it.Transform.Dx - row.Frame.OriginX + b.X * sc,
-                    it.Transform.Dy - row.Frame.OriginY + b.Y * sc, b.W * sc, b.H * sc);
-            pos = payload + body;
+            int pos = 0;
+            while (pos + sizeof(int) <= stream.Length && _opsPendingN < ItemOpsMax)
+            {
+                var op = (Render.DrawOp)System.Runtime.InteropServices.MemoryMarshal.Read<int>(stream[pos..]);
+                int payload = pos + sizeof(int);
+                if (!RepaintStreamSafety.TryBodySize(op, out int body) || payload + body > stream.Length) break;
+                ReadOnlySpan<byte> pl = stream.Slice(payload, body);
+                if (op == Render.DrawOp.PushClip)
+                {
+                    var c = System.Runtime.InteropServices.MemoryMarshal.Read<Render.ClipCmd>(pl);
+                    if (depth < clips.Length) clips[depth] = c.DeviceRect;
+                    depth++;
+                }
+                else if (op == Render.DrawOp.PopClip) depth = Math.Max(0, depth - 1);
+                else if (list && Render.Tiles.SliceOpBounds.TryGet(op, pl, out Foundation.RectF b))
+                {
+                    float a = 1f; int kind = 0;
+                    if (op == Render.DrawOp.FillRoundRect)
+                    {
+                        var f = System.Runtime.InteropServices.MemoryMarshal.Read<Render.FillRoundRectCmd>(pl);
+                        a = f.Fill.A * f.Opacity; kind = f.FillKind;
+                    }
+                    Foundation.RectF clip = depth > 0 && depth <= clips.Length ? clips[depth - 1] : default;
+                    _opsPending[_opsPendingN++] = new CompositeItemOp(i, op, ox + b.X * sc, oy + b.Y * sc, b.W * sc, b.H * sc, a, kind, depth, clip);
+                }
+                pos = payload + body;
+            }
         }
     }
 
@@ -304,7 +332,7 @@ public sealed unsafe partial class D3D12Device
         PixelRect f = (uint)i < (uint)_itemFoot.Length ? _itemFoot[i] : default;
         long foot = f.IsEmpty ? 0 : (long)(f.Right - f.Left) * (f.Bottom - f.Top);
         _itemPending[q] = new CompositeItemStat(i, it.Kind, it.SliceId, node, gen, foot, 0, GpuDrawCount.Frame - _itemDraws0,
-            InlineDirect(in it), it.Opaque.W > 0f && it.Opaque.H > 0f, false);
+            InlineDirect(in it), it.Opaque.W > 0f && it.Opaque.H > 0f, false, f, it.Clip, it.Opaque);
         if (r >= 0 && InlineDirect(in it)) ItemCensusOps(in frame, i, in frame.Slices[r], in it);
         _itemCensusN = q + 1;
     }

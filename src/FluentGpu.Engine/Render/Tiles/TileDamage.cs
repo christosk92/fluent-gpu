@@ -78,6 +78,10 @@ public static class TileDamage
     /// below it; default on). <c>--fg no-cover-start</c> clears and composites every item there (the A/B arm and identity control).</summary>
     public static bool CoverStart = true;
 
+    /// <summary>The D3D12 decoder skips an op whose effective alpha is exactly 0 (default on; D3D12Device.ZeroAlpha).
+    /// <c>--fg no-zero-cull</c> draws it anyway (the A/B arm and identity control).</summary>
+    public static bool ZeroAlphaCull = true;
+
     /// <summary><c>--fg present-validate</c>: every primary composite is re-composited whole into a shadow target and
     /// compared with the back buffer, and every Present1's dirty rects are checked to cover every pixel that changed since
     /// the last presented frame (a model of what DWM shows is kept and compared).</summary>

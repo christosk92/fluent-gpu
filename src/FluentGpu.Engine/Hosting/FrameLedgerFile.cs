@@ -209,7 +209,7 @@ public static class FrameLedgerCsv
     public static string Gpu(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Gpu.Length * 160);
-        sb.AppendLine("seq,observedMs,publishedMs,gpuStartMs,gpuEndMs,sampleSeq,submitSeq,missedSamples,gpuMs,passWholeMs,passCount,passesDropped,uploadsMs,bakedBlurMs,clearMs,sceneMs,glyphBandMs,tileRasterMs,offscreenMs,compositeMs,psTile,psOffscreen,psComposite,renderPasses,draws,compositeDraws,compositeQuadPx,compositeFeatherPx");
+        sb.AppendLine("seq,observedMs,publishedMs,gpuStartMs,gpuEndMs,sampleSeq,submitSeq,missedSamples,gpuMs,passWholeMs,passCount,passesDropped,uploadsMs,bakedBlurMs,clearMs,sceneMs,glyphBandMs,tileRasterMs,offscreenMs,compositeMs,psTile,psOffscreen,psComposite,renderPasses,draws,compositeDraws,compositeQuadPx,compositeFeatherPx,repaintPx");
         foreach (ref readonly var r in s.Gpu.AsSpan())
         {
             sb.Append(r.Seq).Append(',');
@@ -221,7 +221,7 @@ public static class FrameLedgerCsv
             T(sb, r.OffscreenMs); T(sb, r.CompositeMs);
             sb.Append(r.PsTileRaster).Append(',').Append(r.PsOffscreen).Append(',').Append(r.PsComposite).Append(',')
               .Append(r.RenderPasses).Append(',').Append(r.Draws).Append(',').Append(r.CompositeDraws).Append(',')
-              .Append(r.CompositeQuadPx).Append(',').Append(r.CompositeFeatherPx);
+              .Append(r.CompositeQuadPx).Append(',').Append(r.CompositeFeatherPx).Append(',').Append(r.RepaintPx);
             sb.AppendLine();
         }
         return sb.ToString();

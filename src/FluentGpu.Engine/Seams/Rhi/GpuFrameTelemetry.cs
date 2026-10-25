@@ -47,8 +47,10 @@ public readonly record struct GpuPassFrameSummary(ulong Sequence, float WholeMs,
 /// <param name="CompositeQuadPx">Quad pixels the composite pass drew (each quad ∩ its scissor): the CPU's count of what
 /// <paramref name="PsComposite"/> measures.</param>
 /// <param name="CompositeFeatherPx">... of those, drawn through the per-pixel analytic feather.</param>
+/// <param name="RepaintPx">Back-buffer pixels the composite repainted: the window on the whole-frame route, the repaint rects'
+/// area on the partial (PRESERVE) route.</param>
 public readonly record struct GpuFrameWork(ulong PsTileRaster, ulong PsOffscreen, ulong PsComposite, int RenderPasses, int Draws,
-    int CompositeDraws, long CompositeQuadPx, long CompositeFeatherPx);
+    int CompositeDraws, long CompositeQuadPx, long CompositeFeatherPx, long RepaintPx = 0);
 
 /// <summary>Bounds of the pass-granular GPU timeline.</summary>
 public static class GpuPassTimeline
