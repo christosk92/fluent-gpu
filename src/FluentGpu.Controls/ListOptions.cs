@@ -359,6 +359,10 @@ public record ListOptions
     public bool IsItemInvokedEnabled { get; init; }
     /// <summary>The invoke callback (WinUI <c>ItemInvoked</c>): the item index, gated by the invoke matrix.</summary>
     public Action<int>? OnInvoked { get; init; }
+    /// <summary>With a selection mode active, a pointer Tap ALSO raises <see cref="OnInvoked"/> (the WinUI ListView's <c>IsItemClickEnabled</c> shape: a
+    /// click selects and acts, so clicking the item already selected still acts; Enter acts; arrows, Space and a Ctrl/Shift click only move and
+    /// select; a DoubleTap's second press does not act twice). Needs <see cref="IsItemInvokedEnabled"/>. Default false: the ItemsView matrix (a Tap only selects).</summary>
+    public bool InvokeOnTap { get; init; }
     /// <summary>Selection-changed callback (WinUI <c>SelectionChanged</c>).</summary>
     public Action? OnChange { get; init; }
     /// <summary>Typeahead text per item (defaults to the string items when they back the view).</summary>

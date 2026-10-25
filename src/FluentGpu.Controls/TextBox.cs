@@ -34,6 +34,8 @@ public static class TextBox
         public bool IsReadOnly { get; init; }
         public bool AcceptsReturn { get; init; }
         public float Height { get; init; } = 32f;   // multi-line: pass the taller box height (WinUI MinHeight stays 32)
+        /// <summary>How the field eases when <see cref="Width"/> changes (a size transition; null: at once). See <see cref="EditableText.WidthTransition"/>.</summary>
+        public LayoutTransition? WidthTransition { get; init; }
         public bool IsEnabled { get; init; } = true;
         public Func<string, bool>? BeforeTextChanging { get; init; }
         public Action<int, int>? OnSelectionChanged { get; init; }
@@ -79,9 +81,10 @@ public static class TextBox
         float w = Math.Max(o.Width, MinWidth);
         float h = Math.Max(o.Height, 32f);       // TextControlThemeMinHeight = 32 (generic.xaml:96)
 
-        Element editor = Embed.Comp(() => new EditableText
+        // The width is RE-PUSHED (a propless embed freezes its fields at mount): a field whose Width option changes follows it.
+        Element editor = Embed.Comp(new EditableText.LiveWidth(w), () => new EditableText
         {
-            Placeholder = placeholder, Width = w, Height = h,
+            Placeholder = placeholder, Width = w, Height = h, WidthTransition = o.WidthTransition,
             Text = text, MaxLength = maxLength, IsReadOnly = isReadOnly, AcceptsReturn = acceptsReturn,
             IsEnabled = isEnabled,
             // ShowDeleteButton: the WinUI TextBox DeleteButton lane — TextBox is the one composer that turns it on

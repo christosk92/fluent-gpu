@@ -1226,10 +1226,9 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             && held.HoldColumns(w > 1f ? perPageColumns : 0, raisePending ? laidOut.CardW : 0f)
             && Context.Scene is { } holdScene && ShelfViewport is { IsNull: false } holdVp && holdScene.IsLive(holdVp) && holdScene.HasScroll(holdVp))
             holdScene.Mark(holdVp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
-        UseLayoutEffect(() =>
-        {
-            if (!_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
-        }, cardW);
+        // The cards' width hint lands in THIS render's flush (the slots read it, never this render), so a re-fit draws the cards at the width
+        // their cells take in this frame's layout instead of one frame later (a layout effect's write re-rendered them on the next frame).
+        if (!_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
         int perPageItems = Math.Max(1, perPageColumns * (_measured ? 1 : _rows));
         int pageCount = PageCountFor(_count, perPageColumns, leadSpan);   // E7 — span-aware (identity when leadSpan==1)
         int maxPage = pageCount - 1;
