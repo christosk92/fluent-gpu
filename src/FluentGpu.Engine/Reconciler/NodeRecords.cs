@@ -14,9 +14,13 @@ internal sealed class NodeRecords
     private byte[] _kind = new byte[256];       // the stored element's type id (0 = no record)
     private uint[] _src = new uint[256];        // FrozenElement.Serial of the stored element (0 = not a frozen element)
     private object?[] _heap = new object?[256]; // a heap kind's element (HeapElement)
+    private string?[] _key = new string?[256];  // the stored element's Key (the keyed child diff reads the old side here)
     private readonly RecordColumn?[] _cols = new RecordColumn?[32];
 
     internal bool Has(int idx) => (uint)idx < (uint)_kind.Length && _kind[idx] != 0;
+
+    /// <summary>The Key of the element the node was last reconciled against (null: unkeyed, or no record).</summary>
+    internal string? KeyOf(int idx) => (uint)idx < (uint)_key.Length ? _key[idx] : null;
 
     /// <summary>The node's record (a handle valid until the node's next <see cref="Store"/>), or none.</summary>
     internal Element Get(int idx)
@@ -48,13 +52,14 @@ internal sealed class NodeRecords
         if (idx >= _kind.Length)
         {
             int n = Math.Max(_kind.Length * 2, idx + 1);
-            Array.Resize(ref _kind, n); Array.Resize(ref _src, n); Array.Resize(ref _heap, n);
+            Array.Resize(ref _kind, n); Array.Resize(ref _src, n); Array.Resize(ref _heap, n); Array.Resize(ref _key, n);
         }
         ushort k = el.ElementTypeId;
         ushort old = _kind[idx];
         if (old != 0 && old != k) ClearSlot(idx, old);
         _kind[idx] = (byte)k;
         _src[idx] = el.Obj is FrozenElement f ? f.Serial : 0;
+        _key[idx] = el.Key;
         switch (k)
         {
             case BoxEl.TypeId: StoreAs<BoxEl>(idx, k, el); break;
@@ -92,6 +97,7 @@ internal sealed class NodeRecords
         if (k != 0) ClearSlot(idx, k);
         _kind[idx] = 0;
         _src[idx] = 0;
+        _key[idx] = null;
     }
 
     private void ClearSlot(int idx, ushort k)
