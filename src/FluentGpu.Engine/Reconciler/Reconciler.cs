@@ -1363,6 +1363,7 @@ public sealed partial class TreeReconciler
         };
         if (parked) _scene.Mark(node, NodeFlags.Parked);
         _comps[node] = entry;
+        if (MountCensusEnabled) NoteCensusMount(entry);
 
         // The component's per-instance activation signal (UseIsActive), created lazily on first read so a component that
         // never uses the lifecycle allocates nothing. Initial value = its current attached state (inactive if
@@ -1416,6 +1417,7 @@ public sealed partial class TreeReconciler
         // the debt, so cancel the queue slot (the drain skips a cancelled entry without spending its budget).
         entry.QueuedReplay = false;
         _renderCount++;
+        bool firstRender = entry.Rendered is null;
         bool census = _renderCensus is not null;
         long t0 = 0, b0 = 0;
         if (census) { t0 = Stopwatch.GetTimestamp(); b0 = GC.GetAllocatedBytesForCurrentThread(); }
@@ -1466,6 +1468,7 @@ public sealed partial class TreeReconciler
         RemirrorAncestors(node);   // an enclosing boundary that did not re-render still mirrors this anchor
         comp.Context.SetHostNode(_scene.FirstChild(node));
         entry.Rendered = newRendered;
+        if (MountCensusEnabled) NoteCensusRender(entry, firstRender, cause);
         // Scoped relayout: mark the rendered root only when reconcile mutated structure or a layout-affecting
         // column. Starting the dirty walk HERE (not only at the deep mutation site) clears ContentSized scroll
         // firewalls so a TabView equal-width / add-button strip still reflows. Paint-only re-renders leave the bit
@@ -1617,7 +1620,7 @@ public sealed partial class TreeReconciler
         var kids = new List<NodeHandle>();
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) kids.Add(c);
         foreach (var k in kids) Remove(k);
-        if (_comps.Remove(node, out var old)) { old.QueuedReplay = false; old.Scope?.Dispose(); }
+        if (_comps.Remove(node, out var old)) { old.QueuedReplay = false; old.Scope?.Dispose(); if (MountCensusEnabled) _mountFrameOf.Remove(old); }
         // The anchor survives but its bound-Visible effect (node-owned, so the scope dispose above never reaches it) was
         // wired for the OLD embed: drop it as UnmountSubtree does. MountComponent's BindNode wires the new embed afresh;
         // a surviving old effect would keep driving the new component's presence and stack one more per swap.
@@ -4922,7 +4925,7 @@ public sealed partial class TreeReconciler
         _skelForce.Remove(idx);
         ReleaseSkeletonScrollbarSuppression(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
-        if (_comps.Remove(node, out var e)) { e.QueuedReplay = false; e.Scope?.Dispose(); }   // Scope.Dispose cascades: dispose render-effect → RunAllCleanups
+        if (_comps.Remove(node, out var e)) { e.QueuedReplay = false; e.Scope?.Dispose(); if (MountCensusEnabled) _mountFrameOf.Remove(e); }   // Scope.Dispose cascades: dispose render-effect → RunAllCleanups
         if (_virtuals.Remove(node, out var v))
         {
             FreeSpareSlots(v, keep: 0);   // parked spares are detached, so the list's FreeSubtree cannot reach them

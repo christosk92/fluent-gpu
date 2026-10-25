@@ -634,6 +634,8 @@ public sealed partial class RenderContext
     private ulong _lastFh; private int _lastLine, _nextOrd; private bool _haveLast;   // cursor: the previous lookup's call site and the ordinal after it (this render only)
     private int _renderEpoch;                                                      // bumped per render: a cell already resolved at this epoch was hit earlier in the SAME render
     private int _cleanupCellCount;
+    /// <summary>Hook cells this context holds (diagnostics: the mount census).</summary>
+    internal int CellCount => _cells.Count;
 
     // [CallerFilePath] yields the SAME interned string reference for every call site in a file, so the file path is
     // hashed ONCE per distinct file (XxHash64, via DepKey) and cached by reference identity — the steady render re-hashes
