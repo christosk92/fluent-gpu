@@ -29,8 +29,10 @@ namespace FluentGpu.Layout;
 //   column child its FlatLo plus its margin, a fixed row child its FlatLo, a grow row child (FlatLo - basis)·G/g plus the fixed
 //   children and the gaps. An explicit width hands every child the same offer whatever the box is offered: every offer.
 // - everything else (viewports, grids, z-stacks, wrap boxes, a probe): no interval, today's behaviour.
-// A within-pass interval holds only inside its pass (_measureGen), is replaced by the node's next real measure, and is cleared
-// when the node is arranged (its arrange re-measures its children at final widths). A ring slot's interval is dropped whenever
+// A within-pass interval holds only inside its pass (_measureGen) and while the subtree's layout version is the one it was recorded
+// at (a write that marks anything below layout-dirty in the middle of the pass - a bind firing during layout - voids it) and the
+// slot still holds the node it was recorded for (StoreMemo's NodeGen: an index recycled mid-pass does not inherit it), is replaced
+// by the node's next real measure, and is cleared when the node is arranged (its arrange re-measures its children at final widths). A ring slot's interval is dropped whenever
 // the slot is rewritten. The layout-verify oracle re-solves with neither (Verifying) and compares every node's Bounds.
 public sealed partial class FlexLayout
 {
@@ -64,7 +66,8 @@ public sealed partial class FlexLayout
         uint ci = c.Raw.Index;
         if (ci >= (uint)_memo.Length) { kind = 0; return; }
         ref MeasureMemo cm = ref _memo[ci];
-        if (cm.FlatGen != _measureGen || !(cAvail >= cm.FlatLo && cAvail <= cm.FlatHi)) { kind = 0; return; }
+        if (cm.FlatGen != _measureGen || !(cAvail >= cm.FlatLo && cAvail <= cm.FlatHi) || cm.FlatVer != _scene.SubtreeVersion(c)
+            || cm.NodeGen != c.Raw.Gen) { kind = 0; return; }
         if (row)
         {
             if (cli.FlexGrow > 0f)
@@ -111,6 +114,7 @@ public sealed partial class FlexLayout
             }
         }
         m.FlatGen = _measureGen; m.FlatLo = lo; m.FlatHi = hi; m.FlatW = w; m.FlatH = h;
+        m.FlatVer = _scene.SubtreeVersion(node);   // a layout-dirty mark anywhere below, later in this pass, voids the interval
         // The ring slot StoreRing just wrote for this offer carries the interval across passes.
         uint gen = node.Raw.Gen;
         if (m.Ring0NodeGen == gen && m.Ring0AvailW == availW) { m.Ring0Lo = lo; m.Ring0Hi = hi; }

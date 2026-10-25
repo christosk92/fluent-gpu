@@ -173,6 +173,7 @@ public sealed partial class FlexLayout
         // C1 (PERF r3 UI): the measure-validity interval of the last REAL measure this pass (FlexLayout.MeasureFlat.cs) - any
         // offer in [FlatLo, FlatHi] measures to (FlatW, FlatH) with every descendant's measured size unchanged. 0 = none.
         public uint FlatGen; public float FlatLo, FlatHi, FlatW, FlatH;
+        public uint FlatVer;   // the subtree's layout version when the interval was recorded: a mark inside the pass voids it
         public uint PassGen;                                             // _measureGen of the pass the record below is from (0 = never)
         public uint NodeGen;                                             // handle generation — ABA guard on a recycled node index
         public float PAvailW, PW, PH;                                    // that pass's offered width → measured border-box size
@@ -767,12 +768,17 @@ public sealed partial class FlexLayout
                 return new Size2(hit.W, hit.H);
             }
             // C1: an offer inside this pass's validity interval measures to the recorded size, descendants unchanged.
-            if (hit.FlatGen == _measureGen && availW >= hit.FlatLo && availW <= hit.FlatHi && MeasureFlatEnabled && !Verifying && !_naturalProbe)
+            if (hit.FlatGen == _measureGen && availW >= hit.FlatLo && availW <= hit.FlatHi && MeasureFlatEnabled && !Verifying && !_naturalProbe
+                && hit.FlatVer == _scene.SubtreeVersion(node) && hit.NodeGen == node.Raw.Gen)
             {
                 _dMeasureFlatHit++;
                 if (MeasureCensusEnabled) _mcFlatHits++;
                 WriteMeasuredBounds(node, hit.FlatW, hit.FlatH);
                 return StoreMemo(node, availW, new Size2(hit.FlatW, hit.FlatH));
+            }
+            if (MeasureCensusEnabled && hit.FlatGen == _measureGen && availW >= hit.FlatLo && availW <= hit.FlatHi && MeasureFlatEnabled && !Verifying && !_naturalProbe)
+            {
+                if (hit.NodeGen != node.Raw.Gen) _mcFlatVoidGen++; else _mcFlatVoidVer++;   // an interval the guards above refused
             }
         }
         // A scroll/virtual viewport is a layout boundary: its size is its own box (explicit/flex), independent of
