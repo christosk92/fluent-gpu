@@ -99,3 +99,10 @@ public static class ElementFreezeExtensions
     public static Element[] Freeze(this Element[] elements) { ElementFreezer.FreezeAlways(elements); return elements; }
     public static List<Element> Freeze(this List<Element> elements) { for (int i = 0; i < elements.Count; i++) elements[i] = elements[i].Freeze(); return elements; }
 }
+
+/// <summary>A delegate parameter the callee invokes during the call (never later): an element captured into it is read inside the same
+/// render, so analyzer FGEL001 does not ask for a freeze (PERF r3 MODEL M4b). The callee also owns what the delegate stores into the
+/// objects it is handed (a configure callback filling a dialog's Content): it freezes them before it keeps them, so FGEL003 does not ask
+/// the caller to.</summary>
+[AttributeUsage(AttributeTargets.Parameter)]
+public sealed class ImmediateAttribute : Attribute { }

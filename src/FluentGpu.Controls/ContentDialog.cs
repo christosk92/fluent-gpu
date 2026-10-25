@@ -259,10 +259,12 @@ public sealed class ContentDialog : Component
     /// <c>ShowAsync</c> for banner/menu-launched dialogs. Configure the instance in <paramref name="configure"/>
     /// (Title, Content, buttons, callbacks). The result surfaces via <see cref="Closed"/>; the returned handle can be
     /// closed programmatically.</summary>
-    public static OverlayHandle Show(IOverlayService overlay, Action<ContentDialog> configure)
+    public static OverlayHandle Show(IOverlayService overlay, [Immediate] Action<ContentDialog> configure)
     {
         var dialog = new ContentDialog();
         configure(dialog);
+        // PERF r3 MODEL M4b: the card reads Content/Footer in the overlay's later renders; a caller inside a render built them on its tape
+        ElementFreezer.FreezeObject(dialog);
         return dialog.OpenOn(overlay);
     }
 

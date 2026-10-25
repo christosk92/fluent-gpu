@@ -395,10 +395,11 @@ public sealed class TeachingTip : Component
     /// <para><see cref="PlacementMargin"/> and <see cref="PlacementMode.Center"/> need the caller's scene to derive their
     /// anchor rect, which this static path has no access to; both are ignored here (the tip anchors to the target rect
     /// itself). Use the declarative form when you need them.</para></summary>
-    public static OverlayHandle Show(IOverlayService overlay, Func<NodeHandle> target, Action<TeachingTip> configure)
+    public static OverlayHandle Show(IOverlayService overlay, Func<NodeHandle> target, [Immediate] Action<TeachingTip> configure)
     {
         var tip = new TeachingTip();
         configure(tip);
+        ElementFreezer.FreezeObject(tip);   // PERF r3 MODEL M4b: the tip's elements are read in the overlay's later renders
         tip.Target = target;   // keep the instance honest: this IS the targeted form
         return tip.OpenOn(overlay, target);
     }

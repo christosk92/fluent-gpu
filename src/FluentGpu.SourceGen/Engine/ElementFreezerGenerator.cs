@@ -32,13 +32,24 @@ namespace FluentGpu.SourceGen.Engine
             context.RegisterSourceOutput(context.CompilationProvider.Combine(decls), static (spc, pair) => Emit(spc, pair.Left, pair.Right!));
         }
 
-        private enum Kind { None, Element, NullableElement, ElementList, ElementArray, ElementListRef, ElementKindValue, Holder, HolderEach, Obj }
+        private enum Kind { None, Element, NullableElement, ElementList, ElementArray, ElementListRef, ElementKindValue, Holder, HolderEach, Obj, HolderStruct, NullableHolderStruct }
+
+        private static bool IsCandidate(INamedTypeSymbol t, Compilation comp)
+        {
+            if (t.IsStatic || IsGenericAnywhere(t)) return false;
+            if (t.TypeKind == TypeKind.Class) return true;
+            // a struct of this compilation that holds elements (a record struct of a template's parts) is frozen through the ref of the
+            // member that holds it: it needs a nameable type for the accessor's ref parameter
+            return t.TypeKind == TypeKind.Struct && !t.IsRefLikeType && Nameable(t, comp)
+                   && !t.AllInterfaces.Any(i => i.ToDisplayString() == "FluentGpu.Dsl.IElement");
+        }
 
         private sealed class Member
         {
             public string Field = "";
             public string FieldType = "";
             public Kind Kind;
+            public INamedTypeSymbol? Struct;
         }
 
         private static void Emit(SourceProductionContext spc, Compilation comp, ImmutableArray<INamedTypeSymbol?> declared)
@@ -52,7 +63,7 @@ namespace FluentGpu.SourceGen.Engine
             var types = new List<INamedTypeSymbol>();
             var seen = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
             foreach (var t in declared)
-                if (t is not null && seen.Add(t) && t.TypeKind == TypeKind.Class && !t.IsStatic && !IsGenericAnywhere(t)) types.Add(t);
+                if (t is not null && seen.Add(t) && IsCandidate(t, comp)) types.Add(t);
 
             // Fixpoint: a source class holds elements when one of its members (or its base) does.
             var holders = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
@@ -85,7 +96,7 @@ namespace FluentGpu.SourceGen.Engine
             sb.Append("        internal static void Register()\n        {\n");
             foreach (var t in ordered)
             {
-                if (t.IsAbstract) continue;
+                if (t.IsAbstract || t.TypeKind == TypeKind.Struct) continue;
                 sb.Append("            ").Append(Freezer).Append(".Register(");
                 if (Nameable(t, comp)) sb.Append("typeof(").Append(Fq(t)).Append(")");
                 else sb.Append("global::System.Type.GetType(\"").Append(RuntimeName(t)).Append("\", throwOnError: true)");
@@ -96,17 +107,23 @@ namespace FluentGpu.SourceGen.Engine
             foreach (var t in ordered)
             {
                 int i = index[t];
+                bool isStruct = t.TypeKind == TypeKind.Struct;
                 bool nameable = Nameable(t, comp);
                 string self = nameable ? Fq(t) : "object";
                 string attr = nameable ? "" : "[global::System.Runtime.CompilerServices.UnsafeAccessorType(\"" + RuntimeName(t) + "\")] ";
-                sb.Append("        private static void Freeze_").Append(i).Append("(object o)\n        {\n");
-                sb.Append("            var x = ").Append(nameable ? "(" + self + ")o" : "o").Append(";\n");
-                if (t.BaseType is { } b && index.TryGetValue(b, out int bi)) sb.Append("            Freeze_").Append(bi).Append("(o);\n");
+                if (isStruct)
+                    sb.Append("        private static void Freeze_").Append(i).Append("(ref ").Append(self).Append(" x)\n        {\n");
+                else
+                {
+                    sb.Append("        private static void Freeze_").Append(i).Append("(object o)\n        {\n");
+                    sb.Append("            var x = ").Append(nameable ? "(" + self + ")o" : "o").Append(";\n");
+                    if (t.BaseType is { } b && index.TryGetValue(b, out int bi)) sb.Append("            Freeze_").Append(bi).Append("(o);\n");
+                }
                 int m = 0;
                 foreach (var mem in members[t])
                 {
                     string acc = "A" + i + "_" + m++;
-                    string call = acc + "(x)";
+                    string call = acc + (isStruct ? "(ref x)" : "(x)");
                     switch (mem.Kind)
                     {
                         case Kind.Element: case Kind.NullableElement: case Kind.ElementList:
@@ -119,6 +136,11 @@ namespace FluentGpu.SourceGen.Engine
                             sb.Append("            ").Append(Freezer).Append(".FreezeObject(").Append(call).Append(");\n"); break;
                         case Kind.HolderEach:
                             sb.Append("            ").Append(Freezer).Append(".FreezeEach(").Append(call).Append(");\n"); break;
+                        case Kind.HolderStruct:
+                            sb.Append("            Freeze_").Append(index[mem.Struct!]).Append("(ref ").Append(call).Append(");\n"); break;
+                        case Kind.NullableHolderStruct:
+                            sb.Append("            { ref var n = ref ").Append(call).Append("; if (n.HasValue) { var v = n.GetValueOrDefault(); Freeze_")
+                              .Append(index[mem.Struct!]).Append("(ref v); n = v; } }\n"); break;
                     }
                 }
                 sb.Append("        }\n");
@@ -128,7 +150,7 @@ namespace FluentGpu.SourceGen.Engine
                     string acc = "A" + i + "_" + m++;
                     sb.Append("        [global::System.Runtime.CompilerServices.UnsafeAccessor(global::System.Runtime.CompilerServices.UnsafeAccessorKind.Field, Name = \"")
                       .Append(mem.Field).Append("\")] private static extern ref ").Append(mem.FieldType).Append(' ').Append(acc)
-                      .Append('(').Append(attr).Append(self).Append(" o);\n");
+                      .Append('(').Append(attr).Append(isStruct ? "ref " : "").Append(self).Append(" o);\n");
                 }
                 sb.Append('\n');
             }
@@ -157,9 +179,16 @@ namespace FluentGpu.SourceGen.Engine
                 }
                 else continue;
                 var kind = Classify(type, element, elementList, ielement, holders, comp);
+                INamedTypeSymbol? st = null;
+                if (kind == Kind.None && type is INamedTypeSymbol vt && vt.IsValueType)
+                {
+                    var under = vt.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T ? vt.TypeArguments[0] as INamedTypeSymbol : vt;
+                    if (under is not null && holders.Contains(under) && under.TypeKind == TypeKind.Struct)
+                    { st = under; kind = ReferenceEquals(under, vt) ? Kind.HolderStruct : Kind.NullableHolderStruct; }
+                }
                 if (kind == Kind.None) continue;
                 if (!Nameable(type, comp)) continue;   // the accessor's return type must be nameable
-                list.Add(new Member { Field = field!, FieldType = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), Kind = kind });
+                list.Add(new Member { Field = field!, FieldType = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), Kind = kind, Struct = st });
             }
             return list;
         }

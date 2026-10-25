@@ -43,7 +43,15 @@ public sealed class ElementEscapeAnalyzer : DiagnosticAnalyzer
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Captured, Static);
+    private static readonly DiagnosticDescriptor Stored = new(
+        id: "FGEL003",
+        title: "A lambda stores an element in a field without freezing it",
+        messageFormat: "This lambda stores an element in '{0}', which outlives the render the lambda runs in: freeze it where it is stored (Freeze())",
+        category: "FluentGpu.Elements",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Captured, Static, Stored);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -54,6 +62,7 @@ public sealed class ElementEscapeAnalyzer : DiagnosticAnalyzer
             if (start.Compilation.GetTypeByMetadataName("FluentGpu.Dsl.ElementFreezer") is null) return;
             var known = new Known(start.Compilation);
             start.RegisterOperationAction(c => AnalyzeLambda(c, known), OperationKind.AnonymousFunction);
+            start.RegisterOperationAction(c => AnalyzeStores(c, known), OperationKind.AnonymousFunction);
             start.RegisterSymbolAction(c => AnalyzeStatic(c, known), SymbolKind.Field, SymbolKind.Property);
         });
     }
@@ -79,7 +88,7 @@ public sealed class ElementEscapeAnalyzer : DiagnosticAnalyzer
             if (t is INamedTypeSymbol nt)
             {
                 if (nt.IsValueType && IElement is not null && nt.AllInterfaces.Any(i => Eq(i, IElement))) return true;   // BoxEl, TextEl, ...
-                for (var b = nt.BaseType; b is not null; b = b.BaseType) if (Eq(b, HeapElement)) return true;          // a boundary element
+                // a boundary element (HeapElement) is an object: capturing it is safe (its own members are frozen with the trees it rides)
                 if (nt.TypeKind != TypeKind.Delegate && nt.IsGenericType && nt.TypeArguments.Length == 1
                     && nt.OriginalDefinition.ContainingNamespace?.ToDisplayString() == "System.Collections.Generic")
                     return HoldsElement(nt.TypeArguments[0], depth + 1);
@@ -101,8 +110,10 @@ public sealed class ElementEscapeAnalyzer : DiagnosticAnalyzer
             if (Deferred is not null && p.GetAttributes().Any(a => Eq(a.AttributeClass, Deferred))) return true;
             // a builder handed to the engine or the kit (a delegate that returns elements) runs when the engine asks for it: a list
             // row, a region's content, an overlay, a slot. Code in the same assembly is the caller's own helper: not decided here.
-            if (p.Type is INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: { } invoke } && HoldsElement(invoke.ReturnType)
-                && p.ContainingAssembly?.Name is "FluentGpu.Engine" or "FluentGpu.Controls") return true;
+            // Every delegate handed to the engine or the kit runs when the engine calls it (a builder, a handler, an effect), unless the
+            // parameter says it runs during the call ([Immediate]).
+            if (p.Type.TypeKind == TypeKind.Delegate && p.ContainingAssembly?.Name is "FluentGpu.Engine" or "FluentGpu.Controls"
+                && !p.GetAttributes().Any(a => a.AttributeClass?.Name == "ImmediateAttribute")) return true;
             // a delegate parameter of a boundary element's constructor (SkelRegionEl, ForEl, VirtualListEl, KeepAliveEl)
             return p.Type.TypeKind == TypeKind.Delegate && p.ContainingSymbol is IMethodSymbol { MethodKind: MethodKind.Constructor } m
                    && IsBoundaryOrKind(m.ContainingType);
@@ -140,6 +151,42 @@ public sealed class ElementEscapeAnalyzer : DiagnosticAnalyzer
             reported.Add(sym);
             c.ReportDiagnostic(Diagnostic.Create(Captured, op.Syntax.GetLocation(), sym.Name));
         }
+    }
+
+    /// <summary>FGEL003: inside ANY lambda (a row template, a builder, a handler: they run in another render's region, or none), an
+    /// element stored into a field or a property of an object (a cache: <c>_rail ??= Rail()</c>) outlives that region unless frozen.</summary>
+    private static void AnalyzeStores(OperationAnalysisContext c, Known k)
+    {
+        var lambda = (IAnonymousFunctionOperation)c.Operation;
+        // a configure callback handed to an [Immediate] parameter fills the objects it is given; the callee freezes them before it keeps them
+        bool ownsArgs = IsImmediateArgument(lambda);
+        foreach (var op in lambda.Body.DescendantsAndSelf())
+        {
+            if (op is not IAssignmentOperation asg) continue;
+            if (asg is ICompoundAssignmentOperation) continue;
+            ISymbol? target = asg.Target switch
+            {
+                IFieldReferenceOperation f => f.Field,
+                IPropertyReferenceOperation p when p.Property.SetMethod is { } => p.Property,
+                _ => null,
+            };
+            if (target is null) continue;
+            if (ownsArgs && asg.Target is IMemberReferenceOperation { Instance: IParameterReferenceOperation pr }
+                && SymbolEqualityComparer.Default.Equals(pr.Parameter.ContainingSymbol, lambda.Symbol)) continue;
+            // an object initializer of a NEW object inside the lambda is that object's own construction (an element's props)
+            if (asg.Parent is IObjectOrCollectionInitializerOperation) continue;
+            ITypeSymbol? type = target switch { IFieldSymbol f => f.Type, IPropertySymbol p => p.Type, _ => null };
+            if (!k.HoldsElement(type)) continue;
+            if (asg.Value.Syntax is ExpressionSyntax v && IsFreezeCall(v)) continue;
+            c.ReportDiagnostic(Diagnostic.Create(Stored, asg.Syntax.GetLocation(), target.Name));
+        }
+    }
+
+    private static bool IsImmediateArgument(IAnonymousFunctionOperation lambda)
+    {
+        IOperation? cur = lambda.Parent;
+        while (cur is IDelegateCreationOperation or IConversionOperation or IParenthesizedOperation) cur = cur.Parent;
+        return cur is IArgumentOperation { Parameter: { } p } && p.GetAttributes().Any(a => a.AttributeClass?.Name == "ImmediateAttribute");
     }
 
     private static bool IsInside(IMethodSymbol inner, IAnonymousFunctionOperation outer)

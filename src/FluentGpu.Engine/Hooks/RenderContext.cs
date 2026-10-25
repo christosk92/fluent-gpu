@@ -36,9 +36,11 @@ internal sealed class EffectCell : HookCell
     public Action? Cleanup;
 }
 
-internal sealed class MemoCell<T> : HookCell
+internal sealed class MemoCell<T> : HookCell, IElementHolder
 {
     public T Value = default!;
+    // PERF r3 MODEL M4b: a memo that caches elements (or an object holding them) keeps them past the render that built them.
+    void IElementHolder.FreezeElements() => HookValueFreeze.Freeze(ref Value);
     public DepKey Key;
     public bool HasKey;
 }
@@ -517,10 +519,32 @@ internal sealed class AsyncCommandSetCell<TKey> : HookCell, IDisposableCell wher
 }
 
 /// <summary>A stable, mutable per-component box that persists across renders (the React <c>useRef</c> container).</summary>
-public sealed class Ref<T>
+public sealed class Ref<T> : IElementHolder
 {
     public T Value;
     public Ref(T value) => Value = value;
+    // PERF r3 MODEL M4b: a ref that keeps elements (or a latch object holding them) past the render that built them.
+    void IElementHolder.FreezeElements() => HookValueFreeze.Freeze(ref Value);
+}
+
+/// <summary>Freezes a hook's cached value in place (PERF r3 MODEL M4b): an element, an optional element, an element array or list, or an
+/// object holding elements (its generated freezer). The reconciler runs it over a component's hook cells after each render.</summary>
+internal static class HookValueFreeze
+{
+    internal static void Freeze<T>(ref T value)
+    {
+        if (!Tape.RegionsEnabled) return;
+        if (typeof(T) == typeof(Element)) { ref var e = ref Unsafe.As<T, Element>(ref value); e = e.Freeze(); return; }
+        if (typeof(T) == typeof(Element?)) { ref var e = ref Unsafe.As<T, Element?>(ref value); if (e is { } x) e = x.Freeze(); return; }
+        if (typeof(T) == typeof(ElementList)) { ref var l = ref Unsafe.As<T, ElementList>(ref value); l = l.Freeze(); return; }
+        if (typeof(T).IsValueType) return;
+        switch (value)
+        {
+            case Element[] a: ElementFreezer.Freeze(a); return;
+            case List<Element> list: ElementFreezer.Freeze(list); return;
+            case object o: ElementFreezer.FreezeObject(o); return;
+        }
+    }
 }
 
 /// <summary>Persistent backing for one <see cref="RenderContext.UseGesture"/> declaration (input-a11y.md §13). Created
@@ -595,6 +619,16 @@ public sealed partial class RenderContext
     private int _cleanupCellCount;
     /// <summary>Hook cells this context holds (diagnostics: the mount census).</summary>
     internal int CellCount => _hookCount;
+
+    /// <summary>PERF r3 MODEL M4b: freeze what this component's hook cells keep (a ref's or a memo's elements, a latch object in a ref)
+    /// before the render's tape region closes. A frozen element is not copied again.</summary>
+    internal void FreezeHookValues()
+    {
+        if (_hookStart < 0 || Hooks is null) return;
+        var slots = Hooks.Slots;
+        for (int i = 0; i < _hookCount; i++)
+            if (slots[_hookStart + i].Obj is IElementHolder h) h.FreezeElements();
+    }
 
     // [CallerFilePath] yields the SAME interned string reference for every call site in a file, so the file path is
     // hashed ONCE per distinct file (XxHash64, via DepKey) and cached by reference identity — the steady render re-hashes

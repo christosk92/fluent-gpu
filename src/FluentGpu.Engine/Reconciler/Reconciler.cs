@@ -1532,7 +1532,7 @@ public sealed partial class TreeReconciler
         {
             // P2 escapes: a component that caches elements of its own render in a field (a reuse cache) keeps them past this
             // region; freeze them before the region closes (a frozen element is not copied again).
-            if (tape != 0) ElementFreezer.FreezeObject(comp);
+            if (tape != 0) { ElementFreezer.FreezeObject(comp); comp.Context.FreezeHookValues(); }
             TapeClose(tape);
             if (catchUp) EndThemeCatchUp(savedThemeMs, savedThemeFromT);
         }

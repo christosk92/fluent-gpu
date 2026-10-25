@@ -517,7 +517,7 @@ public sealed class NumberBox : Component
         {
             if (liveField.Value is not { } f) return;
             f.SetEnabled(IsEnabled);
-            f.SetRightAffix(affix);
+            f.SetRightAffix(mountAffix);   // PERF r3 MODEL M4b: the effect runs after this render (frozen above)
         }, (upEnabled ? 1 : 0) | (downEnabled ? 2 : 0) | (IsEnabled ? 4 : 0));
         // The field's height is the live style's (its propless Embed.Comp froze the mount-time one): a crossing that re-sizes the box
         // re-sizes the SAME field, so its text, caret and focus survive.
