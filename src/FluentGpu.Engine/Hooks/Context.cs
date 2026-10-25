@@ -575,10 +575,13 @@ public sealed class InputHooks
 public sealed record ContextProviderEl(object Channel, object? Value, Element Child) : HeapElement
 {
     /// <summary>This object's identity as a number (a node record keeps a copy without <see cref="Child"/>, so the reconciler's
-    /// identity skip compares serials; a <c>with</c> copy gets a new one).</summary>
-    internal readonly uint Serial = FrozenElement.NextSerial();
+    /// identity skip compares serials). Excluded from the record's value equality.</summary>
+    internal uint Serial => _serial.Value;
+    private readonly SerialTag _serial = new(FrozenElement.NextSerial());
+    /// <summary>The <c>with</c> copy: a new object, so a new serial (a record's copy constructor runs no field initializer).</summary>
     private ContextProviderEl(ContextProviderEl original) : base(original)
     {
+        _serial = new(FrozenElement.NextSerial());
         Channel = original.Channel;
         Value = original.Value;
         Child = original.Child;

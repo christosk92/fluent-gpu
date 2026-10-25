@@ -41,6 +41,7 @@ internal sealed class NodeRecords
     {
         if (!Has(idx) || _kind[idx] != el.ElementTypeId) return false;
         if (el.Obj is FrozenElement f) return _src[idx] == f.Serial;
+
         if (el.Obj is ContextProviderEl cp) return _src[idx] == cp.Serial;
         if (el.Obj is HeapElement h) return ReferenceEquals(_heap[idx], h);
         return false;

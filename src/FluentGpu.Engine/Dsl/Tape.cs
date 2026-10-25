@@ -164,6 +164,16 @@ internal abstract class FrozenElement
     internal static uint NextSerial() { uint s = (uint)Interlocked.Increment(ref s_serial); return s == 0 ? (uint)Interlocked.Increment(ref s_serial) : s; }
 }
 
+/// <summary>An object's identity serial inside a record: excluded from the record's value equality (always equal, hash 0).</summary>
+internal readonly struct SerialTag : IEquatable<SerialTag>
+{
+    internal readonly uint Value;
+    internal SerialTag(uint value) => Value = value;
+    public bool Equals(SerialTag other) => true;
+    public override bool Equals(object? obj) => obj is SerialTag;
+    public override int GetHashCode() => 0;
+}
+
 internal sealed class FrozenElement<T> : FrozenElement
 {
     internal T Value;
