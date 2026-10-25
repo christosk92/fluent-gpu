@@ -70,6 +70,14 @@ public static class TileDamage
     /// navigation, a flyout) is diffed entry by entry like any other turn instead of taking the whole frame.</summary>
     public static bool PresentStructureDiff;
 
+    /// <summary><c>--fg pp-coverage=X</c> (an investigation arm): the repaint share of the window at or above which the primary
+    /// composite takes the whole-frame route instead of the partial (PRESERVE) one. Default 0.45 (D3D12Device.PartialPresent).</summary>
+    public static float PartialPresentMaxCoverage = 0.45f;
+
+    /// <summary>A partial-present repaint rect inside a top-level occluder's opaque pixels starts at that occluder (no clear, nothing
+    /// below it; default on). <c>--fg no-cover-start</c> clears and composites every item there (the A/B arm and identity control).</summary>
+    public static bool CoverStart = true;
+
     /// <summary><c>--fg present-validate</c>: every primary composite is re-composited whole into a shadow target and
     /// compared with the back buffer, and every Present1's dirty rects are checked to cover every pixel that changed since
     /// the last presented frame (a model of what DWM shows is kept and compared).</summary>
