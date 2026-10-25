@@ -496,6 +496,10 @@ public sealed partial class AnimEngine
             && _scene.TryGetOrphanVisualParent(node, out var vp) && !vp.IsNull)
             rp = vp;
         _scene.Mark(rp.IsNull ? node : rp, NodeFlags.LayoutDirty);
+        // The node's OWN LayoutInput changed too (the eased or restored Width/Height): mark it, as every other input writer
+        // does, so its Arrange cannot early-out on a subtree it vouches is unchanged (the layout-verify tripwire found a
+        // settle restore 320 -> NaN under a clean early-out; PERF r3 MODEL, C1 writers).
+        if (!rp.IsNull) _scene.Mark(node, NodeFlags.LayoutDirty);
     }
 
     /// <summary>The DECLARED (author-written) LayoutInput value a live SizeMode.Reflow row on
