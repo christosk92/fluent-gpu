@@ -84,6 +84,10 @@ public enum ImageAtlasExperiment : byte
 /// <c>no-partial-keep</c> — a slice with a dirty nested slice re-walks whole instead of keeping its own arena and walking only
 /// the nested one (the A/B arm, <c>SceneRecorder.PartialKeep.cs</c>). <c>rewalk-validate</c> — every partial keep is re-walked
 /// instead and checked: the bytes it would have kept, the inputs it would have re-entered with, the offsets it would have used.
+/// <c>capture-validate</c> — every incremental scene capture is re-derived from scratch and compared column by column (the
+/// DEBUG parity self-check on every capture instead of every Nth; a summary line every 2 s). <c>no-ledgered-capture</c> — an
+/// incremental capture always re-walks the reachable tree instead of copying only the ledgered rows when the tree's topology
+/// is unchanged (the A/B arm, <c>SceneRecordingSnapshot.TryCaptureLedgered</c>).
 /// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).
 /// <c>raw-phase</c> — a slice under a composited transition layer rasters at its raw float placement even when that is a
 /// whole pixel up to float noise (<c>SliceRecorder.FractionalPx</c>; the A/B arm). <c>phase-validate</c> — every composited
@@ -289,6 +293,8 @@ public static class EngineSwitches
             case "no-texture-recycle": FluentGpu.Render.Tiles.TileDamage.RecycleTextures = false; return true;
             case "raw-phase": FluentGpu.Render.SliceRecorder.CanonicalPhase = false; return true;
             case "rewalk-validate": FluentGpu.Render.SceneRecordingContext.PartialKeepValidate = true; return true;
+            case "capture-validate": FluentGpu.Scene.SceneRecordingSnapshot.ParityValidateEveryCapture = true; return true;
+            case "no-ledgered-capture": FluentGpu.Scene.SceneRecordingSnapshot.LedgeredCaptureEnabled = false; return true;
             case "no-partial-keep": FluentGpu.Render.SceneRecordingContext.PartialKeepEnabled = false; return true;
             case "damage-log": FluentGpu.Render.Tiles.TileDamage.Log = true; return true;
             case "no-precise-present": FluentGpu.Render.Tiles.TileDamage.PrecisePresent = false; return true;

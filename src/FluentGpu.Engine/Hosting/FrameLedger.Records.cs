@@ -142,6 +142,24 @@ public struct LedgerUiFrame
     public uint Reserved2;
     /// <summary>The UI thread's cumulative CPU time at the frame's end (GetThreadTimes kernel + user, 100 ns; 0 = no platform source).</summary>
     public long UiCpuTimeTotal;
+    // ── version 3: the UI frame's work drivers (the per-frame cost model's regressors) ──
+    /// <summary>Bytes the UI thread allocated in each Paint phase: frame start to flush (reconcile), flush to layout, layout to
+    /// anim, anim to record (image pump, pre-record, record), record to submit (the publication's capture). 0 when Paint did not run.</summary>
+    public long AllocFlush, AllocLayout, AllocAnim, AllocRecord, AllocSubmit;
+    /// <summary>Scene nodes created and freed, and components mounted, inside the frame.</summary>
+    public int NodesCreated, NodesFreed, ComponentsMounted;
+    /// <summary>Layout measure and arrange calls; text layouts shaped and text measure-cache misses.</summary>
+    public int Measures, Arranges, TextShapes, TextShapeMisses;
+    /// <summary>Reactive units the flush ran; node-binding fires and the column writes they made; scoped relayout marks and
+    /// relayouts that escaped to the root.</summary>
+    public int ReactiveUnits, BindFires, BindWrites, ScopedRelayouts, RootEscapes;
+    /// <summary>The publication's scene capture: reachable nodes walked, nodes whose columns were copied, its wall time.</summary>
+    public int CaptureReachable, CaptureCopied;
+    public float CaptureMs;
+    /// <summary><see cref="FluentGpu.Scene.CaptureFullReason"/> of the capture; 1 when the DEBUG incremental-capture parity
+    /// self-check re-derived it (a Debug-only cost, compiled out of Release).</summary>
+    public byte CaptureFull, CaptureParity;
+    public ushort Reserved3;
 }
 
 /// <summary>One turn of the owning host's render thread (only turns that passed the wait: resize parks and device-loss

@@ -100,6 +100,14 @@ public sealed class FontRegistry : IDisposable
     private readonly Dictionary<string, bool> _systemFamilies = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string[]?> _fileFamilies = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(string Family, int Weight), nint> _fallbacks = new();
+    // Lock-free read path (PERF r3 UI). Every text layout on the UI thread and every glyph-run shape on the render thread resolves
+    // its faces here, so the two threads hammered `_gate` for what is, after warm-up, always a cache hit: nav-burst spent 112 ms
+    // (UI) + 34 ms (render) per 10 s spinning in Monitor.Enter_Slowpath on it (Debug). A hit now reads an immutable
+    // copy-on-write snapshot of the cache with no lock; a miss takes the lock and resolves exactly as before, then republishes.
+    // A snapshot maps every key to the same Face (or face handle) the locked table holds, so a hit returns what the locked
+    // lookup would have. Inserts are rare (one per new chain x weight or fallback family); the tables hold tens of entries.
+    private volatile Dictionary<(string Spec, int Weight), Face> _chainsRead = new();
+    private volatile Dictionary<(string Family, int Weight), nint> _fallbacksRead = new();
     private readonly List<nint> _owned = new();
     private IFontFaceSource? _source;
     private string? _bodyChain;
@@ -210,14 +218,17 @@ public sealed class FontRegistry : IDisposable
         weight = ClampWeight(weight);
         if (string.IsNullOrEmpty(spec)) spec = BodyChain;
         FontChainException? thrown = null;
-        Face? f;
-        lock (_gate)
+        if (!_chainsRead.TryGetValue((spec, weight), out Face? f))
         {
-            if (!_chains.TryGetValue((spec, weight), out f))
+            lock (_gate)
             {
-                f = WalkChainLocked(spec, weight, out string? violation);
-                _chains[(spec, weight)] = f;
-                if (violation is not null) thrown = ReportLocked(violation);
+                if (!_chains.TryGetValue((spec, weight), out f))
+                {
+                    f = WalkChainLocked(spec, weight, out string? violation);
+                    _chains[(spec, weight)] = f;
+                    _chainsRead = new Dictionary<(string Spec, int Weight), Face>(_chains);
+                    if (violation is not null) thrown = ReportLocked(violation);
+                }
             }
         }
         if (thrown is not null && ThrowOnViolation) throw thrown;
@@ -231,6 +242,7 @@ public sealed class FontRegistry : IDisposable
     {
         weight = ClampWeight(weight);
         if (string.IsNullOrEmpty(spec)) spec = BodyChain;
+        if (_chainsRead.ContainsKey((spec, weight))) return true;
         lock (_gate) return _chains.ContainsKey((spec, weight));
     }
 
@@ -382,6 +394,7 @@ public sealed class FontRegistry : IDisposable
     /// <summary>A cached fallback face for (<paramref name="family"/>, the RESOLVED <paramref name="weight"/>), or 0.</summary>
     public nint TryGetFallbackFace(string family, int weight)
     {
+        if (_fallbacksRead.TryGetValue((family, weight), out nint hit)) return hit;
         lock (_gate) return _fallbacks.TryGetValue((family, weight), out var f) ? f : 0;
     }
 
@@ -394,6 +407,7 @@ public sealed class FontRegistry : IDisposable
         {
             if (_fallbacks.TryGetValue((family, weight), out var existing)) { release(face); return existing; }
             _fallbacks[(family, weight)] = face;
+            _fallbacksRead = new Dictionary<(string Family, int Weight), nint>(_fallbacks);
             _fallbackOwners.Add((face, release));
             Interlocked.Increment(ref _facesCreated);
             if (ThreadGuard.IsUiThread) Interlocked.Increment(ref _facesCreatedOnUi);
@@ -496,6 +510,8 @@ public sealed class FontRegistry : IDisposable
         foreach (var (face, release) in _fallbackOwners) release(face);
         _owned.Clear(); _fallbackOwners.Clear();
         _chains.Clear(); _singles.Clear(); _fileFaces.Clear(); _fallbacks.Clear(); _systemFamilies.Clear(); _fileFamilies.Clear();
+        _chainsRead = new();
+        _fallbacksRead = new();
     }
 
     /// <summary>Release every face. The shared registry lives for the process and is not disposed.</summary>
