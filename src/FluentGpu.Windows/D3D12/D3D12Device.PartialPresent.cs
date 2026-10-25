@@ -28,12 +28,10 @@ namespace FluentGpu.Rhi.D3D12;
 // history untrustworthy — the first frame, a resize / DPI / clear-colour / knockout change, a different item STRUCTURE
 // (order or set), a forced-full repaint reason, a non-composite submit, a device rebuild — takes
 // the whole-frame route (CLEAR load + full present), exactly the route every frame took before. So does a repaint larger
-// than PpFullCoverage of the window (the clear load is cheaper than preserving most of it). A stood-down present makes
+// than TileDamage.PartialPresentMaxCoverage of the window (the clear load is cheaper than preserving most of it). A stood-down present makes
 // the next present whole (DWM never saw the stood-down frame's changes).
 public sealed unsafe partial class D3D12Device
 {
-    /// <summary>At or above this share of the window, a repaint takes the whole-frame route.</summary>
-    private const float PpFullCoverage = 0.45f;
     private const int PpHistory = (int)FRAME_COUNT + 1;
 
     private struct PpEntry
@@ -412,7 +410,7 @@ public sealed unsafe partial class D3D12Device
             repaint.Union(in _ppHist[h]);
         }
         float window = (float)_w * _h;
-        if (window <= 0f || repaint.SummedArea() >= PpFullCoverage * window) return;
+        if (window <= 0f || repaint.SummedArea() >= TileDamage.PartialPresentMaxCoverage * window) return;
         ReadOnlySpan<RectF> rects = repaint.AsSpan();
         for (int k = 0; k < rects.Length; k++)
         {
@@ -435,7 +433,7 @@ public sealed unsafe partial class D3D12Device
 
         sc.PpPresentCount = 0;
         // Present1 dirty rects only for a frame composited through the PRESERVE route: a whole-route composite (a repaint
-        // over PpFullCoverage, a back buffer of unknown age) presents the whole window — the frame was recomposited whole
+        // over PartialPresentMaxCoverage, a back buffer of unknown age) presents the whole window — the frame was recomposited whole
         // anyway, and DWM then never keeps a pixel of an earlier frame on its word alone.
         bool partialPresent = sc.SequentialFlip && !_ppDirtyFull && _ppPartial && (_frameKnockouts & GpuKnockouts.FullPresent) == 0 && _ppDirty.Count > 0;
         if (partialPresent)
@@ -472,6 +470,7 @@ public sealed unsafe partial class D3D12Device
         if (_ppPartial) for (int k = 0; k < _ppRepaintN; k++) repaintPx += (long)(_ppRepaint[k].Right - _ppRepaint[k].Left) * (_ppRepaint[k].Bottom - _ppRepaint[k].Top);
         else repaintPx = (long)window;
         NoteCompositeCensus(repaintPx, presentPx, dirtyPx, !_ppPartial);
+        _frameRepaintPx = repaintPx;
         LastPartialCoverage = !_ppPartial || window <= 0f ? 1f : RepaintCoverage(window);
         LastPartialRects = _ppPartial ? _ppRepaintN : 0;
         if (_ppPartial) PartialFrameCount++;
@@ -486,20 +485,34 @@ public sealed unsafe partial class D3D12Device
     }
 
     /// <summary>The PRESERVE composite: per repaint rect, clear it to the frame's clear colour (a copy, like the CLEAR load
-    /// op writes) and draw every item that touches it, scissored to it.</summary>
+    /// op writes) and draw every item that touches it, scissored to it.
+    /// <para>A rect inside the opaque pixels of a top-level occluder (<see cref="CoverFrom"/>: the highest one) starts AT that
+    /// occluder: it writes every pixel of the rect fully opaque, so the clear and every item below it paint nothing anyone
+    /// sees there — the rule a backdrop's mini-composite already applies (audit PERF r3 COMP). The shell's window background
+    /// is such an occluder, so a repaint rect no longer clears itself and then fills the same pixels again.</para></summary>
     private void PpCompositeRects(in CompositeFrame frame)
     {
+        int n = frame.Items.Length;
         for (int k = 0; k < _ppRepaintN; k++)
         {
             PixelRect r = _ppRepaint[k];
             _frameClip = r;
             _frameClipOn = true;
             _compositor!.Scissor(_cmdList, r.Left, r.Top, r.Right, r.Bottom);
-            _compositor.Begin(r.Left, r.Top, r.Right, r.Bottom);
-            _compositor.Color(frame.Info.Clear);
-            _compositor.Draw(_cmdList, SliceCompositor.Pso.FillCopy, default);
-            if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, 0, frame.Items.Length, 0, 0, (int)_w, (int)_h, -1);
+            // −1: nothing covers the rect (also under the NoOcclusion knockout: no occluder rects; --fg no-cover-start: the A/B arm)
+            int from = TileDamage.CoverStart ? CoverFrom(n, in r) : -1;
+            if (from < 0)
+            {
+                _compositor.Begin(r.Left, r.Top, r.Right, r.Bottom);
+                _compositor.Color(frame.Info.Clear);
+                _compositor.Draw(_cmdList, SliceCompositor.Pso.FillCopy, default);
+            }
+            else _ppCoveredRects++;
+            if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, Math.Max(from, 0), n, 0, 0, (int)_w, (int)_h, -1);
         }
         _frameClipOn = false;
     }
+
+    /// <summary>Repaint rects the last composites started at an opaque cover (diagnostics; render thread).</summary>
+    private long _ppCoveredRects;
 }

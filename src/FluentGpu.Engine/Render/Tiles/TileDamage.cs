@@ -70,6 +70,22 @@ public static class TileDamage
     /// navigation, a flyout) is diffed entry by entry like any other turn instead of taking the whole frame.</summary>
     public static bool PresentStructureDiff;
 
+    /// <summary><c>--fg pp-coverage=X</c> (an investigation arm): the repaint share of the window at or above which the primary
+    /// composite takes the whole-frame route instead of the partial (PRESERVE) one. Default 0.45 (D3D12Device.PartialPresent).</summary>
+    public static float PartialPresentMaxCoverage = 0.45f;
+
+    /// <summary>A partial-present repaint rect inside a top-level occluder's opaque pixels starts at that occluder (no clear, nothing
+    /// below it; default on). <c>--fg no-cover-start</c> clears and composites every item there (the A/B arm and identity control).</summary>
+    public static bool CoverStart = true;
+
+    /// <summary>The D3D12 decoder skips an op whose effective alpha is exactly 0 (default on; D3D12Device.ZeroAlpha).
+    /// <c>--fg no-zero-cull</c> draws it anyway (the A/B arm and identity control).</summary>
+    public static bool ZeroAlphaCull = true;
+
+    /// <summary>A whole-frame composite folds a window-covering opaque ground fill into its clear colour (default on;
+    /// D3D12Device.ClearFold). <c>--fg no-clear-fold</c> clears to the frame's colour and draws the fill (the A/B arm).</summary>
+    public static bool ClearFold = true;
+
     /// <summary><c>--fg present-validate</c>: every primary composite is re-composited whole into a shadow target and
     /// compared with the back buffer, and every Present1's dirty rects are checked to cover every pixel that changed since
     /// the last presented frame (a model of what DWM shows is kept and compared).</summary>
