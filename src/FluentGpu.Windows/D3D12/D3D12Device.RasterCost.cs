@@ -37,14 +37,13 @@ public sealed unsafe partial class D3D12Device
 
     private long _rcSubmitOps0;
 
-    private long _rcTexC0, _rcTexR0, _rcTexU0;
+    private long _rcTexC0, _rcTexR0;
     private int _rcSeg0, _rcSci0, _rcSegN, _rcSciN;
 
     private void RcBeginSubmit()
     {
         _rcTexC0 = _surfaces?.TexturesCreated ?? 0;
         _rcTexR0 = _surfaces?.TexturesReleased ?? 0;
-        _rcTexU0 = _surfaces?.TexturesReused ?? 0;
         _rcSegN = _rcSciN = 0;
         long all = 0;
         for (int i = 0; i < _rcOpTally.Length; i++) all += _rcOpTally[i];
@@ -117,6 +116,6 @@ public sealed unsafe partial class D3D12Device
             rastered ? _rcGlyphInsts : 0, rastered ? _rcDraws : 0, (int)(all - _rcSubmitOps0),
             rastered ? (int)(_rcCulledEnd - _rcCulled0) : 0, rastered ? (int)(_rcFootEnd - _rcFoot0) : 0,
             (int)((_surfaces?.TexturesCreated ?? 0) - _rcTexC0), (int)((_surfaces?.TexturesReleased ?? 0) - _rcTexR0),
-            rastered ? _rcSegN : 0, rastered ? _rcSciN : 0, (int)((_surfaces?.TexturesReused ?? 0) - _rcTexU0));
+            rastered ? _rcSegN : 0, rastered ? _rcSciN : 0);
     }
 }

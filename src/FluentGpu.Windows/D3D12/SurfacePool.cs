@@ -62,29 +62,7 @@ internal sealed unsafe class SurfacePool : IDisposable
         public PixelRect LastDamage;
     }
 
-    private struct Retired { public ID3D12Resource* Res; public ulong Fence; public long Bytes; public int W, H; public D3D12_RESOURCE_STATES State; public int Turn; }
-
-    // SPARE textures (audit PERF r3 RASTER): a retired texture the GPU has passed is kept for the next create of exactly its
-    // size instead of being released — on the owner's UMA driver a release zero-fills the texture (~0.3–0.6 ms for a 2 MiB
-    // tile, bursts of 8–24 when a page's slots trim together) and a create costs another ~0.05 ms. Bounded so the held bytes
-    // never pass SpareCapBytes, a create that finds no spare of its size first releases spares worth at least its own bytes
-    // (the pool's live bytes never rise above what releasing them on time would have left, plus at most the cap), spares
-    // unused for SpareTurns composite turns are released, and the idle path releases them all.
-    private readonly List<Retired> _spares = new(16);
-    private long _spareBytes;
-
-    /// <summary>The most bytes the pool holds in spare textures.</summary>
-    public const long SpareCapBytes = 16L * 1024 * 1024;
-
-    /// <summary>A spare unused for this many composite turns is released.</summary>
-    public const int SpareTurns = 240;
-
-    /// <summary>Spares on (default). <c>--fg no-texture-recycle</c> releases every retired texture once the fence passes, as
-    /// before (the A/B arm).</summary>
-    public static bool Recycle => FluentGpu.Render.Tiles.TileDamage.RecycleTextures;
-
-    /// <summary>Textures a create took from the spares instead of the driver (the raster cost counters).</summary>
-    public long TexturesReused { get; private set; }
+    private struct Retired { public ID3D12Resource* Res; public ulong Fence; public long Bytes; }
 
     private readonly ID3D12Device* _device;
     private readonly int _tileCap;
@@ -153,8 +131,6 @@ internal sealed unsafe class SurfacePool : IDisposable
         _turn = turn;
         ScratchLeases = 0; ScratchPx = 0L; ScratchRefused = 0;
         DrainRetired(completedFence);
-        for (int i = _spares.Count - 1; i >= 0; i--)
-            if (turn - _spares[i].Turn > SpareTurns) ReleaseSpare(i);
         for (int i = 0; i < _scratch.Length; i++)
         {
             ref Entry e = ref _scratch[i];
@@ -172,17 +148,6 @@ internal sealed unsafe class SurfacePool : IDisposable
         for (int i = _retired.Count - 1; i >= 0; i--)
         {
             if (!LayerTargetTrim.CanRelease(_retired[i].Fence, completedFence)) continue;
-            if (Recycle && _retired[i].W > 0)
-            {
-                // passed by the GPU: a spare (still counted as retired bytes by the census)
-                Retired r = _retired[i];
-                r.Turn = _turn;
-                _spares.Add(r);
-                _spareBytes += r.Bytes;
-                Interlocked.Decrement(ref _retiredCount);
-                _retired.RemoveAt(i);
-                continue;
-            }
             D3D12MemoryDiagnostics.Release(_retired[i].Res, "Tiles.Surface");
             _retired[i].Res->Release();
             TexturesReleased++;
@@ -190,31 +155,6 @@ internal sealed unsafe class SurfacePool : IDisposable
             Interlocked.Decrement(ref _retiredCount);
             _retired.RemoveAt(i);
         }
-        while (_spareBytes > SpareCapBytes && _spares.Count > 0) ReleaseSpare(OldestSpare());
-    }
-
-    private int OldestSpare()
-    {
-        int best = 0;
-        for (int i = 1; i < _spares.Count; i++) if (_spares[i].Turn < _spares[best].Turn) best = i;
-        return best;
-    }
-
-    private void ReleaseSpare(int i)
-    {
-        Retired r = _spares[i];
-        D3D12MemoryDiagnostics.Release(r.Res, "Tiles.Surface");
-        r.Res->Release();
-        TexturesReleased++;
-        Interlocked.Add(ref _retiredBytes, -r.Bytes);
-        _spareBytes -= r.Bytes;
-        _spares.RemoveAt(i);
-    }
-
-    /// <summary>Release every spare (the idle path, teardown).</summary>
-    private void ReleaseSpares()
-    {
-        for (int i = _spares.Count - 1; i >= 0; i--) ReleaseSpare(i);
     }
 
     /// <summary>Retired textures still waiting on the fence (the idle path asks whether to look again soon).</summary>
@@ -248,7 +188,6 @@ internal sealed unsafe class SurfacePool : IDisposable
     public int TrimIdle(long nowMs, ulong completedFence, bool weak)
     {
         DrainRetired(completedFence);
-        ReleaseSpares();   // nothing is about to be created: give the bytes back exactly as the release would have
         long next = long.MaxValue;
         for (int i = 0; i < _scratch.Length; i++)
         {
@@ -285,7 +224,7 @@ internal sealed unsafe class SurfacePool : IDisposable
     {
         if (e.Res == null) { e = default; e.SrvStamp = int.MinValue; return; }
         long retiredBytes = LayerTargetBucket.Bytes(e.W, e.H);
-        _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence, Bytes = retiredBytes, W = e.W, H = e.H, State = e.State });
+        _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence, Bytes = retiredBytes });
         Interlocked.Add(ref _retiredBytes, retiredBytes);
         Interlocked.Increment(ref _retiredCount);
         e = default;
@@ -299,9 +238,6 @@ internal sealed unsafe class SurfacePool : IDisposable
         for (int i = 0; i < _scratch.Length; i++) if (_scratch[i].Res != null) { D3D12MemoryDiagnostics.Release(_scratch[i].Res, "Tiles.Surface"); _scratch[i].Res->Release(); _scratch[i] = default; _scratch[i].SrvStamp = int.MinValue; }
         foreach (var r in _retired) { D3D12MemoryDiagnostics.Release(r.Res, "Tiles.Surface"); r.Res->Release(); }
         _retired.Clear();
-        foreach (var r in _spares) { D3D12MemoryDiagnostics.Release(r.Res, "Tiles.Surface"); r.Res->Release(); }
-        _spares.Clear();
-        _spareBytes = 0;
         Interlocked.Exchange(ref _retiredBytes, 0);
         Interlocked.Exchange(ref _retiredCount, 0);
     }
@@ -316,10 +252,11 @@ internal sealed unsafe class SurfacePool : IDisposable
         if (e.Res == null || e.W != w || e.H != h)
         {
             Retire(ref e);
-            e.Res = CreateTarget(w, h, "Tiles.Surface", out e.State);
+            e.Res = CreateTarget(w, h, "Tiles.Surface");
             e.W = w; e.H = h;
+            e.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             _device->CreateRenderTargetView(e.Res, null, Rtv(slot));
-            e.CreatedTurn = _turn;   // a reused spare holds another surface's pixels: as new (it rasters whole)
+            e.CreatedTurn = _turn;
         }
         e.LastTurn = _turn;
         e.LastUseFence = frameFence;
@@ -405,8 +342,9 @@ internal sealed unsafe class SurfacePool : IDisposable
             }
             ref Entry n = ref _scratch[best];
             Retire(ref n);
-            n.Res = CreateTarget(w, h, "Tiles.Scratch", out n.State);
+            n.Res = CreateTarget(w, h, "Tiles.Scratch");
             n.W = w; n.H = h;
+            n.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             _device->CreateRenderTargetView(n.Res, null, Rtv(_tileCap + best));
         }
         ref Entry s = ref _scratch[best];
@@ -616,30 +554,8 @@ internal sealed unsafe class SurfacePool : IDisposable
         return gpu;
     }
 
-    /// <summary>A render target of exactly <paramref name="w"/>×<paramref name="h"/>: a spare of that size when one is held
-    /// (<paramref name="state"/> = the state it was retired in), else a new texture (PIXEL_SHADER_RESOURCE) — after
-    /// releasing spares worth at least its bytes, so holding spares never adds to what a create allocates.</summary>
-    private ID3D12Resource* CreateTarget(int w, int h, string name, out D3D12_RESOURCE_STATES state)
+    private ID3D12Resource* CreateTarget(int w, int h, string name)
     {
-        for (int i = 0; i < _spares.Count; i++)
-        {
-            if (_spares[i].W != w || _spares[i].H != h) continue;
-            Retired r = _spares[i];
-            _spares.RemoveAt(i);
-            _spareBytes -= r.Bytes;
-            Interlocked.Add(ref _retiredBytes, -r.Bytes);
-            TexturesReused++;
-            state = r.State;
-            return r.Res;
-        }
-        long need = LayerTargetBucket.Bytes(w, h), freed = 0;
-        while (freed < need && _spares.Count > 0)
-        {
-            int o = OldestSpare();
-            freed += _spares[o].Bytes;
-            ReleaseSpare(o);
-        }
-        state = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         TexturesCreated++;
         D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd = default;
