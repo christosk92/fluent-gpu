@@ -182,6 +182,10 @@ internal abstract class RecordColumn
     private uint _next;
     internal uint NextStamp() { uint s = ++_next; return s == 0 ? ++_next : s; }
     internal abstract void Clear(int slot);
+    /// <summary>Copy the record at <paramref name="slot"/> onto this column's OLD stack and return a handle to the copy (valid until
+    /// <see cref="PopOld"/>): the value an Update diffs against after the node's record already holds the new element.</summary>
+    internal abstract Element PushOld(int slot, ushort kind);
+    internal abstract void PopOld();
 }
 
 internal sealed class RecordColumn<T> : RecordColumn
@@ -208,6 +212,27 @@ internal sealed class RecordColumn<T> : RecordColumn
         if (slot >= Items.Length) return;
         Items[slot] = default!;
         Stamps[slot] = 0;
+    }
+
+    private RecordColumn<T>? _old;
+    private int _oldTop;
+
+    internal override Element PushOld(int slot, ushort kind)
+    {
+        var s = _old ??= new RecordColumn<T>();
+        int at = _oldTop++;
+        s.Ensure(at);
+        s.Items[at] = Items[slot];
+        uint stamp = s.NextStamp();
+        s.Stamps[at] = stamp;
+        return new Element(s, kind, at, stamp);
+    }
+
+    internal override void PopOld()
+    {
+        int at = --_oldTop;
+        _old!.Items[at] = default!;
+        _old.Stamps[at] = 0;
     }
 }
 

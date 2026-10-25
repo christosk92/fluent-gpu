@@ -93,14 +93,12 @@ public sealed partial class TreeReconciler
     private struct BoundSlot
     {
         public Signal<int> Index;
-        public Element El;
-        public NodeHandle Root;
+        public NodeHandle Root;   // its element is the root's node record
         public int ContentType;
 
-        public BoundSlot(Signal<int> index, Element el, NodeHandle root, int contentType = 0)
+        public BoundSlot(Signal<int> index, NodeHandle root, int contentType = 0)
         {
             Index = index;
-            El = el;
             Root = root;
             ContentType = contentType;
         }
@@ -300,8 +298,7 @@ public sealed partial class TreeReconciler
     private sealed class KeptSlot
     {
         public Signal<int> Index = null!;
-        public Element El;
-        public NodeHandle Root;
+        public NodeHandle Root;   // its element is the root's node record
         public int ContentType;
         public long LastUsed;   // FrameEpoch of the last park/touch — the LRU key
     }
@@ -415,8 +412,7 @@ public sealed partial class TreeReconciler
     {
         public string Key = "";
         public object Token = null!;
-        public Element El;
-        public NodeHandle Root;
+        public NodeHandle Root;   // its element is the root's node record
         public long LastUsed;
         public bool Attached;
         public bool ResourcesActive = true;
@@ -1106,9 +1102,16 @@ public sealed partial class TreeReconciler
     {
         int idx = (int)node.Raw.Index;
         if (_records.IsSource(idx, newEl)) return;
-        UpdateCore(node, newEl, _records.Get(idx));
-        _records.Store(idx, newEl);
+        // The record takes the new element FIRST (a bind body run by this update reads its companions there, as the bind's
+        // element was re-pointed at the new one); the diff reads the previous record from the kind's old stack.
+        ushort kind = newEl.ElementTypeId;
+        Element old = _records.StoreKeepOld(idx, newEl);
+        try { UpdateCore(node, newEl, old); }
+        finally { _records.PopOld(kind); }
     }
+
+    /// <summary>The node's record (the element it was last mounted or reconciled against); valid until its next store.</summary>
+    private Element RecordOf(NodeHandle node) => _records.Get((int)node.Raw.Index);
 
     private void UpdateCore(NodeHandle node, Element newEl, Element oldEl)
     {
@@ -2064,7 +2067,6 @@ public sealed partial class TreeReconciler
             {
                 Key = key,
                 Token = token,
-                El = desired,
                 Root = root,
                 LastUsed = state.Clock,
                 Attached = true,
@@ -2097,13 +2099,12 @@ public sealed partial class TreeReconciler
                 SetSubtreeExitFrozen(entry.Root, frozen: false, budgetReplays: true);
             }
 
-            if (entry.El.ElementTypeId == desired.ElementTypeId)
+            if (RecordOf(entry.Root).ElementTypeId == desired.ElementTypeId)
             {
                 Update(entry.Root, desired);
-                entry.El = desired;
                 // Land the authored pose before any Enter seeds over it: an Enter that names fewer channels than the
                 // exit did, or none (reduced motion), would otherwise show the page faded out or offset.
-                if (reclaimed) Anim?.LandEnterRest(entry.Root, EnterRestOf(entry.El));
+                if (reclaimed) Anim?.LandEnterRest(entry.Root, EnterRestOf(RecordOf(entry.Root)));
             }
             else
             {
@@ -2117,7 +2118,7 @@ public sealed partial class TreeReconciler
         if (transition is { } enter && enter.Enter.Active && Anim is { } anim && !Motion.ReducedMotion && !SnapMotion)
         {
             anim.CancelAll(entry.Root);
-            anim.SeedEnterOver(entry.Root, enter.Enter, enter, EnterRestOf(entry.El));
+            anim.SeedEnterOver(entry.Root, enter.Enter, enter, EnterRestOf(RecordOf(entry.Root)));
         }
         EvictInactiveKeepAliveEntries(state, options);
     }
@@ -2134,7 +2135,7 @@ public sealed partial class TreeReconciler
         OnSubtreeDeactivated?.Invoke(entry.Root);
         _scene.Unmark(entry.Root, NodeFlags.HitTestVisible);
         Anim!.CancelAll(entry.Root);
-        Anim.SeedExitOver(entry.Root, spec.Exit, spec, EnterRestOf(entry.El));
+        Anim.SeedExitOver(entry.Root, spec.Exit, spec, EnterRestOf(RecordOf(entry.Root)));
         // Freeze component renders for the outgoing snapshot: the page stays attached (exit tracks keep ticking;
         // UseActivation does not fire — park still owns that) but must not rebuild against the incoming route.
         SetSubtreeExitFrozen(entry.Root, frozen: true);
@@ -2241,7 +2242,6 @@ public sealed partial class TreeReconciler
         if (options.CompositeTransitions) _scene.Paint(root).CompositeLayer = true;
         Mount(root, desired);
         entry.Root = root;
-        entry.El = desired;
         entry.Attached = true;
         entry.ResourcesActive = true;
         MarkLayoutShape(parent);
@@ -3187,7 +3187,7 @@ public sealed partial class TreeReconciler
             if (Wire(b.RadialGradientCenter.IsBound, bP?.RadialGradientCenter.IsBound == true))
             {
                 var fx = NewBind<Point2>(b, static e => e.Is(out BoxEl x) ? x.RadialGradientCenter : default);
-                AddBinding(node, fx.Start(() =>
+                AddBinding(node, fx.Start(node, () =>
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
@@ -3204,7 +3204,7 @@ public sealed partial class TreeReconciler
             if (Wire(b.FeedbackTransform.IsBound, bP?.FeedbackTransform.IsBound == true))
             {
                 var fx = NewBind<Affine2D>(b, static e => e.Is(out BoxEl x) ? x.FeedbackTransform : default);
-                AddBinding(node, fx.Start(() =>
+                AddBinding(node, fx.Start(node, () =>
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node) || !_scene.TryGetFeedback(node, out var st)) return;
@@ -3217,7 +3217,7 @@ public sealed partial class TreeReconciler
             if (Wire(b.FeedbackDecay.IsBound, bP?.FeedbackDecay.IsBound == true))
             {
                 var fx = NewBind<float>(b, static e => e.Is(out BoxEl x) ? x.FeedbackDecay : default);
-                AddBinding(node, fx.Start(() =>
+                AddBinding(node, fx.Start(node, () =>
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node) || !_scene.TryGetFeedback(node, out var st)) return;
@@ -3230,7 +3230,7 @@ public sealed partial class TreeReconciler
             if (Wire(b.GradientMix.IsBound, bP?.GradientMix.IsBound == true))
             {
                 var fx = NewBind<float>(b, static e => e.Is(out BoxEl x) ? x.GradientMix : default);
-                AddBinding(node, fx.Start(() =>
+                AddBinding(node, fx.Start(node, () =>
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
@@ -3248,7 +3248,7 @@ public sealed partial class TreeReconciler
                 // stays theme-agnostic), and write the resolved border equality-gated so an unchanged validity marks NO
                 // PaintDirty (Memo.OnStale re-runs this effect each keystroke, but a no-op validity dirties nothing).
                 var fx = NewBind<ValidationState>(b, static e => e.Is(out BoxEl x) ? x.Validation : default);
-                AddBinding(node, fx.Start(() =>
+                AddBinding(node, fx.Start(node, () =>
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
@@ -3293,7 +3293,7 @@ public sealed partial class TreeReconciler
                 // ImageLatencyCensus.SourceWait: when this node's source went empty (a row mounted or rebound before its
                 // data landed) and the source it last showed. Two captured locals on the closure that exists anyway.
                 long emptySince = 0; string? lastSrc = null;
-                AddBinding(node, fx.Start(() =>
+                AddBinding(node, fx.Start(node, () =>
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
@@ -3333,7 +3333,7 @@ public sealed partial class TreeReconciler
             if (Wire(ime.Placeholder.IsBound, imeP?.Placeholder.IsBound == true))
             {
                 var fx = NewBind<ColorF>(ime, static e => e.Is(out ImageEl x) ? x.Placeholder : default);
-                AddBinding(node, fx.Start(() =>
+                AddBinding(node, fx.Start(node, () =>
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
@@ -3355,7 +3355,7 @@ public sealed partial class TreeReconciler
             if (Wire(ile.Tint.IsBound, ileP?.Tint.IsBound == true))
             {
                 var fx = NewBind<ColorF>(ile, static e => e.Is(out IconLayerEl x) ? x.Tint : default);
-                AddBinding(node, fx.Start(() =>
+                AddBinding(node, fx.Start(node, () =>
                 {
                     NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
@@ -3878,7 +3878,7 @@ public sealed partial class TreeReconciler
             _scene.AppendChild(content, root);   // mount under the viewport so scroll bindings resolve their container
             Mount(root, el);
             _scene.Detach(root);
-            prefix.Add(new BoundSlot(sig, el, root));
+            prefix.Add(new BoundSlot(sig, root));
             ve.OnItemPrepared?.Invoke(index);
         }
 
@@ -4041,7 +4041,7 @@ public sealed partial class TreeReconciler
                     _realizeSlotIndex = idx; _realizeSlotSignal = sig;   // W2-E3: the cold mount's image requests classify by this slot
                     Mount(child, el);
                     _realizeSlotIndex = -1; _realizeSlotSignal = null;
-                    scratch[ord] = new BoundSlot(sig, el, child);
+                    scratch[ord] = new BoundSlot(sig, child);
                     structural = true;
                 }
             }
@@ -4198,7 +4198,7 @@ public sealed partial class TreeReconciler
                 SetSubtreeParked(slots[i].Root, parked: true);         // quiesce render-effects/animations (Flow.KeepAlive mechanics)
                 kept[item] = new KeptSlot
                 {
-                    Index = slots[i].Index, El = slots[i].El, Root = slots[i].Root,
+                    Index = slots[i].Index, Root = slots[i].Root,
                     ContentType = slots[i].ContentType, LastUsed = epoch,
                 };
                 consumed[i] = true;
@@ -4226,7 +4226,7 @@ public sealed partial class TreeReconciler
                 {
                     _scene.AppendChild(content, ks.Root);
                     SetSubtreeParked(ks.Root, parked: false);
-                    var restored = new BoundSlot(ks.Index, ks.El, ks.Root, ks.ContentType);
+                    var restored = new BoundSlot(ks.Index, ks.Root, ks.ContentType);
                     RebindBoundSlot(ref restored, item, ve);
                     newSlots[ord] = restored;
                     structural = true;
@@ -4292,7 +4292,7 @@ public sealed partial class TreeReconciler
             _realizeSlotIndex = item; _realizeSlotSignal = nsig;   // W2-E3: the cold mount's image requests classify by this slot
             Mount(child, nel);
             _realizeSlotIndex = -1; _realizeSlotSignal = null;
-            newSlots[ord] = new BoundSlot(nsig, nel, child, dtype);
+            newSlots[ord] = new BoundSlot(nsig, child, dtype);
             structural = true;
             _realizeProgress = true;
         }
@@ -5238,12 +5238,13 @@ public sealed partial class TreeReconciler
             // (LostFocus, IME/SIP teardown) reach the row and its ancestors. An exit orphan stays LIVE, so without it a
             // focused row kept focus through its fade and Enter re-fired it on an index that now names another item.
             OnSubtreeRemoved?.Invoke(root);
+            EnterRest rest = animate ? EnterRestOf(RecordOf(root)) : default;   // before the unmount drops the row's record
             UnmountSubtree(root);
             if (animate)
             {
                 anim!.CancelAll(root);
                 _scene.Orphan(root);
-                anim!.SeedExitOver(root, exit, in motionDef, EnterRestOf(slot.El), dealt is null ? 0f : staggerMs * RemovedRank(index, dealt));
+                anim!.SeedExitOver(root, exit, in motionDef, rest, dealt is null ? 0f : staggerMs * RemovedRank(index, dealt));
             }
             else _scene.FreeSubtree(root);
             _reconciled = true;

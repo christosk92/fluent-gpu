@@ -89,7 +89,6 @@ public sealed partial class TreeReconciler
                 OnSubtreeDeactivated?.Invoke(fresh.Root);
                 _scene.Detach(fresh.Root);
                 SetSubtreeParked(fresh.Root, parked: true);
-                ks.El = fresh.El;
                 ks.Root = fresh.Root;
                 rebuilt++;
             }
@@ -116,7 +115,7 @@ public sealed partial class TreeReconciler
         _realizeSlotIndex = index.Peek(); _realizeSlotSignal = index;   // the cold mount's image requests classify by this slot
         Mount(child, el);
         _realizeSlotIndex = outerIndex; _realizeSlotSignal = outerSignal;
-        return new BoundSlot(index, el, child, contentType);
+        return new BoundSlot(index, child, contentType);
     }
 
     /// <summary>Hard-free a replaced slot root: hover/press/focus hygiene, unmount (hook cleanups, binds), free. No exit orphan.</summary>

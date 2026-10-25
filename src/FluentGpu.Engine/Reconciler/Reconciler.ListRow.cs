@@ -88,7 +88,7 @@ public sealed partial class TreeReconciler
         if (Wire(lr.Cells.IsBound, prev?.Cells.IsBound == true))
         {
             var fx = NewBind<RowCells>(lr, static e => e.Is(out ListRowEl x) ? x.Cells : default);
-            AddBinding(node, fx.Start(() =>
+            AddBinding(node, fx.Start(node, () =>
             {
                 NodeBindingFireCount++;
                 if (!_scene.IsLive(node)) return;
@@ -105,7 +105,7 @@ public sealed partial class TreeReconciler
         if (Wire(lr.Fill.IsBound, prev?.Fill.IsBound == true))
         {
             var fx = NewBind<ColorF>(lr, static e => e.Is(out ListRowEl x) ? x.Fill : default);
-            AddBinding(node, fx.Start(() =>
+            AddBinding(node, fx.Start(node, () =>
             {
                 NodeBindingFireCount++;
                 if (!_scene.IsLive(node)) return;
@@ -121,7 +121,7 @@ public sealed partial class TreeReconciler
         if (Wire(lr.HoverFill.IsBound, prev?.HoverFill.IsBound == true))
         {
             var fx = NewBind<ColorF>(lr, static e => e.Is(out ListRowEl x) ? x.HoverFill : default);
-            AddBinding(node, fx.Start(() =>
+            AddBinding(node, fx.Start(node, () =>
             {
                 NodeBindingFireCount++;
                 if (!_scene.IsLive(node)) return;
@@ -139,7 +139,7 @@ public sealed partial class TreeReconciler
             // Rides the generic PressedFill channel/state (ListRowEl.SelectedFill doc comment) — a row has no
             // separate pressed visual, so Selected repurposes the third paint-fill slot every element already has.
             var fx = NewBind<ColorF>(lr, static e => e.Is(out ListRowEl x) ? x.SelectedFill : default);
-            AddBinding(node, fx.Start(() =>
+            AddBinding(node, fx.Start(node, () =>
             {
                 NodeBindingFireCount++;
                 if (!_scene.IsLive(node)) return;
@@ -155,7 +155,7 @@ public sealed partial class TreeReconciler
         if (Wire(lr.Placeholder.IsBound, prev?.Placeholder.IsBound == true))
         {
             var fx = NewBind<bool>(lr, static e => e.Is(out ListRowEl x) ? x.Placeholder : default);
-            AddBinding(node, fx.Start(() =>
+            AddBinding(node, fx.Start(node, () =>
             {
                 NodeBindingFireCount++;
                 if (!_scene.IsLive(node)) return;

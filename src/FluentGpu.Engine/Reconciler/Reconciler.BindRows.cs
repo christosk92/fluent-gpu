@@ -25,7 +25,6 @@ public sealed partial class TreeReconciler
     private object?[] _bSel = new object?[256];        // Func<Element, Prop<T>>: reads the channel off a re-rendered element (static)
     private BindOps?[] _bOps = new BindOps?[256];      // the typed operations (one shared instance per T)
     private object?[] _bFire = new object?[256];       // Action<BindRef> (static, closure-free) or Action (a closure body)
-    private Element?[] _bEl = new Element?[256];       // the element the channel was last reconciled against (companions)
     private byte[] _bFlags = new byte[256];
     private int[] _bRow = new int[256];                // its RxTable row; the free list threads through here while free
     private int _bHigh = 1, _bFree, _bLive;            // bind 0 is "none"
@@ -141,7 +140,6 @@ public sealed partial class TreeReconciler
         _bSignal[b] = p.Signal;
         _bSel[b] = channel;
         _bOps[b] = BindOps<T>.Instance;
-        _bEl[b] = el;
         _bFlags[b] = writesLayout ? BFWritesLayout : (byte)0;
         _bNode[b] = default;
         _bFire[b] = null;
@@ -168,7 +166,7 @@ public sealed partial class TreeReconciler
 
     private void ReleaseBind(int b)
     {
-        _bThunk[b] = null; _bSignal[b] = null; _bSel[b] = null; _bOps[b] = null; _bFire[b] = null; _bEl[b] = null;
+        _bThunk[b] = null; _bSignal[b] = null; _bSel[b] = null; _bOps[b] = null; _bFire[b] = null;
         _bNode[b] = default; _bFlags[b] = 0;
         _bRow[b] = _bFree;
         _bFree = b;
@@ -181,7 +179,7 @@ public sealed partial class TreeReconciler
     {
         int n = _bNode.Length * 2;
         Array.Resize(ref _bNode, n); Array.Resize(ref _bThunk, n); Array.Resize(ref _bSignal, n); Array.Resize(ref _bSel, n);
-        Array.Resize(ref _bOps, n); Array.Resize(ref _bFire, n); Array.Resize(ref _bEl, n); Array.Resize(ref _bFlags, n);
+        Array.Resize(ref _bOps, n); Array.Resize(ref _bFire, n); Array.Resize(ref _bFlags, n);
         Array.Resize(ref _bRow, n);
     }
 
@@ -197,7 +195,6 @@ public sealed partial class TreeReconciler
     {
         Prop<T> p = Unsafe.As<Func<Element, Prop<T>>>(_bSel[b]!)(next);
         if (!p.IsBound) return BindRewire.NowStatic;
-        _bEl[b] = next;
         Func<T>? thunk = p.Thunk;
         IReadSignal<T>? signal = p.Signal;
         if (object.Equals(thunk, _bThunk[b]) && object.Equals(signal, _bSignal[b])) return BindRewire.Unchanged;
@@ -208,7 +205,8 @@ public sealed partial class TreeReconciler
     }
 
     internal NodeHandle BindNodeOf(int b) => _bNode[b];
-    internal Element BindElOf(int b) => _bEl[b].GetValueOrDefault();
+    /// <summary>The element the bind's node was last reconciled against (its node record): bodies read static companions here.</summary>
+    internal Element BindElOf(int b) => _records.Get((int)_bNode[b].Raw.Index);
     internal bool BindFlag(int b, byte f) => (_bFlags[b] & f) != 0;
     internal void SetBindFlag(int b, byte f, bool on) => _bFlags[b] = on ? (byte)(_bFlags[b] | f) : (byte)(_bFlags[b] & ~f);
     internal void SetBindFire(int b, NodeHandle node, object fire) { _bNode[b] = node; _bFire[b] = fire; }
@@ -316,7 +314,7 @@ internal readonly struct Bind<T>
     /// <summary>Arm the closure-free body (a static lambda calling the channel's Fire method) and run it once.</summary>
     internal BindRef Start(NodeHandle node, Action<BindRef> fire) { Rec.SetBindFire(Id, node, fire); Rec.StartBind(Id); return this; }
     /// <summary>Arm a closure body and run it once (the rare channels).</summary>
-    internal BindRef Start(Action body) { Rec.SetBindFire(Id, default, body); Rec.StartBind(Id); return this; }
+    internal BindRef Start(NodeHandle node, Action body) { Rec.SetBindFire(Id, node, body); Rec.StartBind(Id); return this; }
 
     public static implicit operator BindRef(Bind<T> b) => new(b.Rec, b.Id);
     public static explicit operator Bind<T>(BindRef r) => new(r);

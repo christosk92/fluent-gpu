@@ -14,7 +14,7 @@ public sealed partial class TreeReconciler
     {
         if (!Wire(sf.Instances.IsBound, prev?.Instances.IsBound == true)) return;
         var fx = NewBind<SpriteInstances>(sf, static e => e.Is(out SpriteFieldEl x) ? x.Instances : default);
-        AddBinding(node, fx.Start(() =>
+        AddBinding(node, fx.Start(node, () =>
         {
             NodeBindingFireCount++;
             if (!_scene.IsLive(node)) return;

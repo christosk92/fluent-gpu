@@ -26,7 +26,7 @@ public sealed partial class TreeReconciler
         // WritesLayout: a re-wire's re-run happens inside a render scope, so a re-shape it causes is promoted to a
         // layout-shape change exactly like the static path's inRenderScope:true (RewireBinds).
         var fx = NewBind<TextSpans>(st, static e => e.Is(out SpanTextEl x) ? x.Spans : default, writesLayout: true);
-        AddBinding(node, fx.Start(() =>
+        AddBinding(node, fx.Start(node, () =>
         {
             NodeBindingFireCount++;
             if (!_scene.IsLive(node)) return;

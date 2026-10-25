@@ -16,7 +16,7 @@ public sealed partial class TreeReconciler
         if (Wire(se.GradientMix.IsBound, prev?.GradientMix.IsBound == true))
         {
             var mx = NewBind<float>(se, static e => e.Is(out SeriesEl x) ? x.GradientMix : default);
-            AddBinding(node, mx.Start(() =>
+            AddBinding(node, mx.Start(node, () =>
             {
                 NodeBindingFireCount++;
                 if (!_scene.IsLive(node)) return;
@@ -30,7 +30,7 @@ public sealed partial class TreeReconciler
         }
         if (!Wire(se.Samples.IsBound, prev?.Samples.IsBound == true)) return;
         var fx = NewBind<SeriesSamples>(se, static e => e.Is(out SeriesEl x) ? x.Samples : default);
-        AddBinding(node, fx.Start(() =>
+        AddBinding(node, fx.Start(node, () =>
         {
             NodeBindingFireCount++;
             if (!_scene.IsLive(node)) return;

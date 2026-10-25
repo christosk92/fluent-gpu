@@ -89,6 +89,19 @@ internal sealed class NodeRecords
         col.Stamps[idx] = stamp;
     }
 
+    /// <summary>Store <paramref name="el"/> as the node's record and return its PREVIOUS record (a copy on the kind's old stack,
+    /// valid until <see cref="PopOld"/>; a heap kind's previous object). The node's kind does not change across an Update.</summary>
+    internal Element StoreKeepOld(int idx, Element el)
+    {
+        ushort k = _kind[idx];
+        System.Diagnostics.Debug.Assert(k == el.ElementTypeId, "an Update never changes the node's element kind");
+        Element old = _cols[k] is { } col ? col.PushOld(idx, k) : new Element((HeapElement)_heap[idx]!);
+        Store(idx, el);
+        return old;
+    }
+
+    internal void PopOld(ushort kind) => _cols[kind]?.PopOld();
+
     /// <summary>The node left the tree: drop its record (no reference outlives the node).</summary>
     internal void Clear(int idx)
     {
