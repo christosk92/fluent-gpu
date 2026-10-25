@@ -379,6 +379,25 @@ public sealed partial class FlexLayout
     // its workers while the pass runs, and the measure finds them shaped (IFontSystem.PrefetchShape; the DirectWrite backend's
     // TextLayoutEngine.Prefetch.cs). A clean subtree is skipped whole: the pass rides its measure ring and measures none of its
     // text. Reads only (no column, flag or cache is written), and the measure's answer is the same with or without it.
+    // Only a BATCH is handed over (PrefetchBatchMin or more strings): one or two new strings (a ticking time label, a keystroke)
+    // shape inline faster than a hand-off and a wait, so a pass that finds fewer prefetches nothing and wakes no worker.
+    private const int PrefetchBatchMin = 4;
+    private readonly List<NodeHandle> _prefetch = new();
+
+    private void PrefetchTexts(NodeHandle root)
+    {
+        _prefetch.Clear();
+        PrefetchText(root);
+        if (_prefetch.Count >= PrefetchBatchMin)
+            foreach (var n in _prefetch)
+            {
+                ref LayoutInput li = ref _scene.Layout(n);
+                _fonts.PrefetchShape(_scene.Paint(n).Text, in li.TextStyle);
+            }
+        _dPrefetch += _prefetch.Count >= PrefetchBatchMin ? _prefetch.Count : 0;
+        _prefetch.Clear();
+    }
+
     private void PrefetchText(NodeHandle n)
     {
         if (_scene.IsLayoutClean(n)) return;
@@ -391,8 +410,7 @@ public sealed partial class FlexLayout
             if (_scene.TryGetMeasureCache(n, out var mc)
                 && (SameShape(in mc.E0, paint.Text, in li.TextStyle, epoch) || SameShape(in mc.E1, paint.Text, in li.TextStyle, epoch)))
                 return;   // measured before with this text and style: its shape is (or was) stored
-            _fonts.PrefetchShape(paint.Text, in li.TextStyle);
-            _dPrefetch++;
+            _prefetch.Add(n);
             return;
         }
         for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c)) PrefetchText(c);
@@ -470,7 +488,7 @@ public sealed partial class FlexLayout
     public void Run(NodeHandle root, Size2 window)
     {
         if (root.IsNull) return;
-        if (_fonts.CanPrefetchShapes) PrefetchText(root);
+        if (_fonts.CanPrefetchShapes) PrefetchTexts(root);
         if (MeasureCensusEnabled) CensusSolve(root: true);
         // Snapshot so the per-Run print stays per-call even though the counters are now frame accumulators (host-reset).
         FluentGpu.Hosting.MountProf.RootSolves++;
@@ -494,7 +512,7 @@ public sealed partial class FlexLayout
     public void RunSubtree(NodeHandle node)
     {
         if (node.IsNull) return;
-        if (_fonts.CanPrefetchShapes) PrefetchText(node);
+        if (_fonts.CanPrefetchShapes) PrefetchTexts(node);
         if (MeasureCensusEnabled) CensusSolve(root: false);
         FluentGpu.Hosting.MountProf.SubtreeSolves++;
         BeginMeasurePass();

@@ -65,13 +65,15 @@ public sealed unsafe partial class TextLayoutEngine
         }
         private readonly int _cap;
         private readonly Dictionary<long, int> _index;
-        private Rec[] _recs = new Rec[256];
+        private Rec[] _recs;
         private int _recHigh;
         private int[] _freeRecs = new int[64];
         private int _freeCount;
-        private char[] _chars = new char[8192];
-        private RunGlyph[] _glyphs = new RunGlyph[8192];
-        private BreakOpp[] _breaks = new BreakOpp[8192];
+        // Sized for the cap at ~16 chars (and glyphs, and breaks) per record (measured: ~15), so the store does not grow, and copy
+        // under its lock, while the first pages fill it (a growth copy held the UI behind a worker for up to 0.8 ms Debug).
+        private char[] _chars;
+        private RunGlyph[] _glyphs;
+        private BreakOpp[] _breaks;
         private SpanRec[] _spans = new SpanRec[256];
         private int _charsUsed, _glyphsUsed, _breaksUsed, _spansUsed, _charsDead, _glyphsDead, _breaksDead, _spansDead;
 
@@ -91,6 +93,11 @@ public sealed unsafe partial class TextLayoutEngine
         public ShapeStore(int cap)
         {
             _cap = cap;
+            int per = 16 * Math.Max(cap, 64);
+            _recs = new Rec[cap + 16];
+            _chars = new char[per];
+            _glyphs = new RunGlyph[per];
+            _breaks = new BreakOpp[per];
             _index = new Dictionary<long, int>(Math.Min(cap, 4096));
             _evictScratch = new List<int>(cap / 4 + 1);
         }
