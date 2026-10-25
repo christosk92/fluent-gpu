@@ -198,9 +198,11 @@ public sealed unsafe partial class D3D12Device
         {
             // The pass's CLEAR load op writes the clear colour: like DISCARD it never reads the previous contents, and on
             // a tiler it is a per-bin fast clear instead of a full-window quad.
-            BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, frame.Info.Clear);
+            // A window-covering opaque ground fill becomes the clear colour and is not drawn (D3D12Device.ClearFold.cs).
+            BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, ClearFoldDecide(in frame));
             BindCompositor((int)_w, (int)_h);
             if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, 0, frame.Items.Length, 0, 0, (int)_w, (int)_h, -1);
+            _foldItem = -1; _foldPending = false;
         }
         EndPassIfOpen();
         _compositeCensusOn = false;
@@ -1519,7 +1521,13 @@ public sealed unsafe partial class D3D12Device
                     break;
                 }
                 case CompositeKind.Direct:
-                    if (InlineDirect(in it) && !allDirect) { DrawInline(in frame, in it, ox, oy, tw, th); break; }
+                    if (InlineDirect(in it) && !allDirect)
+                    {
+                        _foldPending = i == _foldItem;   // its first fill was folded into the clear (ClearFold)
+                        DrawInline(in frame, in it, ox, oy, tw, th);
+                        _foldPending = false;
+                        break;
+                    }
                     DrawSurfaceItem(in it, i, ox, oy, feathers);
                     break;
                 case CompositeKind.Image:

@@ -82,6 +82,10 @@ public static class TileDamage
     /// <c>--fg no-zero-cull</c> draws it anyway (the A/B arm and identity control).</summary>
     public static bool ZeroAlphaCull = true;
 
+    /// <summary>A whole-frame composite folds a window-covering opaque ground fill into its clear colour (default on;
+    /// D3D12Device.ClearFold). <c>--fg no-clear-fold</c> clears to the frame's colour and draws the fill (the A/B arm).</summary>
+    public static bool ClearFold = true;
+
     /// <summary><c>--fg present-validate</c>: every primary composite is re-composited whole into a shadow target and
     /// compared with the back buffer, and every Present1's dirty rects are checked to cover every pixel that changed since
     /// the last presented frame (a model of what DWM shows is kept and compared).</summary>

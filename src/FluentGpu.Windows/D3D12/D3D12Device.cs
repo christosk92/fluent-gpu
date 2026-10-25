@@ -2049,7 +2049,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<FillRoundRectCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<FillRoundRectCmd>();
-                    if (ZeroAlpha(c.Opacity, c.Fill.A, c.FillKind == 1 ? c.ColorB.A : 0f)) break;   // paints nothing (ZeroAlpha)
+                    if (ZeroAlpha(c.Opacity, c.Fill.A, c.FillKind == 1 ? c.ColorB.A : 0f) || FoldSkip(in c)) break;   // paints nothing (ZeroAlpha) / is the clear (ClearFold)
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
