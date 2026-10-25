@@ -170,6 +170,7 @@ public sealed partial class SliceRecorder
         public RectF Bounds;       // slice-space (pose-free window DIP) subtree bounds
         public bool PoseLocked;    // the stream holds a viewport-fixed op baked at the record-time delta
         public bool Fractional;    // a composited transition layer (NodePaint.CompositeLayer): placed at its exact sub-pixel offset
+        public float PoseDx, PoseDy;   // this turn's composite-time pose delta (OwnDelta at placement; 0 = at its free pose)
         // which cut budget the slice spends when registered (effect budget / acrylic budget / a free distributable fade)
         public BudgetClass Budget;
         // a repaint boundary's raster downscale (BoxEl.RasterScale): > 1 = the low-resolution route (no tiles)
@@ -616,16 +617,31 @@ public sealed partial class SliceRecorder
 
     /// <summary>The placement (device px) a slice under a composited transition layer is rastered and composited at (its
     /// whole-pixel part places the item, the rest is <see cref="SliceFrame.PhaseX"/>): <paramref name="px"/> = <c>AccDx·scale</c>,
-    /// a float sum of layout offsets and a device-snapped scroll translate. A placement that is a whole pixel therefore
-    /// arrives with float noise (measured ±2⁻¹⁴..3·2⁻¹⁴ px): raw, the phase flipped between 0, 6.1e-5 and 0.99994 on scroll
-    /// steps and every flip re-rastered every tile of the page (SliceGeometry, audit PERF r3 RASTER). Within
-    /// <see cref="FractionalSnap"/> of a whole pixel the placement IS that pixel (phase exactly 0 on every turn); any other
-    /// value is returned unchanged, so a real sub-pixel offset (a sliding page) rasters exactly as before.</summary>
+    /// a float sum of layout offsets and a device-snapped scroll translate. With every transition layer above the slice at
+    /// its free pose (<paramref name="atRest"/>: no slide in flight) a device-aligned placement is a whole pixel by
+    /// construction, but it arrives with float noise (measured ±2⁻¹⁴..3·2⁻¹⁴ px): raw, the phase flipped between 0, 6.1e-5 and
+    /// 0.99994 on scroll steps and every flip re-rastered every tile of the page (SliceGeometry, audit PERF r3 RASTER). At rest
+    /// and within <see cref="FractionalSnap"/> of a whole pixel the placement IS that pixel (phase exactly 0 on every turn).
+    /// Any other value — and every placement while a layer is posed (a sliding page) — is returned unchanged: the slide
+    /// rasters exactly as before.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static float FractionalPx(float px)
+    internal static float FractionalPx(float px, bool atRest)
     {
         float r = MathF.Round(px);
-        return CanonicalPhase && MathF.Abs(px - r) <= FractionalSnap ? r : px;
+        return CanonicalPhase && atRest && MathF.Abs(px - r) <= FractionalSnap ? r : px;
+    }
+
+    /// <summary>Is every composited transition layer at or above <paramref name="slot"/> at its free pose this turn (its
+    /// placement's pose delta exactly 0)? See <see cref="FractionalPx"/>.</summary>
+    private bool FractionalAtRest(int slot)
+    {
+        for (int s = slot, guard = 0; s >= 0 && guard < 64; s = _recs[s].Parent, guard++)
+        {
+            ref Rec r = ref _recs[s];
+            if (r.Fractional && (r.PoseDx != 0f || r.PoseDy != 0f)) return false;
+            if (s == RootSlot) break;
+        }
+        return true;
     }
 
     /// <summary>Near-whole fractional placements snap to the pixel (default). <c>--fg raw-phase</c> turns it off (the A/B
@@ -2044,6 +2060,7 @@ public sealed partial class SliceRecorder
             round = Offset(m.OuterClip.RoundedRect, pdx, pdy); roundR = m.OuterClip.CornerRadius;
         }
         c.AccDx = cdx; c.AccDy = cdy;
+        c.PoseDx = cdx - accDx; c.PoseDy = cdy - accDy;
 
         // A composite-time STICKY clip (CompositeSliceFlags.StickyClip): the node's ClipTop pose, a half-plane that is
         // viewport-fixed while the slice rides the page. Everything below the slice inherits it exactly (childClip — the
@@ -2457,8 +2474,9 @@ public sealed partial class SliceRecorder
                     // The group's transform is its slice's posed offset (whole device px) and its footprint the placed
                     // extent of what it encloses (+ its blur reach): a group moved rigidly by an ancestor scroll keeps its
                     // surface origin relative to its content — the group-cache key (GroupCacheKey) then matches.
+                    bool gRest = FractionalAtRest(e.Slot);
                     var gT = UnderFractional(e.Slot)
-                        ? Affine2D.Translation(MathF.Floor(FractionalPx(e.AccDx * scale)), MathF.Floor(FractionalPx(e.AccDy * scale)))
+                        ? Affine2D.Translation(MathF.Floor(FractionalPx(e.AccDx * scale, gRest)), MathF.Floor(FractionalPx(e.AccDy * scale, gRest)))
                         : Affine2D.Translation(MathF.Round(e.AccDx * scale), MathF.Round(e.AccDy * scale));
                     RectF gFoot = ScalePx(e.Rect, scale);
                     if (!gFoot.IsEmpty && gSigma > 0f)
@@ -2543,8 +2561,9 @@ public sealed partial class SliceRecorder
             // The placement this segment rasters and composites at: the exact offset under a fractional layer, on the
             // whole pixel when it is one up to float noise (FractionalPx) — one value for the phase, the item transform and the
             // opaque rect below.
-            float placeX = fractional ? FractionalPx(e.AccDx * scale) : e.AccDx * scale;
-            float placeY = fractional ? FractionalPx(e.AccDy * scale) : e.AccDy * scale;
+            bool atRest = fractional && FractionalAtRest(e.Slot);
+            float placeX = fractional ? FractionalPx(e.AccDx * scale, atRest) : e.AccDx * scale;
+            float placeY = fractional ? FractionalPx(e.AccDy * scale, atRest) : e.AccDy * scale;
             if (fractional)
             {
                 phaseX = placeX - MathF.Floor(placeX); phaseY = placeY - MathF.Floor(placeY);
