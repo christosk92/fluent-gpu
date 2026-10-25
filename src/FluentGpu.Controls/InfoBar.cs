@@ -302,7 +302,7 @@ public static class InfoBar
                 Grow = 1f,
                 // Inside the vertical stack the panel must not absorb the leftover column height (its Grow=1 is the
                 // *-column horizontal grow when it is the sole column child).
-                Children = panel is null ? [content] : [panel.Value with { Grow = 0f }, content],
+                Children = panel is null ? [content.Value] : [panel.Value with { Grow = 0f }, content.Value],
             }
             : panel ?? new BoxEl { Grow = 1f };   // empty * column still pushes the close button to the trailing edge
 
