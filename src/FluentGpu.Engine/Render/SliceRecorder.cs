@@ -170,6 +170,8 @@ public sealed partial class SliceRecorder
         public RectF Bounds;       // slice-space (pose-free window DIP) subtree bounds
         public bool PoseLocked;    // the stream holds a viewport-fixed op baked at the record-time delta
         public bool Fractional;    // a composited transition layer (NodePaint.CompositeLayer): placed at its exact sub-pixel offset
+        public bool Held;          // this pass: cut last pass under a budget, its share is reserved until it registers (CountBudget)
+        public bool RefusedCut;    // its last walk folded a cut inline for want of budget / a slot (never partially kept)
         public float PoseDx, PoseDy;   // this turn's composite-time pose delta (OwnDelta at placement; 0 = at its free pose)
         // which cut budget the slice spends when registered (effect budget / acrylic budget / a free distributable fade)
         public BudgetClass Budget;
@@ -385,6 +387,7 @@ public sealed partial class SliceRecorder
         r.AcrylicFallbacks = 0;
         r.Walked = true;
         r.RegFrame = _frame;
+        r.RefusedCut = false;   // this walk decides its cuts anew
         (_index[slot], _indexPrior[slot]) = (_indexPrior[slot], _index[slot]);
         _indexPriorCount[slot] = _indexCount[slot];
         _indexCount[slot] = 0;
@@ -392,7 +395,7 @@ public sealed partial class SliceRecorder
         _bakedPriorCount[slot] = _bakedCount[slot];
         _bakedCount[slot] = 0;
         _walked++;
-        CountBudget(in r);
+        CountBudget(ref r);
         EvNoteWalk(slot, why, detail);   // the walk ledger: which slice re-recorded, and why (evidence-diagnostics §A.4)
         return dl;
     }
@@ -420,7 +423,7 @@ public sealed partial class SliceRecorder
         r.RegFrame = _frame;
         r.Walked = false;
         _kept++;
-        CountBudget(in r);
+        CountBudget(ref r);
         _acrylicFallbacks += r.AcrylicFallbacks;
     }
 
@@ -566,16 +569,77 @@ public sealed partial class SliceRecorder
         FreeFade,
     }
 
-    private void CountBudget(in Rec r)
+    private void CountBudget(ref Rec r)
     {
         if (r.Kind != SliceKind.Effect || (r.Role != (int)SliceRole.Main && r.Role != (int)SliceRole.Layer)) return;
         switch (r.Budget)
         {
-            case BudgetClass.Acrylic: _acrylics++; break;
+            case BudgetClass.Acrylic: _acrylics++; if (r.Held) { r.Held = false; _acrylicHeld--; } break;
             case BudgetClass.FreeFade: _freeFades++; break;
-            default: _effects++; break;
+            default: _effects++; if (r.Held) { r.Held = false; _effectHeld--; } break;
         }
     }
+
+    // ── stable cut budgets (audit PERF r3 RASTER: the stage-visualizer rewalk mismatch) ──────────────────────────────────
+    // The effect and acrylic budgets are counted in WALK ORDER, so whether a boundary is cut used to depend on how many cuts
+    // registered before it this pass: a new effect slice earlier in the walk folded an EXISTING cut inline (its parent's
+    // bytes: a CompositeSlice marker became the child's own ops). A partial keep keeps that parent's arena and re-enters the
+    // child, so the kept marker disagreed with the canonical walk (rewalk-validate: CompositeSlice -> DrawImage). Now a slice
+    // cut last pass HOLDS its share: it is admitted whatever registered before it, and a NEW cut is admitted only within the
+    // cap minus the holds not yet registered — the count of every hold plus the new cuts so far, so the order in which
+    // existing cuts register no longer matters, and a keep and the canonical walk admit the same new cuts. A cut is still
+    // never admitted past the cap (by induction: existing ≤ cap, new ≤ cap − existing). A slice whose walk had to FOLD a cut
+    // (no budget or no slot) records that decision in its bytes, which a later pass could decide the other way: it is never
+    // partially kept (RefusedCut). Pixels are identical either way (a folded boundary records inline, the same ops).
+    private int _effectHeld, _acrylicHeld;
+
+    /// <summary>BeginPass: reserve the share of every slice cut last pass under the effect / acrylic budget.</summary>
+    private void HoldBudgets()
+    {
+        _effectHeld = _acrylicHeld = 0;
+        uint last = _frame - 1;
+        for (int s = 1; s < _slotCount; s++)
+        {
+            ref Rec r = ref _recs[s];
+            r.Held = r.Live && r.RegFrame == last && r.Kind == SliceKind.Effect
+                && (r.Role == (int)SliceRole.Main || r.Role == (int)SliceRole.Layer)
+                && r.Budget is BudgetClass.Effect or BudgetClass.Acrylic;
+            if (!r.Held) continue;
+            if (r.Budget == BudgetClass.Acrylic) _acrylicHeld++; else _effectHeld++;
+        }
+    }
+
+    /// <summary>May the node's foldable effect cut be made this pass? A slice cut last pass holds its share (see above);
+    /// any other only within what the holds leave.</summary>
+    internal bool EffectBudgetFor(int nodeIndex, uint gen, SliceRole role)
+    {
+        int s = Find(nodeIndex, gen, (int)role);
+        if (s >= 0 && _recs[s].Held && _recs[s].Budget == BudgetClass.Effect) return true;
+        return _effects + _effectHeld < EffectSliceCap;
+    }
+
+    /// <summary>The acrylic twin of <see cref="EffectBudgetFor"/>.</summary>
+    internal bool AcrylicBudgetFor(int nodeIndex, uint gen, SliceRole role)
+    {
+        int s = Find(nodeIndex, gen, (int)role);
+        if (s >= 0 && _recs[s].Held && _recs[s].Budget == BudgetClass.Acrylic) return true;
+        return _acrylics + _acrylicHeld < AcrylicSliceCap;
+    }
+
+    /// <summary>The walk of <paramref name="slot"/> folded a cut inline for want of budget or a slot (see above).</summary>
+    internal void NoteRefusedCut(int slot)
+    {
+        if ((uint)slot < (uint)_slotCount) _recs[slot].RefusedCut = true;
+        if (SceneRecordingContext.PartialKeepValidate && s_refusalLogs < 12)
+        {
+            s_refusalLogs++;
+            Console.Error.WriteLine($"[rewalk-validate] fold: pass={_frame} in slot={slot} node={(slot >= 0 && slot < _slotCount ? _recs[slot].NodeIndex : -1)} effects={_effects}+held {_effectHeld}/{EffectSliceCap} acrylics={_acrylics}+held {_acrylicHeld}/{AcrylicSliceCap} slots={_slotCount}");
+        }
+    }
+    private static int s_refusalLogs;
+
+    /// <summary>Did the walk that wrote <paramref name="slot"/>'s arena fold a cut it might not fold now?</summary>
+    internal bool RefusedCut(int slot) => (uint)slot < (uint)_slotCount && _recs[slot].RefusedCut;
 
     /// <summary>The cut budget <paramref name="slot"/> spends from now on (set at the cut, before its walk registers it).</summary>
     internal void SetBudget(int slot, BudgetClass budget) => _recs[slot].Budget = budget;
@@ -585,6 +649,14 @@ public sealed partial class SliceRecorder
     internal void SetScreen(int slot, bool screen) => _recs[slot].Screen = screen;
     /// <summary>BoxEl.Feedback on a repaint boundary: its composite item is a FEEDBACK item (the backend's trail surface).</summary>
     internal void SetFeedback(int slot, in FeedbackState state) { _recs[slot].HasFeedback = !state.Spec.IsNone; _recs[slot].Feedback = state; }
+
+    /// <summary>Diagnostics (rewalk-validate): the cut budget at this point of the pass and what the recorder holds for a node.</summary>
+    internal string BudgetDiag(int nodeIndex, uint gen, int sub)
+    {
+        int s = Find(nodeIndex, gen, sub & 7);
+        string slot = s < 0 ? "no slot" : $"slot={s} live={_recs[s].Live} regFrame={_recs[s].RegFrame} (pass {_frame}) budget={_recs[s].Budget} kind={_recs[s].Kind}";
+        return $"effects={_effects}/{EffectSliceCap} folded={_folded} acrylics={_acrylics} | {slot}";
+    }
 
     /// <summary>The effect budget: may another FOLDABLE effect slice be CUT this pass?</summary>
     internal bool EffectBudgetLeft => _effects < EffectSliceCap;
@@ -815,6 +887,7 @@ public sealed partial class SliceRecorder
         if (++_frame == 0) _frame = 1;
         _passInlineSticky = ForceInlineStickyClip;
         _walked = _kept = _effects = _folded = _acrylics = _acrylicFallbacks = _freeFades = _partialKeeps = _reentered = 0;
+        HoldBudgets();
         _sigMissWalks = 0;
         _bytes = 0;
         _keptAll = false;
