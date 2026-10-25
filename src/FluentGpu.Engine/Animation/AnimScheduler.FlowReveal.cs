@@ -149,7 +149,7 @@ public sealed partial class AnimEngine
         else
             Animate(node, ch, from, to, dyn.DurationMs, dyn.Easing);
         ClaimRevealClip(node);
-        if (enter) MarkStartPending(node);
+        if (enter) MarkStartPending(node, FluentGpu.Hosting.TraceAnimKind.Reveal);
     }
 
     // The node clips its content at the presented extent for the life of the row — the reflow ClipAdded contract: a node

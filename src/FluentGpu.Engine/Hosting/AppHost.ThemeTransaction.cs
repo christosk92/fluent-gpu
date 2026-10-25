@@ -200,6 +200,7 @@ public sealed partial class AppHost
         _tx = run;
         run.Phase = TxPhase.Prewarm;
         run.StartMs = _timers.NowMs;
+        FrameTrace.Theme("tx.begin", run.Request.Label);
         var prewarm = run.Request.Prewarm;
         if (prewarm.Fonts is { } fonts && FontRegistry.Shared.Source is not null && !Fonts.IsReady(fonts))
             run.Fonts = Fonts.Preload(fonts);
@@ -238,6 +239,7 @@ public sealed partial class AppHost
                 run.Request.CloseTransients?.Invoke();
                 run.Token = Freeze();
                 run.Phase = TxPhase.Capturing;   // this frame is the capture frame
+                FrameTrace.Theme("tx.freeze", run.Request.Label, (float)run.PrewarmMs);
                 return;
             }
             case TxPhase.Capturing:
@@ -288,6 +290,7 @@ public sealed partial class AppHost
             return;
         }
         run.Phase = TxPhase.Settling;
+        FrameTrace.Theme("tx.apply", r.Label);
         var spec = r.Settle ?? SettleSpec.Default with { FontsReady = FontsReadyFor(r.Next.Fonts) };
         run.Settle = Settle(spec);
     }
@@ -358,6 +361,7 @@ public sealed partial class AppHost
             Commit(run, ThemeTransactionOutcome.Cut, latencyMs: 0);
             return;
         }
+        FrameTrace.Theme("tx.thaw", run.Request.Label, run.Request.Dissolve.Ms, (float)ElapsedWallMs(run.StartQpc));
         Thaw(token, run.Request.Dissolve, DwmPlanFor(run));
         Commit(run, ThemeTransactionOutcome.Committed, latencyMs: ElapsedWallMs(run.StartQpc));
     }

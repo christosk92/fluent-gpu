@@ -296,6 +296,10 @@ public static class EngineSwitches
             case "video-nv12": Nv12VideoOutput = true; return true;
             case "video-overlay": VideoOverlay = true; return true;
             case "playready-sl2000": ForcePlayReadySl2000 = true; return true;
+            case "frame-trace":
+                // `--fg frame-trace[=PATH]`: the frame/animation/input timeline (FrameTrace.cs); started by the platform once the host exists.
+                FrameTrace.RequestedPath = value ?? "";
+                return true;
             case "ledger":
                 Ledger = true;
                 if (!string.IsNullOrEmpty(value)) FrameLedger.DumpPath = value;

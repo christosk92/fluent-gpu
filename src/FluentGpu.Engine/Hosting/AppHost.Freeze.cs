@@ -268,9 +268,11 @@ public sealed partial class AppHost
         {
             RunDwmEdges(start: false, end: true);
             EndFreezeLocal(FreezeEnd.Thawed);
+            FrameTrace.Theme("dissolve.end", null, u);
             return FreezeKind.Release;
         }
         t = u < 0f ? 0f : u;
+        FrameTrace.Theme("dissolve", null, t);
         WakeFrame();   // the next dissolve frame is owed (the loop keeps running until the dissolve completes)
         return FreezeKind.Dissolve;
     }
