@@ -651,7 +651,17 @@ public sealed partial class RenderContext
     public ReactiveRuntime? Runtime;            // creates signals/memos; schedules this component's render-effect
     /// <summary>Imperatively re-render THIS component (granular — schedules only this component's render-effect). Wired
     /// by the reconciler at mount. For escape-hatch callers (e.g. a Navigator's OnChange); state/context use signals.</summary>
-    public Action RequestRerender = static () => { };
+    public Action RequestRerender
+    {
+        // Created on first read and kept (the same delegate every read, as the field was): a component that never asks costs no
+        // delegate (PERF r3 UI; most never do). Before the reconciler wires RerenderEffect, a read is the no-op, as it was.
+        get => _requestRerender ?? (RerenderEffect is { } fx ? _requestRerender = fx.Schedule : s_noRerender);
+        set => _requestRerender = value;
+    }
+    private Action? _requestRerender;
+    private static readonly Action s_noRerender = static () => { };
+    /// <summary>Reconciler-injected at mount: the render-effect <see cref="RequestRerender"/> schedules.</summary>
+    internal Computation? RerenderEffect;
     /// <summary>Host-injected: wake the frame loop WITHOUT re-rendering this component. The wake is the only thing an
     /// escape hatch needs when it has already mutated retained scene state directly (offsets, transforms, dirty flags)
     /// and the tree it would re-render is byte-identical. Falls back to <see cref="RequestRerender"/> when unwired.</summary>
@@ -687,7 +697,10 @@ public sealed partial class RenderContext
     internal void AddHostBound(Action register) => (_hostBound ??= new()).Add(register);
     public NodeHandle AnchorNode;               // this component's anchor in the scene (context resolution walks up from here)
     public Func<NodeHandle, object, Signal<object?>?>? ResolveContextSignal;   // (anchor, channel) → nearest provider signal
-    public Func<Signal<bool>>? GetActiveSig;    // reconciler-injected: get-or-create THIS component's KeepAlive-parked signal (UseIsActive)
+    public Func<Signal<bool>>? GetActiveSig;    // host-injected: get-or-create THIS component's KeepAlive-parked signal (UseIsActive)
+    /// <summary>Reconciler-injected at mount: THIS component's KeepAlive-parked signal, get-or-create (UseIsActive), when
+    /// <see cref="GetActiveSig"/> is not set (an interface on the reconciler's per-component record: no delegate per mount).</summary>
+    internal IComponentActivation? ComponentActivation;
     /// <summary>Reconciler-injected at mount when this component was embedded with re-pushed props
     /// (<c>Embed.Comp(props, factory)</c>): the per-instance signal the reconciler's reuse seam writes on each parent
     /// re-render (equality-gated) and that <see cref="UseProps{T}"/> reads (subscribing this component's render-effect).
@@ -1122,10 +1135,12 @@ public sealed partial class RenderContext
         if (idx < 0)
         {
             var componentActive = GetActiveSig;   // get-or-create this component's parked signal on first compute (lazy)
+            var activation = componentActive is null ? ComponentActivation : null;
             var meta = ResolveContextSignal?.Invoke(AnchorNode, Activation.IsActive);
             var windowVisible = meta?.Peek() as IReadSignal<bool>;   // ambient visibility signal (the channel value never re-publishes)
             var memo = new Memo<bool>(Rt, () =>
-                (componentActive is null || componentActive().Value) && (windowVisible is null || windowVisible.Value));
+                (componentActive is not null ? componentActive().Value : activation is null || activation.ActiveSignal().Value)
+                && (windowVisible is null || windowVisible.Value));
             cell = new MemoHookCell<bool>(memo);
             RegisterCell(__k, cell, cleanupCapable: true);
         }

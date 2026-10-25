@@ -39,7 +39,46 @@ public sealed partial class TreeReconciler
     // bindings deliberately stay NODE-owned (_nodeBindings, disposed at node unmount) — a bind created during a render
     // outlives that render and can die with its node WITHOUT the component unmounting (Show/For swaps, KeepAlive
     // eviction), so it must not hang off the component scope. G4c's per-component props signal will hang off Scope too.
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public int ParkEpoch; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; public bool PersistWaiting; public bool ThemeCatchUp; }
+    /// <summary>A mounted component: its lifetime record AND its render-effect (PERF r3 UI). One object per instance where a mount
+    /// used to allocate six more: an <see cref="Effect"/> with a closure body (the closure and its delegate), a
+    /// <see cref="ReactiveScope"/> that owned that effect and carried <c>Comp.Unmount</c> as a cleanup (the scope, its two lists,
+    /// the delegate), and the GetActiveSig and RequestRerender delegates. <see cref="Execute"/> is the effect body
+    /// (<see cref="RunComponent"/>), <see cref="DisposeLifetime"/> is the scope's Dispose: the render-effect first, then the
+    /// component's hook cleanups, exactly once.</summary>
+    private sealed class CompEntry : ManagedEffect, IComponentActivation
+    {
+        private readonly TreeReconciler _rec;
+        public readonly NodeHandle Node;
+        public readonly Component Comp;
+        public Element? Rendered; public Type Type = null!; public bool Parked; public int ParkEpoch; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; public bool PersistWaiting; public bool ThemeCatchUp;
+        private bool _lifetimeDisposed;
+
+        public CompEntry(TreeReconciler rec, NodeHandle node, Component comp) : base(rec.Runtime, owner: null)
+        {
+            _rec = rec;
+            Node = node;
+            Comp = comp;
+            // DiagOwner: a UseContext(FrameClock.Tick) poller IS this effect (the read happens while it is Tracking.Current),
+            // so stamping it here is what lets the [wake] census name the component instead of counting an anonymous one.
+            DiagOwner = comp;
+        }
+
+        protected override void Execute() => _rec.RunComponent(Node, this);
+
+        /// <summary>The per-instance activation signal (UseIsActive), created on first read so a component that never uses the
+        /// lifecycle allocates nothing. Initial value = its current attached state (inactive if parked OR presence-hidden;
+        /// SetSubtreeHidden/Reconciler.Presence.cs folds the same formula on a live flip).</summary>
+        public Signal<bool> ActiveSignal() => ActiveSig ??= new Signal<bool>(!Parked && !Hidden);
+
+        /// <summary>Unmount: dispose the render-effect, then run the component's hook cleanups (<c>RunAllCleanups</c>), once.</summary>
+        public void DisposeLifetime()
+        {
+            if (_lifetimeDisposed) return;
+            _lifetimeDisposed = true;
+            Dispose();
+            Comp.Unmount();
+        }
+    }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
 
     private struct BoundSlot
@@ -768,7 +807,7 @@ public sealed partial class TreeReconciler
         _rethemeScratch.Clear();
         foreach (var e in _comps.Values) _rethemeScratch.Add(e);   // snapshot: Schedule won't mutate _comps, but be defensive
         for (int i = 0; i < _rethemeScratch.Count; i++)
-            _rethemeScratch[i].Effect?.Schedule();
+            _rethemeScratch[i].Schedule();
         _rethemeScratch.Clear();
         // Re-run bindings + control-flow boundaries (Flow.For rows, bound colors, Show/skeleton branches). They read
         // tokens but are not component renders, so a component re-render alone leaves them on the old theme. Scheduling
@@ -1353,9 +1392,8 @@ public sealed partial class TreeReconciler
         bool hidden = false;
         for (var a = node; !a.IsNull; a = _scene.Parent(a))
             if ((_scene.Flags(a) & NodeFlags.Visible) == 0) { hidden = true; break; }
-        var entry = new CompEntry
+        var entry = new CompEntry(this, node, comp)
         {
-            Comp = comp,
             Type = ce.ComponentType,
             Parked = parked,
             Hidden = hidden,
@@ -1365,10 +1403,8 @@ public sealed partial class TreeReconciler
         _comps[node] = entry;
         if (MountCensusEnabled) NoteCensusMount(entry);
 
-        // The component's per-instance activation signal (UseIsActive), created lazily on first read so a component that
-        // never uses the lifecycle allocates nothing. Initial value = its current attached state (inactive if
-        // parked OR presence-hidden — SetSubtreeHidden/Reconciler.Presence.cs folds the same formula on a live flip).
-        comp.Context.GetActiveSig = () => entry.ActiveSig ??= new Signal<bool>(!entry.Parked && !entry.Hidden);
+        // The component's per-instance activation signal (UseIsActive): CompEntry.ActiveSignal, read through the context.
+        comp.Context.ComponentActivation = entry;
 
         // Re-pushed props channel — seeded BEFORE the first render-effect run so the very first Render sees the props.
         // An IPropsHost ([Props]-generated) component receives them through its typed sink; otherwise we back them with a
@@ -1381,27 +1417,18 @@ public sealed partial class TreeReconciler
             else { entry.PropsSig = new Signal<object?>(props); comp.Context.PropsSig = entry.PropsSig; }
         }
 
-        // One lifetime scope per component (the never-re-running owner ReactiveCore was designed for). It OWNS the
-        // render-effect (so Scope.Dispose cascades to it — no manual Effect.Dispose) and carries the hook-cleanup
-        // teardown as a scope cleanup, so unmount collapses to Scope.Dispose(): dispose the render-effect, then run
-        // RunAllCleanups — the same order the split (Effect.Dispose(); Comp.Unmount();) ran. Re-running the render-effect
-        // is safe under this owner: it owns nothing itself (its nested binds/For/Show effects are created owner:null and
-        // registered node-owned via AddBinding), so RunComputation's dispose-children pass on re-render is a no-op.
-        var scope = new ReactiveScope(Runtime);
-        entry.Scope = scope;
-        scope.AddCleanup(comp.Unmount);   // RunAllCleanups runs exactly once, when the scope disposes
-        // DiagOwner: a UseContext(FrameClock.Tick) poller IS this effect (the read happens while it is Tracking.Current),
-        // so stamping it here is what lets the [wake] census name the component instead of counting an anonymous one.
-        var effect = new Effect(Runtime, () => RunComponent(node, entry), owner: scope, runNow: false) { DiagOwner = comp };
-        entry.Effect = effect;
-        comp.Context.RequestRerender = effect.Schedule;   // imperative re-render (granular) for escape-hatch callers
+        // The entry IS the render-effect (not yet run) and its lifetime: unmount is entry.DisposeLifetime() — dispose the
+        // render-effect, then run RunAllCleanups, the order the per-component ReactiveScope's Dispose ran them in. The effect
+        // owns nothing itself (its nested binds/For/Show effects are created owner:null and registered node-owned via
+        // AddBinding), so RunComputation's dispose-children pass on re-render is a no-op.
+        comp.Context.RerenderEffect = entry;   // imperative re-render (granular) for escape-hatch callers: Context.RequestRerender
         // E14: apply the anchor's own base-Element props (Sticky/Visible/Enter/…) BEFORE the first render — mirrors
         // Mount's WriteColumns-then-mount-children order for every other element kind.
         WriteAnchorColumns(node, ce, old: null);
         // E7: a Flow.Persist slot owns its key here, adopting the parked subtree of that key (or waiting for its live owner).
         if (IsPersistSlot(ce)) MountPersistSlot(node, entry, ((PersistProps)ce.Props!).Key);
         FluentGpu.Hosting.MountProf.Exit();
-        effect.RunNow();                                  // first render + child mount (deferred if mounted parked)
+        entry.RunNow();                                   // first render + child mount (deferred if mounted parked)
     }
 
     private void RunComponent(NodeHandle node, CompEntry entry)
@@ -1427,10 +1454,9 @@ public sealed partial class TreeReconciler
         // replay, RunNow) reads null ("sched") instead of a stale cause. One reference read/write per render.
         ISignalSource? cause = null;
         byte causeTag = 0;
-        if (entry.Effect is { } fx)
         {
-            cause = fx.StaleCause;
-            fx.StaleCause = null;
+            cause = entry.StaleCause;
+            entry.StaleCause = null;
             causeTag = entry.Rendered is null ? (byte)1 : cause is not null && ReferenceEquals(cause, entry.PropsSig) ? (byte)2 : (byte)0;
         }
         // E20: a page back from a park mid-theme-fade renders as a late joiner of that fade (Reconciler.ThemeFade.cs).
@@ -1620,7 +1646,7 @@ public sealed partial class TreeReconciler
         var kids = new List<NodeHandle>();
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) kids.Add(c);
         foreach (var k in kids) Remove(k);
-        if (_comps.Remove(node, out var old)) { old.QueuedReplay = false; old.Scope?.Dispose(); if (MountCensusEnabled) _mountFrameOf.Remove(old); }
+        if (_comps.Remove(node, out var old)) { old.QueuedReplay = false; old.DisposeLifetime(); if (MountCensusEnabled) _mountFrameOf.Remove(old); }
         // The anchor survives but its bound-Visible effect (node-owned, so the scope dispose above never reaches it) was
         // wired for the OLD embed: drop it as UnmountSubtree does. MountComponent's BindNode wires the new embed afresh;
         // a surviving old effect would keep driving the new component's presence and stack one more per swap.
@@ -2296,7 +2322,7 @@ public sealed partial class TreeReconciler
                 if (ThemeCatchUpDue(entry.ParkEpoch)) entry.ThemeCatchUp = true;
                 // A theme changed while it was parked: the debt includes the re-theme, so it renders NOW, in this activation
                 // flush, unbudgeted — dripped, the page would show old- and new-theme components side by side for frames.
-                if (!budgetReplays || entry.ParkEpoch != Tok.Epoch || TakeReplayBudget()) entry.Effect?.Schedule();
+                if (!budgetReplays || entry.ParkEpoch != Tok.Epoch || TakeReplayBudget()) entry.Schedule();
                 else { entry.QueuedReplay = true; _replayQueue.Enqueue(entry); }   // drips from BeginRenderCensus
             }
         }
@@ -2324,7 +2350,7 @@ public sealed partial class TreeReconciler
                 if (entry.DeferredRender && !entry.Parked)
                 {
                     entry.DeferredRender = false;
-                    if (!budgetReplays || TakeReplayBudget()) entry.Effect?.Schedule();
+                    if (!budgetReplays || TakeReplayBudget()) entry.Schedule();
                     else { entry.QueuedReplay = true; _replayQueue.Enqueue(entry); }
                 }
             }
@@ -2363,7 +2389,7 @@ public sealed partial class TreeReconciler
             if (!TakeReplayBudget()) return;
             _replayQueue.Dequeue();
             entry.QueuedReplay = false;
-            entry.Effect?.Schedule();
+            entry.Schedule();
         }
     }
 
@@ -4926,7 +4952,7 @@ public sealed partial class TreeReconciler
         ReleaseSkeletonScrollbarSuppression(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
         if (_attachments.Count != 0) DetachAttachment(idx);   // BoxEl.Attachment: the node leaves with its per-node state
-        if (_comps.Remove(node, out var e)) { e.QueuedReplay = false; e.Scope?.Dispose(); if (MountCensusEnabled) _mountFrameOf.Remove(e); }   // Scope.Dispose cascades: dispose render-effect → RunAllCleanups
+        if (_comps.Remove(node, out var e)) { e.QueuedReplay = false; e.DisposeLifetime(); if (MountCensusEnabled) _mountFrameOf.Remove(e); }   // dispose the render-effect, then RunAllCleanups
         if (_virtuals.Remove(node, out var v))
         {
             FreeSpareSlots(v, keep: 0);   // parked spares are detached, so the list's FreeSubtree cannot reach them
