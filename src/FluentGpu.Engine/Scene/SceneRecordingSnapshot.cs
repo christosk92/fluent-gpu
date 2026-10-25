@@ -46,6 +46,8 @@ public sealed partial class SceneRecordingSnapshot
     private bool[] _stringRetained = [];
     private uint _stringEpoch;
     private List<StringId> _retainedStrings = new(), _previousRetainedStrings = new();
+    private StringId[] _lastAdditionalStrings = [];   // the `additional` ids of the last full RetainStrings (the skip compares them)
+    private int _lastAdditionalCount;
     private Orphan[] _orphans = [];
     private NodeHandle[] _overlays = [], _spotlights = [];
     private SceneStore.RemovedNodeExtent[] _removals = [];
@@ -219,7 +221,93 @@ public sealed partial class SceneRecordingSnapshot
     {
         LastCaptureFullReason = IncrementalRefusal(source, lastCapturedSeq);
         if (LastCaptureFullReason != CaptureFullReason.None) return false;
+        if (LedgeredCaptureEnabled && TryCaptureLedgered(source, extraRoots, lastCapturedSeq)) return true;
         CaptureCore(source, extraRoots, incremental: true, baseline: lastCapturedSeq);
+        return true;
+    }
+
+    // ── PERF r3 UI: the ledgered capture, O(changed) instead of O(reachable) ─────────────────────────────────────────
+    // The incremental walk above still visits every reachable node per publication (0.24 µs each in Debug: ~0.55 ms at
+    // 2300 nodes, half of a bind-only UI frame) to rebuild a reachable set that is almost always the baseline's. It IS the
+    // baseline's when (a) no topology write happened anywhere in the store since the baseline (SceneStore.TopologyStamp: every
+    // parent, first-child and next-sibling write, and every free) and (b) the walk starts from the same roots in the same
+    // order (root, overlays, orphans, drag ghost, drag overlay, the popup roots): the walk is a pure function of those two.
+    // Then the reachable set, its order (_captured), the scroll-node list and every reached slot's handle are the baseline's,
+    // and the only rows that can differ are the ledgered ones (the store's capture-ledger contract, the one the walk's own
+    // skip test relies on): this path copies exactly the ledgered reachable rows, with the SAME row copy (CopyNodeRow), and
+    // rebuilds the per-capture lists (orphans, overlays, spotlights, scroll chrome) exactly as the walk path does. A
+    // ledgered node the snapshot does not hold is unreachable now, because it was unreachable at the baseline and nothing
+    // linked it since. Any doubt falls back to the walk: a handle or the scrollable flag of a ledgered slot moved.
+    // Validation: the DEBUG parity self-check (a from-scratch capture compared column by column) covers this path too, and
+    // `--fg capture-validate` runs it on EVERY incremental capture; `--fg no-ledgered-capture` is the A/B arm.
+
+    /// <summary>The ledgered capture (on by default). <c>--fg no-ledgered-capture</c> turns it off (the A/B arm).</summary>
+    internal static bool LedgeredCaptureEnabled = true;
+
+    /// <summary>Incremental captures that took the ledgered path (diagnostics; the capture-validate summary).</summary>
+    internal static long LedgeredCaptures;
+
+    private NodeHandle[] _lastExtraRoots = [];
+    private int _lastExtraRootCount;
+    // Whether this capture may have changed the retained-string set's inputs (a captured string, font or span-run reference,
+    // or the reachable set itself). False only after a ledgered capture whose copied rows kept every string reference.
+    private bool _stringInputsChanged = true;
+
+    private bool ReachedInThisSnapshot(int index)
+        => _captureEpoch != 0 && (uint)index < (uint)_capturedEpoch.Length && _capturedEpoch[index] == _captureEpoch;
+
+    private bool SameRoots(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots)
+    {
+        if (source.Root != Root || source.DragGhost != DragGhost || source.DragOverlay != DragOverlay
+            || source.OverlayCount != OverlayCount || source.OrphanCount != OrphanCount || extraRoots.Length != _lastExtraRootCount)
+            return false;
+        for (int i = 0; i < OverlayCount; i++) if (source.OverlayAt(i) != _overlays[i]) return false;
+        for (int i = 0; i < OrphanCount; i++) if (source.OrphanAt(i, out _, out _) != _orphans[i].Node) return false;
+        for (int i = 0; i < extraRoots.Length; i++) if (extraRoots[i] != _lastExtraRoots[i]) return false;
+        return true;
+    }
+
+    private bool LedgeredRow(SceneStore source, int index, ulong baseline)
+        => (source.CaptureStampAt(index) > baseline || source.CreatedStampAt(index) > baseline) && ReachedInThisSnapshot(index);
+
+    private bool TryCaptureLedgered(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots, ulong baseline)
+    {
+        if (source.TopologyStamp > baseline || !SameRoots(source, extraRoots)) return false;
+        ReadOnlySpan<int> changed = source.CaptureChangedNodes;
+        // Vouch before mutating anything: every ledgered reachable slot still holds the handle the snapshot copied, and its
+        // scrollable bit (the scroll-node list's membership) did not flip.
+        for (int i = 0; i < changed.Length; i++)
+        {
+            int index = changed[i];
+            if (!LedgeredRow(source, index, baseline)) continue;
+            NodeHandle node = _handles[index];
+            if (source.HandleAt(index) != node || !source.IsLive(node)) return false;
+            if (((source.Flags(node) ^ _flags[index]) & NodeFlags.Scrollable) != 0) return false;
+        }
+
+        _uiDirtConsumed = false;   // a new publication: its UI dirt is unrecorded
+        int count = source.RecordingNodeCount;
+        EnsureCapacity(16);
+        PrepareCompositorOverlay(Capacity);
+        _nodeCount = count;
+        CopyFrameScalars(source);
+        _capIncremental = true;
+        _capBaseline = baseline;
+        _copiedNodeCount = 0;
+        ResourceReferenceRowsScanned = 0;
+        _resourceReferencesDirty = _unresolvedSpanReference;
+        _stringInputsChanged = false;
+        _orphanChildren.BeginCapture();
+        for (int i = 0; i < changed.Length; i++)
+        {
+            int index = changed[i];
+            if (LedgeredRow(source, index, baseline)) CopyNodeRow(source, _handles[index], index);
+        }
+        if (_resourceReferencesDirty) { RebuildResourceReferences(); _stringInputsChanged = true; }
+        LastCaptureRebuiltResourceReferences = _resourceReferencesDirty;
+        FinishCapture(source, incremental: true);
+        Interlocked.Increment(ref LedgeredCaptures);
+        VerifyIncrementalParity(source, extraRoots, ledgered: true);
         return true;
     }
 
@@ -266,22 +354,11 @@ public sealed partial class SceneRecordingSnapshot
         PrepareCompositorOverlay(Capacity);
         _highestCapturedIndex = 0;
         _nodeCount = count;
-        Root = source.Root;
-        DeviceScale = source.DeviceScale;
-        DragGhost = source.DragGhost;
-        DragGhostBackplate = source.DragGhostBackplate;
-        DragOverlay = source.DragOverlay;
-        DropSpotlightActive = source.DropSpotlightActive;
-        DropSpotlightRootCount = source.DropSpotlightRootCount;
-        OverlayCount = source.OverlayCount;
-        OverlayClip = source.OverlayClip;
-        SpotlightScrimClip = source.SpotlightScrimClip;
-        OrphanCount = source.OrphanCount;
-        HasActiveRevealBands = source.HasActiveRevealBands;
-        PendingRemovalOverflow = source.PendingRemovalOverflow;
-        _removalCount = source.PendingRemovalExtents.Length;
-        Grow(ref _removals, _removalCount);
-        source.PendingRemovalExtents.CopyTo(_removals);
+        CopyFrameScalars(source);
+        Grow(ref _lastExtraRoots, extraRoots.Length);
+        extraRoots.CopyTo(_lastExtraRoots);
+        _lastExtraRootCount = extraRoots.Length;
+        _stringInputsChanged = true;
         _capIncremental = incremental;
         _capBaseline = baseline;
         _copiedNodeCount = 0;
@@ -333,7 +410,35 @@ public sealed partial class SceneRecordingSnapshot
         // back to the original captured-order derivation, preserving both de-duplication and ownership semantics.
         if (_resourceReferencesDirty) RebuildResourceReferences();
         LastCaptureRebuiltResourceReferences = _resourceReferencesDirty;
+        FinishCapture(source, incremental);
+        if (incremental) VerifyIncrementalParity(source, extraRoots, ledgered: false);
+    }
 
+    /// <summary>The frame scalars and the removal ledger every capture copies wholesale (both capture paths).</summary>
+    private void CopyFrameScalars(SceneStore source)
+    {
+        Root = source.Root;
+        DeviceScale = source.DeviceScale;
+        DragGhost = source.DragGhost;
+        DragGhostBackplate = source.DragGhostBackplate;
+        DragOverlay = source.DragOverlay;
+        DropSpotlightActive = source.DropSpotlightActive;
+        DropSpotlightRootCount = source.DropSpotlightRootCount;
+        OverlayCount = source.OverlayCount;
+        OverlayClip = source.OverlayClip;
+        SpotlightScrimClip = source.SpotlightScrimClip;
+        OrphanCount = source.OrphanCount;
+        HasActiveRevealBands = source.HasActiveRevealBands;
+        PendingRemovalOverflow = source.PendingRemovalOverflow;
+        _removalCount = source.PendingRemovalExtents.Length;
+        Grow(ref _removals, _removalCount);
+        source.PendingRemovalExtents.CopyTo(_removals);
+    }
+
+    /// <summary>The per-capture lists rebuilt after the rows (both capture paths): scroll chrome over the scroll-node list,
+    /// orphans and their visual-parent index, overlays, spotlights; then the snapshot's lineage.</summary>
+    private void FinishCapture(SceneStore source, bool incremental)
+    {
         // Scrollbar chrome: rebuilt for the captured scrollable set (collected during the walk) — keyed by the
         // SCROLLER's index, a handful of entries, so a full rebuild is the only correct cheap option.
         ScrollChrome.BeginCapture();
@@ -374,7 +479,6 @@ public sealed partial class SceneRecordingSnapshot
         _lastCaptureSeq = source.PublishSeq + 1;
         LastCaptureWasIncremental = incremental;
         _incrementalStreak = incremental ? _incrementalStreak + 1 : 0;
-        if (incremental) VerifyIncrementalParity(source, extraRoots);
     }
 
     private readonly record struct ResourceReferences(int Image, int Derived, int Outgoing, int SpanRun);
@@ -517,7 +621,19 @@ public sealed partial class SceneRecordingSnapshot
             && source.CaptureStampAt(index) <= _capBaseline
             && source.CreatedStampAt(index) <= _capBaseline)
             return;
+        CopyNodeRow(source, node, index);
+    }
 
+    /// <summary>Copy one slot's rows from the store (both capture paths). On the ledgered path it also notes whether the
+    /// row's string references (text, font family) moved, which is all <see cref="RetainStrings"/> derives from a row.</summary>
+    private void CopyNodeRow(SceneStore source, NodeHandle node, int index)
+    {
+        StringId oldText = default, oldFont = default;
+        if (!_stringInputsChanged)
+        {
+            oldText = _paint[index].Text;
+            if (_textStyle.TryGet(index, out var oldStyle)) oldFont = oldStyle.FontFamily;
+        }
         _copiedNodeCount++;
         var previousReferences = _resourceReferencesDirty ? default : ResourceReferencesAt(index);
         if (_capIncremental) ClearSparseRows(index);   // a full capture already emptied every table
@@ -537,7 +653,7 @@ public sealed partial class SceneRecordingSnapshot
         }
         else if (ownCold != 0) _paintCold.Free(ownCold);
         _interaction[index] = source.Interaction(node);
-        NodeFlags flags = sourceFlags;
+        NodeFlags flags = source.Flags(node);
         _flags[index] = flags;
         _dirty[index] = source.RecordDirtyBits(node);
         _dirtySelf[index] = source.RecordDirtySelfBits(node);
@@ -630,6 +746,11 @@ public sealed partial class SceneRecordingSnapshot
         }
         if (!_resourceReferencesDirty && previousReferences != ResourceReferencesAt(index))
             _resourceReferencesDirty = true;
+        if (!_stringInputsChanged)
+        {
+            StringId newFont = _textStyle.TryGet(index, out var newStyle) ? newStyle.FontFamily : default;
+            if (_paint[index].Text != oldText || newFont != oldFont) _stringInputsChanged = true;
+        }
     }
 
     public bool IsLive(NodeHandle node) => node.Raw.Index > 0 && node.Raw.Index < (uint)_nodeCount && node.Raw.Index < (uint)Capacity
@@ -797,6 +918,15 @@ public sealed partial class SceneRecordingSnapshot
     /// </summary>
     public void RetainStrings(StringTable strings, ReadOnlySpan<StringId> additional = default)
     {
+        // PERF r3 UI: the retained set is a pure function of the captured rows' text and font ids, the retained span runs and
+        // `additional`. A ledgered capture that moved none of them (_stringInputsChanged false: same reachable set, no copied
+        // row changed a string or font reference, no resource-reference rebuild) leaves the set exactly as the last call made
+        // it, so the O(captured) re-mark is skipped. Any walk capture sets the flag.
+        if (!_stringInputsChanged && ReferenceEquals(_stringOwner, strings) && additional.SequenceEqual(_lastAdditionalStrings.AsSpan(0, _lastAdditionalCount)))
+            return;
+        Grow(ref _lastAdditionalStrings, additional.Length);
+        additional.CopyTo(_lastAdditionalStrings);
+        _lastAdditionalCount = additional.Length;
         if (!ReferenceEquals(_stringOwner, strings))
         {
             if (_stringOwner is { } previous)

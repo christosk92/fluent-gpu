@@ -369,6 +369,9 @@ public sealed partial class SceneStore : ISceneBackend
     }
 
     public int LiveCount { get; private set; }
+    /// <summary>Nodes ever created / freed (monotonic): a frame's node churn is the difference of two reads (frame ledger).</summary>
+    public long NodesCreatedTotal { get; private set; }
+    public long NodesFreedTotal { get; private set; }
 
     /// <summary>SoA column length (the high-water spine allocation) — O(1) census of the slab size, not the live count.</summary>
     public int Capacity => _gen.Length;
@@ -431,6 +434,7 @@ public sealed partial class SceneStore : ISceneBackend
         _dragCompleted[idx] = null;
         _dragCanceled[idx] = null;
         LiveCount++;
+        NodesCreatedTotal++;
         unchecked { CapacityRevision++; }
         return new NodeHandle(new Handle((uint)idx, _gen[idx]));
     }
@@ -442,6 +446,7 @@ public sealed partial class SceneStore : ISceneBackend
         // there is no handle left to ask. Only the subtree ROOT is captured; its extent (and the span table's stored
         // SubtreeBounds, which the recorder prefers) already covers the descendants going with it.
         CaptureRemovalExtent(node);
+        NoteTopologyChanged();   // the freed slots' handles die (generation bump), whether or not the root was attached
         FreeSubtreeCore(node);
     }
 
@@ -577,6 +582,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_gen[idx] == 0) _gen[idx] = 1;
         PushFree(idx);
         LiveCount--;
+        NodesFreedTotal++;
         unchecked { CapacityRevision++; }
     }
 
@@ -681,6 +687,7 @@ public sealed partial class SceneStore : ISceneBackend
     {
         Debug.Assert(IsLive(parent) && IsLive(child));
         int p = (int)parent.Raw.Index, c = (int)child.Raw.Index;
+        NoteTopologyChanged();
         _parent[c] = p;
         _prevSib[c] = _lastChild[p];
         _nextSib[c] = 0;
@@ -708,6 +715,7 @@ public sealed partial class SceneStore : ISceneBackend
     {
         Debug.Assert(IsLive(parent) && IsLive(child));
         int p = (int)parent.Raw.Index, c = (int)child.Raw.Index;
+        NoteTopologyChanged();
         _parent[c] = p;
         _prevSib[c] = 0;
         _nextSib[c] = _firstChild[p];
@@ -729,6 +737,7 @@ public sealed partial class SceneStore : ISceneBackend
     {
         int p = _parent[c];
         if (p == 0) return;
+        NoteTopologyChanged();
         MarkRecordDirty(c, RecordDirtyLayout);
         if (_prevSib[c] != 0) NoteCaptureChanged(_prevSib[c]);   // P8: its captured NextSibling changes below
         if (_prevSib[c] != 0) _nextSib[_prevSib[c]] = _nextSib[c]; else _firstChild[p] = _nextSib[c];
