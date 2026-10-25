@@ -46,6 +46,16 @@ public static class Tape
     internal static uint Stamp => t_stamp;
 
     /// <summary>Open a region; returns the token <see cref="End"/> takes.</summary>
+    /// <summary><see cref="Begin()"/> naming the code that builds in the region (probe mode keeps it per stamp for the escape log).</summary>
+    public static int Begin(string label)
+    {
+        int t = Begin();
+        if (ProbePath is not null) s_probeLabels[t_stamp] = label;
+        return t;
+    }
+
+    private static readonly Dictionary<uint, string> s_probeLabels = new();
+
     public static int Begin()
     {
         var cols = t_columns ??= new List<TapeColumn>();
@@ -101,14 +111,27 @@ public static class Tape
     private static void ProbeStale(int slot, uint stamp, string column)
     {
         s_probeReads++;
+        // The signature: the element kind, the code that built it (the region's label), and the read path with the tape/record
+        // plumbing dropped and the reconciler's recursion collapsed, so one escape is one line whatever the tree depth.
         var st = new System.Diagnostics.StackTrace(2, false);
         var sb = new System.Text.StringBuilder();
-        for (int f = 0; f < Math.Min(14, st.FrameCount); f++)
+        string last = "";
+        int kept = 0;
+        for (int f = 0; f < st.FrameCount && kept < 16; f++)
         {
             var m = st.GetFrame(f)?.GetMethod();
-            sb.Append(m?.DeclaringType?.Name).Append('.').Append(m?.Name).Append(" < ");
+            string ty = m?.DeclaringType?.Name ?? "?";
+            if (ty.StartsWith("TapeColumn", StringComparison.Ordinal) || ty is "Element" or "ElementList" or "NodeRecords" or "ElementCompat"
+                || ty.StartsWith("ColdRef", StringComparison.Ordinal) || ty.EndsWith("Diff", StringComparison.Ordinal)) continue;
+            string name = ty + "." + m?.Name;
+            if (ty == "TreeReconciler" && m?.Name is "Update" or "UpdateCore" or "ReconcileChildren" or "ReconcileChildrenCore"
+                or "Mount" or "MountCore" or "ReconcileSingleChild" or "ReconcileWindow" or "ReconcileWindowCore") name = "TreeReconciler.(diff)";
+            if (name == last) continue;
+            sb.Append(name).Append(" < ");
+            last = name; kept++;
         }
-        string sig = column + " | " + sb;
+        string built = s_probeLabels.TryGetValue(stamp & 0x7FFF_FFFFu, out var lbl) ? lbl : "?";
+        string sig = column + " built in [" + built + "] | " + sb;
         if (s_probeOut is null)
         {
             string path = ProbePath!.Replace("{pid}", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -236,10 +259,29 @@ internal sealed class FrozenElement<T> : FrozenElement
 /// the newer value.</summary>
 internal abstract class RecordColumn
 {
-    internal uint[] Stamps = new uint[256];
+    internal uint[] Stamps = new uint[16];
     private uint _next;
+    private int[] _free = new int[16];
+    private int _freeTop, _count;
     internal uint NextStamp() { uint s = ++_next; return s == 0 ? ++_next : s; }
     internal abstract void Clear(int slot);
+    internal abstract void Ensure(int slot);
+
+    /// <summary>A slab slot for a node's record of this kind (the column holds only the nodes of its kind, not every node index).</summary>
+    internal int Alloc()
+    {
+        if (_freeTop != 0) return _free[--_freeTop];
+        int s = _count++;
+        Ensure(s);
+        return s;
+    }
+
+    internal void Free(int slot)
+    {
+        Clear(slot);
+        if (_freeTop == _free.Length) Array.Resize(ref _free, _free.Length * 2);
+        _free[_freeTop++] = slot;
+    }
     /// <summary>Copy the record at <paramref name="slot"/> onto this column's OLD stack and return a handle to the copy (valid until
     /// <see cref="PopOld"/>): the value an Update diffs against after the node's record already holds the new element.</summary>
     internal abstract Element PushOld(int slot, ushort kind);
@@ -248,9 +290,9 @@ internal abstract class RecordColumn
 
 internal sealed class RecordColumn<T> : RecordColumn
 {
-    internal T[] Items = new T[256];
+    internal T[] Items = new T[16];
 
-    internal void Ensure(int slot)
+    internal override void Ensure(int slot)
     {
         if (slot < Items.Length) return;
         int n = Math.Max(Items.Length * 2, slot + 1);

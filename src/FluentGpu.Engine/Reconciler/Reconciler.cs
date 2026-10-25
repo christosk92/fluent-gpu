@@ -381,7 +381,6 @@ public sealed partial class TreeReconciler
             l = next;
         }
     }
-    private readonly Dictionary<int, ShowEl> _showEl = new();                  // latest ShowEl per boundary node (parent re-renders replace it — see UpdateShow)
     private readonly Dictionary<int, int> _showEffect = new();              // the Show boundary effect, rescheduled by UpdateShow
     private readonly Dictionary<int, ForElBase> _forEl = new();                       // latest ForElBase per boundary node (parent re-renders replace it — see UpdateFor)
     private readonly Dictionary<int, int> _forEffect = new();                      // the For boundary effect, rescheduled by UpdateFor
@@ -864,9 +863,15 @@ public sealed partial class TreeReconciler
         if (census) { t0 = Stopwatch.GetTimestamp(); b0 = GC.GetAllocatedBytesForCurrentThread(); }
         bool prevShape = _layoutShapeMutated;
         _layoutShapeMutated = false;
-        Element newRoot = root.RenderWithHooks();
-        long t1 = census ? Stopwatch.GetTimestamp() : 0;
-        RenderRootDiff(newRoot);
+        long t1;
+        int tape = TapeOpen(root.GetType().Name);
+        try
+        {
+            Element newRoot = root.RenderWithHooks();
+            t1 = census ? Stopwatch.GetTimestamp() : 0;
+            RenderRootDiff(newRoot);
+        }
+        finally { TapeClose(tape); }
         if (census) NoteRenderCensus(root, t1 - t0, Stopwatch.GetTimestamp() - t1, GC.GetAllocatedBytesForCurrentThread() - b0);
         // Same gate as RunComponent: mark the root only when reconcile mutated layout shape.
         if (_layoutShapeMutated && !_scene.Root.IsNull)
@@ -1109,6 +1114,10 @@ public sealed partial class TreeReconciler
         try { UpdateCore(node, newEl, old); }
         finally { _records.PopOld(kind); }
     }
+
+    /// <summary>Open a tape region around a call into app element-building code (<c>--fg tape</c>; 0 = regions off).</summary>
+    private static int TapeOpen(string label) => !Tape.RegionsEnabled ? 0 : Tape.ProbePath is null ? Tape.Begin() : Tape.Begin(label);
+    private static void TapeClose(int token) { if (token != 0) Tape.End(token); }
 
     /// <summary>The node's record (the element it was last mounted or reconciled against); valid until its next store.</summary>
     private Element RecordOf(NodeHandle node) => _records.Get((int)node.Raw.Index);
@@ -1492,6 +1501,7 @@ public sealed partial class TreeReconciler
         Element newRendered;
         bool prevShape = _layoutShapeMutated;
         long t1;
+        int tape = TapeOpen(comp.GetType().Name);
         try
         {
             if (RenderFaultSink is { } faultSink)
@@ -1512,7 +1522,7 @@ public sealed partial class TreeReconciler
             FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Reconcile);
             try { ReconcileSingleChild(node, newRendered); } finally { FluentGpu.Hosting.MountProf.Exit(); }
         }
-        finally { if (catchUp) EndThemeCatchUp(savedThemeMs, savedThemeFromT); }
+        finally { TapeClose(tape); if (catchUp) EndThemeCatchUp(savedThemeMs, savedThemeFromT); }
         // Nested component renders (children mounted/re-rendered inside this reconcile) report their own rows; this
         // row's reconcile time therefore INCLUDES them — read the per-type numbers as inclusive of the subtree.
         if (census) NoteRenderCensus(comp, t1 - t0, Stopwatch.GetTimestamp() - t1, GC.GetAllocatedBytesForCurrentThread() - b0, cause, causeTag);
@@ -1692,7 +1702,6 @@ public sealed partial class TreeReconciler
         // The effect reads the LATEST stored ShowEl (not its mount-time capture): parent re-renders replace the stored
         // element and reschedule this effect (UpdateShow), like the skeleton boundary.
         int mountIdx = (int)node.Raw.Index;
-        _showEl[mountIdx] = se;
         WriteAnchorColumns(node, se, old: null);   // before the first branch mounts (mirrors MountComponent)
         int row = NewNodeRow(RowKindShow, node);
         _showEffect[mountIdx] = row;
@@ -1705,7 +1714,7 @@ public sealed partial class TreeReconciler
     {
         if (!_scene.IsLive(node)) return;
         int idx = (int)node.Raw.Index;
-        if (!_showEl.TryGetValue(idx, out var cur)) return;
+        if (!RecordOf(node).Is(out ShowEl cur)) return;   // the latest ShowEl: the node record (its branches frozen at store)
         Element? desired = cur.When() ? cur.Then : cur.Else;
         ReconcileSingleChild(node, desired);
         MirrorParticipation(node, _scene.FirstChild(node));
@@ -1715,7 +1724,6 @@ public sealed partial class TreeReconciler
     private void UpdateShow(NodeHandle node, ShowEl next)
     {
         int idx = (int)node.Raw.Index;
-        _showEl[idx] = next;
         if (_showEffect.TryGetValue(idx, out int row)) Runtime.Rows.Schedule(row);
     }
 
@@ -1743,7 +1751,9 @@ public sealed partial class TreeReconciler
     {
         int idx = (int)node.Raw.Index;
         bool force = _skelForce.Remove(idx);
-        ReconcileSkeletonRegion(node, force);
+        int tape = TapeOpen("SkelRegion");
+        try { ReconcileSkeletonRegion(node, force); }
+        finally { TapeClose(tape); }
     }
 
     /// <summary>Smooth-resize (see the block comment inside): an authored Enter/Exit/Layout on the region
@@ -1934,9 +1944,14 @@ public sealed partial class TreeReconciler
         // Fill reads the items source ONCE (tracked ⇒ subscribes this row) and fills a pooled buffer it rents via
         // Grow (mirrors RealizeBoundWindow) — no fresh new Element[n] each run, so the nav-churn Gen0 stays flat.
         Element[] buf = Array.Empty<Element>();
-        int n = cur.Fill(ref buf);
-        ReconcileChildren(node, buf.AsSpan(0, n));
-        if (buf.Length > 0) { Array.Clear(buf, 0, n); ArrayPool<Element>.Shared.Return(buf); }
+        int tape = TapeOpen("For");
+        try
+        {
+            int n = cur.Fill(ref buf);
+            ReconcileChildren(node, buf.AsSpan(0, n));
+            if (buf.Length > 0) { Array.Clear(buf, 0, n); ArrayPool<Element>.Shared.Return(buf); }
+        }
+        finally { TapeClose(tape); }
     }
 
     /// <summary>
@@ -1992,9 +2007,13 @@ public sealed partial class TreeReconciler
                 && !activeEntry.Cacheable && Equals(activeEntry.Token, token)
                 ? activeKey
                 : cacheable ? ka.KeyOf(token) : "__transient:" + (++state.TransientSeq).ToString();
-            Element desired = ka.View(token) with { Key = key };
-
-            ReconcileKeepAlive(node, state, ka.Options, key, token, desired, cacheable);
+            int tape = TapeOpen("KeepAlive.View");
+            try
+            {
+                Element desired = ka.View(token) with { Key = key };
+                ReconcileKeepAlive(node, state, ka.Options, key, token, desired, cacheable);
+            }
+            finally { TapeClose(tape); }
             // structural: this effect PARKS the outgoing subtree (ReconcileKeepAlive → DeactivateKeepAliveEntry →
             // SetSubtreeParked), and a parked component's render is skipped + deferred (RunComponent). It must therefore
             // beat the render effects of the pages inside it whenever ONE signal write feeds both — otherwise the
@@ -3629,6 +3648,13 @@ public sealed partial class TreeReconciler
     /// budget, cap or deferral — a frame that runs this leaves the window fully covered.</summary>
     private void RealizeWindow(NodeHandle node, VirtualListEl ve, bool reuseOverlap = false, bool mount = false)
     {
+        int tape = TapeOpen("VirtualList.Realize");
+        try { RealizeWindowCore(node, ve, reuseOverlap, mount); }
+        finally { TapeClose(tape); }
+    }
+
+    private void RealizeWindowCore(NodeHandle node, VirtualListEl ve, bool reuseOverlap, bool mount)
+    {
         _ = mount;
         if (!_virtuals.TryGetValue(node, out var entry)) { entry = new VirtualEntry(); _virtuals[node] = entry; }
         entry.El = ve;
@@ -4969,7 +4995,6 @@ public sealed partial class TreeReconciler
         _relativeKey.Remove(idx);
         _providerSig.Remove(idx);
         _mirroredChild.Remove(idx);
-        _showEl.Remove(idx);
         _showEffect.Remove(idx);
         _forEl.Remove(idx);
         _forEffect.Remove(idx);

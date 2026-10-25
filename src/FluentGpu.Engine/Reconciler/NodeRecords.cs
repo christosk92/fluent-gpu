@@ -15,6 +15,7 @@ internal sealed class NodeRecords
     private uint[] _src = new uint[256];        // FrozenElement.Serial of the stored element (0 = not a frozen element)
     private object?[] _heap = new object?[256]; // a heap kind's element (HeapElement)
     private string?[] _key = new string?[256];  // the stored element's Key (the keyed child diff reads the old side here)
+    private int[] _slot = new int[256];         // the node's slot in its kind's column (a slab: a column holds only its kind)
     private readonly RecordColumn?[] _cols = new RecordColumn?[32];
 
     internal bool Has(int idx) => (uint)idx < (uint)_kind.Length && _kind[idx] != 0;
@@ -30,7 +31,8 @@ internal sealed class NodeRecords
         if (k == 0) return default;
         var col = _cols[k];
         if (col is null) return new Element((HeapElement)_heap[idx]!);
-        return new Element(col, k, idx, col.Stamps[idx]);
+        int s = _slot[idx];
+        return new Element(col, k, s, col.Stamps[s]);
     }
 
     /// <summary>The node's record, or null.</summary>
@@ -55,44 +57,55 @@ internal sealed class NodeRecords
         {
             int n = Math.Max(_kind.Length * 2, idx + 1);
             Array.Resize(ref _kind, n); Array.Resize(ref _src, n); Array.Resize(ref _heap, n); Array.Resize(ref _key, n);
+            Array.Resize(ref _slot, n);
         }
         ushort k = el.ElementTypeId;
         ushort old = _kind[idx];
-        if (old != 0 && old != k) ClearSlot(idx, old);
+        if (old != 0 && old != k) { ClearSlot(idx, old); old = 0; }
         _kind[idx] = (byte)k;
+        bool fresh = old == 0;   // the node has no slot of this kind yet
         _src[idx] = el.Obj is FrozenElement f ? f.Serial : el.Obj is ContextProviderEl cps ? cps.Serial : 0;
         _key[idx] = el.Key;
         switch (k)
         {
-            case BoxEl.TypeId: StoreAs<BoxEl>(idx, k, el).DropTree(); break;
-            case TextEl.TypeId: StoreAs<TextEl>(idx, k, el); break;
-            case ComponentEl.TypeId: StoreAs<ComponentEl>(idx, k, el); break;
-            case ScrollEl.TypeId: StoreAs<ScrollEl>(idx, k, el).DropTree(); break;
-            case ShowEl.TypeId: StoreAs<ShowEl>(idx, k, el); break;
-            case ImageEl.TypeId: StoreAs<ImageEl>(idx, k, el); break;
-            case GridEl.TypeId: StoreAs<GridEl>(idx, k, el).DropTree(); break;
-            case PolylineStrokeEl.TypeId: StoreAs<PolylineStrokeEl>(idx, k, el); break;
-            case SpanTextEl.TypeId: StoreAs<SpanTextEl>(idx, k, el); break;
-            case IconLayerEl.TypeId: StoreAs<IconLayerEl>(idx, k, el); break;
-            case PathEl.TypeId: StoreAs<PathEl>(idx, k, el); break;
-            case ListRowEl.TypeId: StoreAs<ListRowEl>(idx, k, el); break;
-            case SeriesEl.TypeId: StoreAs<SeriesEl>(idx, k, el); break;
-            case SpriteFieldEl.TypeId: StoreAs<SpriteFieldEl>(idx, k, el); break;
-            case ContextProviderEl.TypeId: _heap[idx] = ((ContextProviderEl)el.Obj!) with { Child = default }; break;   // no subtree
-            default: _heap[idx] = el.Obj; break;   // a heap kind (boundaries): the object
+            // A tape element's record outlives its region: what it keeps is frozen (its cold groups, a Show's branches, a
+            // SkeletonOverride); the element-tree members are dropped first (DropTree), so nothing under them is copied.
+            case BoxEl.TypeId: { ref var v = ref StoreAs<BoxEl>(idx, k, el, fresh); v.DropTree(); if (el.Obj is null) Freeze(ref v); break; }
+            case TextEl.TypeId: { ref var v = ref StoreAs<TextEl>(idx, k, el, fresh); if (el.Obj is null) Freeze(ref v); break; }
+            case ComponentEl.TypeId: { ref var v = ref StoreAs<ComponentEl>(idx, k, el, fresh); if (el.Obj is null) Freeze(ref v); break; }
+            case ScrollEl.TypeId: { ref var v = ref StoreAs<ScrollEl>(idx, k, el, fresh); v.DropTree(); if (el.Obj is null) Freeze(ref v); break; }
+            case ShowEl.TypeId: { ref var v = ref StoreAs<ShowEl>(idx, k, el, fresh); if (el.Obj is null) Freeze(ref v); break; }
+            case ImageEl.TypeId: { ref var v = ref StoreAs<ImageEl>(idx, k, el, fresh); if (el.Obj is null) Freeze(ref v); break; }
+            case GridEl.TypeId: { ref var v = ref StoreAs<GridEl>(idx, k, el, fresh); v.DropTree(); if (el.Obj is null) Freeze(ref v); break; }
+            case PolylineStrokeEl.TypeId: { ref var v = ref StoreAs<PolylineStrokeEl>(idx, k, el, fresh); if (el.Obj is null) Freeze(ref v); break; }
+            case SpanTextEl.TypeId: { ref var v = ref StoreAs<SpanTextEl>(idx, k, el, fresh); if (el.Obj is null) Freeze(ref v); break; }
+            case IconLayerEl.TypeId: { ref var v = ref StoreAs<IconLayerEl>(idx, k, el, fresh); if (el.Obj is null) Freeze(ref v); break; }
+            case PathEl.TypeId: { ref var v = ref StoreAs<PathEl>(idx, k, el, fresh); if (el.Obj is null) Freeze(ref v); break; }
+            case ListRowEl.TypeId: { ref var v = ref StoreAs<ListRowEl>(idx, k, el, fresh); if (el.Obj is null) Freeze(ref v); break; }
+            case SeriesEl.TypeId: { ref var v = ref StoreAs<SeriesEl>(idx, k, el, fresh); if (el.Obj is null) Freeze(ref v); break; }
+            case SpriteFieldEl.TypeId: { ref var v = ref StoreAs<SpriteFieldEl>(idx, k, el, fresh); if (el.Obj is null) Freeze(ref v); break; }
+            case ContextProviderEl.TypeId:   // a copy without its subtree
+            {
+                var cp = ((ContextProviderEl)el.Obj!) with { Child = default };
+                _heap[idx] = cp.SkeletonOverride is { } so ? cp with { SkeletonOverride = so.Freeze() } : cp;
+                break;
+            }
+            default: _heap[idx] = ((HeapElement)el.Obj!).FreezeMembers(); break;   // a heap kind (boundaries): the object
         }
     }
 
+    private static void Freeze<T>(ref T v) where T : struct, IElementKind<T> => T.FreezeMembers(ref v);
+
     /// <summary>Copy the element into the kind's column; returns the stored value (the caller clears its element-valued
     /// members: a record never points at an element tree).</summary>
-    private ref T StoreAs<T>(int idx, ushort k, Element el) where T : struct
+    private ref T StoreAs<T>(int idx, ushort k, Element el, bool fresh) where T : struct
     {
         var col = (RecordColumn<T>)(_cols[k] ??= new RecordColumn<T>());
-        col.Ensure(idx);
+        int s = fresh ? (_slot[idx] = col.Alloc()) : _slot[idx];
         uint stamp = col.NextStamp();
-        col.Items[idx] = el.Ref<T>();
-        col.Stamps[idx] = stamp;
-        return ref col.Items[idx];
+        col.Items[s] = el.Ref<T>();
+        col.Stamps[s] = stamp;
+        return ref col.Items[s];
     }
 
     /// <summary>Store <paramref name="el"/> as the node's record and return its PREVIOUS record (a copy on the kind's old stack,
@@ -101,7 +114,7 @@ internal sealed class NodeRecords
     {
         ushort k = _kind[idx];
         System.Diagnostics.Debug.Assert(k == el.ElementTypeId, "an Update never changes the node's element kind");
-        Element old = _cols[k] is { } col ? col.PushOld(idx, k) : new Element((HeapElement)_heap[idx]!);
+        Element old = _cols[k] is { } col ? col.PushOld(_slot[idx], k) : new Element((HeapElement)_heap[idx]!);
         Store(idx, el);
         return old;
     }
@@ -121,7 +134,7 @@ internal sealed class NodeRecords
 
     private void ClearSlot(int idx, ushort k)
     {
-        if (_cols[k] is { } c) c.Clear(idx);
+        if (_cols[k] is { } c) c.Free(_slot[idx]);
         else _heap[idx] = null;
     }
 }
