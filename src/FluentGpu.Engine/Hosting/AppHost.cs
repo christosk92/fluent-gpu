@@ -8429,12 +8429,10 @@ public sealed partial class AppHost : IDisposable
                 ref readonly RectF now = ref _scene.Bounds(n);
                 if (MathF.Abs(now.X - was.X) < 0.5f && MathF.Abs(now.Y - was.Y) < 0.5f) continue;
                 // Bounds are parent-relative: the move is the child's own (its line changed). Position only: the size follows the layout.
+                // Seeded after this frame's tick: present the start NOW and let the rows advance from the next tick (AnimateBoundsPresented), or
+                // this frame shows the child on its new line first and a plain seed holds its start for a second frame.
                 var pos = spec with { Channels = TransitionChannels.Position };
-                _anim.AnimateBounds(n, was, new RectF(now.X, now.Y, was.W, was.H), pos);
-                // The tick that composes the row's start has run: present the start NOW, or this frame shows the child on its new line first.
-                ref NodePaint wp = ref _scene.Paint(n);
-                wp.LocalTransform = wp.LocalTransform with { Dx = wp.LocalTransform.Dx + was.X - now.X, Dy = wp.LocalTransform.Dy + was.Y - now.Y };
-                _scene.Mark(n, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                _anim.AnimateBoundsPresented(n, was, new RectF(now.X, now.Y, was.W, was.H), pos);
             }
             _wrapMovers.Clear();
         }
