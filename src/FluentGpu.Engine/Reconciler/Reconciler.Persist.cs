@@ -112,7 +112,7 @@ public sealed partial class TreeReconciler
             we.PersistWaiting = false;
             _persistLive[key] = waiter;
             AdoptPersisted(waiter, we, content, el);
-            we.Effect?.Schedule();   // its first render (skipped while it waited) reconciles build() against the adopted subtree
+            we.Schedule();   // its first render (skipped while it waited) reconciles build() against the adopted subtree
             return;
         }
 
@@ -146,7 +146,7 @@ public sealed partial class TreeReconciler
         if (_comps.TryGetValue(node, out var e))
         {
             if (e.Parked || e.ExitFrozen) e.DeferredRender = true;
-            else e.Effect?.Schedule();
+            else e.Schedule();
         }
         int idx = (int)node.Raw.Index;
         if (_nodeBindings.TryGetValue(idx, out var binds))
@@ -194,7 +194,7 @@ public sealed partial class TreeReconciler
             e.PersistWaiting = false;
             if (Diag.Enabled && _persistKeyByNode.TryGetValue((int)node.Raw.Index, out var key))
                 Diag.Event("persist", $"duplicate Flow.Persist key '{key}': the second slot mounts its own content");
-            e.Effect?.Schedule();
+            e.Schedule();
         }
         _persistWaitScratch.Clear();
     }
