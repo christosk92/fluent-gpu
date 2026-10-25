@@ -154,7 +154,7 @@ public sealed partial class FlexLayout
 
     /// <summary>Host-driven per-frame reset: zero the diag counters at the top of a frame so DiagMeasure/Arrange/TextMiss
     /// read that frame's total after all layout (full + scoped + phase-7 reflow) has run. Cheap; no-op meaning when off.</summary>
-    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dTextSharedHit = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = 0; }
+    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dTextSharedHit = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = _dMeasureFlatHit = 0; if (MeasureCensusEnabled) CensusFrameStart(); }
 
     // Within-pass Measure memo. Measure(node, availW) is a PURE function of the node's subtree content + availW within
     // ONE layout solve (it has no external mutable input; its only side effect is writing the node's Bounds W/H). But the
@@ -170,6 +170,10 @@ public sealed partial class FlexLayout
     private struct MeasureMemo
     {
         public uint Gen; public float AvailW; public float W, H;         // within-pass memo
+        // C1 (PERF r3 UI): the measure-validity interval of the last REAL measure this pass (FlexLayout.MeasureFlat.cs) - any
+        // offer in [FlatLo, FlatHi] measures to (FlatW, FlatH) with every descendant's measured size unchanged. 0 = none.
+        public uint FlatGen; public float FlatLo, FlatHi, FlatW, FlatH;
+        public uint FlatVer;   // the subtree's layout version when the interval was recorded: a mark inside the pass voids it
         public uint PassGen;                                             // _measureGen of the pass the record below is from (0 = never)
         public uint NodeGen;                                             // handle generation — ABA guard on a recycled node index
         public float PAvailW, PW, PH;                                    // that pass's offered width → measured border-box size
@@ -184,6 +188,9 @@ public sealed partial class FlexLayout
         // conservative superset TryResolveSizeStable already trusts) — a hit returns the stored size WITHOUT
         // descending at all.
         public uint Ring0NodeGen, Ring1NodeGen;
+        // C1: the validity interval of the measure each ring slot holds (NaN = none): a clean subtree asked another offer inside it
+        // answers from the slot, as it would for the slot's own offer (FlexLayout.MeasureFlat.cs).
+        public float Ring0Lo, Ring0Hi, Ring1Lo, Ring1Hi;
         public float Ring0AvailW, Ring0W, Ring0H; public ulong Ring0Sig;
         public float Ring1AvailW, Ring1W, Ring1H; public ulong Ring1Sig;
         // P4 fix (2026-09-19, "the drawer-under-context-flyout overflow"): the subtree-content version read at
@@ -230,9 +237,9 @@ public sealed partial class FlexLayout
     /// <summary>P4 cross-pass measure ring lookup — see the <c>Ring0*</c>/<c>Ring1*</c> fields on <see cref="MeasureMemo"/>.
     /// Excluded for viewport/grid/z-stack roots (same conservative scope as <see cref="TryResolveSizeStable"/> and the
     /// within-pass memo — those measure paths keep no per-node record to validate against).</summary>
-    private bool TryRingHit(NodeHandle node, float availW, out Size2 size)
+    private bool TryRingHit(NodeHandle node, float availW, out Size2 size, out float flatLo, out float flatHi)
     {
-        size = default;
+        size = default; flatLo = flatHi = float.NaN;
         if (Verifying || BypassMeasureRing) return false;   // --fg layout-verify: the oracle's re-solve descends for real, it never rides the ring
         uint i = node.Raw.Index;
         if (i >= (uint)_memo.Length) return false;
@@ -250,15 +257,18 @@ public sealed partial class FlexLayout
         uint curVer = _scene.SubtreeVersion(node);
         ref MeasureMemo m = ref _memo[i];
         ulong sig = 0; bool sigComputed = false;
-        if (m.Ring0NodeGen == gen && m.Ring0AvailW == availW && m.Ring0Ver == curVer)
+        bool flatOn = MeasureFlatEnabled && MeasureFlatRingEnabled;
+        if (m.Ring0NodeGen == gen && m.Ring0Ver == curVer
+            && (m.Ring0AvailW == availW || (flatOn && availW >= m.Ring0Lo && availW <= m.Ring0Hi)))   // NaN bounds compare false
         {
             sig = LayoutSig(node); sigComputed = true;
-            if (sig == m.Ring0Sig) { size = new Size2(m.Ring0W, m.Ring0H); return true; }
+            if (sig == m.Ring0Sig) { size = new Size2(m.Ring0W, m.Ring0H); flatLo = m.Ring0Lo; flatHi = m.Ring0Hi; return true; }
         }
-        if (m.Ring1NodeGen == gen && m.Ring1AvailW == availW && m.Ring1Ver == curVer)
+        if (m.Ring1NodeGen == gen && m.Ring1Ver == curVer
+            && (m.Ring1AvailW == availW || (flatOn && availW >= m.Ring1Lo && availW <= m.Ring1Hi)))
         {
             if (!sigComputed) sig = LayoutSig(node);
-            if (sig == m.Ring1Sig) { size = new Size2(m.Ring1W, m.Ring1H); return true; }
+            if (sig == m.Ring1Sig) { size = new Size2(m.Ring1W, m.Ring1H); flatLo = m.Ring1Lo; flatHi = m.Ring1Hi; return true; }
         }
         return false;
     }
@@ -274,10 +284,12 @@ public sealed partial class FlexLayout
         uint ver = _scene.SubtreeVersion(node);   // P4 fix (2026-09-19): stamp the version TryRingHit will require unchanged
         ulong sig = LayoutSig(node);
         ref MeasureMemo m = ref _memo[i];
-        if (m.Ring0NodeGen == gen && m.Ring0AvailW == availW) { m.Ring0W = size.Width; m.Ring0H = size.Height; m.Ring0Sig = sig; m.Ring0Ver = ver; return; }
-        if (m.Ring1NodeGen == gen && m.Ring1AvailW == availW) { m.Ring1W = size.Width; m.Ring1H = size.Height; m.Ring1Sig = sig; m.Ring1Ver = ver; return; }
+        if (m.Ring0NodeGen == gen && m.Ring0AvailW == availW) { m.Ring0W = size.Width; m.Ring0H = size.Height; m.Ring0Sig = sig; m.Ring0Ver = ver; m.Ring0Lo = m.Ring0Hi = float.NaN; return; }
+        if (m.Ring1NodeGen == gen && m.Ring1AvailW == availW) { m.Ring1W = size.Width; m.Ring1H = size.Height; m.Ring1Sig = sig; m.Ring1Ver = ver; m.Ring1Lo = m.Ring1Hi = float.NaN; return; }
         m.Ring1NodeGen = m.Ring0NodeGen; m.Ring1AvailW = m.Ring0AvailW; m.Ring1W = m.Ring0W; m.Ring1H = m.Ring0H; m.Ring1Sig = m.Ring0Sig; m.Ring1Ver = m.Ring0Ver;
+        m.Ring1Lo = m.Ring0Lo; m.Ring1Hi = m.Ring0Hi;
         m.Ring0NodeGen = gen; m.Ring0AvailW = availW; m.Ring0W = size.Width; m.Ring0H = size.Height; m.Ring0Sig = sig; m.Ring0Ver = ver;
+        m.Ring0Lo = m.Ring0Hi = float.NaN;
     }
 
     private Size2 StoreMemo(NodeHandle node, float availW, Size2 size)
@@ -373,6 +385,54 @@ public sealed partial class FlexLayout
         _fonts = fonts;
     }
 
+    // ── Shape prefetch (PERF r3 UI, C4 step 4) ──────────────────────────────────────────────────────────────────────────────
+    // Before a pass measures, hand the font system every text node in the subtrees it will solve whose measure cache holds no
+    // entry for its CURRENT text and style (a node mounted or retexted since it was last measured): the backend shapes those on
+    // its workers while the pass runs, and the measure finds them shaped (IFontSystem.PrefetchShape; the DirectWrite backend's
+    // TextLayoutEngine.Prefetch.cs). A clean subtree is skipped whole: the pass rides its measure ring and measures none of its
+    // text. Reads only (no column, flag or cache is written), and the measure's answer is the same with or without it.
+    // Only a BATCH is handed over (PrefetchBatchMin or more strings): one or two new strings (a ticking time label, a keystroke)
+    // shape inline faster than a hand-off and a wait, so a pass that finds fewer prefetches nothing and wakes no worker.
+    private const int PrefetchBatchMin = 4;
+    private readonly List<NodeHandle> _prefetch = new();
+
+    private void PrefetchTexts(NodeHandle root)
+    {
+        _prefetch.Clear();
+        PrefetchText(root);
+        if (_prefetch.Count >= PrefetchBatchMin)
+            foreach (var n in _prefetch)
+            {
+                ref LayoutInput li = ref _scene.Layout(n);
+                _fonts.PrefetchShape(_scene.Paint(n).Text, in li.TextStyle);
+            }
+        _dPrefetch += _prefetch.Count >= PrefetchBatchMin ? _prefetch.Count : 0;
+        _prefetch.Clear();
+    }
+
+    private void PrefetchText(NodeHandle n)
+    {
+        if (_scene.IsLayoutClean(n)) return;
+        ref NodePaint paint = ref _scene.Paint(n);
+        if (paint.VisualKind == VisualKind.Text)
+        {
+            if (paint.Text.IsEmpty) return;
+            ref LayoutInput li = ref _scene.Layout(n);
+            int epoch = FluentGpu.Text.FontRegistry.Shared.BodyVersion;
+            if (_scene.TryGetMeasureCache(n, out var mc)
+                && (SameShape(in mc.E0, paint.Text, in li.TextStyle, epoch) || SameShape(in mc.E1, paint.Text, in li.TextStyle, epoch)))
+                return;   // measured before with this text and style: its shape is (or was) stored
+            _prefetch.Add(n);
+            return;
+        }
+        for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c)) PrefetchText(c);
+    }
+
+    private static bool SameShape(in TextMeasureEntry e, StringId text, in TextStyle style, int fontEpoch)
+        => e.Valid && e.Text == text && e.FontEpoch == fontEpoch && e.Style == style;
+
+    private int _dPrefetch;
+
     public void Run(NodeHandle root)
     {
         if (root.IsNull) return;
@@ -440,6 +500,8 @@ public sealed partial class FlexLayout
     public void Run(NodeHandle root, Size2 window)
     {
         if (root.IsNull) return;
+        if (_fonts.CanPrefetchShapes) PrefetchTexts(root);
+        if (MeasureCensusEnabled) CensusSolve(root: true);
         // Snapshot so the per-Run print stays per-call even though the counters are now frame accumulators (host-reset).
         FluentGpu.Hosting.MountProf.RootSolves++;
         int m0 = _dMeasure, th0 = _dTextHit, tm0 = _dTextMiss, a0 = _dArrange, mh0 = _dMeasureMemoHit;
@@ -448,7 +510,9 @@ public sealed partial class FlexLayout
         ref LayoutInput li = ref _scene.Layout(root);
         float w = float.IsNaN(li.Width) ? window.Width : li.Width;
         float h = float.IsNaN(li.Height) ? window.Height : li.Height;
+        if (MeasureCensusEnabled) _mcArranging = true;
         Arrange(root, 0f, 0f, w, h);
+        _mcArranging = false;
         VerifyParity(root, window.Width, 0f, 0f, w, h, "Run(window)");
         if (s_layoutDiag) Console.Error.WriteLine($"[--fg layout] measure={_dMeasure - m0} memoHit={_dMeasureMemoHit - mh0} arrange={_dArrange - a0} textHit={_dTextHit - th0} textMiss={_dTextMiss - tm0}");
     }
@@ -460,6 +524,8 @@ public sealed partial class FlexLayout
     public void RunSubtree(NodeHandle node)
     {
         if (node.IsNull) return;
+        if (_fonts.CanPrefetchShapes) PrefetchTexts(node);
+        if (MeasureCensusEnabled) CensusSolve(root: false);
         FluentGpu.Hosting.MountProf.SubtreeSolves++;
         BeginMeasurePass();
         ref LayoutInput li = ref _scene.Layout(node);
@@ -496,7 +562,9 @@ public sealed partial class FlexLayout
         }
         Measure(node, w);
         float ox = b.X, oy = b.Y;
+        if (MeasureCensusEnabled) _mcArranging = true;
         Arrange(node, ox, oy, w, h);
+        _mcArranging = false;
         VerifyParity(node, w, ox, oy, w, h, "RunSubtree");
     }
 
@@ -699,6 +767,21 @@ public sealed partial class FlexLayout
                 WriteMeasuredBounds(node, hit.W, hit.H);
                 return new Size2(hit.W, hit.H);
             }
+            // C1: an offer inside this pass's validity interval measures to the recorded size, descendants unchanged - while nothing
+            // below was marked layout-dirty since it was recorded and the slot still holds the same node.
+            if (hit.FlatGen == _measureGen && availW >= hit.FlatLo && availW <= hit.FlatHi && MeasureFlatEnabled && !Verifying && !_naturalProbe)
+            {
+                bool guardOk = hit.FlatVer == _scene.SubtreeVersion(node) && hit.NodeGen == node.Raw.Gen;
+                if (MeasureFlatValidate) return FlatValidate(node, availW, guardOk);
+                if (guardOk)
+                {
+                    _dMeasureFlatHit++;
+                    if (MeasureCensusEnabled) _mcFlatHits++;
+                    WriteMeasuredBounds(node, hit.FlatW, hit.FlatH);
+                    return StoreMemo(node, availW, new Size2(hit.FlatW, hit.FlatH));
+                }
+                if (MeasureCensusEnabled) { if (hit.NodeGen != node.Raw.Gen) _mcFlatVoidGen++; else _mcFlatVoidVer++; }
+            }
         }
         // A scroll/virtual viewport is a layout boundary: its size is its own box (explicit/flex), independent of
         // content — content overflow is what scrolls. (layout.md §4.3/§6.)
@@ -712,10 +795,14 @@ public sealed partial class FlexLayout
         // participation fields still hash the same — so the stored size is provably still correct and Measure can
         // return WITHOUT DESCENDING at all (no children visited, no text re-shaped). Re-assert Bounds W/H exactly
         // like the within-pass hit above so Arrange (which reads Bounds for base sizes) sees the identical value.
-        if (!special && TryRingHit(node, availW, out var ringSize))
+        if (!special && TryRingHit(node, availW, out var ringSize, out float ringLo, out float ringHi))
         {
             _dMeasureMemoHit++;
             WriteMeasuredBounds(node, ringSize.Width, ringSize.Height);
+            // C1: the slot's interval holds for this (unchanged) subtree in this pass too, so the parent can still be flat (only with
+            // ring intervals on: it extends a ring answer to other offers, as sound as the ring's dirty marks - see MeasureFlatRingEnabled).
+            if (MeasureFlatEnabled && MeasureFlatRingEnabled && !_naturalProbe && !float.IsNaN(ringLo))
+            { ref MeasureMemo fm = ref _memo[mi]; fm.FlatGen = _measureGen; fm.FlatLo = ringLo; fm.FlatHi = ringHi; fm.FlatW = ringSize.Width; fm.FlatH = ringSize.Height; }
             return StoreMemo(node, availW, ringSize);
         }
 
@@ -726,12 +813,15 @@ public sealed partial class FlexLayout
         if (FluentGpu.Hosting.MountProf.On) FluentGpu.Hosting.MountProf.NoteMeasure((int)node.Raw.Index, availW, (_scene.Flags(node) & NodeFlags.LayoutDirty) != 0 || !_scene.IsLayoutClean(node));
         ref LayoutInput li = ref _scene.Layout(node);
         ref NodePaint paint = ref _scene.Paint(node);
+        if (MeasureCensusEnabled) CensusMeasure(node, availW, paint.VisualKind == VisualKind.Text, Row(li));
 
         if (_scene.HasScroll(node)) return MeasureViewport(node, in li, availW);
         if (_scene.HasGrid(node)) return MeasureGrid(node, in li, availW);
         if ((_scene.Flags(node) & NodeFlags.ZStack) != 0) return MeasureZStack(node, in li, availW);
 
         float w, h;
+        // C1: what this measure's validity interval needs (FlexLayout.MeasureFlat.cs). Kind 0 = not flat, 1 = text, 2 = flex box.
+        int flatKind = 0; bool flatTextFree = false; float flatTextW = 0f; float flatNeed = float.NegativeInfinity;
         if (paint.VisualKind == VisualKind.Text)
         {
             float measureW = DefiniteWidth(in li, availW);
@@ -796,6 +886,10 @@ public sealed partial class FlexLayout
                     FirstLineWidth = m.FirstLineWidth,
                 });
             }
+            // C1: unbounded maxW = the run does not depend on the offer; otherwise it is the same at any maxW in [laid width, maxW].
+            flatKind = _naturalProbe ? 0 : 1;
+            flatTextFree = !(widthConstrained && needsColumnBudget) || !float.IsNaN(li.Width);
+            flatTextW = w;
         }
         else
         {
@@ -810,6 +904,7 @@ public sealed partial class FlexLayout
             }
             else
             {
+                flatKind = _naturalProbe ? 0 : 2;
                 // In a ROW with a definite width, a flex-grow child's real width is (childAvail − the fixed siblings),
                 // not the whole row. Measure its (possibly wrapping) content against THAT — otherwise a fixed pane +
                 // grow content wraps to the entire window and overflows. (A column already stretches children to its
@@ -834,6 +929,9 @@ public sealed partial class FlexLayout
                 float main = 0f, cross = 0f;
                 float baseUsed = 0f, totalShrinkScaled = 0f;   // Arrange's first pass, mirrored for the shrink re-measure below
                 int n = 0;
+                // C1: each child must be flat at the offer it gets now (this box's high end) and at the one it would get at this box's low
+                // end; the low end reduces to "the child-available width there is at least flatNeed" (see FlexLayout.MeasureFlat.cs).
+                float flatGrowScaled = float.NegativeInfinity, flatFixedSum = 0f, flatGrowSum = 0f;
                 for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
                 {
                     ref LayoutInput cli = ref _scene.Layout(c);
@@ -852,6 +950,7 @@ public sealed partial class FlexLayout
                         : row ? (cli.FlexGrow > 0f ? growAvail : childAvail)
                         : float.IsInfinity(childAvail) ? childAvail : MathF.Max(0f, childAvail - cli.Margin.Horizontal);
                     var cs = Measure(c, cAvail);
+                    if (flatKind == 2 && MeasureFlatEnabled) FlatTrack(c, in cli, row, cAvail, cs, ref flatNeed, ref flatGrowScaled, ref flatFixedSum, ref flatGrowSum, ref flatKind);
                     float cMain = row ? cs.Width : cs.Height;
                     float cCross = row ? cs.Height : cs.Width;
                     // In an INDEFINITE column, a growable Basis=0 child must still contribute its content height while
@@ -897,6 +996,7 @@ public sealed partial class FlexLayout
                             float fm = MathF.Max(0f, ClampMain(cli, row, baseMain + free * (cli.FlexShrink * baseMain / totalShrinkScaled)));
                             if (fm <= 0f || fm >= cb.W) continue;   // not narrower than its measure ⇒ same height
                             float bw = cb.W, bh = cb.H;
+                            flatKind = 0;   // C1: a shrink re-measure ran - not flat (conservative)
                             cross = MathF.Max(cross, Measure(c, fm).Height + MarginCross(cli, row));
                             WriteMeasuredBounds(c, bw, bh);
                         }
@@ -907,7 +1007,11 @@ public sealed partial class FlexLayout
                 // frame while the orphan paints at its last full Bounds. ONLY such an orphan is folded in — see
                 // AddOrphanMain. Read the live LayoutInput — no recursive Measure (content is frozen; the Size track
                 // writes the animating extent).
+                if (flatKind == 2 && !float.IsNegativeInfinity(flatGrowScaled))   // a grow child's low-end share: (FlatLo - basis)·G/g + fixed + gaps
+                    flatNeed = MathF.Max(flatNeed, flatGrowScaled * flatGrowSum + flatFixedSum + (n > 1 ? li.Gap * (n - 1) : 0f));
+                int nBeforeOrphans = n;
                 AddOrphanMain(node, row, ref main, ref cross, ref n);
+                if (n != nBeforeOrphans) flatKind = 0;   // C1: a reflow exit orphan folds in - not flat (conservative)
                 if (n > 1) main += li.Gap * (n - 1);
                 main += row ? li.Padding.Horizontal : li.Padding.Vertical;
                 cross += row ? li.Padding.Vertical : li.Padding.Horizontal;
@@ -927,6 +1031,8 @@ public sealed partial class FlexLayout
         WriteMeasuredBounds(node, w, h);
         var result = new Size2(w, h);
         if (!_naturalProbe) StoreRing(node, availW, result);   // P4: always refresh the cross-pass ring — its later read validity is the clean-subtree gate above, not the write.
+        if (MeasureFlatEnabled && !_naturalProbe) RecordFlat(node, in li, availW, w, h, flatKind, flatTextFree, flatTextW, flatNeed);
+        if (MeasureCensusEnabled) CensusResult(node, result);
         return StoreMemo(node, availW, result);
     }
 
@@ -1003,6 +1109,7 @@ public sealed partial class FlexLayout
         // children are never visited during layout; the recorder/hit-test walks independently early-return on the
         // node's own cleared NodeFlags.Visible, so their staleness doesn't matter while collapsed).
         if (Collapsed(node)) { SetArrangedBounds(node, new RectF(x, y, 0f, 0f)); return; }
+        ClearFlat(node);   // C1: arranging re-measures the children at final widths; this node's interval no longer describes them
 
         // P4 early-out (layout.md §4.2/§4.6): nothing in this subtree (self or any descendant) was marked
         // layout-dirty this frame, a previous Arrange already recorded a real rect for this node, and the box the
