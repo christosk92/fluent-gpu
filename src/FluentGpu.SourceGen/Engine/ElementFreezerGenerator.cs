@@ -74,11 +74,17 @@ namespace FluentGpu.SourceGen.Engine
                 changed = false;
                 foreach (var t in types)
                 {
-                    var ms = Members(t, element, elementList, ielement, holders, comp);
+                    var ms = Members(t, element, elementList, ielement, holders, comp, null);
                     members[t] = ms;
                     bool holds = ms.Count > 0 || (t.BaseType is { } b && holders.Contains(b));
                     if (holds && holders.Add(t)) changed = true;
                 }
+            }
+            // FGEL004: a member that mentions an element but is not one the freezer reaches (an IElementHolder freezes by hand)
+            foreach (var t in types)
+            {
+                if (t.AllInterfaces.Any(i => i.ToDisplayString() == "FluentGpu.Dsl.IElementHolder")) continue;
+                Members(t, element, elementList, ielement, holders, comp, spc);
             }
             if (holders.Count == 0) return;
 
@@ -159,7 +165,7 @@ namespace FluentGpu.SourceGen.Engine
         }
 
         private static List<Member> Members(INamedTypeSymbol t, INamedTypeSymbol element, INamedTypeSymbol elementList, INamedTypeSymbol ielement,
-                                            HashSet<INamedTypeSymbol> holders, Compilation comp)
+                                            HashSet<INamedTypeSymbol> holders, Compilation comp, SourceProductionContext? report)
         {
             var list = new List<Member>();
             foreach (var sym in t.GetMembers())
@@ -186,8 +192,13 @@ namespace FluentGpu.SourceGen.Engine
                     if (under is not null && holders.Contains(under) && under.TypeKind == TypeKind.Struct)
                     { st = under; kind = ReferenceEquals(under, vt) ? Kind.HolderStruct : Kind.NullableHolderStruct; }
                 }
-                if (kind == Kind.None) continue;
-                if (!Nameable(type, comp)) continue;   // the accessor's return type must be nameable
+                bool reachable = kind != Kind.None && Nameable(type, comp);   // the accessor's return type must be nameable
+                if (!reachable)
+                {
+                    if (report is { } r && MentionsElement(type, element, elementList, ielement))
+                        r.ReportDiagnostic(Diagnostic.Create(Unreachable, sym.Locations.FirstOrDefault(), t.Name, sym.Name, type.ToDisplayString()));
+                    continue;
+                }
                 list.Add(new Member { Field = field!, FieldType = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), Kind = kind, Struct = st });
             }
             return list;
@@ -219,7 +230,7 @@ namespace FluentGpu.SourceGen.Engine
                 && SymbolEqualityComparer.Default.Equals(nul.TypeArguments[0], element)) return Kind.NullableElement;
             if (type is IArrayTypeSymbol arr)
             {
-                if (SymbolEqualityComparer.Default.Equals(arr.ElementType, element)) return Kind.ElementArray;
+                if (SymbolEqualityComparer.Default.Equals(arr.ElementType, element) || IsNullableOf(arr.ElementType, element)) return Kind.ElementArray;
                 if (arr.ElementType is INamedTypeSymbol ae && ae.TypeKind == TypeKind.Class && IsHolderType(ae, holders, comp)) return Kind.HolderEach;
                 return Kind.None;
             }
@@ -242,6 +253,7 @@ namespace FluentGpu.SourceGen.Engine
                     if (listLike)
                     {
                         if (SymbolEqualityComparer.Default.Equals(arg, element)) return Kind.ElementListRef;
+                        if (IsNullableOf(arg, element) && def == "System.Collections.Generic.List<T>") return Kind.ElementListRef;
                         if (arg is INamedTypeSymbol an && an.TypeKind == TypeKind.Class && IsHolderType(an, holders, comp)) return Kind.HolderEach;
                         return Kind.None;
                     }
@@ -270,6 +282,33 @@ namespace FluentGpu.SourceGen.Engine
                     if (r.Name == "FluentGpu.Engine") return true;
             return false;
         }
+
+        private static bool IsNullableOf(ITypeSymbol t, INamedTypeSymbol element)
+            => t is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } n
+               && SymbolEqualityComparer.Default.Equals(n.TypeArguments[0], element);
+
+        /// <summary>The type mentions an element anywhere (itself, an array's element, a generic argument, a tuple member): a member of
+        /// that type in a holder must be one the freezer can reach.</summary>
+        private static bool MentionsElement(ITypeSymbol t, INamedTypeSymbol element, INamedTypeSymbol elementList, INamedTypeSymbol ielement, int depth = 0)
+        {
+            if (depth > 4) return false;
+            if (SymbolEqualityComparer.Default.Equals(t, element) || SymbolEqualityComparer.Default.Equals(t, elementList)) return true;
+            if (t is IArrayTypeSymbol a) return MentionsElement(a.ElementType, element, elementList, ielement, depth + 1);
+            if (t is not INamedTypeSymbol n || n.TypeKind == TypeKind.Delegate) return false;
+            if (n.IsValueType && n.ContainingNamespace?.ToDisplayString() is "FluentGpu.Dsl" or "FluentGpu.Hooks"
+                && n.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, ielement))) return true;
+            foreach (var arg in n.TypeArguments) if (MentionsElement(arg, element, elementList, ielement, depth + 1)) return true;
+            if (n.IsTupleType) foreach (var f in n.TupleElements) if (MentionsElement(f.Type, element, elementList, ielement, depth + 1)) return true;
+            return false;
+        }
+
+        private static readonly DiagnosticDescriptor Unreachable = new(
+            id: "FGEL004",
+            title: "A member holds elements the element freezer cannot reach",
+            messageFormat: "'{0}.{1}' ({2}) holds elements that outlive the render that built them, but the generated freezer cannot reach it: hold them as Element, Element?, ElementList, Element[]/Element?[] or List<Element>/List<Element?>, make the type nameable, or implement IElementHolder",
+            category: "FluentGpu.Elements",
+            defaultSeverity: DiagnosticSeverity.Error,
+            isEnabledByDefault: true);
 
         private static bool IsGenericAnywhere(INamedTypeSymbol t)
         {

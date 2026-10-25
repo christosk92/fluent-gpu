@@ -55,6 +55,7 @@ public static class ElementFreezer
     public static void Freeze(ref Element? e) { if (e is { } x) e = x.Freeze(); }
     public static void Freeze(ref ElementList l) => l = l.Freeze();
     public static void Freeze(Element[]? a) { if (a is null) return; for (int i = 0; i < a.Length; i++) a[i] = a[i].Freeze(); }
+    public static void Freeze(Element?[]? a) { if (a is null) return; for (int i = 0; i < a.Length; i++) if (a[i] is { } x) a[i] = x.Freeze(); }
     internal static void FreezeAlways(Element[] a) { for (int i = 0; i < a.Length; i++) a[i] = a[i].Freeze(); }
     public static void Freeze(List<Element>? l) { if (l is null) return; for (int i = 0; i < l.Count; i++) l[i] = l[i].Freeze(); }
     public static void Freeze(List<Element?>? l) { if (l is null) return; for (int i = 0; i < l.Count; i++) if (l[i] is { } x) l[i] = x.Freeze(); }
