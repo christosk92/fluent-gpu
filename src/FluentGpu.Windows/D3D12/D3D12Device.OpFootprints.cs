@@ -42,10 +42,13 @@ public sealed unsafe partial class D3D12Device
     private OpFoot[]? _replayFoot;
     private int _replayFootN;
     private long _rcFootSkippedTally;
+    private int[] _rastersOfRow = new int[64];
 
     /// <summary>RasterTiles: the footprint table of <paramref name="row"/>'s stream, built when the row's bytes are new to it
-    /// (a ContentKey of 0 is never cached: rebuilt per turn). Null when the footprint skip is off.</summary>
-    private OpFoot[]? FootprintsOf(in CompositeFrame frame, in SliceRow row, out int count)
+    /// (a ContentKey of 0 is never cached: rebuilt per turn) and <paramref name="rasters"/> of its tiles raster this turn —
+    /// a table costs one pass over the ops, as one replay does, so a single raster of new bytes decodes them directly (the
+    /// lyrics rows: one tile of changed content per turn, nothing to skip). Null when the skip is off or not worth it.</summary>
+    private OpFoot[]? FootprintsOf(in CompositeFrame frame, in SliceRow row, int rasters, out int count)
     {
         count = 0;
         if (!TileDamage.OpFootprints || row.Id < 0) return null;
@@ -56,6 +59,7 @@ public sealed unsafe partial class D3D12Device
             Array.Resize(ref _footOf, n); Array.Resize(ref _footN, n); Array.Resize(ref _footKey, n); Array.Resize(ref _footTurn, n);
         }
         bool fresh = row.ContentKey != 0 ? _footKey[id] == row.ContentKey : _footTurn[id] == _compositeTurn;
+        if ((!fresh || _footOf[id] is null) && rasters < 2) return null;
         if (!fresh || _footOf[id] is null)
         {
             BuildFootprints(frame.StreamOf(in row), ref _footOf[id], out _footN[id]);

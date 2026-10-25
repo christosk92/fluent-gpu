@@ -353,6 +353,10 @@ public sealed unsafe partial class D3D12Device
         // ForceFullDirect (knockout): nothing is retained — every segment is drawn direct, every tile stays invalid.
         if ((_frameKnockouts & GpuKnockouts.ForceFullDirect) != 0) return;
         long rc0 = RcRasterBegin();
+        // rasters per row this turn (the footprint table pays back only from the second replay of new bytes)
+        if (_rastersOfRow.Length < frame.Slices.Length) _rastersOfRow = new int[Math.Max(frame.Slices.Length, 2 * _rastersOfRow.Length)];
+        Array.Clear(_rastersOfRow, 0, frame.Slices.Length);
+        for (int i = 0; i < rasters.Length; i++) { int rr = RowOf(rasters[i].Key.SliceId); if (rr >= 0) _rastersOfRow[rr]++; }
         ulong fence = _fenceValue + 1;
         if (_tileBarriers.Length < rasters.Length) _tileBarriers = new D3D12_RESOURCE_BARRIER[rasters.Length * 2];
         int nb = 0;
@@ -396,7 +400,7 @@ public sealed unsafe partial class D3D12Device
             bool beyondPlan = tr.Partial && (!partial || !damage.Equals(tr.Damage));
             if (TileDamage.Log) LogRaster(in tr, in row, partial, fresh, in damage);
             BeginImageRecord(tr.Surface, whole: !partial);
-            _replayFoot = FootprintsOf(in frame, in row, out _replayFootN);
+            _replayFoot = FootprintsOf(in frame, in row, _rastersOfRow[r], out _replayFootN);
             if (!partial)
             {
                 BeginPass(rtv, tr.W, tr.H, PassLoad.Clear);
