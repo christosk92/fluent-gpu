@@ -600,6 +600,8 @@ public sealed class ItemsView : Component, IPropsHost
     public SelectionModel? Selection;
     public bool IsItemInvokedEnabled;                                      // idl:41-42, default false
     public Action<int>? ItemInvoked;
+    /// <summary><see cref="ListOptions.InvokeOnTap"/>: with a selection mode active, a Tap selects AND invokes (a DoubleTap then never invokes again).</summary>
+    public bool InvokeOnTap;
     public Action? SelectionChanged;
     public ItemsViewController? Controller;
     /// <summary>The ONE app-facing handle over this view's live scroll viewport (scroll rework §9) — forwarded straight
@@ -725,6 +727,7 @@ public sealed class ItemsView : Component, IPropsHost
             Selection = o.Selection,
             IsItemInvokedEnabled = o.IsItemInvokedEnabled,
             ItemInvoked = o.OnInvoked,
+            InvokeOnTap = o.InvokeOnTap,
             SelectionChanged = o.OnChange,
             ItemText = o.ItemText,
             IsItemEnabled = o.IsItemEnabled,
@@ -793,6 +796,7 @@ public sealed class ItemsView : Component, IPropsHost
             Selection = o.Selection,
             IsItemInvokedEnabled = o.IsItemInvokedEnabled,
             ItemInvoked = o.OnInvoked,
+            InvokeOnTap = o.InvokeOnTap,
             SelectionChanged = o.OnChange,
             ItemText = o.ItemText,
             IsItemEnabled = o.IsItemEnabled,
@@ -879,6 +883,7 @@ public sealed class ItemsView : Component, IPropsHost
             Selection = o.Selection,
             IsItemInvokedEnabled = o.IsItemInvokedEnabled,
             OnInvoked = invoke,
+            InvokeOnTap = o.InvokeOnTap,
             OnChange = o.OnChange,
             ItemText = text,
             IsItemEnabled = enabled,
@@ -1685,10 +1690,14 @@ public sealed class ItemsView : Component, IPropsHost
             if (IsItemSelectable?.Invoke(i) != false) model.OnInteractedAction(i, ctrl, shift);
             if (IsItemInvokedEnabled && ItemInvoked is not null)
             {
+                // InvokeOnTap (the ListView click shape): a plain Tap acts too (a Ctrl/Shift Tap stays a selection gesture), and the DoubleTap that follows
+                // it does not act a second time.
                 bool cannotInvoke =
                     (SelectionMode == ItemsSelectionMode.None && trigger == ItemContainerTrigger.DoubleTap) ||
                     (SelectionMode != ItemsSelectionMode.None &&
-                     trigger is ItemContainerTrigger.Tap or ItemContainerTrigger.SpaceKey);
+                     (trigger == ItemContainerTrigger.SpaceKey
+                      || (trigger == ItemContainerTrigger.Tap && (!InvokeOnTap || ctrl || shift))
+                      || (trigger == ItemContainerTrigger.DoubleTap && InvokeOnTap)));
                 if (!cannotInvoke) ItemInvoked(i);
             }
         }
