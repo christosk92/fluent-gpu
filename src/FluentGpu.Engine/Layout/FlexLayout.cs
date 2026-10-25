@@ -416,7 +416,7 @@ public sealed partial class FlexLayout
         ref NodePaint paint = ref _scene.Paint(n);
         if (paint.VisualKind == VisualKind.Text)
         {
-            if (paint.Text.IsEmpty) return;
+            if (paint.Text.IsEmpty || _scene.ShapeHanded(n)) return;   // empty, or the reconciler handed it over already
             ref LayoutInput li = ref _scene.Layout(n);
             int epoch = FluentGpu.Text.FontRegistry.Shared.BodyVersion;
             if (_scene.TryGetMeasureCache(n, out var mc)

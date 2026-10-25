@@ -29,6 +29,7 @@ public sealed partial class TreeReconciler
     {
         var fonts = Fonts;
         if (fonts is null || !fonts.CanPrefetchShapes) return;
+        _scene.ShapeHanded(node) = false;   // a new text or style: not handed (yet), so the layout walk would prefetch it
         if (_scene.Paint(node).Text.IsEmpty) return;
         if (_textPrefetchOpen) { PrefetchTextNode(fonts, node); return; }
         _textPrefetch.Add(node);
@@ -44,6 +45,7 @@ public sealed partial class TreeReconciler
         ref NodePaint paint = ref _scene.Paint(n);
         if (paint.Text.IsEmpty) return;
         fonts.PrefetchShape(paint.Text, in _scene.Layout(n).TextStyle);
+        _scene.ShapeHanded(n) = true;   // the layout pass's walk skips it: one hand-off per string, not two
         TextWritesPrefetched++;
     }
 
