@@ -217,7 +217,7 @@ public sealed partial class RenderContext
                 cell.Arm();
             });
         }
-        else cell = (DebounceCell<T>)_cells[idx];
+        else cell = (DebounceCell<T>)CellAt(idx);
         cell.Ms = ms;
         handle = new DebounceHandle(cell);
         return cell.Output;
@@ -249,7 +249,7 @@ public sealed partial class RenderContext
                 cell.Arm();
             });
         }
-        else cell = (DebounceCell<T>)_cells[idx];
+        else cell = (DebounceCell<T>)CellAt(idx);
         cell.Ms = ms;
         handle = new DebounceHandle(cell);
         return cell.Output;
@@ -276,7 +276,7 @@ public sealed partial class RenderContext
                 cell.OnChange();
             });
         }
-        else cell = (ThrottleCell<T>)_cells[idx];
+        else cell = (ThrottleCell<T>)CellAt(idx);
         cell.Ms = ms;
         return cell.Output;
     }
@@ -300,7 +300,7 @@ public sealed partial class RenderContext
                 cell.OnChange();
             });
         }
-        else cell = (ThrottleCell<T>)_cells[idx];
+        else cell = (ThrottleCell<T>)CellAt(idx);
         cell.Ms = ms;
         return cell.Output;
     }
@@ -323,7 +323,7 @@ public sealed partial class RenderContext
         }
         else
         {
-            cell = (TimeoutCell)_cells[idx];
+            cell = (TimeoutCell)CellAt(idx);
             cell.Callback = callback;   // route to the latest closure
             cell.Ms = ms;
             if (cell.Key != deps) { cell.Key = deps; cell.Arm(ms); }   // deps change → restart
@@ -351,7 +351,7 @@ public sealed partial class RenderContext
         }
         else
         {
-            cell = (IntervalCell)_cells[idx];
+            cell = (IntervalCell)CellAt(idx);
             cell.Tick = tick;
             cell.Ms = ms;
             cell.SetEnabled(enabled);

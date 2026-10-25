@@ -13,7 +13,11 @@ namespace FluentGpu.Signals;
 /// </summary>
 public sealed class RxTable
 {
-    private const byte FLive = 1, FQueued = 2, FStructural = 4, FFreeAfterQueue = 8;
+    private const byte FLive = 1, FQueued = 2, FStructural = 4, FFreeAfterQueue = 8, FRunning = 16, FCleanups = 32;
+
+    /// <summary>The kind of a row whose body is an <see cref="Action"/> held by the table itself (<see cref="CreateAction"/>):
+    /// the row form of an <see cref="Effect"/> (UseSignalEffect), run without the host's <see cref="Runner"/>.</summary>
+    public const int KindAction = -1;
 
     private readonly ReactiveRuntime _rt;
     private byte[] _state = new byte[64];
@@ -23,6 +27,9 @@ public sealed class RxTable
     private int[] _srcHead = new int[64];   // first source link (read order), 0 = none
     private int[] _srcTail = new int[64];
     private ISignalSource?[] _cause = new ISignalSource?[64];
+    private object?[] _body = new object?[64];      // KindAction: the body; else null
+    private object?[] _owner = new object?[64];     // KindAction: the diagnostic owner (Computation.DiagOwner)
+    private Dictionary<int, List<Action>>? _cleanups;   // rows that registered Reactive.OnCleanup during a run (rare)
     private int _high = 1;                  // row 0 is "no row"
     private int _freeRow;                   // free list threaded through _payload
     private int _live;
@@ -73,6 +80,33 @@ public sealed class RxTable
     }
 
     /// <summary>The payload a row was created with (the host may re-point it, e.g. after its own table compacts).</summary>
+    /// <summary>A row running <paramref name="body"/> (an <see cref="Effect"/> without the object): created dirty, not run;
+    /// <see cref="RunNow"/> runs it.</summary>
+    public int CreateAction(Action body, object? diagOwner, bool structural = false)
+    {
+        int row = Create(KindAction, 0, structural);
+        _body[row] = body;
+        _owner[row] = diagOwner;
+        return row;
+    }
+
+    /// <summary>Reactive.OnCleanup inside a row's run: run before the row's next run and at its dispose, last first.</summary>
+    internal void AddCleanup(int row, Action cleanup)
+    {
+        _cleanups ??= new();
+        if (!_cleanups.TryGetValue(row, out var list)) _cleanups[row] = list = new List<Action>(2);
+        list.Add(cleanup);
+        _flags[row] |= FCleanups;
+    }
+
+    private void RunCleanups(int row)
+    {
+        if ((_flags[row] & FCleanups) == 0) return;
+        _flags[row] &= unchecked((byte)~FCleanups);
+        if (!_cleanups!.Remove(row, out var list)) return;
+        for (int i = list.Count - 1; i >= 0; i--) list[i]();
+    }
+
     public int PayloadOf(int row) => _payload[row];
     public void SetPayload(int row, int payload) => _payload[row] = payload;
     public int KindOf(int row) => _kind[row];
@@ -81,14 +115,20 @@ public sealed class RxTable
     /// <summary>What last took the row out of CLEAN (a signal, a memo, or null for an imperative schedule); cleared on read.</summary>
     public object? TakeStaleCause(int row) { var c = _cause[row]; _cause[row] = null; return c; }
 
+    /// <summary>The row's stale cause without clearing it (the flush profiler).</summary>
+    internal ISignalSource? PeekStaleCause(int row) => _cause[row];
+
     /// <summary>Dispose a row: drop its source links, and free it now, or once the queue that holds it drops it.</summary>
     public void Dispose(int row)
     {
         if (!IsLive(row)) return;
+        RunCleanups(row);
         UnlinkSources(row);
         _live--;
         byte f = _flags[row];
-        if ((f & FQueued) != 0) { _flags[row] = (byte)((f & ~FLive) | FFreeAfterQueue); return; }
+        // Queued, or disposed by its own run (its node unmounted under it): the number is freed when the queue drops it or the
+        // run returns, so it is never reused while something still refers to it.
+        if ((f & (FQueued | FRunning)) != 0) { _flags[row] = (byte)((f & ~FLive) | FFreeAfterQueue); return; }
         Free(row);
     }
 
@@ -97,6 +137,8 @@ public sealed class RxTable
         _flags[row] = 0;
         _state[row] = Computation.Clean;
         _cause[row] = null;
+        _body[row] = null;
+        _owner[row] = null;
         _payload[row] = _freeRow;
         _freeRow = row;
     }
@@ -137,7 +179,7 @@ public sealed class RxTable
     {
         byte f = _flags[row];
         _flags[row] = (byte)(f & ~FQueued);
-        if ((f & FFreeAfterQueue) != 0) { Free(row); return false; }
+        if ((f & FFreeAfterQueue) != 0) { if ((f & FRunning) == 0) Free(row); return false; }
         return (f & FLive) != 0;
     }
 
@@ -166,14 +208,28 @@ public sealed class RxTable
 
     private void Run(int row)
     {
+        RunCleanups(row);
         UnlinkSources(row);
         var prevC = Tracking.Current; var prevT = Tracking.Table; int prevR = Tracking.Row;
         Tracking.Current = null; Tracking.Table = this; Tracking.Row = row;
-        try { Runner!(_kind[row], _payload[row], row); }
+        bool nested = (_flags[row] & FRunning) != 0;
+        _flags[row] |= FRunning;
+        try
+        {
+            if (_kind[row] == KindAction) ((Action)_body[row]!)();
+            else Runner!(_kind[row], _payload[row], row);
+        }
         finally
         {
             Tracking.Current = prevC; Tracking.Table = prevT; Tracking.Row = prevR;
-            if ((_flags[row] & FLive) != 0) _state[row] = Computation.Clean;
+            byte f = _flags[row];
+            if (!nested)
+            {
+                f &= unchecked((byte)~FRunning);
+                _flags[row] = f;
+                if ((f & FFreeAfterQueue) != 0 && (f & FQueued) == 0) Free(row);
+            }
+            if ((f & FLive) != 0) _state[row] = Computation.Clean;
         }
     }
 
@@ -219,8 +275,9 @@ public sealed class RxTable
         int n = Math.Max(need, _state.Length * 2);
         Array.Resize(ref _state, n); Array.Resize(ref _flags, n); Array.Resize(ref _kind, n); Array.Resize(ref _payload, n);
         Array.Resize(ref _srcHead, n); Array.Resize(ref _srcTail, n); Array.Resize(ref _cause, n);
+        Array.Resize(ref _body, n); Array.Resize(ref _owner, n);
     }
 
-    internal object? DiagOwnerOf(int row) => DescribeOwner?.Invoke(_kind[row], _payload[row]);
-    internal string DiagKindOf(int row) => DescribeKind?.Invoke(_kind[row]) ?? "row:" + _kind[row];
+    internal object? DiagOwnerOf(int row) => _kind[row] == KindAction ? _owner[row] : DescribeOwner?.Invoke(_kind[row], _payload[row]);
+    internal string DiagKindOf(int row) => _kind[row] == KindAction ? "Effect" : DescribeKind?.Invoke(_kind[row]) ?? "row:" + _kind[row];
 }

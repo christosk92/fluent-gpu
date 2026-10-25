@@ -53,6 +53,14 @@ public static class MountProf
         string key = FluentGpu.Signals.SignalDiag.Describe(cause) + " -> " + what;
         s_units[key] = s_units.GetValueOrDefault(key) + 1;
     }
+
+    /// <summary>A table row's unit (a bind or a component render, PERF r3 MODEL M3), named as its object form was.</summary>
+    internal static void NoteUnit(object? owner, string kind, FluentGpu.Signals.ISignalSource? cause)
+    {
+        string what = owner?.GetType().Name ?? kind;
+        string key = FluentGpu.Signals.SignalDiag.Describe(cause) + " -> " + what;
+        s_units[key] = s_units.GetValueOrDefault(key) + 1;
+    }
     public static void NoteMeasure(int node, float availW, bool dirty)
     {
         s_measPerNode[node] = s_measPerNode.GetValueOrDefault(node) + 1;

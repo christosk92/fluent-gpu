@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-
 namespace FluentGpu.Hooks;
 
 /// <summary>One hook cell's slot in the shared <see cref="HookTable"/> (PERF r3 MODEL M2, DESIGN 2.4): the call-site key, the
@@ -12,6 +10,7 @@ internal struct HookSlot
     public int Line, Ordinal;
     public int Epoch;
     public HookSlotKind Kind;
+    public int Row;          // ActionRow: the RxTable row
     public object? Obj;
     public object? Aux;
 }
@@ -27,6 +26,11 @@ internal enum HookSlotKind : byte
     DepsEffect,
     /// <summary><see cref="Obj"/> is an <see cref="IDisposableCell"/>: dispose it.</summary>
     DisposableCell,
+    /// <summary><see cref="HookSlot.Row"/> is an action row of <see cref="Obj"/> (the runtime's <see cref="FluentGpu.Signals.RxTable"/>): dispose it.</summary>
+    ActionRow,
+    /// <summary>Not a hook: UseContext's last-resolved provider for the channel in <see cref="HookSlot.Obj"/> (signal in
+    /// <see cref="HookSlot.Aux"/>), kept for a parked re-render.</summary>
+    ContextCache,
 }
 
 /// <summary>
@@ -34,43 +38,47 @@ internal enum HookSlotKind : byte
 /// plus a <c>Dictionary</c> keyed by call site per component. A component owns a contiguous run of slots; runs come in size
 /// classes (4, 8, 16, ... slots), are recycled through one free list per class, and move to the next class (order kept) when
 /// the component outgrows them. So a mounted page adds slots to a long-lived array, not objects to the heap, and an unmount
-/// returns its run for the next mount. UI-thread confined, like the hooks themselves.
+/// returns its run for the next mount. One table per reconciler (injected into each context at mount, like the runtime), so a
+/// torn-down window takes its slots with it; UI-thread confined, like the hooks themselves.
 /// </summary>
-internal static class HookTable
+internal sealed class HookTable
 {
-    internal static HookSlot[] Slots = new HookSlot[1024];
-    private static int s_top;
-    private static readonly Stack<int>[] s_free = [new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new()];
+    /// <summary>The table of a context that was never injected by a reconciler (a component rendered outside one).</summary>
+    internal static readonly HookTable Detached = new();
+
+    internal HookSlot[] Slots = new HookSlot[1024];
+    private int _top;
+    private readonly Stack<int>[] _free = [new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new()];
 
     /// <summary>The capacity of size class <paramref name="cls"/>: 4 &lt;&lt; cls slots.</summary>
     internal static int Capacity(int cls) => 4 << cls;
 
     /// <summary>Take a run of size class <paramref name="cls"/>; returns its first slot. Its slots are cleared.</summary>
-    internal static int Rent(int cls)
+    internal int Rent(int cls)
     {
-        if (cls < s_free.Length && s_free[cls].TryPop(out int start)) return start;
+        if (cls < _free.Length && _free[cls].TryPop(out int start)) return start;
         int cap = Capacity(cls);
-        if (s_top + cap > Slots.Length)
+        if (_top + cap > Slots.Length)
         {
             int n = Slots.Length;
-            while (n < s_top + cap) n *= 2;
+            while (n < _top + cap) n *= 2;
             Array.Resize(ref Slots, n);
         }
-        start = s_top;
-        s_top += cap;
+        start = _top;
+        _top += cap;
         return start;
     }
 
     /// <summary>Return a run (cleared here, so no slot keeps an app object alive).</summary>
-    internal static void Return(int start, int cls, int used)
+    internal void Return(int start, int cls, int used)
     {
         Slots.AsSpan(start, used).Clear();
-        if (cls < s_free.Length) s_free[cls].Push(start);
+        if (cls < _free.Length) _free[cls].Push(start);
         // a run above the largest class is not recycled: it stays in the slab, cleared (a component with > 8192 hooks)
     }
 
     /// <summary>Move a full run of class <paramref name="cls"/> to the next class, keeping the order; returns the new start.</summary>
-    internal static int Grow(int start, int cls, int used)
+    internal int Grow(int start, int cls, int used)
     {
         int next = Rent(cls + 1);
         Slots.AsSpan(start, used).CopyTo(Slots.AsSpan(next, used));
@@ -78,6 +86,6 @@ internal static class HookTable
         return next;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static ref HookSlot At(int i) => ref Slots[i];
+    /// <summary>Slots in use (diagnostics).</summary>
+    internal int Top => _top;
 }

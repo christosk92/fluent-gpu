@@ -13,7 +13,7 @@ public sealed partial class TreeReconciler
     private void BindSprites(NodeHandle node, SpriteFieldEl sf, SpriteFieldEl? prev)
     {
         if (!Wire(sf.Instances.IsBound, prev?.Instances.IsBound == true)) return;
-        var fx = new BindEffect<SpriteInstances>(Runtime, sf, static e => e is SpriteFieldEl x ? x.Instances : default);
+        var fx = NewBind<SpriteInstances>(sf, static e => e is SpriteFieldEl x ? x.Instances : default);
         AddBinding(node, fx.Start(() =>
         {
             NodeBindingFireCount++;

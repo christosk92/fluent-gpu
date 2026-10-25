@@ -9,3 +9,10 @@ internal interface IComponentActivation
 {
     Signal<bool> ActiveSignal();
 }
+
+/// <summary>What <see cref="RenderContext.RequestRerender"/> schedules: the component's render (a row of the reconciler's
+/// runtime, PERF r3 MODEL M3). The delegate is made on the first read of RequestRerender and kept.</summary>
+internal interface IRerenderTarget
+{
+    Action CreateSchedule();
+}

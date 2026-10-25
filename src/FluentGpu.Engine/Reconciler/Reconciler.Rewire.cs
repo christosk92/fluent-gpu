@@ -47,34 +47,35 @@ public sealed partial class TreeReconciler
     private bool RewireBinds(NodeHandle node, Element next)
     {
         int idx = (int)node.Raw.Index;
-        if (!_nodeBindings.TryGetValue(idx, out var head)) return false;
+        if (!_nodeBindings.TryGetValue(idx, out int head)) return false;
         bool unwired = false;
-        Computation? before = null;
-        for (Computation? c = head; c is not null;)
+        int before = 0;
+        for (int l = head; l != 0;)
         {
-            Computation? after = c.NextNodeBinding;
-            if (c is BindEffect bind)   // Show/For/skeleton boundary effects share the table
+            int after = _nbNext[l];
+            if (_nbBind[l] != 0)   // a bind row (Show/For/skeleton boundary rows and effects share the chain)
             {
+                int b = _nbBind[l];
                 int writes = NodeBindingWriteCount;
-                BindRewire r = bind.Rewire(next);
+                BindRewire r = _bOps[b]!.Rewire(this, b, next);
                 if (r == BindRewire.Reran)
                 {
-                    if (bind.WritesLayout && NodeBindingWriteCount != writes) _layoutShapeMutated = true;
+                    if (BindFlag(b, BFWritesLayout) && NodeBindingWriteCount != writes) _layoutShapeMutated = true;
                 }
                 else if (r == BindRewire.NowStatic)
                 {
-                    if (before is null) { if (after is null) _nodeBindings.Remove(idx); else _nodeBindings[idx] = after; }
-                    else before.NextNodeBinding = after;
-                    c.NextNodeBinding = null;
-                    c.Dispose();
+                    if (before == 0) { if (after == 0) _nodeBindings.Remove(idx); else _nodeBindings[idx] = after; }
+                    else _nbNext[before] = after;
+                    DisposeBind(b);
+                    FreeLink(l);
                     NodeBindingUnwireCount++;
                     unwired = true;
-                    c = after;
-                    continue;   // `before` stays: the unlinked effect is no longer in the chain
+                    l = after;
+                    continue;   // `before` stays: the unlinked bind is no longer in the chain
                 }
             }
-            before = c;
-            c = after;
+            before = l;
+            l = after;
         }
         return unwired;
     }
@@ -152,9 +153,9 @@ public sealed partial class TreeReconciler
     internal int BindEffectCount(NodeHandle node)
     {
         int n = 0;
-        if (_nodeBindings.TryGetValue((int)node.Raw.Index, out var head))
-            for (var c = head; c is not null; c = c.NextNodeBinding)
-                if (c is BindEffect) n++;
+        if (_nodeBindings.TryGetValue((int)node.Raw.Index, out int head))
+            for (int l = head; l != 0; l = _nbNext[l])
+                if (_nbBind[l] != 0) n++;
         return n;
     }
 
@@ -164,9 +165,9 @@ public sealed partial class TreeReconciler
         get
         {
             int n = 0;
-            foreach (var head in _nodeBindings.Values)
-                for (var c = head; c is not null; c = c.NextNodeBinding)
-                    if (c is BindEffect) n++;
+            foreach (int head in _nodeBindings.Values)
+                for (int l = head; l != 0; l = _nbNext[l])
+                    if (_nbBind[l] != 0) n++;
             return n;
         }
     }
@@ -189,112 +190,3 @@ internal enum BindRewire : byte
     NowStatic,
 }
 
-/// <summary>One bound element channel's reactive effect — the unit <c>TreeReconciler.BindNode</c> wires per bound
-/// <c>Prop&lt;T&gt;</c>. The body reads the channel's SOURCE through this object (<see cref="BindEffect{T}.Read"/>) and
-/// the channel's STATIC companions through <see cref="El"/>, never through mount-captured locals, so the reconciler can
-/// re-point a reused node's binding at a re-rendered element (<see cref="Rewire"/>) without re-allocating anything.</summary>
-internal abstract class BindEffect : Computation
-{
-    private Action? _body;
-
-    private protected BindEffect(ReactiveRuntime runtime, Element el) : base(runtime, owner: null) => El = el;
-
-    /// <summary>The element this channel was last reconciled against (the mount element until the first re-wire). Bodies
-    /// read static companions here — an ImageEl's decode target/BlurHash/effects, a SpanTextEl's OverflowSuffix, a
-    /// ListRowEl's placeholder color and click flag, the declared Enter a bound Visible seeds — so a re-run (or a later
-    /// signal fire) applies the CURRENT element's companions, never the mount element's stale ones. Updated by every
-    /// <see cref="Rewire"/> whose element still binds the channel.</summary>
-    internal Element El { get; private protected set; }
-
-    /// <summary>The channel writes a LAYOUT column (Width/Height/Text/Spans): a re-wire that wrote raises the enclosing
-    /// render scope's layout-shape bit (<c>TreeReconciler.RewireBinds</c>).</summary>
-    internal bool WritesLayout { get; init; }
-
-    /// <summary>Arm the body and run it once — the mount <c>runNow</c>. Separate from construction so the body closure can
-    /// capture this effect (it reads <see cref="BindEffect{T}.Read"/> and <see cref="El"/> through it).</summary>
-    internal BindEffect Start(Action body)
-    {
-        _body = body;
-        RunStale();
-        Started = true;
-        return this;
-    }
-
-    /// <summary>The closure-free form: the effect carries its <paramref name="node"/> and <paramref name="rec"/>, and
-    /// <paramref name="fire"/> is a STATIC lambda (compiler-cached) that calls the reconciler's channel method with this effect.
-    /// One object per binding instead of three (effect, closure, delegate) — page-mount RCA, allocations.</summary>
-    internal BindEffect Start(TreeReconciler rec, NodeHandle node, Action<BindEffect> fire)
-    {
-        Rec = rec;
-        Node = node;
-        _fire = fire;
-        RunStale();
-        Started = true;
-        return this;
-    }
-
-    private Action<BindEffect>? _fire;
-    /// <summary>The reconciler and node a closure-free binding fires into (<see cref="Start(TreeReconciler, NodeHandle, Action{BindEffect})"/>).</summary>
-    internal TreeReconciler? Rec;
-    internal NodeHandle Node;
-    /// <summary>A channel's own first-write latch (the bound Width/Height "primed" state the closures used to capture).</summary>
-    internal bool Primed;
-
-    private protected sealed override void RunSelfBody() => _fire!(this);
-
-    /// <summary>The mount run is over: every later run re-writes a channel that already shows a value (E20: a colour channel
-    /// re-fired inside the live theme fade cross-fades from it; the mount run has nothing on screen to fade from).</summary>
-    internal bool Started { get; private set; }
-
-    private protected sealed override void OnStale() => Runtime.Schedule(this);
-
-    internal sealed override void RunStale()
-    {
-        FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.BindFire);
-        try { if (_fire is null) RunComputation(_body!); else RunComputationSelf(); } finally { FluentGpu.Hosting.MountProf.Exit(); }
-    }
-
-    /// <summary>Re-point this binding at the same channel of <paramref name="next"/>. A still-bound channel adopts
-    /// <paramref name="next"/> as <see cref="El"/>; if its payload also differs (by <c>Prop&lt;T&gt;</c> equality) the
-    /// source is swapped and the body re-runs once (re-tracking its dependencies) — <see cref="BindRewire.Reran"/>. A
-    /// channel that is STATIC on <paramref name="next"/> (a bound→static flip) is left untouched and reported as
-    /// <see cref="BindRewire.NowStatic"/>: the reconciler unlinks and disposes it (<c>TreeReconciler.RewireBinds</c>).</summary>
-    internal abstract BindRewire Rewire(Element next);
-}
-
-/// <summary>The typed half of <see cref="BindEffect"/>: holds the channel's current thunk-or-signal payload and the
-/// static selector that reads the same channel off a re-rendered element.</summary>
-internal sealed class BindEffect<T> : BindEffect
-{
-    private readonly Func<Element, Prop<T>> _channel;   // a static lambda (compiler-cached) — never allocates per call
-    private Func<T>? _thunk;
-    private IReadSignal<T>? _signal;
-
-    /// <param name="channel">Reads THIS channel off an element of the bound node's type, returning <c>default</c> (a
-    /// static, unbound <c>Prop&lt;T&gt;</c>) for any other type — so a mismatched element can never re-wire.</param>
-    internal BindEffect(ReactiveRuntime runtime, Element el, Func<Element, Prop<T>> channel) : base(runtime, el)
-    {
-        _channel = channel;
-        Prop<T> p = channel(el);
-        _thunk = p.Thunk;
-        _signal = p.Signal;
-    }
-
-    /// <summary>The channel's current value. Read it INSIDE the body: invoking the thunk / reading the signal there is
-    /// what subscribes this effect to the current source.</summary>
-    internal T Read() => _thunk is { } thunk ? thunk() : _signal!.Value;
-
-    internal override BindRewire Rewire(Element next)
-    {
-        Prop<T> p = _channel(next);
-        if (!p.IsBound) return BindRewire.NowStatic;
-        El = next;
-        Func<T>? thunk = p.Thunk;
-        IReadSignal<T>? signal = p.Signal;
-        if (object.Equals(thunk, _thunk) && object.Equals(signal, _signal)) return BindRewire.Unchanged;
-        _thunk = thunk;
-        _signal = signal;
-        RunStale();
-        return BindRewire.Reran;
-    }
-}

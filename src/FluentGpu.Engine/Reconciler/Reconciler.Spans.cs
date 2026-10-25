@@ -25,7 +25,7 @@ public sealed partial class TreeReconciler
         if (!Wire(st.Spans.IsBound, prev?.Spans.IsBound == true)) return;   // prev: the static→bound flip pass (WireGainedBinds)
         // WritesLayout: a re-wire's re-run happens inside a render scope, so a re-shape it causes is promoted to a
         // layout-shape change exactly like the static path's inRenderScope:true (RewireBinds).
-        var fx = new BindEffect<TextSpans>(Runtime, st, static e => e is SpanTextEl x ? x.Spans : default) { WritesLayout = true };
+        var fx = NewBind<TextSpans>(st, static e => e is SpanTextEl x ? x.Spans : default, writesLayout: true);
         AddBinding(node, fx.Start(() =>
         {
             NodeBindingFireCount++;
