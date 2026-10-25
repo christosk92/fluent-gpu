@@ -37,8 +37,14 @@ public sealed unsafe partial class D3D12Device
 
     private long _rcSubmitOps0;
 
+    private long _rcTexC0, _rcTexR0;
+    private int _rcSeg0, _rcSci0, _rcSegN, _rcSciN;
+
     private void RcBeginSubmit()
     {
+        _rcTexC0 = _surfaces?.TexturesCreated ?? 0;
+        _rcTexR0 = _surfaces?.TexturesReleased ?? 0;
+        _rcSegN = _rcSciN = 0;
         long all = 0;
         for (int i = 0; i < _rcOpTally.Length; i++) all += _rcOpTally[i];
         _rcSubmitOps0 = all;
@@ -57,6 +63,7 @@ public sealed unsafe partial class D3D12Device
         _rcPasses = _frameRenderPasses;
         _rcGlyphInsts = _frameGlyphInstanceCount;
         _rcDraws = GpuDrawCount.Frame;
+        _rcSeg0 = _frameSegments; _rcSci0 = _frameScissorSets;
         return Stopwatch.GetTimestamp();
     }
 
@@ -77,6 +84,7 @@ public sealed unsafe partial class D3D12Device
         _rcGlyphInsts = _frameGlyphInstanceCount - _rcGlyphInsts;
         _rcDraws = GpuDrawCount.Frame - _rcDraws;
         _rcCulledEnd = _rcCulledTally;
+        _rcSegN = _frameSegments - _rcSeg0; _rcSciN = _frameScissorSets - _rcSci0;
         Array.Copy(_rcOpTally, _rcOpsEnd, _rcOpTally.Length);   // the raster phase's ops only (not the composite's replays)
         _rcFootEnd = _rcFootSkippedTally;
     }
@@ -106,6 +114,8 @@ public sealed unsafe partial class D3D12Device
             (int)ops, (int)rects, (int)glyphs, (int)d[(int)DrawOp.DrawImage], (int)paths, (int)series, (int)scopes,
             rastered ? (int)(_rcSpansSkippedTally - _rcSpans0) : 0,
             rastered ? _rcGlyphInsts : 0, rastered ? _rcDraws : 0, (int)(all - _rcSubmitOps0),
-            rastered ? (int)(_rcCulledEnd - _rcCulled0) : 0, rastered ? (int)(_rcFootEnd - _rcFoot0) : 0);
+            rastered ? (int)(_rcCulledEnd - _rcCulled0) : 0, rastered ? (int)(_rcFootEnd - _rcFoot0) : 0,
+            (int)((_surfaces?.TexturesCreated ?? 0) - _rcTexC0), (int)((_surfaces?.TexturesReleased ?? 0) - _rcTexR0),
+            rastered ? _rcSegN : 0, rastered ? _rcSciN : 0);
     }
 }
