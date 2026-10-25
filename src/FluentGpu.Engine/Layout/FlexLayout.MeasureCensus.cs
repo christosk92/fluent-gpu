@@ -17,13 +17,13 @@ public sealed partial class FlexLayout
     /// <summary><c>--fg measure-census</c>.</summary>
     public static bool MeasureCensusEnabled;
 
-    private struct CensusNode { public float W0, W1, W2; public int Count, Pass; }
+    private struct CensusNode { public float W0, W1, W2; public int Count, Pass; public float LastW, LastH; public bool HasResult, NewWidth; }
     private readonly Dictionary<int, CensusNode> _mcNodes = new();
     private int _mcPass;
     private bool _mcArranging;
     private long _mcLastDump;
     private long _mcFrames, _mcReal, _mcFirst, _mcRepeat, _mcNoise, _mcSmall, _mcReal1, _mcInf, _mcArrangePhase, _mcText, _mcRow, _mcCol,
-                 _mcRootSolves, _mcSubtreeSolves, _mcTextNew, _mcRepeatText;
+                 _mcRootSolves, _mcSubtreeSolves, _mcTextNew, _mcRepeatText, _mcNewSame, _mcNewDiff, _mcNewSameText;
 
     private void CensusFrameStart()
     {
@@ -63,6 +63,7 @@ public sealed partial class FlexLayout
             if (r.Count == 1) r.W1 = availW; else if (r.Count == 2) r.W2 = availW;
             r.Count++;
             r.Pass = _mcPass;
+            r.NewWidth = !same;
             _mcNodes[i] = r;
         }
         long now = Stopwatch.GetTimestamp();
@@ -73,9 +74,25 @@ public sealed partial class FlexLayout
         Console.Error.WriteLine(
             $"[measure-census] frames={_mcFrames} realMeasures={_mcReal} first={_mcFirst} repeatSameWidth={_mcRepeat} (text {_mcRepeatText}) " +
             $"newWidth: noise<0.01={_mcNoise} <1={_mcSmall} >=1={_mcReal1} unbounded={_mcInf} (text {_mcTextNew}) arrangePhase={_mcArrangePhase} " +
-            $"kind: text={_mcText} row={_mcRow} col/other={_mcCol} rootSolves={_mcRootSolves} subtreeSolves={_mcSubtreeSolves} nodesCreatedTotal={created}");
+            $"kind: text={_mcText} row={_mcRow} col/other={_mcCol} rootSolves={_mcRootSolves} subtreeSolves={_mcSubtreeSolves} nodesCreatedTotal={created} " +
+            $"newWidthResult: same={_mcNewSame} (text {_mcNewSameText}) different={_mcNewDiff}");
         _mcFrames = _mcReal = _mcFirst = _mcRepeat = _mcNoise = _mcSmall = _mcReal1 = _mcInf = _mcArrangePhase = _mcText = _mcRow = _mcCol = 0;
-        _mcRootSolves = _mcSubtreeSolves = _mcTextNew = _mcRepeatText = 0;
+        _mcRootSolves = _mcSubtreeSolves = _mcTextNew = _mcRepeatText = _mcNewSame = _mcNewDiff = _mcNewSameText = 0;
+    }
+
+    /// <summary>The general path's result for a real measure: for a NEW-width re-measure, whether it came out the same size as the
+    /// node's previous measure this frame (a re-measure whose outcome changed nothing: the upper bound of what an exact skip saves).</summary>
+    private void CensusResult(NodeHandle node, Size2 result)
+    {
+        int i = (int)node.Raw.Index;
+        if (!_mcNodes.TryGetValue(i, out var r)) return;
+        if (r.NewWidth && r.HasResult)
+        {
+            bool same = r.LastW.Equals(result.Width) && r.LastH.Equals(result.Height);
+            if (same) { _mcNewSame++; if (_scene.Paint(node).VisualKind == VisualKind.Text) _mcNewSameText++; } else _mcNewDiff++;
+        }
+        r.LastW = result.Width; r.LastH = result.Height; r.HasResult = true; r.NewWidth = false;
+        _mcNodes[i] = r;
     }
 
     private static float Delta(float a, float b)

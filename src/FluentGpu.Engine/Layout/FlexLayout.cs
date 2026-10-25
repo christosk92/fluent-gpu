@@ -966,6 +966,7 @@ public sealed partial class FlexLayout
         WriteMeasuredBounds(node, w, h);
         var result = new Size2(w, h);
         if (!_naturalProbe) StoreRing(node, availW, result);   // P4: always refresh the cross-pass ring — its later read validity is the clean-subtree gate above, not the write.
+        if (MeasureCensusEnabled) CensusResult(node, result);
         return StoreMemo(node, availW, result);
     }
 
