@@ -119,6 +119,8 @@ internal sealed partial class SceneRecordingContext
         result = default;
         if (!PartialKeepEnabled || stats.InlineLayerDepth != 0) return false;
         var sl = stats.Slices!;
+        // its walk folded a cut for want of budget: this pass may cut it, which changes this slice's own bytes
+        if (sl.RefusedCut(selfSlot)) return false;
         int probe = sl.BeginProbe(selfSlot, scene.Capacity);
         int dirty = 0;
         if (!ProbeOwnWalk(scene, node, sl, spans, spanFrame, inMotion, rootPosed, ref dirty) || dirty == 0) return false;
@@ -311,6 +313,13 @@ internal sealed partial class SceneRecordingContext
             s_keepMismatches++;
             arena.FirstOpDifferingFromPrior(out int at, out int curOp, out int priorOp);
             Console.Error.WriteLine($"[rewalk-validate] MISMATCH kept arena: slot={slot} node={sl.NodeIndexOf(slot)}:{sl.GenOf(slot)} role={sl.RoleOf(slot)} bytes={arena.BytePosition} firstDiff@{at} op {(DrawOp)priorOp} -> {(DrawOp)curOp}");
+            // what the kept bytes named there (a child slice's marker) and the cut budget the re-walk saw
+            ReadOnlySpan<byte> prior = arena.PriorBytes(0, arena.PriorByteLength);
+            if ((DrawOp)priorOp == DrawOp.CompositeSlice && at + sizeof(int) + System.Runtime.CompilerServices.Unsafe.SizeOf<CompositeSliceCmd>() <= prior.Length)
+            {
+                var m = System.Runtime.InteropServices.MemoryMarshal.Read<CompositeSliceCmd>(prior[(at + sizeof(int))..]);
+                Console.Error.WriteLine($"[rewalk-validate]   kept marker: child={m.NodeIndex}:{m.Gen} sub={m.Sub} kind={(Tiles.SliceKind)m.Kind} flags={m.Flags} | {sl.BudgetDiag(m.NodeIndex, m.Gen, m.Sub)}");
+            }
         }
         MaybeLogValidation();
     }

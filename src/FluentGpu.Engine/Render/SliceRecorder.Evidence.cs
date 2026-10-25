@@ -108,6 +108,7 @@ public sealed partial class SliceRecorder
             bool done = i < rasterDone.Length && rasterDone[i] != 0;
             byte flags = done ? RasterEntryFlags.Faithful : (byte)0;
             if (i < rasterFlags.Length && (rasterFlags[i] & CompositeFrameFlags.RasterScratchRefused) != 0) flags |= RasterEntryFlags.ScratchRefused;
+            if (tr.Reason == InvalidationReason.SliceGeometry) flags |= (byte)(table.GeometryCause(tr.Key) << RasterEntryFlags.GeoShift);
             table.SurfaceLedger(tr.Surface, out _, out _, out ulong want, out _, out _);
             int node = -1; uint gen = 0;
             if (table.IsLive(tr.Key.SliceId)) { ref SliceRow sr = ref table.Row(tr.Key.SliceId); node = sr.NodeIndex; gen = sr.Gen; }

@@ -1896,6 +1896,8 @@ public sealed partial class AppHost : IDisposable
         _evBuildTicks = t1 - t0; _evSubmitTicks = t2 - t1;
         NoteTileCensus(slices, tiles);
         _ledgerTurnTiles += slices.LastRasteredTiles;
+        _ledgerTurnBuildTicks += t1 - t0;
+        _ledgerTurnRaster = _device.LastRasterCost;
         FluentGpu.Scroll.Diag.ScrollProbe.RenderCost(FluentGpu.Scroll.Diag.ScrollCostPhase.Composite, t1 - t0,
             frame.Items.Length, slices.LastExposedTileMissing);
         FluentGpu.Scroll.Diag.ScrollProbe.RenderCost(FluentGpu.Scroll.Diag.ScrollCostPhase.TileRaster, t2 - t1,

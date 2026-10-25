@@ -61,6 +61,11 @@ public static class TileDamage
     /// whole (the A/B arm and the escape hatch).</summary>
     public static bool Enabled = true;
 
+    /// <summary>A tile replay skips the primitives whose footprint (SliceOpBounds) misses the tile without decoding them
+    /// (default; the backend's per-segment footprint table). <c>--fg no-op-footprints</c> decodes every op (the A/B arm).</summary>
+    public static bool OpFootprints = true;
+
+
     /// <summary>The partial-present diff uses the precise damage (default): a re-rastered tile dirties only what its raster
     /// wrote, and an item STRUCTURE change dirties only the items that moved. <c>--fg no-precise-present</c> restores the
     /// whole-placement / whole-frame behaviour (the A/B arm).</summary>
@@ -90,6 +95,16 @@ public static class TileDamage
     /// compared with the back buffer, and every Present1's dirty rects are checked to cover every pixel that changed since
     /// the last presented frame (a model of what DWM shows is kept and compared).</summary>
     public static bool PresentValidate;
+
+    /// <summary><c>--fg phase-validate</c> (audit PERF r3 RASTER): every composited tile of a slice whose fractional placement
+    /// was snapped to its whole pixel (<c>SliceRecorder.FractionalPx</c>) is re-rastered at its RAW phase into a shadow surface and the
+    /// two are compared byte for byte (the count of differing pixels and the largest channel delta are logged).</summary>
+    public static bool PhaseValidate;
+
+    /// <summary><c>--fg footprint-validate</c> (audit PERF r3 RASTER): composited tiles are re-rastered with the per-segment
+    /// op-footprint skip OFF (every op decoded) into a shadow surface and compared byte for byte with what the skipping
+    /// raster left in the tile (a mismatch is logged).</summary>
+    public static bool FootprintValidate;
 
     /// <summary><c>--fg damage-validate</c>: the backend re-rasters every partially rastered tile whole into a shadow
     /// surface and compares the two byte for byte (a mismatch is logged with its extent).</summary>

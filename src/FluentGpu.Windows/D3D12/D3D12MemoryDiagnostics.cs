@@ -134,11 +134,24 @@ internal static unsafe class D3D12MemoryDiagnostics
     private static long _peakAtMs;   // ms since the ledger's first use when the peak was set: lines it up with the log's events
     private static readonly long s_t0 = Environment.TickCount64;
 
+    private static readonly Dictionary<string, long>.AlternateLookup<ReadOnlySpan<char>> ClassLiveBySpan = ClassLive.GetAlternateLookup<ReadOnlySpan<char>>();
+
     private static void ClassAdd(string name, long delta)
     {
-        string k = NameKey(name);
-        long v = ClassLive.GetValueOrDefault(k) + delta;
-        if (v <= 0) ClassLive.Remove(k); else ClassLive[k] = v;
+        // The class key is the name up to its first space / '[' — looked up as a span, so a tracked create / release
+        // allocates no key string (audit PERF r3 RASTER); a class seen for the first time stores one.
+        ReadOnlySpan<char> k = NameKeySpan(name);
+        long v = (ClassLiveBySpan.TryGetValue(k, out long cur) ? cur : 0) + delta;
+        if (v <= 0) ClassLiveBySpan.Remove(k);
+        else if (!ClassLiveBySpan.ContainsKey(k)) ClassLive[k.Length == name.Length ? name : k.ToString()] = v;
+        else ClassLiveBySpan[k] = v;
+    }
+
+    private static ReadOnlySpan<char> NameKeySpan(string name)
+    {
+        int cut = name.Length;
+        for (int i = 0; i < name.Length; i++) { char c = name[i]; if (c == ' ' || c == '[') { cut = i; break; } }
+        return cut == 0 ? name : name.AsSpan(0, cut);
     }
 
     /// <summary>The tracked high-water mark and what made it: "peak=X MiB {class:MiB,...}" (largest first).</summary>
@@ -181,7 +194,7 @@ internal static unsafe class D3D12MemoryDiagnostics
             }
             _createdBytes += bytes;
             _createCount++;
-            Log($"create {name} bytes={Format(bytes)} live={Format(_liveBytes)} creates={_createCount} releases={_releaseCount}");
+            if (LogEnabled) Log($"create {name} bytes={Format(bytes)} live={Format(_liveBytes)} creates={_createCount} releases={_releaseCount}");
         }
     }
 
@@ -211,12 +224,12 @@ internal static unsafe class D3D12MemoryDiagnostics
                 ClassAdd(entry.Name, -(long)entry.Bytes);
                 _releasedBytes += entry.Bytes;
                 _releaseCount++;
-                Log($"release {entry.Name} bytes={Format(entry.Bytes)} live={Format(_liveBytes)} creates={_createCount} releases={_releaseCount}");
+                if (LogEnabled) Log($"release {entry.Name} bytes={Format(entry.Bytes)} live={Format(_liveBytes)} creates={_createCount} releases={_releaseCount}");
                 return;
             }
 
             _releaseCount++;
-            Log($"release {fallbackName} bytes=unknown live={Format(_liveBytes)} creates={_createCount} releases={_releaseCount}");
+            if (LogEnabled) Log($"release {fallbackName} bytes=unknown live={Format(_liveBytes)} creates={_createCount} releases={_releaseCount}");
         }
     }
 
@@ -284,7 +297,7 @@ internal static unsafe class D3D12MemoryDiagnostics
         lock (Gate)
         {
             _resizeCount++;
-            Log($"resize {target} {width}x{height} live={Format(_liveBytes)} resizes={_resizeCount}");
+            if (LogEnabled) Log($"resize {target} {width}x{height} live={Format(_liveBytes)} resizes={_resizeCount}");
         }
     }
 
@@ -292,7 +305,7 @@ internal static unsafe class D3D12MemoryDiagnostics
     {
         lock (Gate)
         {
-            Log($"snapshot {label} live={Format(_liveBytes)} created={Format(_createdBytes)} released={Format(_releasedBytes)} resources={Live.Count} creates={_createCount} releases={_releaseCount} resizes={_resizeCount}");
+            if (LogEnabled) Log($"snapshot {label} live={Format(_liveBytes)} created={Format(_createdBytes)} released={Format(_releasedBytes)} resources={Live.Count} creates={_createCount} releases={_releaseCount} resizes={_resizeCount}");
         }
     }
 

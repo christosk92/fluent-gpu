@@ -170,6 +170,9 @@ public sealed partial class SliceRecorder
         public RectF Bounds;       // slice-space (pose-free window DIP) subtree bounds
         public bool PoseLocked;    // the stream holds a viewport-fixed op baked at the record-time delta
         public bool Fractional;    // a composited transition layer (NodePaint.CompositeLayer): placed at its exact sub-pixel offset
+        public bool Held;          // this pass: cut last pass under a budget, its share is reserved until it registers (CountBudget)
+        public bool RefusedCut;    // its last walk folded a cut inline for want of budget / a slot (never partially kept)
+        public float PoseDx, PoseDy;   // this turn's composite-time pose delta (OwnDelta at placement; 0 = at its free pose)
         // which cut budget the slice spends when registered (effect budget / acrylic budget / a free distributable fade)
         public BudgetClass Budget;
         // a repaint boundary's raster downscale (BoxEl.RasterScale): > 1 = the low-resolution route (no tiles)
@@ -384,6 +387,7 @@ public sealed partial class SliceRecorder
         r.AcrylicFallbacks = 0;
         r.Walked = true;
         r.RegFrame = _frame;
+        r.RefusedCut = false;   // this walk decides its cuts anew
         (_index[slot], _indexPrior[slot]) = (_indexPrior[slot], _index[slot]);
         _indexPriorCount[slot] = _indexCount[slot];
         _indexCount[slot] = 0;
@@ -391,7 +395,7 @@ public sealed partial class SliceRecorder
         _bakedPriorCount[slot] = _bakedCount[slot];
         _bakedCount[slot] = 0;
         _walked++;
-        CountBudget(in r);
+        CountBudget(ref r);
         EvNoteWalk(slot, why, detail);   // the walk ledger: which slice re-recorded, and why (evidence-diagnostics §A.4)
         return dl;
     }
@@ -419,7 +423,7 @@ public sealed partial class SliceRecorder
         r.RegFrame = _frame;
         r.Walked = false;
         _kept++;
-        CountBudget(in r);
+        CountBudget(ref r);
         _acrylicFallbacks += r.AcrylicFallbacks;
     }
 
@@ -565,16 +569,77 @@ public sealed partial class SliceRecorder
         FreeFade,
     }
 
-    private void CountBudget(in Rec r)
+    private void CountBudget(ref Rec r)
     {
         if (r.Kind != SliceKind.Effect || (r.Role != (int)SliceRole.Main && r.Role != (int)SliceRole.Layer)) return;
         switch (r.Budget)
         {
-            case BudgetClass.Acrylic: _acrylics++; break;
+            case BudgetClass.Acrylic: _acrylics++; if (r.Held) { r.Held = false; _acrylicHeld--; } break;
             case BudgetClass.FreeFade: _freeFades++; break;
-            default: _effects++; break;
+            default: _effects++; if (r.Held) { r.Held = false; _effectHeld--; } break;
         }
     }
+
+    // ── stable cut budgets (audit PERF r3 RASTER: the stage-visualizer rewalk mismatch) ──────────────────────────────────
+    // The effect and acrylic budgets are counted in WALK ORDER, so whether a boundary is cut used to depend on how many cuts
+    // registered before it this pass: a new effect slice earlier in the walk folded an EXISTING cut inline (its parent's
+    // bytes: a CompositeSlice marker became the child's own ops). A partial keep keeps that parent's arena and re-enters the
+    // child, so the kept marker disagreed with the canonical walk (rewalk-validate: CompositeSlice -> DrawImage). Now a slice
+    // cut last pass HOLDS its share: it is admitted whatever registered before it, and a NEW cut is admitted only within the
+    // cap minus the holds not yet registered — the count of every hold plus the new cuts so far, so the order in which
+    // existing cuts register no longer matters, and a keep and the canonical walk admit the same new cuts. A cut is still
+    // never admitted past the cap (by induction: existing ≤ cap, new ≤ cap − existing). A slice whose walk had to FOLD a cut
+    // (no budget or no slot) records that decision in its bytes, which a later pass could decide the other way: it is never
+    // partially kept (RefusedCut). Pixels are identical either way (a folded boundary records inline, the same ops).
+    private int _effectHeld, _acrylicHeld;
+
+    /// <summary>BeginPass: reserve the share of every slice cut last pass under the effect / acrylic budget.</summary>
+    private void HoldBudgets()
+    {
+        _effectHeld = _acrylicHeld = 0;
+        uint last = _frame - 1;
+        for (int s = 1; s < _slotCount; s++)
+        {
+            ref Rec r = ref _recs[s];
+            r.Held = r.Live && r.RegFrame == last && r.Kind == SliceKind.Effect
+                && (r.Role == (int)SliceRole.Main || r.Role == (int)SliceRole.Layer)
+                && r.Budget is BudgetClass.Effect or BudgetClass.Acrylic;
+            if (!r.Held) continue;
+            if (r.Budget == BudgetClass.Acrylic) _acrylicHeld++; else _effectHeld++;
+        }
+    }
+
+    /// <summary>May the node's foldable effect cut be made this pass? A slice cut last pass holds its share (see above);
+    /// any other only within what the holds leave.</summary>
+    internal bool EffectBudgetFor(int nodeIndex, uint gen, SliceRole role)
+    {
+        int s = Find(nodeIndex, gen, (int)role);
+        if (s >= 0 && _recs[s].Held && _recs[s].Budget == BudgetClass.Effect) return true;
+        return _effects + _effectHeld < EffectSliceCap;
+    }
+
+    /// <summary>The acrylic twin of <see cref="EffectBudgetFor"/>.</summary>
+    internal bool AcrylicBudgetFor(int nodeIndex, uint gen, SliceRole role)
+    {
+        int s = Find(nodeIndex, gen, (int)role);
+        if (s >= 0 && _recs[s].Held && _recs[s].Budget == BudgetClass.Acrylic) return true;
+        return _acrylics + _acrylicHeld < AcrylicSliceCap;
+    }
+
+    /// <summary>The walk of <paramref name="slot"/> folded a cut inline for want of budget or a slot (see above).</summary>
+    internal void NoteRefusedCut(int slot)
+    {
+        if ((uint)slot < (uint)_slotCount) _recs[slot].RefusedCut = true;
+        if (SceneRecordingContext.PartialKeepValidate && s_refusalLogs < 12)
+        {
+            s_refusalLogs++;
+            Console.Error.WriteLine($"[rewalk-validate] fold: pass={_frame} in slot={slot} node={(slot >= 0 && slot < _slotCount ? _recs[slot].NodeIndex : -1)} effects={_effects}+held {_effectHeld}/{EffectSliceCap} acrylics={_acrylics}+held {_acrylicHeld}/{AcrylicSliceCap} slots={_slotCount}");
+        }
+    }
+    private static int s_refusalLogs;
+
+    /// <summary>Did the walk that wrote <paramref name="slot"/>'s arena fold a cut it might not fold now?</summary>
+    internal bool RefusedCut(int slot) => (uint)slot < (uint)_slotCount && _recs[slot].RefusedCut;
 
     /// <summary>The cut budget <paramref name="slot"/> spends from now on (set at the cut, before its walk registers it).</summary>
     internal void SetBudget(int slot, BudgetClass budget) => _recs[slot].Budget = budget;
@@ -584,6 +649,14 @@ public sealed partial class SliceRecorder
     internal void SetScreen(int slot, bool screen) => _recs[slot].Screen = screen;
     /// <summary>BoxEl.Feedback on a repaint boundary: its composite item is a FEEDBACK item (the backend's trail surface).</summary>
     internal void SetFeedback(int slot, in FeedbackState state) { _recs[slot].HasFeedback = !state.Spec.IsNone; _recs[slot].Feedback = state; }
+
+    /// <summary>Diagnostics (rewalk-validate): the cut budget at this point of the pass and what the recorder holds for a node.</summary>
+    internal string BudgetDiag(int nodeIndex, uint gen, int sub)
+    {
+        int s = Find(nodeIndex, gen, sub & 7);
+        string slot = s < 0 ? "no slot" : $"slot={s} live={_recs[s].Live} regFrame={_recs[s].RegFrame} (pass {_frame}) budget={_recs[s].Budget} kind={_recs[s].Kind}";
+        return $"effects={_effects}/{EffectSliceCap} folded={_folded} acrylics={_acrylics} | {slot}";
+    }
 
     /// <summary>The effect budget: may another FOLDABLE effect slice be CUT this pass?</summary>
     internal bool EffectBudgetLeft => _effects < EffectSliceCap;
@@ -609,6 +682,43 @@ public sealed partial class SliceRecorder
     /// <summary>The slice at <paramref name="slot"/> is a composited transition layer: it and every slice below it place at their
     /// exact (sub-pixel) offset — see <see cref="SliceFrame.PhaseX"/>.</summary>
     internal void SetFractional(int slot) => _recs[slot].Fractional = true;
+
+    /// <summary>How close to a whole device pixel a FRACTIONAL placement must be to be taken as that pixel: 2⁻¹⁰ px. See
+    /// <see cref="FractionalPx"/>.</summary>
+    internal const float FractionalSnap = 1f / 1024f;
+
+    /// <summary>The placement (device px) a slice under a composited transition layer is rastered and composited at (its
+    /// whole-pixel part places the item, the rest is <see cref="SliceFrame.PhaseX"/>): <paramref name="px"/> = <c>AccDx·scale</c>,
+    /// a float sum of layout offsets and a device-snapped scroll translate. With every transition layer above the slice at
+    /// its free pose (<paramref name="atRest"/>: no slide in flight) a device-aligned placement is a whole pixel by
+    /// construction, but it arrives with float noise (measured ±2⁻¹⁴..3·2⁻¹⁴ px): raw, the phase flipped between 0, 6.1e-5 and
+    /// 0.99994 on scroll steps and every flip re-rastered every tile of the page (SliceGeometry, audit PERF r3 RASTER). At rest
+    /// and within <see cref="FractionalSnap"/> of a whole pixel the placement IS that pixel (phase exactly 0 on every turn).
+    /// Any other value — and every placement while a layer is posed (a sliding page) — is returned unchanged: the slide
+    /// rasters exactly as before.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static float FractionalPx(float px, bool atRest)
+    {
+        float r = MathF.Round(px);
+        return CanonicalPhase && atRest && MathF.Abs(px - r) <= FractionalSnap ? r : px;
+    }
+
+    /// <summary>Is every composited transition layer at or above <paramref name="slot"/> at its free pose this turn (its
+    /// placement's pose delta exactly 0)? See <see cref="FractionalPx"/>.</summary>
+    private bool FractionalAtRest(int slot)
+    {
+        for (int s = slot, guard = 0; s >= 0 && guard < 64; s = _recs[s].Parent, guard++)
+        {
+            ref Rec r = ref _recs[s];
+            if (r.Fractional && (r.PoseDx != 0f || r.PoseDy != 0f)) return false;
+            if (s == RootSlot) break;
+        }
+        return true;
+    }
+
+    /// <summary>Near-whole fractional placements snap to the pixel (default). <c>--fg raw-phase</c> turns it off (the A/B
+    /// arm: the raw float placement, as before).</summary>
+    public static bool CanonicalPhase = true;
 
     private bool UnderFractional(int slot)
     {
@@ -777,6 +887,7 @@ public sealed partial class SliceRecorder
         if (++_frame == 0) _frame = 1;
         _passInlineSticky = ForceInlineStickyClip;
         _walked = _kept = _effects = _folded = _acrylics = _acrylicFallbacks = _freeFades = _partialKeeps = _reentered = 0;
+        HoldBudgets();
         _sigMissWalks = 0;
         _bytes = 0;
         _keptAll = false;
@@ -2022,6 +2133,7 @@ public sealed partial class SliceRecorder
             round = Offset(m.OuterClip.RoundedRect, pdx, pdy); roundR = m.OuterClip.CornerRadius;
         }
         c.AccDx = cdx; c.AccDy = cdy;
+        c.PoseDx = cdx - accDx; c.PoseDy = cdy - accDy;
 
         // A composite-time STICKY clip (CompositeSliceFlags.StickyClip): the node's ClipTop pose, a half-plane that is
         // viewport-fixed while the slice rides the page. Everything below the slice inherits it exactly (childClip — the
@@ -2435,8 +2547,9 @@ public sealed partial class SliceRecorder
                     // The group's transform is its slice's posed offset (whole device px) and its footprint the placed
                     // extent of what it encloses (+ its blur reach): a group moved rigidly by an ancestor scroll keeps its
                     // surface origin relative to its content — the group-cache key (GroupCacheKey) then matches.
+                    bool gRest = FractionalAtRest(e.Slot);
                     var gT = UnderFractional(e.Slot)
-                        ? Affine2D.Translation(MathF.Floor(e.AccDx * scale), MathF.Floor(e.AccDy * scale))
+                        ? Affine2D.Translation(MathF.Floor(FractionalPx(e.AccDx * scale, gRest)), MathF.Floor(FractionalPx(e.AccDy * scale, gRest)))
                         : Affine2D.Translation(MathF.Round(e.AccDx * scale), MathF.Round(e.AccDy * scale));
                     RectF gFoot = ScalePx(e.Rect, scale);
                     if (!gFoot.IsEmpty && gSigma > 0f)
@@ -2518,10 +2631,15 @@ public sealed partial class SliceRecorder
             bool fractional = UnderFractional(e.Slot);
             float phaseX = 0f, phaseY = 0f;
             int originX = (int)ox, originY = (int)oy;
+            // The placement this segment rasters and composites at: the exact offset under a fractional layer, on the
+            // whole pixel when it is one up to float noise (FractionalPx) — one value for the phase, the item transform and the
+            // opaque rect below.
+            bool atRest = fractional && FractionalAtRest(e.Slot);
+            float placeX = fractional ? FractionalPx(e.AccDx * scale, atRest) : e.AccDx * scale;
+            float placeY = fractional ? FractionalPx(e.AccDy * scale, atRest) : e.AccDy * scale;
             if (fractional)
             {
-                float px = e.AccDx * scale, py = e.AccDy * scale;
-                phaseX = px - MathF.Floor(px); phaseY = py - MathF.Floor(py);
+                phaseX = placeX - MathF.Floor(placeX); phaseY = placeY - MathF.Floor(placeY);
                 ox -= phaseX; oy -= phaseY;
             }
             var frame = new SliceFrame(originX, originY, residualX, residualY, scale, phaseX, phaseY);
@@ -2533,6 +2651,8 @@ public sealed partial class SliceRecorder
 
             ref SliceRow row = ref table.Row(id);
             row.ContentKey = ContentKey(e.Slot, e.Segment, ox, oy, scale);
+            row.RefPhaseX = fractional ? e.AccDx * scale - MathF.Floor(placeX) : 0f;
+            row.RefPhaseY = fractional ? e.AccDy * scale - MathF.Floor(placeY) : 0f;
             int arenaBase = withStreams ? StreamOffsetOf(e.Slot) : 0;
             row.StreamBase = arenaBase;
             row.DrawListStart = arenaBase + sg.ByteStart;
@@ -2628,7 +2748,7 @@ public sealed partial class SliceRecorder
             if (e.HasLayer) LayerParams(in e.Layer, e.InnerClip, scale, out alpha, out sigma, out feather, out srcPx);
             ApplyDist(in e.Dist, scale, ref alpha, ref feather, out EdgeFeather feather2);
             var transform = fractional
-                ? Affine2D.Translation(originX + MathF.Floor(e.AccDx * scale), originY + MathF.Floor(e.AccDy * scale))
+                ? Affine2D.Translation(originX + MathF.Floor(placeX), originY + MathF.Floor(placeY))
                 : Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
             RectF clipPx = StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH);
             if (r.Pose == PoseKind.Posed)
@@ -2662,7 +2782,7 @@ public sealed partial class SliceRecorder
                 clipPx,
                 RadiiPx(e.RoundR, scale), feather, sigma, default, r.Screen ? CompositeItem.BlendScreen : (byte)0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
                 feather2, default, e.Dist.Count, lowRes,
-                claimsCover && !posedImage ? OpaquePx(in sg.Opaque, in e, scale, alpha, sigma, in feather, in feather2, in clipPx) : default,
+                claimsCover && !posedImage ? OpaquePx(in sg.Opaque, in e, scale, placeX, placeY, alpha, sigma, in feather, in feather2, in clipPx) : default,
                 r.HasFeedback ? r.Feedback.Spec : default, r.HasFeedback ? r.Feedback.Warp : default, r.HasFeedback ? r.Feedback.EffectiveDecay : 0f,
                 subX, subY),
                 in e.Layer, in e.Dist, in e);
@@ -2820,12 +2940,12 @@ public sealed partial class SliceRecorder
     /// or at the whole-pixel placement round(AccDx·scale) (+ a residual): the rect is the INTERSECTION of both. The backend
     /// turns it into the whole pixels the composited item writes opaque. Only an item that composites its pixels unchanged
     /// can hide what lies beneath it: alpha 1, no blur, no feather, no rounded clip, no distributed fade.</summary>
-    private static RectF OpaquePx(in RectF opaque, in Plan e, float scale, float alpha, float sigma,
+    private static RectF OpaquePx(in RectF opaque, in Plan e, float scale, float ex, float ey, float alpha, float sigma,
         in EdgeFeather feather, in EdgeFeather feather2, in RectF clipPx)
     {
         if (opaque.IsEmpty || alpha < 1f || sigma > 0f || e.RoundR > 0f || e.Dist.Count > 0) return default;
         if (feather.Rect.W > 0f || feather.Rect.H > 0f || feather2.Rect.W > 0f || feather2.Rect.H > 0f) return default;
-        float ex = e.AccDx * scale, ey = e.AccDy * scale, rx = MathF.Round(ex), ry = MathF.Round(ey);
+        float rx = MathF.Round(ex), ry = MathF.Round(ey);
         float x0 = opaque.X * scale + MathF.Max(ex, rx), y0 = opaque.Y * scale + MathF.Max(ey, ry);
         float x1 = opaque.Right * scale + MathF.Min(ex, rx), y1 = opaque.Bottom * scale + MathF.Min(ey, ry);
         bool unbounded = clipPx.W <= 0f && clipPx.H <= 0f && clipPx.X == 0f && clipPx.Y == 0f;
