@@ -227,7 +227,10 @@ public sealed class ToolTip : Component
     /// countdown is a host one-shot timer (<see cref="HostTimerQueue"/>) armed in the reactive flush that follows the
     /// pointer-enter and drained at the top of the next frame.</summary>
     public static Element Wrap(Element target, string text, float grow = 0f, float showDelayMs = float.NaN)
-        => Embed.Comp(new ToolTipSlots(target, text, grow, showDelayMs), s_factory) with { SkeletonProxy = ProxyOf(target, grow) };
+    {
+        var slots = new ToolTipSlots(target, text, grow, showDelayMs);
+        return Embed.Comp(slots, s_factory) with { SkeletonProxy = ProxyOf(slots, grow) };
+    }
 
     // Every form stays a ToolTip COMPONENT boundary (PERF r3 UI). The component is thin (no hook, no state: Render returns the
     // attachment wrapper, and the tooltip's state lives in the attachment, created on the first hover or focus), but its element
@@ -242,11 +245,17 @@ public sealed class ToolTip : Component
     /// either way. The value is read inside the <see cref="ToolTip"/> component's render, so a bound Text re-evaluates it
     /// (and only it) on change.</summary>
     public static Element Wrap(Element target, Prop<string?> text, float grow = 0f, float showDelayMs = float.NaN)
-        => Embed.Comp(new ToolTipBoundSlots(target, text, grow, showDelayMs), s_factory) with { SkeletonProxy = ProxyOf(target, grow) };
+    {
+        var slots = new ToolTipBoundSlots(target, text, grow, showDelayMs);
+        return Embed.Comp(slots, s_factory) with { SkeletonProxy = ProxyOf(slots, grow) };
+    }
 
     /// <summary>The wrapped target's shape for a derived skeleton: a tooltip draws nothing in place, so a loading region derives the TARGET (a ring,
     /// a glyph button at its real size), never the deriver's 160-wide default bar for an opaque component, which overran the row it stood in.</summary>
-    static Func<Element> ProxyOf(Element target, float grow) => () => grow > 0f ? Fill(target, grow) : target;
+    // PERF r3 MODEL M4b: the proxy reads the target through the slots object, never a captured element: a region derives it
+    // after the render that built the target, and by then the slots (the component's props) are frozen with the tree they ride.
+    static Func<Element> ProxyOf(ToolTipSlots slots, float grow) => () => grow > 0f ? Fill(slots.Target, grow) : slots.Target;
+    static Func<Element> ProxyOf(ToolTipBoundSlots slots, float grow) => () => grow > 0f ? Fill(slots.Target, grow) : slots.Target;
 
     /// <summary>Live target + BOUND text slot for <see cref="Wrap(Element, Prop{string}, float, float)"/>. Compared by
     /// target reference (see <see cref="ToolTipSlots"/>'s comment) plus the <see cref="Prop{T}"/> payload's own value
