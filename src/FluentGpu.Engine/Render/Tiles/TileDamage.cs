@@ -106,6 +106,11 @@ public static class TileDamage
     /// raster left in the tile (a mismatch is logged).</summary>
     public static bool FootprintValidate;
 
+    /// <summary><c>--fg ink-validate</c> (audit PERF r3 RASTER, item 8): every replayed glyph run's quads are checked against the
+    /// extent <see cref="FluentGpu.Render.GlyphInk"/> held for the run before it (the extent the fade distribution test read);
+    /// a quad outside it (margin included) is a breach, logged with the count.</summary>
+    public static bool InkValidate;
+
     /// <summary><c>--fg damage-validate</c>: the backend re-rasters every partially rastered tile whole into a shadow
     /// surface and compares the two byte for byte (a mismatch is logged with its extent).</summary>
     public static bool Validate;

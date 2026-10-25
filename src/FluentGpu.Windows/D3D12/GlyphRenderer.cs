@@ -74,7 +74,12 @@ internal readonly record struct ColorLayer(ushort Gid, float DxEm, float DyEm, C
 /// <see cref="Colors"/> (span runs and colour-emoji runs, parallel to <see cref="Glyphs"/>): the per-quad color
 /// override — A==0 entries inherit the replayed command color; null = a plain uniform run (the overwhelming case).
 /// A colour emoji contributes one quad PER PALETTE LAYER, each carrying its CPAL colour here.</summary>
-internal struct ShapedRun { public ShapedGlyph[] Glyphs; public ColorF[]? Colors; public int Count; public int LastUsedFrame; }
+internal struct ShapedRun
+{
+    public ShapedGlyph[] Glyphs; public ColorF[]? Colors; public int Count; public int LastUsedFrame;
+    // the quads' extent (local DIP, the origin baked in, as the quads): GlyphInk, computed on first use; Ink empty = no quad
+    public bool HasInk; public RectF Ink;
+}
 
 /// <summary>Content key for the shaped-run cache. Keyed on the interned <see cref="StringId"/> handles (stable across frames,
 /// no per-frame string hashing) + quantized layout inputs — including EVERY shaping input of the glyph op (numeric Weight,
@@ -258,18 +263,36 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private readonly Dictionary<RunKey, ShapedRun> _runCache = new();
     private readonly List<ShapedGlyph> _scratch = new(256);   // reused miss-path shaping buffer
     private readonly List<ColorF> _colorScratch = new(256);   // reused span-run per-quad color buffer (miss path)
-    private readonly List<RunKey> _evictScratch = new();      // reused eviction sweep buffer (off the hot path)
     private readonly float[] _vpConstants = new float[2];
     // Renderer-owned quad-array free-list (bucketed by pow2 size). A virtualization storm shapes thousands of fresh
     // runs whose arrays the cache holds for many frames — the SHARED ArrayPool drains and falls back to allocating;
     // this list retains returned arrays (up to a per-bucket cap), so steady-state churn reuses instead of allocating.
     private readonly Stack<ShapedGlyph[]>[] _quadPool = new Stack<ShapedGlyph[]>[14];   // buckets 1<<0 .. 1<<13
-    // Per-bucket retained-depth cap (audit mem-02): without it the free-list ratchets to the session-peak run count and
-    // never gives memory back. A single frame can rent at most one array per cache-MISS run; an eviction sweep can
-    // return many same-size arrays at once. 8 per bucket absorbs that transient (an eviction sweep landing while a few
-    // new same-size runs are mid-shape) without holding peak. Returns beyond the cap drop the reference (managed arrays
-    // — the GC reclaims them); the only cost of dropping is that the NEXT miss at that size re-allocates one array.
-    private const int MaxPooledQuadArraysPerBucket = 8;
+    // Retention bounds (audit mem-02): without them the free-list ratchets to the session-peak run count and never gives
+    // memory back. The BYTE cap (MaxPooledQuadBytes) is the bound: the pool never holds more than 1 MiB of quads. Within it
+    // the per-bucket depth follows the churn (audit PERF r3 RASTER): a navigation shapes a new page's runs (tens of arrays
+    // per size class) while an eviction sweep returns the runs of a page that left 240 frames ago in one batch — a depth of
+    // 8 dropped most of that batch, so every navigation re-allocated its page's quad arrays (≈ 1.3–1.6 MB of render-thread
+    // allocation per 10 s of nav-burst). So each bucket keeps, beyond the previous fixed depth (RestingPooledArraysPerBucket),
+    // only what shaping DEMANDED from it over the last DemandSweeps sweeps (≈ 0.5–2 s: one navigation's mount and the sweep
+    // that returns the page before): every sweep trims a bucket to max(8, its recent rents) — the colour pool to its recent
+    // rents alone — and with no frame running the device's between-turns housekeeping, when it runs, trims both to that resting
+    // depth once nothing was shaped for QuietTrimMs (TrimIdlePools; it schedules no wake of its own). A steady state
+    // (playback's clock label, an idle page) shapes a run now and then, so the pools stand at the previous caps (8 per bucket, no colours); only a burst of shaping holds more, never past the 1 MiB byte
+    // cap the two pools share. Returns beyond a cap drop the reference (managed arrays — the GC reclaims them); the only cost
+    // of dropping is that the NEXT miss at that size re-allocates one array.
+    private const int MaxPooledQuadArraysPerBucket = 512;
+    private const int RestingPooledArraysPerBucket = 8;
+    private const int DemandSweeps = 4;
+    private readonly int[] _quadDemand = new int[14 * DemandSweeps], _colorDemand = new int[14 * DemandSweeps];
+    private readonly int[] _quadRentsSince = new int[14], _colorRentsSince = new int[14];
+    private int _demandSweep;
+    private long _lastRentMs;
+    private const int QuietTrimMs = 2000;
+    // The colour twin of the quad pool: a span or colour-emoji run's per-quad colours (ShapedRun.Colors), returned with
+    // its quads. Same buckets and depth, inside the SAME byte cap; empty at rest (before it there was no colour pool).
+    private readonly Stack<ColorF[]>[] _colorPool = new Stack<ColorF[]>[14];
+    private long _pooledColorBytes;
     // Liveness source for the run cache: a reclaimed text id resolves to "" (StringTable), so its runs can never be
     // hit again — evict them promptly instead of waiting out the age backstop (keeps the free-list small under storms).
     private StringTable? _liveness;
@@ -492,7 +515,7 @@ float4 PSMain(VSOutG i) : SV_Target
         int v = _registry.BodyVersion;
         if (v == _bodyVersionSeen) return;
         _bodyVersionSeen = v;
-        foreach (var kv in _runCache) ReturnQuads(kv.Value.Glyphs);
+        foreach (var kv in _runCache) ReturnRun(kv.Value);
         _runCache.Clear();
         _runCacheEpoch++;
     }
@@ -733,7 +756,7 @@ float4 PSMain(VSOutG i) : SV_Target
         _atlas.Reset();
         _cache.Clear();
         _iconCache.Clear();
-        foreach (var kv in _runCache) ReturnQuads(kv.Value.Glyphs);
+        foreach (var kv in _runCache) ReturnRun(kv.Value);
         _runCache.Clear();
         _runCacheEpoch++;
         Diag.Count("text.atlas", "generation-reset");
@@ -757,9 +780,12 @@ float4 PSMain(VSOutG i) : SV_Target
         var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId, typography);
 
         ref var hit = ref CollectionsMarshal.GetValueRefOrNullRef(_runCache, key);
+        LastRunInkValid = false;
         if (!Unsafe.IsNullRef(ref hit))
         {
             hit.LastUsedFrame = _frame;
+            if (!hit.HasInk) { hit.Ink = InkOf(hit.Glyphs.AsSpan(0, hit.Count)); hit.HasInk = true; }
+            LastRunInk = Relative(in hit.Ink, originX, topY); LastRunInkValid = true;
             if (_preparing) return;
             _runsCached++;
 #if DEBUG
@@ -789,7 +815,7 @@ float4 PSMain(VSOutG i) : SV_Target
         ColorF[]? colors = null;
         if (_colorScratch.Count == n && ColorGlyphBake.RetainColors(CollectionsMarshal.AsSpan(_colorScratch)))
         {
-            colors = new ColorF[n];   // only retain when some span or palette layer actually recolors
+            colors = RentColors(n);   // only retain when some span or palette layer actually recolors (pooled: ReturnRun)
             _colorScratch.CopyTo(colors);
         }
         // A mixed-generation shape (some quads hold stale atlas UVs) must NEVER be cached — it would replay wrong
@@ -797,18 +823,42 @@ float4 PSMain(VSOutG i) : SV_Target
         // correctness backstop (Diag canary — should read 0 in production).
         if (consistent)
         {
-            _runCache[key] = new ShapedRun { Glyphs = arr, Colors = colors, Count = n, LastUsedFrame = _frame };
+            RectF inkOf = InkOf(arr.AsSpan(0, n));
+            _runCache[key] = new ShapedRun { Glyphs = arr, Colors = colors, Count = n, LastUsedFrame = _frame, HasInk = true, Ink = inkOf };
+            LastRunInk = Relative(in inkOf, originX, topY); LastRunInkValid = true;
             _runsShaped++;
         }
         else
         {
             Diag.Count("text.run", "uncachedMixedEpoch");
         }
-        if (_preparing) { if (!consistent) ReturnQuads(arr); return; }
+        if (_preparing) { if (!consistent) { ReturnQuads(arr); ReturnColors(colors); } return; }
         var baked = arr.AsSpan(0, n);
         Replay(baked, colors, forceColor, color, world, opacity, dpiScale, motionSoft, outList);
-        if (!consistent) ReturnQuads(arr);   // Replay already copied into outList; the rented array is not retained
+        if (!consistent) { ReturnQuads(arr); ReturnColors(colors); }   // Replay already copied into outList; the rented arrays are not retained
     }
+
+    /// <summary>The extent of the run the last <see cref="LayoutRun"/> replayed or shaped, relative to its layout origin
+    /// (GlyphInk) — valid only when that run is a cached, complete shape (a mixed-generation shape publishes nothing).</summary>
+    internal RectF LastRunInk;
+    internal bool LastRunInkValid;
+
+    /// <summary>The union of the quads' destination rects (local DIP); empty when no quad has area.</summary>
+    private static RectF InkOf(ReadOnlySpan<ShapedGlyph> quads)
+    {
+        float x0 = float.MaxValue, y0 = float.MaxValue, x1 = float.MinValue, y1 = float.MinValue;
+        for (int i = 0; i < quads.Length; i++)
+        {
+            ref readonly ShapedGlyph q = ref quads[i];
+            if (!(q.DstW > 0f) || !(q.DstH > 0f)) continue;
+            x0 = MathF.Min(x0, q.DstX); y0 = MathF.Min(y0, q.DstY);
+            x1 = MathF.Max(x1, q.DstX + q.DstW); y1 = MathF.Max(y1, q.DstY + q.DstH);
+        }
+        return x1 > x0 && y1 > y0 ? new RectF(x0, y0, x1 - x0, y1 - y0) : default;
+    }
+
+    private static RectF Relative(in RectF ink, float originX, float topY)
+        => ink.IsEmpty ? default : new RectF(ink.X - originX, ink.Y - topY, ink.W, ink.H);
 
     private float[] _gradDy = Array.Empty<float>();
     private float[] _gradRo0 = Array.Empty<float>();     // per-glyph reading-order LEFT  (continuous across wrapped visual lines)
@@ -987,8 +1037,10 @@ float4 PSMain(VSOutG i) : SV_Target
     internal ShapedGlyph[] RentQuads(int count)
     {
         if (count == 0) return Array.Empty<ShapedGlyph>();
+        _lastRentMs = Environment.TickCount64;
         int bucket = 32 - System.Numerics.BitOperations.LeadingZeroCount((uint)(count - 1));
         if (bucket >= _quadPool.Length) return new ShapedGlyph[count];   // pathological run — don't pool
+        _quadRentsSince[bucket]++;
         var stack = _quadPool[bucket];
         if (stack is not { Count: > 0 }) return new ShapedGlyph[1 << bucket];
         var array = stack.Pop();
@@ -1002,12 +1054,94 @@ float4 PSMain(VSOutG i) : SV_Target
         int bucket = System.Numerics.BitOperations.Log2((uint)arr.Length);
         if (bucket >= _quadPool.Length || arr.Length != 1 << bucket) return;
         long bytes = (long)arr.Length * Unsafe.SizeOf<ShapedGlyph>();
-        if (bytes > MaxPooledQuadBytes - _pooledQuadBytes) return;
+        if (bytes > MaxPooledQuadBytes - _pooledQuadBytes - _pooledColorBytes) return;
         var stack = _quadPool[bucket] ??= new Stack<ShapedGlyph[]>();
         if (stack.Count >= MaxPooledQuadArraysPerBucket) return;   // cap reached → drop the reference (GC reclaims)
         stack.Push(arr);
         _pooledQuadBytes += bytes;
     }
+
+    /// <summary>A pow2 colour array for <paramref name="count"/> quads (ShapedRun.Colors; only the first Count entries are
+    /// ever read).</summary>
+    private ColorF[] RentColors(int count)
+    {
+        int bucket = 32 - System.Numerics.BitOperations.LeadingZeroCount((uint)(count - 1));
+        if (bucket >= _colorPool.Length) return new ColorF[count];
+        _colorRentsSince[bucket]++;
+        var stack = _colorPool[bucket];
+        if (stack is not { Count: > 0 }) return new ColorF[1 << bucket];
+        var array = stack.Pop();
+        _pooledColorBytes -= (long)array.Length * Unsafe.SizeOf<ColorF>();
+        return array;
+    }
+
+    private void ReturnColors(ColorF[]? arr)
+    {
+        if (arr is null || arr.Length == 0) return;
+        int bucket = System.Numerics.BitOperations.Log2((uint)arr.Length);
+        if (bucket >= _colorPool.Length || arr.Length != 1 << bucket) return;
+        long bytes = (long)arr.Length * Unsafe.SizeOf<ColorF>();
+        if (bytes > MaxPooledQuadBytes - _pooledQuadBytes - _pooledColorBytes) return;
+        var stack = _colorPool[bucket] ??= new Stack<ColorF[]>();
+        if (stack.Count >= MaxPooledQuadArraysPerBucket) return;
+        stack.Push(arr);
+        _pooledColorBytes += bytes;
+    }
+
+    /// <summary>A run left the cache: its quad and colour arrays go back to the pools.</summary>
+    private void ReturnRun(in ShapedRun run)
+    {
+        ReturnQuads(run.Glyphs);
+        ReturnColors(run.Colors);
+    }
+
+    /// <summary>Each sweep: every bucket keeps at most the resting depth plus what shaping rented from it over the last
+    /// <see cref="DemandSweeps"/> sweeps (see the pool's retention note).</summary>
+    private void TrimToDemand()
+    {
+        int at = _demandSweep++ % DemandSweeps;
+        for (int b = 0; b < _quadPool.Length; b++)
+        {
+            _quadDemand[b * DemandSweeps + at] = _quadRentsSince[b]; _quadRentsSince[b] = 0;
+            _colorDemand[b * DemandSweeps + at] = _colorRentsSince[b]; _colorRentsSince[b] = 0;
+            int q = 0, c = 0;
+            for (int k = 0; k < DemandSweeps; k++) { q += _quadDemand[b * DemandSweeps + k]; c += _colorDemand[b * DemandSweeps + k]; }
+            int qCap = Math.Max(RestingPooledArraysPerBucket, q);
+            var qs = _quadPool[b];
+            while (qs is not null && qs.Count > qCap) _pooledQuadBytes -= (long)qs.Pop().Length * Unsafe.SizeOf<ShapedGlyph>();
+            var cs = _colorPool[b];
+            while (cs is not null && cs.Count > c) _pooledColorBytes -= (long)cs.Pop().Length * Unsafe.SizeOf<ColorF>();
+        }
+    }
+
+    /// <summary>The cache is at rest: drop pooled quad arrays past <paramref name="quadDepth"/> and colour arrays past
+    /// <paramref name="colorDepth"/> per bucket.</summary>
+    private void TrimPools(int quadDepth, int colorDepth)
+    {
+        for (int i = 0; i < _quadPool.Length; i++)
+        {
+            var q = _quadPool[i];
+            while (q is not null && q.Count > quadDepth) _pooledQuadBytes -= (long)q.Pop().Length * Unsafe.SizeOf<ShapedGlyph>();
+            var c = _colorPool[i];
+            while (c is not null && c.Count > colorDepth) _pooledColorBytes -= (long)c.Pop().Length * Unsafe.SizeOf<ColorF>();
+        }
+    }
+
+    /// <summary>Between-turns housekeeping (wall clock, D3D12Device.TrimIdleResources): once no run has been shaped for
+    /// QuietTrimMs, the pools trim back to their resting depth. It never asks for a wake of its own: a pending wake keeps the
+    /// render thread's housekeeping from going dormant between turns, and its extra passes shift turns (measured: −0.4
+    /// presents/s in home-scroll). While frames run, the per-sweep demand trim bounds the pools; once they stop, the trim
+    /// rides the housekeeping the tiles' own stale timers schedule.</summary>
+    internal void TrimIdlePools(long nowMs)
+    {
+        if (nowMs - _lastRentMs < QuietTrimMs) return;
+        bool above = _pooledColorBytes > 0;
+        for (int i = 0; i < _quadPool.Length && !above; i++) above = _quadPool[i] is { Count: > RestingPooledArraysPerBucket };
+        if (above) TrimPools(RestingPooledArraysPerBucket, 0);
+    }
+
+    /// <summary>Bytes the colour pool holds (census; with <see cref="QuadPoolBytes"/> never above the 1 MiB cap).</summary>
+    internal long ColorPoolBytes => _pooledColorBytes;
 
     // Colour-blind by design (like GlyphKey and the atlas): a colour emoji's palette layers bake into the run's Colors
     // array, not the key, so the same run replays under any run colour; forceColor (selection/disabled) still wins.
@@ -1416,18 +1550,23 @@ float4 PSMain(VSOutG i) : SV_Target
     private void EvictStaleRuns()
     {
         int maxAge = _runCache.Count > 4096 ? 60 : 240;
+        int evicted = 0;
+        // Removed while enumerating (Dictionary.Remove never invalidates an active enumerator, .NET Core 3.0+): the sweep
+        // needs no key list, which grew to the largest batch a sweep ever evicted (audit PERF r3 RASTER, C5). The set of
+        // runs evicted is the same — each run's test reads only its own entry.
         foreach (var kv in _runCache)
         {
             int idle = _frame - kv.Value.LastUsedFrame;
             if (idle > maxAge
                 || (idle > 2 && kv.Key.TextId != 0 && _liveness is { } st && st.Resolve(new StringId(kv.Key.TextId)).Length == 0))
-                _evictScratch.Add(kv.Key);
+            {
+                _runCache.Remove(kv.Key);
+                ReturnRun(kv.Value);
+                evicted++;
+            }
         }
-        foreach (var k in _evictScratch)
-            if (_runCache.Remove(k, out var dead))
-                ReturnQuads(dead.Glyphs);
-        if (_evictScratch.Count != 0) _runCacheEpoch++;
-        _evictScratch.Clear();
+        if (evicted != 0) _runCacheEpoch++;
+        TrimToDemand();
     }
 
 #if DEBUG
@@ -1568,7 +1707,7 @@ float4 PSMain(VSOutG i) : SV_Target
             }
             _atlas = candidate;
             _texInitialized = false;
-            foreach (var kv in _runCache) ReturnQuads(kv.Value.Glyphs);
+            foreach (var kv in _runCache) ReturnRun(kv.Value);
             _runCache.Clear(); // coordinates survive; every normalized UV and phase stride must be rebuilt
             _runCacheEpoch++;
             Diag.Count("text.atlas", "capacityGrow");
