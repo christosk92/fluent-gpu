@@ -43,10 +43,10 @@ public sealed partial class SliceRecorder
     private void ContentScanBegin(int s)
     {
         EnsureContentStorage(_recs.Length);
-        _cOps[s] ??= RentCleared<TileOp>(64);   // pooled per-slot storage (SliceRecorder.Pool.cs)
-        _cSegScopeStart[s] ??= RentCleared<int>(16);
-        _cSegScopeCount[s] ??= RentCleared<int>(16);
-        _cSegScopeIdx[s] ??= RentCleared<int>(16);
+        _cOps[s] ??= new TileOp[64];
+        _cSegScopeStart[s] ??= new int[9];
+        _cSegScopeCount[s] ??= new int[9];
+        _cSegScopeIdx[s] ??= new int[16];
         _cOpCount[s] = 0;
         _cSegScopeLen[s] = 0;
         _cScopeDepth = 0;
@@ -68,7 +68,7 @@ public sealed partial class SliceRecorder
         if (_cBlendAdditive) hash = TileContentHash.Fold(hash, AdditiveBlendMark);
         int n = _cOpCount[s];
         ref TileOp[] ops = ref _cOps[s];
-        if (n == ops.Length) GrowPooled(ref ops, n * 2, _retiredOps);
+        if (n == ops.Length) Array.Resize(ref ops, n * 2);
         ops[n] = new TileOp { Pos = pos, Bounds = bounds, Hash = hash, Scope = scope, Clip = clip, Spread = spread, ScopeSig = _cScopeSig[_cScopeDepth] };
         _cOpCount[s] = n + 1;
         if (!clip) GrowOpenLayers(ops, in bounds);
@@ -120,10 +120,10 @@ public sealed partial class SliceRecorder
     {
         ref int[] starts = ref _cSegScopeStart[s];
         ref int[] counts = ref _cSegScopeCount[s];
-        if (k >= starts.Length) { GrowPooled(ref starts, Math.Max(k + 1, starts.Length * 2), _retiredInts); GrowPooled(ref counts, starts.Length, _retiredInts); }
+        if (k >= starts.Length) { Array.Resize(ref starts, Math.Max(k + 1, starts.Length * 2)); Array.Resize(ref counts, starts.Length); }
         int at = _cSegScopeLen[s];
         ref int[] idx = ref _cSegScopeIdx[s];
-        if (at + _cScopeDepth > idx.Length) GrowPooled(ref idx, Math.Max(at + _cScopeDepth, idx.Length * 2), _retiredInts);
+        if (at + _cScopeDepth > idx.Length) Array.Resize(ref idx, Math.Max(at + _cScopeDepth, idx.Length * 2));
         for (int i = 0; i < _cScopeDepth; i++) idx[at + i] = _cScope[i];
         starts[k] = at;
         counts[k] = _cScopeDepth;

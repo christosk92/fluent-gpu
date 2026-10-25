@@ -350,7 +350,6 @@ public sealed partial class SliceRecorder
             return s;
         }
         s = Allocate();
-        ClaimSlot(s);
         _arenas[s] ??= new DrawList(4096);
         _arenas[s]!.Reset();
         _curGen[s] = NewGen();   // an empty current buffer: nothing can be kept or copied from a fresh slot
@@ -795,7 +794,7 @@ public sealed partial class SliceRecorder
     {
         int n = _indexCount[slot];
         ref SliceSpan[] arr = ref _index[slot];
-        if (n == arr.Length) GrowPooled(ref arr, Math.Max(arr.Length * 2, 16), _retiredSpans);   // SliceRecorder.Pool.cs
+        if (n == arr.Length) Array.Resize(ref arr, arr.Length * 2);
         arr[n] = new SliceSpan(default, byteStart, 0, sortStart, 0, false, depth);
         _indexCount[slot] = n + 1;
         return n;
@@ -826,7 +825,7 @@ public sealed partial class SliceRecorder
             if (e.Depth <= depth) continue;   // the copied node's own entry (or a sibling sharing its start) — not a descendant
             int n = _indexCount[slot];
             ref SliceSpan[] arr = ref _index[slot];
-            if (n == arr.Length) GrowPooled(ref arr, Math.Max(arr.Length * 2, 16), _retiredSpans);
+            if (n == arr.Length) Array.Resize(ref arr, arr.Length * 2);
             arr[n] = e with { ByteStart = e.ByteStart + db, SortStart = e.SortStart + ds };
             _indexCount[slot] = n + 1;
         }
@@ -886,7 +885,6 @@ public sealed partial class SliceRecorder
     internal void BeginPass(SceneRecordingSnapshot scene)
     {
         if (++_frame == 0) _frame = 1;
-        ReleaseDeadSlots();   // the storage of slots that died last pass returns to the pools (SliceRecorder.Pool.cs)
         _passInlineSticky = ForceInlineStickyClip;
         _walked = _kept = _effects = _folded = _acrylics = _acrylicFallbacks = _freeFades = _partialKeeps = _reentered = 0;
         HoldBudgets();
@@ -1440,8 +1438,8 @@ public sealed partial class SliceRecorder
         }
         _scanGen[s] = _curGen[s];
         _contentGen[s] = _curGen[s];
-        _scanMarks[s] ??= RentCleared<ScanMark>(16);   // pooled per-slot storage (SliceRecorder.Pool.cs)
-        _scanSegs[s] ??= RentCleared<ScanSeg>(16);
+        _scanMarks[s] ??= new ScanMark[8];
+        _scanSegs[s] ??= new ScanSeg[9];
         _scanVideos[s] ??= new ScanVideo[2];
         _scanFades[s] ??= new ScanFade[4];
         int marks = 0, videos = 0, fades = 0, inline = 0;
@@ -1525,7 +1523,7 @@ public sealed partial class SliceRecorder
                 case DrawOp.CompositeSlice:
                 {
                     AddSeg(s, marks, segStart, pos, cmds, segBounds, segVideo ? default : segOpaque, segHeavy || segVideo);
-                    if (marks == _scanMarks[s].Length) GrowPooled(ref _scanMarks[s], marks * 2, _retiredMarks);
+                    if (marks == _scanMarks[s].Length) Array.Resize(ref _scanMarks[s], marks * 2);
                     _scanMarks[s][marks++] = new ScanMark
                     {
                         ByteStart = pos, ByteEnd = payload + body, Cmd = MemoryMarshal.Read<CompositeSliceCmd>(p),
@@ -1685,7 +1683,7 @@ public sealed partial class SliceRecorder
 
     private void AddSeg(int s, int k, int start, int end, int cmds, in RectF bounds, in RectF opaque, bool heavy)
     {
-        if (k >= _scanSegs[s].Length) GrowPooled(ref _scanSegs[s], Math.Max(k + 1, _scanSegs[s].Length * 2), _retiredSegs);
+        if (k >= _scanSegs[s].Length) Array.Resize(ref _scanSegs[s], Math.Max(k + 1, _scanSegs[s].Length * 2));
         _scanSegs[s][k] = new ScanSeg { ByteStart = start, ByteEnd = end, Commands = cmds, Bounds = bounds, Opaque = opaque, Heavy = heavy };
     }
 

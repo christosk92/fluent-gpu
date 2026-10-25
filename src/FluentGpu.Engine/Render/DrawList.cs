@@ -1064,7 +1064,7 @@ public sealed class DrawList
     private void EnsureSort(int extra)
     {
         if (_sortLen + extra <= _sort.Length) return;
-        int n = Math.Max(_sort.Length * 2, MinSortCapacity);   // a released list holds an empty buffer (ReleaseBuffers)
+        int n = _sort.Length * 2;
         while (n < _sortLen + extra) n *= 2;
         var ns = System.Buffers.ArrayPool<ulong>.Shared.Rent(n);
         Array.Copy(_sort, ns, _sortLen);
@@ -1075,7 +1075,7 @@ public sealed class DrawList
     private void Ensure(int extra)
     {
         if (_len + extra <= _buf.Length) return;
-        int n = Math.Max(_buf.Length * 2, MinByteCapacity);
+        int n = _buf.Length * 2;
         while (n < _len + extra) n *= 2;
         var nb = System.Buffers.ArrayPool<byte>.Shared.Rent(n);
         Array.Copy(_buf, nb, _len);
@@ -1103,24 +1103,6 @@ public sealed class DrawList
         if (b.Length < 16 || !System.Numerics.BitOperations.IsPow2(b.Length)) return;
         if (_retiredSortN == _retiredSorts.Length) Array.Resize(ref _retiredSorts, _retiredSortN * 2);
         _retiredSorts[_retiredSortN++] = b;
-    }
-
-    private const int MinByteCapacity = 4096, MinSortCapacity = 256;
-
-    /// <summary>The slice recorder retired this list's slot (SliceRecorder.ReleaseDeadSlots, a pass after the slot died:
-    /// nothing reads its bytes any more): every buffer goes back to the shared pool and the list holds empty ones, so a
-    /// slot that hosts another slice later grows from the pool to THAT slice's size, instead of keeping the largest arena
-    /// it ever held while another slot allocates its own (audit PERF r3 RASTER, C5).</summary>
-    internal void ReleaseBuffers()
-    {
-        RetireBuf(_buf); RetireBuf(_priorBuf);
-        RetireSort(_sort); RetireSort(_priorSort);
-        _buf = _priorBuf = Array.Empty<byte>();
-        _sort = _priorSort = Array.Empty<ulong>();
-        _len = _priorLen = _sortLen = _priorSortLen = 0;
-        CommandCount = 0;
-        _opcodeStats = default;
-        ReturnRetired();
     }
 
     /// <summary>Hand the buffers this list grew out of back to the pool (between passes: nothing reads them any more).</summary>

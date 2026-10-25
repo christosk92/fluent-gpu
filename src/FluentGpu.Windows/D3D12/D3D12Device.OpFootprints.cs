@@ -1,5 +1,3 @@
-using System.Buffers;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using FluentGpu.Render;
@@ -45,8 +43,6 @@ public sealed unsafe partial class D3D12Device
     private int _replayFootN;
     private long _rcFootSkippedTally;
     private int[] _rastersOfRow = new int[64];
-    // the build buffer (grow-once): a table is built here, then copied into its slice id's table sized to fit
-    private OpFoot[] _footScratch = new OpFoot[1024];
 
     /// <summary>RasterTiles: the footprint table of <paramref name="row"/>'s stream, built when the row's bytes are new to it
     /// (a ContentKey of 0 is never cached: rebuilt per turn) and <paramref name="rasters"/> of its tiles raster this turn —
@@ -66,10 +62,7 @@ public sealed unsafe partial class D3D12Device
         if ((!fresh || _footOf[id] is null) && rasters < 2) return null;
         if (!fresh || _footOf[id] is null)
         {
-            int n = BuildFootprints(frame.StreamOf(in row));
-            FitTable(ref _footOf[id], n);
-            Array.Copy(_footScratch, _footOf[id]!, n);
-            _footN[id] = n;
+            BuildFootprints(frame.StreamOf(in row), ref _footOf[id], out _footN[id]);
             _footKey[id] = row.ContentKey;
             _footTurn[id] = _compositeTurn;
         }
@@ -77,21 +70,9 @@ public sealed unsafe partial class D3D12Device
         return _footOf[id];
     }
 
-    /// <summary>A slice id's table, sized for <paramref name="n"/> entries: kept while it holds them and is at most 4× too
-    /// large, else exchanged through the shared pool — slice ids are reused by other slices, so a fixed or grow-only table
-    /// per id held the largest segment it ever served while another id allocated its own (audit PERF r3 RASTER, C5).</summary>
-    private static void FitTable(ref OpFoot[]? table, int n)
+    private void BuildFootprints(ReadOnlySpan<byte> stream, ref OpFoot[]? table, out int count)
     {
-        int want = Math.Max(16, n);
-        if (table is not null && table.Length >= want && table.Length <= 4 * want) return;
-        if (table is not null && table.Length >= 16 && BitOperations.IsPow2(table.Length)) ArrayPool<OpFoot>.Shared.Return(table);
-        table = ArrayPool<OpFoot>.Shared.Rent(want);
-    }
-
-    /// <summary>Build <paramref name="stream"/>'s footprints into the build buffer; returns their count.</summary>
-    private int BuildFootprints(ReadOnlySpan<byte> stream)
-    {
-        OpFoot[] table = _footScratch;
+        table ??= new OpFoot[128];   // grown by doubling to the largest segment this slice id serves
         int n = 0, pos = 0;
         while (pos + sizeof(int) <= stream.Length)
         {
@@ -100,12 +81,12 @@ public sealed unsafe partial class D3D12Device
             if (Skippable(op) && body <= _replayOp.Length - sizeof(int)
                 && SliceOpBounds.TryGet(op, stream.Slice(pos + sizeof(int), body), out RectF b))
             {
-                if (n == table.Length) { Array.Resize(ref table, n * 2); _footScratch = table; }   // grow-once
+                if (n == table.Length) Array.Resize(ref table, n * 2);
                 table[n++] = new OpFoot { Pos = pos, L = b.X, T = b.Y, R = b.Right, B = b.Bottom };
             }
             pos += sizeof(int) + body;
         }
-        return n;
+        count = n;
     }
 
     /// <summary>A primitive the tile replay hands to DecodeOne (not a scope op, a blend or a marker).</summary>

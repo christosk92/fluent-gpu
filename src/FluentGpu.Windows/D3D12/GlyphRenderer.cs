@@ -273,15 +273,22 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     // the per-bucket depth follows the churn (audit PERF r3 RASTER): a navigation shapes a new page's runs (tens of arrays
     // per size class) while an eviction sweep returns the runs of a page that left 240 frames ago in one batch — a depth of
     // 8 dropped most of that batch, so every navigation re-allocated its page's quad arrays (≈ 1.3–1.6 MB of render-thread
-    // allocation per 10 s of nav-burst). While runs are being shaped the depth is MaxPooledQuadArraysPerBucket; once no run
-    // has been shaped for QuietSweepsToTrim sweeps (the cache at rest), each bucket trims back to RestingPooledArraysPerBucket
-    // (the previous fixed depth) and the colour pool empties, so the resting footprint is exactly what it was, and the two
-    // pools together never hold more than the 1 MiB byte cap. Returns beyond a cap drop the reference (managed arrays — the
-    // GC reclaims them); the only cost of dropping is that the NEXT miss at that size re-allocates one array.
+    // allocation per 10 s of nav-burst). So each bucket keeps, beyond the previous fixed depth (RestingPooledArraysPerBucket),
+    // only what shaping DEMANDED from it over the last DemandSweeps sweeps (≈ 0.5–2 s: one navigation's mount and the sweep
+    // that returns the page before): every sweep trims a bucket to max(8, its recent rents) — the colour pool to its recent
+    // rents alone — and with no frame running the device's between-turns housekeeping trims both to that resting depth after
+    // QuietTrimMs (TrimIdlePools). A steady state (playback's clock label, an idle page) shapes a run now and then, so the pools
+    // stand at the previous caps (8 per bucket, no colours); only a burst of shaping holds more, never past the 1 MiB byte
+    // cap the two pools share. Returns beyond a cap drop the reference (managed arrays — the GC reclaims them); the only cost
+    // of dropping is that the NEXT miss at that size re-allocates one array.
     private const int MaxPooledQuadArraysPerBucket = 512;
     private const int RestingPooledArraysPerBucket = 8;
-    private const int QuietSweepsToTrim = 4;
-    private int _quadRents, _quadRentsAtSweep, _quietSweeps;
+    private const int DemandSweeps = 4;
+    private readonly int[] _quadDemand = new int[14 * DemandSweeps], _colorDemand = new int[14 * DemandSweeps];
+    private readonly int[] _quadRentsSince = new int[14], _colorRentsSince = new int[14];
+    private int _demandSweep;
+    private long _lastRentMs;
+    private const int QuietTrimMs = 2000;
     // The colour twin of the quad pool: a span or colour-emoji run's per-quad colours (ShapedRun.Colors), returned with
     // its quads. Same buckets and depth, inside the SAME byte cap; empty at rest (before it there was no colour pool).
     private readonly Stack<ColorF[]>[] _colorPool = new Stack<ColorF[]>[14];
@@ -1030,9 +1037,10 @@ float4 PSMain(VSOutG i) : SV_Target
     internal ShapedGlyph[] RentQuads(int count)
     {
         if (count == 0) return Array.Empty<ShapedGlyph>();
-        _quadRents++;
+        _lastRentMs = Environment.TickCount64;
         int bucket = 32 - System.Numerics.BitOperations.LeadingZeroCount((uint)(count - 1));
         if (bucket >= _quadPool.Length) return new ShapedGlyph[count];   // pathological run — don't pool
+        _quadRentsSince[bucket]++;
         var stack = _quadPool[bucket];
         if (stack is not { Count: > 0 }) return new ShapedGlyph[1 << bucket];
         var array = stack.Pop();
@@ -1059,6 +1067,7 @@ float4 PSMain(VSOutG i) : SV_Target
     {
         int bucket = 32 - System.Numerics.BitOperations.LeadingZeroCount((uint)(count - 1));
         if (bucket >= _colorPool.Length) return new ColorF[count];
+        _colorRentsSince[bucket]++;
         var stack = _colorPool[bucket];
         if (stack is not { Count: > 0 }) return new ColorF[1 << bucket];
         var array = stack.Pop();
@@ -1086,6 +1095,25 @@ float4 PSMain(VSOutG i) : SV_Target
         ReturnColors(run.Colors);
     }
 
+    /// <summary>Each sweep: every bucket keeps at most the resting depth plus what shaping rented from it over the last
+    /// <see cref="DemandSweeps"/> sweeps (see the pool's retention note).</summary>
+    private void TrimToDemand()
+    {
+        int at = _demandSweep++ % DemandSweeps;
+        for (int b = 0; b < _quadPool.Length; b++)
+        {
+            _quadDemand[b * DemandSweeps + at] = _quadRentsSince[b]; _quadRentsSince[b] = 0;
+            _colorDemand[b * DemandSweeps + at] = _colorRentsSince[b]; _colorRentsSince[b] = 0;
+            int q = 0, c = 0;
+            for (int k = 0; k < DemandSweeps; k++) { q += _quadDemand[b * DemandSweeps + k]; c += _colorDemand[b * DemandSweeps + k]; }
+            int qCap = Math.Max(RestingPooledArraysPerBucket, q);
+            var qs = _quadPool[b];
+            while (qs is not null && qs.Count > qCap) _pooledQuadBytes -= (long)qs.Pop().Length * Unsafe.SizeOf<ShapedGlyph>();
+            var cs = _colorPool[b];
+            while (cs is not null && cs.Count > c) _pooledColorBytes -= (long)cs.Pop().Length * Unsafe.SizeOf<ColorF>();
+        }
+    }
+
     /// <summary>The cache is at rest: drop pooled quad arrays past <paramref name="quadDepth"/> and colour arrays past
     /// <paramref name="colorDepth"/> per bucket.</summary>
     private void TrimPools(int quadDepth, int colorDepth)
@@ -1097,6 +1125,19 @@ float4 PSMain(VSOutG i) : SV_Target
             var c = _colorPool[i];
             while (c is not null && c.Count > colorDepth) _pooledColorBytes -= (long)c.Pop().Length * Unsafe.SizeOf<ColorF>();
         }
+    }
+
+    /// <summary>Between-turns housekeeping (wall clock, D3D12Device.TrimIdleResources): once no run has been shaped for
+    /// QuietTrimMs, the pools trim back to their resting depth; returns the ms until that is due, or -1 when they are at
+    /// rest already.</summary>
+    internal int TrimIdlePools(long nowMs)
+    {
+        bool above = _pooledColorBytes > 0;
+        for (int i = 0; i < _quadPool.Length && !above; i++) above = _quadPool[i] is { Count: > RestingPooledArraysPerBucket };
+        if (!above) return -1;
+        long idle = nowMs - _lastRentMs;
+        if (idle >= QuietTrimMs) { TrimPools(RestingPooledArraysPerBucket, 0); return -1; }
+        return (int)Math.Max(1, QuietTrimMs - idle);
     }
 
     /// <summary>Bytes the colour pool holds (census; with <see cref="QuadPoolBytes"/> never above the 1 MiB cap).</summary>
@@ -1525,9 +1566,7 @@ float4 PSMain(VSOutG i) : SV_Target
             }
         }
         if (evicted != 0) _runCacheEpoch++;
-        // At rest (no run shaped for QuietSweepsToTrim sweeps) the pools trim back to their resting depth.
-        if (_quadRents != _quadRentsAtSweep) { _quadRentsAtSweep = _quadRents; _quietSweeps = 0; }
-        else if (++_quietSweeps == QuietSweepsToTrim) TrimPools(RestingPooledArraysPerBucket, 0);
+        TrimToDemand();
     }
 
 #if DEBUG
