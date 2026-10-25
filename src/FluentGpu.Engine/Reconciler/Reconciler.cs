@@ -300,7 +300,7 @@ public sealed partial class TreeReconciler
     private sealed class KeptSlot
     {
         public Signal<int> Index = null!;
-        public Element El = null!;
+        public Element El;
         public NodeHandle Root;
         public int ContentType;
         public long LastUsed;   // FrameEpoch of the last park/touch — the LRU key
@@ -417,7 +417,7 @@ public sealed partial class TreeReconciler
     {
         public string Key = "";
         public object Token = null!;
-        public Element El = null!;
+        public Element El;
         public NodeHandle Root;
         public long LastUsed;
         public bool Attached;
@@ -882,7 +882,7 @@ public sealed partial class TreeReconciler
 
     private void RenderRootDiff(Element newRoot)
     {
-        if (_scene.Root.IsNull || _oldRoot is null || _oldRoot.ElementTypeId != newRoot.ElementTypeId)
+        if (_scene.Root.IsNull || _oldRoot is not { } oldRootEl || oldRootEl.ElementTypeId != newRoot.ElementTypeId)
         {
             if (!_scene.Root.IsNull) Remove(_scene.Root);
             var node = _scene.CreateNode(newRoot.ElementTypeId);
@@ -895,7 +895,7 @@ public sealed partial class TreeReconciler
         }
         else
         {
-            Update(_scene.Root, newRoot, _oldRoot);
+            Update(_scene.Root, newRoot, oldRootEl);
             // LayoutDirty is marked by WriteColumns (layout-input / grid / clip-flag change) and by structural
             // reconcile paths — an identical-shape root re-render must not force a full solve.
         }
@@ -1062,10 +1062,21 @@ public sealed partial class TreeReconciler
     }
 
     /// <summary>The positional children of a container element (box or grid); empty for leaves.</summary>
-    private static Element[] ChildrenOf(Element? el) => el.ElementTypeId switch {
+    private static ElementList ChildrenOf(Element el) => el.ElementTypeId switch {
         BoxEl.TypeId when el.Is(out BoxEl b) => b.Children,
         GridEl.TypeId when el.Is(out GridEl g) => g.Children,
-        _ => []};
+        _ => default};
+
+    /// <summary>The children of a container element (box or grid); false for leaves.</summary>
+    private static bool TryChildrenOf(Element el, out ElementList kids)
+    {
+        switch (el.ElementTypeId)
+        {
+            case BoxEl.TypeId when el.Is(out BoxEl b): kids = b.Children; return true;
+            case GridEl.TypeId when el.Is(out GridEl g): kids = g.Children; return true;
+            default: kids = default; return false;
+        }
+    }
 
     /// <summary>Mark a node <see cref="NodeFlags.LayoutDirty"/> AND raise <c>_layoutShapeMutated</c>. Every
     /// reconcile-time layout mark goes through here: the local mark alone can be firewalled below a ContentSized
@@ -1095,7 +1106,7 @@ public sealed partial class TreeReconciler
 
     private void Update(NodeHandle node, Element newEl, Element oldEl)
     {
-        if (ReferenceEquals(newEl, oldEl)) return;
+        if (newEl.SameAs(oldEl)) return;
         if (_renderCensus is not null) _censusUpdates++;
 
         if (newEl.Is(out ComponentEl nce))
@@ -1164,7 +1175,7 @@ public sealed partial class TreeReconciler
             WriteColumns(node, nse, isMount: false);
             RewireBinds(node, nse);   // a re-render that binds Visible with a new thunk/signal re-points the mount bind (or unwires it)
             if (nse.Visible.IsBound && !oldEl.Visible.IsBound) WireGainedBinds(node, nse, oldEl);   // static→bound Visible
-            var oldContent = (oldEl as ScrollEl)?.Content;
+            var oldContent = (oldEl.AsKind<ScrollEl>())?.Content;
             var content = _scene.FirstChild(node);
             if (content.IsNull)
             {
@@ -1173,9 +1184,9 @@ public sealed partial class TreeReconciler
                 Mount(content, nse.Content);
                 MarkLayoutShape(node);
             }
-            else if (oldContent is not null && oldContent.ElementTypeId == nse.Content.ElementTypeId)
+            else if (oldContent is { } oc && oc.ElementTypeId == nse.Content.ElementTypeId)
             {
-                Update(content, nse.Content, oldContent);
+                Update(content, nse.Content, oc);
             }
             else
             {
@@ -1251,7 +1262,7 @@ public sealed partial class TreeReconciler
             else
                 _providerSig[idx] = (np.Channel, new Signal<object?>(np.Value));
 
-            var oldChild = (oldEl as ContextProviderEl)?.Child;
+            Element? oldChild = oldEl.Is(out ContextProviderEl ocp) ? ocp.Child : null;
             ReconcileSingleChild(node, np.Child, oldChild);
             MirrorParticipation(node, _scene.FirstChild(node));
             return;
@@ -1278,7 +1289,7 @@ public sealed partial class TreeReconciler
             if (gained) WireGainedBinds(node, newEl, oldEl);
             if (BindContract.CompiledIn && BindContract.Enabled && (unwired || gained)) CheckBindingShape(node, newEl);
         }
-        ReconcileChildren(node, ChildrenOf(newEl), ChildrenOf(oldEl));
+        ReconcileChildren(node, ChildrenOf(newEl).AsSpan(), ChildrenOf(oldEl).AsSpan());
     }
 
     /// <summary>GEN-01 (wired): true unless <paramref name="a"/> and <paramref name="b"/> are the same leaf element
@@ -1306,10 +1317,10 @@ public sealed partial class TreeReconciler
     /// varies with a measured width or an expansion target exist today and rely on being updated), so the semantic stays
     /// as-is and the report below (UNCONDITIONAL — see <see cref="ReuseGuard.KeyIgnoredInSingleChildSlot"/>) makes the
     /// dropped request loud instead of silent, in every build a user actually runs.</para></summary>
-    private void ReconcileSingleChild(NodeHandle parent, Element? newChild, Element? oldChild)
+    private void ReconcileSingleChild(NodeHandle parent, Element? newChildOpt, Element? oldChild)
     {
         var child = _scene.FirstChild(parent);
-        if (newChild is null)
+        if (newChildOpt is not { } newChild)
         {
             if (!child.IsNull) { Remove(child); MarkLayoutShape(parent); }
             return;
@@ -1321,7 +1332,7 @@ public sealed partial class TreeReconciler
             Mount(c, newChild);
             MarkLayoutShape(parent);
         }
-        else if (oldChild is not null && oldChild.ElementTypeId == newChild.ElementTypeId)
+        else if (oldChild is { } oldEl && oldEl.ElementTypeId == newChild.ElementTypeId)
         {
             // ALWAYS ON (unlike every other ReuseGuard report — this one is not DEBUG/FLUENTGPU_DIAG-gated): the author
             // asked for a REMOUNT via a changed key and this slot cannot deliver one. Same-type + both keys present +
@@ -1330,9 +1341,9 @@ public sealed partial class TreeReconciler
             // the hot path: two reference reads (Element.Key), and only when both are non-empty, one ordinal compare;
             // ReuseGuard.KeyIgnoredInSingleChildSlot owns the per-site dedupe that keeps a legitimately-varying-every-frame
             // key (a measured width baked into a root key) a single log line instead of one per frame.
-            if (newChild.Key is { Length: > 0 } nk && oldChild.Key is { Length: > 0 } ok && nk != ok)
-                ReportKeyIgnoredInSingleChildSlot(newChild, oldChild, ok, nk);
-            Update(child, newChild, oldChild);
+            if (newChild.Key is { Length: > 0 } nk && oldEl.Key is { Length: > 0 } ok && nk != ok)
+                ReportKeyIgnoredInSingleChildSlot(newChild, oldEl, ok, nk);
+            Update(child, newChild, oldEl);
         }
         else
         {
@@ -1362,12 +1373,12 @@ public sealed partial class TreeReconciler
         ReuseGuard.KeyIgnoredInSingleChildSlot(newChild.GetType().Name, oldKey, newKey);
     }
 
-    private void ReplaceSingleChild(NodeHandle parent, Element? newChild)
+    private void ReplaceSingleChild(NodeHandle parent, Element? newChildOpt)
     {
         var child = _scene.FirstChild(parent);
         if (!child.IsNull) Remove(child);
         // A removal alone changes the parent's shape, and the mount path below is skipped — mark before the early-out.
-        if (newChild is null) { if (!child.IsNull) MarkLayoutShape(parent); return; }
+        if (newChildOpt is not { } newChild) { if (!child.IsNull) MarkLayoutShape(parent); return; }
 
         var c = _scene.CreateNode(newChild.ElementTypeId);
         _scene.AppendChild(parent, c);
@@ -2887,12 +2898,12 @@ public sealed partial class TreeReconciler
         switch (el.ElementTypeId)
         {
             case BoxEl.TypeId when el.Is(out BoxEl box):
-                BindBoxCommon(node, box, prev as BoxEl);
+                BindBoxCommon(node, box, prev.AsKind<BoxEl>());
                 if (BindsRareChannel(box)) BindChannels(node, el, prev);   // its box branch invokes OnRealized (mount only)
                 else if (prev is null) box.OnRealized?.Invoke(node);
                 return;
             case TextEl.TypeId when el.Is(out TextEl text):
-                BindTextCommon(node, text, prev as TextEl);
+                BindTextCommon(node, text, prev.AsKind<TextEl>());
                 if (prev is null) text.OnRealized?.Invoke(node);
                 return;
         }
@@ -3174,7 +3185,7 @@ public sealed partial class TreeReconciler
     {
         if (el.Is(out BoxEl b))
         {
-            var bP = prev as BoxEl;
+            var bP = prev.AsKind<BoxEl>();
             if (Wire(b.RadialGradientCenter.IsBound, bP?.RadialGradientCenter.IsBound == true))
             {
                 var fx = NewBind<Point2>(b, static e => e.Is(out BoxEl x) ? x.RadialGradientCenter : default);
@@ -3267,11 +3278,11 @@ public sealed partial class TreeReconciler
         }
         else if (el.Is(out SpanTextEl st))
         {
-            BindSpanText(node, st, prev as SpanTextEl);   // Reconciler.Spans.cs — bound Spans : Prop<TextSpans> only (P2)
+            BindSpanText(node, st, prev.AsKind<SpanTextEl>());   // Reconciler.Spans.cs — bound Spans : Prop<TextSpans> only (P2)
         }
         else if (el.Is(out ImageEl ime))
         {
-            var imeP = prev as ImageEl;
+            var imeP = prev.AsKind<ImageEl>();
             if (Wire(ime.Source.IsBound, imeP?.Source.IsBound == true))
             {
                 var fx = NewBind<string>(ime, static e => e.Is(out ImageEl x) ? x.Source : default);
@@ -3340,7 +3351,7 @@ public sealed partial class TreeReconciler
         }
         else if (el.Is(out IconLayerEl ile))
         {
-            var ileP = prev as IconLayerEl;
+            var ileP = prev.AsKind<IconLayerEl>();
             // The layer TINT rides NodePaint.Fill (VisualKind.IconLayer). A bound Tint (the ThemedIcon role thunk reads
             // Tok) re-fires on RethemeAll → repaints the node with the new ColorF, NO re-raster (the mask is colorless).
             if (Wire(ile.Tint.IsBound, ileP?.Tint.IsBound == true))
@@ -3369,15 +3380,15 @@ public sealed partial class TreeReconciler
         }
         else if (el.Is(out SeriesEl se))
         {
-            BindSeriesSamples(node, se, prev as SeriesEl);   // Reconciler.Series.cs — the bound sample-source channel
+            BindSeriesSamples(node, se, prev.AsKind<SeriesEl>());   // Reconciler.Series.cs — the bound sample-source channel
         }
         else if (el.Is(out SpriteFieldEl sf))
         {
-            BindSprites(node, sf, prev as SpriteFieldEl);   // Reconciler.Sprites.cs — the bound instance-buffer channel
+            BindSprites(node, sf, prev.AsKind<SpriteFieldEl>());   // Reconciler.Sprites.cs — the bound instance-buffer channel
         }
         else if (el.Is(out ListRowEl lr))
         {
-            BindListRowCells(node, lr, prev as ListRowEl);   // Reconciler.ListRow.cs — Cells/Fill/HoverFill/SelectedFill/Placeholder
+            BindListRowCells(node, lr, prev.AsKind<ListRowEl>());   // Reconciler.ListRow.cs — Cells/Fill/HoverFill/SelectedFill/Placeholder
         }
     }
 
@@ -4442,7 +4453,7 @@ public sealed partial class TreeReconciler
             int os = i + shift;
             if ((uint)os >= (uint)oldN) { newNodes[i] = NodeHandle.Null; continue; }
             Element nk = newKids[i], ok = oldKids[os];
-            if (ReferenceEquals(nk, ok))
+            if (nk.SameAs(ok))
             {
                 newNodes[i] = oldNodes[os];
                 used[os] = true;
@@ -4607,9 +4618,7 @@ public sealed partial class TreeReconciler
         // explicit colors are free to differ (WriteColumns rewrites them every recycle) so their VALUE is ignored — only
         // the bind class is checked.
         if (a.Is(out TextEl ta) && b.Is(out TextEl tb) && ta.Color.IsBound != tb.Color.IsBound) return false;
-        Element[]? ac = a.ElementTypeId switch { BoxEl.TypeId when a.Is(out BoxEl x) => x.Children, GridEl.TypeId when a.Is(out GridEl x) => x.Children, _ => null };
-        Element[]? bc = b.ElementTypeId switch { BoxEl.TypeId when b.Is(out BoxEl x) => x.Children, GridEl.TypeId when b.Is(out GridEl x) => x.Children, _ => null };
-        if (ac is null || bc is null) return true;   // leaf type matched (no child structure to compare)
+        if (!TryChildrenOf(a, out var ac) || !TryChildrenOf(b, out var bc)) return true;   // leaf type matched (no child structure to compare)
 
         // Ordinal pass over UNKEYED children (Key == null): walk both in order skipping keyed siblings, comparing
         // overlapping ordinals only. A trailing surplus on either side is a legal tail insert/remove (ReconcileChildren
@@ -5094,7 +5103,7 @@ public sealed partial class TreeReconciler
         else
         {
             RewireBinds(node, ce);
-            if (ce.Visible.IsBound && !old!.Visible.IsBound) WireGainedBinds(node, ce, old);
+            if (ce.Visible.IsBound && !old!.Value.Visible.IsBound) WireGainedBinds(node, ce, old.Value);
         }
     }
 

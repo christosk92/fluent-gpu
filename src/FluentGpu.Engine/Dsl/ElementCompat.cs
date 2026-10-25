@@ -15,4 +15,8 @@ public static class ElementCompat
 
     public static bool SameAs(this Element? a, Element? b) => a is { } x ? b is { } y && x.SameAs(y) : b is null;
     public static int IdentityHash(this Element? el) => el is { } e ? e.IdentityHash() : 0;
+
+    /// <summary>The element as value kind <typeparamref name="T"/>, or null (the former <c>el as BoxEl</c>).</summary>
+    public static T? AsKind<T>(this Element? el) where T : struct => el is { } e && e.Is(out T v) ? v : null;
+    public static T? AsKind<T>(this Element el) where T : struct => el.Is(out T v) ? v : null;
 }

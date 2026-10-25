@@ -30,7 +30,7 @@ public readonly struct SeriesSamples(float[] array, int count, uint version) : I
 /// sample copy (gpu-renderer.md §3.1), so a per-frame rewrite costs one bind fire and one re-record of this node.
 /// A leaf: no children, no pointer handlers, no declarative motion of its own (wrap it in a <see cref="BoxEl"/> for
 /// Enter/Exit/Layout, exactly like <see cref="PathEl"/>).</summary>
-public partial struct SeriesEl : IElementKind<SeriesEl>
+public partial struct SeriesEl : IElementKind<SeriesEl>, IEquatable<SeriesEl>
 {
     public const ushort TypeId = 18;
     static ushort IElementKind<SeriesEl>.Kind => 18;
@@ -102,4 +102,37 @@ public partial struct SeriesEl : IElementKind<SeriesEl>
     {
         v._ecold = v._ecold.Frozen();
     }
+
+    public readonly bool Equals(SeriesEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in SeriesEl o) =>
+        EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<Prop<SeriesSamples>>.Default.Equals(Samples, o.Samples)
+        && EqualityComparer<SeriesShape>.Default.Equals(Shape, o.Shape)
+        && EqualityComparer<ColorF>.Default.Equals(Color, o.Color)
+        && EqualityComparer<GradientSpec?>.Default.Equals(Gradient, o.Gradient)
+        && EqualityComparer<float>.Default.Equals(Thickness, o.Thickness)
+        && EqualityComparer<float>.Default.Equals(Baseline, o.Baseline)
+        && EqualityComparer<float>.Default.Equals(Amplitude, o.Amplitude)
+        && EqualityComparer<float>.Default.Equals(Opacity, o.Opacity)
+        && EqualityComparer<SeriesGradientAxis>.Default.Equals(GradientAxis, o.GradientAxis)
+        && EqualityComparer<bool>.Default.Equals(AntiAlias, o.AntiAlias)
+        && EqualityComparer<GradientSpec?>.Default.Equals(GradientTo, o.GradientTo)
+        && EqualityComparer<Prop<float>>.Default.Equals(GradientMix, o.GradientMix)
+        && EqualityComparer<PaintBlend>.Default.Equals(Blend, o.Blend)
+        && EqualityComparer<float>.Default.Equals(Width, o.Width)
+        && EqualityComparer<float>.Default.Equals(Height, o.Height)
+        && EqualityComparer<float>.Default.Equals(MinWidth, o.MinWidth)
+        && EqualityComparer<float>.Default.Equals(MinHeight, o.MinHeight)
+        && EqualityComparer<float>.Default.Equals(MaxWidth, o.MaxWidth)
+        && EqualityComparer<float>.Default.Equals(MaxHeight, o.MaxHeight)
+        && EqualityComparer<float>.Default.Equals(Grow, o.Grow)
+        && EqualityComparer<float>.Default.Equals(Shrink, o.Shrink)
+        && EqualityComparer<float>.Default.Equals(Basis, o.Basis)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignSelf, o.AlignSelf)
+        && EqualityComparer<FlexAlign>.Default.Equals(JustifySelf, o.JustifySelf)
+        && EqualityComparer<Edges4>.Default.Equals(Margin, o.Margin)
+        && _ecold.ValueEquals(in o._ecold);
+    public override readonly bool Equals(object? obj) => obj is SeriesEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(18, Key);
 }

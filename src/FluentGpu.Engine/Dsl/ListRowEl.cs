@@ -81,7 +81,7 @@ public sealed class RowCellBuffer
 /// slot's <see cref="RowCellBuffer"/>) plus whichever of <see cref="Placeholder"/>/
 /// <see cref="SelectedFill"/>/<see cref="HoverFill"/> are bound — never a remount (<c>IsRecyclable</c> ⇒ true,
 /// Reconciler.cs).</summary>
-public partial struct ListRowEl : IElementKind<ListRowEl>
+public partial struct ListRowEl : IElementKind<ListRowEl>, IEquatable<ListRowEl>
 {
     public const ushort TypeId = 17;
     static ushort IElementKind<ListRowEl>.Kind => 17;
@@ -157,4 +157,32 @@ public partial struct ListRowEl : IElementKind<ListRowEl>
     {
         v._ecold = v._ecold.Frozen();
     }
+
+    public readonly bool Equals(ListRowEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in ListRowEl o) =>
+        EqualityComparer<Prop<RowCells>>.Default.Equals(Cells, o.Cells)
+        && EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<float>.Default.Equals(Height, o.Height)
+        && EqualityComparer<float>.Default.Equals(Width, o.Width)
+        && EqualityComparer<float>.Default.Equals(MinWidth, o.MinWidth)
+        && EqualityComparer<float>.Default.Equals(MinHeight, o.MinHeight)
+        && EqualityComparer<float>.Default.Equals(MaxWidth, o.MaxWidth)
+        && EqualityComparer<float>.Default.Equals(MaxHeight, o.MaxHeight)
+        && EqualityComparer<float>.Default.Equals(Grow, o.Grow)
+        && EqualityComparer<float>.Default.Equals(Shrink, o.Shrink)
+        && EqualityComparer<float>.Default.Equals(Basis, o.Basis)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignSelf, o.AlignSelf)
+        && EqualityComparer<FlexAlign>.Default.Equals(JustifySelf, o.JustifySelf)
+        && EqualityComparer<Edges4>.Default.Equals(Margin, o.Margin)
+        && EqualityComparer<Prop<ColorF>>.Default.Equals(Fill, o.Fill)
+        && EqualityComparer<Prop<ColorF>>.Default.Equals(HoverFill, o.HoverFill)
+        && EqualityComparer<Prop<ColorF>>.Default.Equals(SelectedFill, o.SelectedFill)
+        && EqualityComparer<CornerRadius4>.Default.Equals(Corners, o.Corners)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Placeholder, o.Placeholder)
+        && EqualityComparer<ColorF>.Default.Equals(PlaceholderColor, o.PlaceholderColor)
+        && EqualityComparer<Action<int>?>.Default.Equals(OnCellClick, o.OnCellClick)
+        && _ecold.ValueEquals(in o._ecold);
+    public override readonly bool Equals(object? obj) => obj is ListRowEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(17, Key);
 }

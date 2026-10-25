@@ -208,7 +208,7 @@ public sealed partial class TreeReconciler
     }
 
     internal NodeHandle BindNodeOf(int b) => _bNode[b];
-    internal Element BindElOf(int b) => _bEl[b]!;
+    internal Element BindElOf(int b) => _bEl[b].GetValueOrDefault();
     internal bool BindFlag(int b, byte f) => (_bFlags[b] & f) != 0;
     internal void SetBindFlag(int b, byte f, bool on) => _bFlags[b] = on ? (byte)(_bFlags[b] | f) : (byte)(_bFlags[b] & ~f);
     internal void SetBindFire(int b, NodeHandle node, object fire) { _bNode[b] = node; _bFire[b] = fire; }

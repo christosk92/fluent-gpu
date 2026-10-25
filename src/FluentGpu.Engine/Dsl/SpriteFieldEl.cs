@@ -28,7 +28,7 @@ public readonly struct SpriteInstances(Sprite[] array, int count, uint version) 
 /// <c>DrawSpritesCmd</c> chunks of 16 and the GPU expands each sprite into an SDF quad — nothing is tessellated or cached.
 /// A leaf like <see cref="SeriesEl"/>: no children, no pointer handlers; wrap it in a <see cref="BoxEl"/> for
 /// Enter/Exit/Layout/Transform.</summary>
-public partial struct SpriteFieldEl : IElementKind<SpriteFieldEl>
+public partial struct SpriteFieldEl : IElementKind<SpriteFieldEl>, IEquatable<SpriteFieldEl>
 {
     public const ushort TypeId = 19;
     static ushort IElementKind<SpriteFieldEl>.Kind => 19;
@@ -83,4 +83,28 @@ public partial struct SpriteFieldEl : IElementKind<SpriteFieldEl>
     {
         v._ecold = v._ecold.Frozen();
     }
+
+    public readonly bool Equals(SpriteFieldEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in SpriteFieldEl o) =>
+        EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<Prop<SpriteInstances>>.Default.Equals(Instances, o.Instances)
+        && EqualityComparer<SpriteKernel>.Default.Equals(Kernel, o.Kernel)
+        && EqualityComparer<PaintBlend>.Default.Equals(Blend, o.Blend)
+        && EqualityComparer<float>.Default.Equals(Opacity, o.Opacity)
+        && EqualityComparer<float>.Default.Equals(Width, o.Width)
+        && EqualityComparer<float>.Default.Equals(Height, o.Height)
+        && EqualityComparer<float>.Default.Equals(MinWidth, o.MinWidth)
+        && EqualityComparer<float>.Default.Equals(MinHeight, o.MinHeight)
+        && EqualityComparer<float>.Default.Equals(MaxWidth, o.MaxWidth)
+        && EqualityComparer<float>.Default.Equals(MaxHeight, o.MaxHeight)
+        && EqualityComparer<float>.Default.Equals(Grow, o.Grow)
+        && EqualityComparer<float>.Default.Equals(Shrink, o.Shrink)
+        && EqualityComparer<float>.Default.Equals(Basis, o.Basis)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignSelf, o.AlignSelf)
+        && EqualityComparer<FlexAlign>.Default.Equals(JustifySelf, o.JustifySelf)
+        && EqualityComparer<Edges4>.Default.Equals(Margin, o.Margin)
+        && _ecold.ValueEquals(in o._ecold);
+    public override readonly bool Equals(object? obj) => obj is SpriteFieldEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(19, Key);
 }

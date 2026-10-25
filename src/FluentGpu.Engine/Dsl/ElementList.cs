@@ -8,7 +8,7 @@ namespace FluentGpu.Dsl;
 /// on the stack and copies 16 bytes per child), or a heap array (built outside a region, an existing <c>Element[]</c>, or frozen).
 /// <c>new Element[] {..}</c>, <c>list.ToArray()</c> and <c>List&lt;Element&gt;</c> convert implicitly.</summary>
 [CollectionBuilder(typeof(ElementList), nameof(Create))]
-public readonly struct ElementList : IReadOnlyList<Element>
+public readonly struct ElementList : IReadOnlyList<Element>, IEquatable<ElementList>
 {
     private readonly Element[]? _heap;
     private readonly int _start, _count;
@@ -63,6 +63,11 @@ public readonly struct ElementList : IReadOnlyList<Element>
         }
         return copy is null ? this : new ElementList(copy);
     }
+
+    /// <summary>The same list (identity: the record compared its Element[] by reference).</summary>
+    public bool Equals(ElementList o) => ReferenceEquals(_heap, o._heap) && _start == o._start && _count == o._count && _stamp == o._stamp;
+    public override bool Equals(object? obj) => obj is ElementList o && Equals(o);
+    public override int GetHashCode() => _heap is { } h ? System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(h) : HashCode.Combine(_start, _count, _stamp);
 
     public Enumerator GetEnumerator() => new(this);
     IEnumerator<Element> IEnumerable<Element>.GetEnumerator() => GetEnumerator();

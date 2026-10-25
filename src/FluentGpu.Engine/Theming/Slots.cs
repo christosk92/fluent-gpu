@@ -149,7 +149,7 @@ internal abstract class ViewSlotBody<TProps> : Component where TProps : class
         IOptionRequests requests = UnhandledOptionRequests.Instance;
         if (store is not null) { reader = store; requests = store.RequestForwarder; }
         var ctx = new ViewContext(Context, reader, requests, a.Registry, FluentGpu.Dsl.Motion.ReducedMotion);
-        return a.Template(a.Args.Props, in ctx) ?? s_empty;
+        return a.Template(a.Args.Props, in ctx) is { IsNone: false } r ? r : s_empty;
     }
 }
 

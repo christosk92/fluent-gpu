@@ -14,7 +14,7 @@ namespace FluentGpu.Hooks;
 /// reschedules the boundary effect, so the latest <see cref="Then"/> / <see cref="Else"/> children and <see cref="When"/>
 /// thunk are reconciled in place (children built from live render state stay fresh — no freeze at first mount).
 /// </summary>
-public partial struct ShowEl : IElementKind<ShowEl>
+public partial struct ShowEl : IElementKind<ShowEl>, IEquatable<ShowEl>
 {
     public const ushort TypeId = 7;
     static ushort IElementKind<ShowEl>.Kind => 7;
@@ -51,6 +51,17 @@ public partial struct ShowEl : IElementKind<ShowEl>
         v = v with { Then = v.Then.Freeze() };
         if (v.Else is { } elseF) v = v with { Else = elseF.Freeze() };
     }
+
+    public readonly bool Equals(ShowEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in ShowEl o) =>
+        EqualityComparer<Func<bool>>.Default.Equals(When, o.When)
+        && EqualityComparer<Element>.Default.Equals(Then, o.Then)
+        && EqualityComparer<Element?>.Default.Equals(Else, o.Else)
+        && EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && _ecold.ValueEquals(in o._ecold);
+    public override readonly bool Equals(object? obj) => obj is ShowEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(7, Key);
 }
 
 /// <summary>
@@ -62,7 +73,6 @@ public partial struct ShowEl : IElementKind<ShowEl>
 /// </summary>
 public abstract record ForElBase : HeapElement
 {
-    public const ushort TypeId = 10;
     public sealed override ushort ElementTypeId => 10;
 
     /// <summary>

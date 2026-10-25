@@ -12,7 +12,7 @@ public enum SkeletonMode : byte { Auto, Off }
 public enum ValidationState : byte { None, Warning, Error }
 
 /// <summary>A box: container/layout node and/or a filled, optionally-clickable surface (VStack/HStack/Button/Box).</summary>
-public partial struct BoxEl : IElementKind<BoxEl>
+public partial struct BoxEl : IElementKind<BoxEl>, IEquatable<BoxEl>
 {
     public const ushort TypeId = 1;
     static ushort IElementKind<BoxEl>.Kind => 1;
@@ -534,6 +534,53 @@ public partial struct BoxEl : IElementKind<BoxEl>
         v._cMisc = v._cMisc.Frozen();
         v = v with { Children = v.Children.Freeze() };
     }
+
+    public readonly bool Equals(BoxEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in BoxEl o) =>
+        EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<byte>.Default.Equals(Direction, o.Direction)
+        && EqualityComparer<float>.Default.Equals(Gap, o.Gap)
+        && EqualityComparer<Edges4>.Default.Equals(Padding, o.Padding)
+        && EqualityComparer<Edges4>.Default.Equals(Margin, o.Margin)
+        && EqualityComparer<Prop<ColorF>>.Default.Equals(Fill, o.Fill)
+        && EqualityComparer<Prop<ColorF>>.Default.Equals(BorderColor, o.BorderColor)
+        && EqualityComparer<float>.Default.Equals(BorderWidth, o.BorderWidth)
+        && EqualityComparer<Prop<CornerRadius4>>.Default.Equals(Corners, o.Corners)
+        && EqualityComparer<Action?>.Default.Equals(OnClick, o.OnClick)
+        && EqualityComparer<CursorId?>.Default.Equals(Cursor, o.Cursor)
+        && EqualityComparer<Prop<bool>>.Default.Equals(HitTestVisible, o.HitTestVisible)
+        && EqualityComparer<bool>.Default.Equals(IsEnabled, o.IsEnabled)
+        && EqualityComparer<bool>.Default.Equals(Focusable, o.Focusable)
+        && EqualityComparer<AutomationRole>.Default.Equals(Role, o.Role)
+        && EqualityComparer<Prop<float>>.Default.Equals(Opacity, o.Opacity)
+        && EqualityComparer<Action<NodeHandle>?>.Default.Equals(OnRealized, o.OnRealized)
+        && EqualityComparer<ElementList>.Default.Equals(Children, o.Children)
+        && EqualityComparer<bool>.Default.Equals(ZStack, o.ZStack)
+        && EqualityComparer<bool>.Default.Equals(ClipToBounds, o.ClipToBounds)
+        && EqualityComparer<Prop<float>>.Default.Equals(Width, o.Width)
+        && EqualityComparer<Prop<float>>.Default.Equals(Height, o.Height)
+        && EqualityComparer<float>.Default.Equals(MinWidth, o.MinWidth)
+        && EqualityComparer<float>.Default.Equals(MinHeight, o.MinHeight)
+        && EqualityComparer<float>.Default.Equals(MaxWidth, o.MaxWidth)
+        && EqualityComparer<float>.Default.Equals(Grow, o.Grow)
+        && EqualityComparer<float>.Default.Equals(Shrink, o.Shrink)
+        && EqualityComparer<float>.Default.Equals(Basis, o.Basis)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignSelf, o.AlignSelf)
+        && EqualityComparer<FlexAlign>.Default.Equals(JustifySelf, o.JustifySelf)
+        && EqualityComparer<FlexJustify>.Default.Equals(Justify, o.Justify)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignItems, o.AlignItems)
+        && EqualityComparer<bool>.Default.Equals(Wrap, o.Wrap)
+        && _ecold.ValueEquals(in o._ecold)
+        && _cPaint.ValueEquals(in o._cPaint)
+        && _cPaintFx.ValueEquals(in o._cPaintFx)
+        && _cInput.ValueEquals(in o._cInput)
+        && _cGesture.ValueEquals(in o._cGesture)
+        && _cMotion.ValueEquals(in o._cMotion)
+        && _cHover.ValueEquals(in o._cHover)
+        && _cMisc.ValueEquals(in o._cMisc);
+    public override readonly bool Equals(object? obj) => obj is BoxEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(1, Key);
 }
 
 /// <summary>
@@ -541,7 +588,7 @@ public partial struct BoxEl : IElementKind<BoxEl>
 /// <see cref="RowHeight"/> (or the tallest cell when NaN). True tracks — every cell in a column shares its width
 /// (unlike nested-flex faking). Width-aware: resolves inside a ScrollView. (layout.md §7.)
 /// </summary>
-public partial struct GridEl : IElementKind<GridEl>
+public partial struct GridEl : IElementKind<GridEl>, IEquatable<GridEl>
 {
     public const ushort TypeId = 9;
     static ushort IElementKind<GridEl>.Kind => 9;
@@ -612,13 +659,37 @@ public partial struct GridEl : IElementKind<GridEl>
         v._ecold = v._ecold.Frozen();
         v = v with { Children = v.Children.Freeze() };
     }
+
+    public readonly bool Equals(GridEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in GridEl o) =>
+        EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<TrackSize[]>.Default.Equals(Columns, o.Columns)
+        && EqualityComparer<float>.Default.Equals(ColGap, o.ColGap)
+        && EqualityComparer<float>.Default.Equals(RowGap, o.RowGap)
+        && EqualityComparer<float>.Default.Equals(RowHeight, o.RowHeight)
+        && EqualityComparer<float>.Default.Equals(MinColWidth, o.MinColWidth)
+        && EqualityComparer<int>.Default.Equals(MaxColumns, o.MaxColumns)
+        && EqualityComparer<ElementList>.Default.Equals(Children, o.Children)
+        && EqualityComparer<float>.Default.Equals(Width, o.Width)
+        && EqualityComparer<float>.Default.Equals(Height, o.Height)
+        && EqualityComparer<float>.Default.Equals(Grow, o.Grow)
+        && EqualityComparer<float>.Default.Equals(Shrink, o.Shrink)
+        && EqualityComparer<float>.Default.Equals(Basis, o.Basis)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignSelf, o.AlignSelf)
+        && EqualityComparer<FlexAlign>.Default.Equals(JustifySelf, o.JustifySelf)
+        && EqualityComparer<Edges4>.Default.Equals(Margin, o.Margin)
+        && EqualityComparer<Edges4>.Default.Equals(Padding, o.Padding)
+        && _ecold.ValueEquals(in o._ecold);
+    public override readonly bool Equals(object? obj) => obj is GridEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(9, Key);
 }
 
 /// <summary>A text run. <see cref="FontFamily"/> selects the face — a system family name ("Segoe UI",
 /// "Segoe Fluent Icons") or a custom file as <c>"path/to.ttf#Family Name"</c> (the WinUI syntax). Null = the theme
 /// body font. Combine with an icon-font family + a private-use glyph to render icons (see <c>Ui.Icon</c>).</summary>
 /// <summary>A leaf stroked polyline, drawn analytically by the renderer and revealable through stroke trim.</summary>
-public partial struct PolylineStrokeEl : IElementKind<PolylineStrokeEl>
+public partial struct PolylineStrokeEl : IElementKind<PolylineStrokeEl>, IEquatable<PolylineStrokeEl>
 {
     public const ushort TypeId = 11;
     static ushort IElementKind<PolylineStrokeEl>.Kind => 11;
@@ -689,6 +760,46 @@ public partial struct PolylineStrokeEl : IElementKind<PolylineStrokeEl>
     {
         v._ecold = v._ecold.Frozen();
     }
+
+    public readonly bool Equals(PolylineStrokeEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in PolylineStrokeEl o) =>
+        EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<Point2>.Default.Equals(P0, o.P0)
+        && EqualityComparer<Point2>.Default.Equals(P1, o.P1)
+        && EqualityComparer<Point2>.Default.Equals(P2, o.P2)
+        && EqualityComparer<Point2>.Default.Equals(P3, o.P3)
+        && EqualityComparer<int>.Default.Equals(PointCount, o.PointCount)
+        && EqualityComparer<ColorF>.Default.Equals(Color, o.Color)
+        && EqualityComparer<float>.Default.Equals(Thickness, o.Thickness)
+        && EqualityComparer<float>.Default.Equals(TrimStart, o.TrimStart)
+        && EqualityComparer<float>.Default.Equals(TrimEnd, o.TrimEnd)
+        && EqualityComparer<bool>.Default.Equals(RoundCaps, o.RoundCaps)
+        && EqualityComparer<float>.Default.Equals(OffsetX, o.OffsetX)
+        && EqualityComparer<float>.Default.Equals(OffsetY, o.OffsetY)
+        && EqualityComparer<float>.Default.Equals(ScaleX, o.ScaleX)
+        && EqualityComparer<float>.Default.Equals(ScaleY, o.ScaleY)
+        && EqualityComparer<float>.Default.Equals(Rotation, o.Rotation)
+        && EqualityComparer<float>.Default.Equals(Opacity, o.Opacity)
+        && EqualityComparer<float>.Default.Equals(TransformOriginX, o.TransformOriginX)
+        && EqualityComparer<float>.Default.Equals(TransformOriginY, o.TransformOriginY)
+        && EqualityComparer<float>.Default.Equals(HoverScale, o.HoverScale)
+        && EqualityComparer<float>.Default.Equals(PressScale, o.PressScale)
+        && EqualityComparer<float>.Default.Equals(Width, o.Width)
+        && EqualityComparer<float>.Default.Equals(Height, o.Height)
+        && EqualityComparer<float>.Default.Equals(MinWidth, o.MinWidth)
+        && EqualityComparer<float>.Default.Equals(MinHeight, o.MinHeight)
+        && EqualityComparer<float>.Default.Equals(MaxWidth, o.MaxWidth)
+        && EqualityComparer<float>.Default.Equals(MaxHeight, o.MaxHeight)
+        && EqualityComparer<float>.Default.Equals(Grow, o.Grow)
+        && EqualityComparer<float>.Default.Equals(Shrink, o.Shrink)
+        && EqualityComparer<float>.Default.Equals(Basis, o.Basis)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignSelf, o.AlignSelf)
+        && EqualityComparer<FlexAlign>.Default.Equals(JustifySelf, o.JustifySelf)
+        && EqualityComparer<Edges4>.Default.Equals(Margin, o.Margin)
+        && _ecold.ValueEquals(in o._ecold);
+    public override readonly bool Equals(object? obj) => obj is PolylineStrokeEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(11, Key);
 }
 
 /// <summary>
@@ -704,7 +815,7 @@ public partial struct PolylineStrokeEl : IElementKind<PolylineStrokeEl>
 /// ZStack parent, so this element carries only the per-leaf transform/flex boilerplate below (copied verbatim from
 /// <see cref="PolylineStrokeEl"/>) plus its own geometry fields.</para>
 /// </summary>
-public partial struct PathEl : IElementKind<PathEl>
+public partial struct PathEl : IElementKind<PathEl>, IEquatable<PathEl>
 {
     public const ushort TypeId = 16;
     static ushort IElementKind<PathEl>.Kind => 16;
@@ -805,9 +916,51 @@ public partial struct PathEl : IElementKind<PathEl>
     {
         v._ecold = v._ecold.Frozen();
     }
+
+    public readonly bool Equals(PathEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in PathEl o) =>
+        EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<PathData?>.Default.Equals(Geometry, o.Geometry)
+        && EqualityComparer<ColorF>.Default.Equals(Fill, o.Fill)
+        && EqualityComparer<FillRule>.Default.Equals(Rule, o.Rule)
+        && EqualityComparer<ColorF>.Default.Equals(StrokeColor, o.StrokeColor)
+        && EqualityComparer<StrokeStyle>.Default.Equals(Stroke, o.Stroke)
+        && EqualityComparer<float>.Default.Equals(TrimStart, o.TrimStart)
+        && EqualityComparer<float>.Default.Equals(TrimEnd, o.TrimEnd)
+        && EqualityComparer<byte>.Default.Equals(TrimMode, o.TrimMode)
+        && EqualityComparer<float>.Default.Equals(ViewBoxW, o.ViewBoxW)
+        && EqualityComparer<float>.Default.Equals(ViewBoxH, o.ViewBoxH)
+        && EqualityComparer<bool>.Default.Equals(HitTestGeometry, o.HitTestGeometry)
+        && EqualityComparer<Action<NodeHandle>?>.Default.Equals(OnRealized, o.OnRealized)
+        && EqualityComparer<float>.Default.Equals(OffsetX, o.OffsetX)
+        && EqualityComparer<float>.Default.Equals(OffsetY, o.OffsetY)
+        && EqualityComparer<float>.Default.Equals(ScaleX, o.ScaleX)
+        && EqualityComparer<float>.Default.Equals(ScaleY, o.ScaleY)
+        && EqualityComparer<float>.Default.Equals(Rotation, o.Rotation)
+        && EqualityComparer<float>.Default.Equals(Opacity, o.Opacity)
+        && EqualityComparer<float>.Default.Equals(TransformOriginX, o.TransformOriginX)
+        && EqualityComparer<float>.Default.Equals(TransformOriginY, o.TransformOriginY)
+        && EqualityComparer<float>.Default.Equals(HoverScale, o.HoverScale)
+        && EqualityComparer<float>.Default.Equals(PressScale, o.PressScale)
+        && EqualityComparer<float>.Default.Equals(Width, o.Width)
+        && EqualityComparer<float>.Default.Equals(Height, o.Height)
+        && EqualityComparer<float>.Default.Equals(MinWidth, o.MinWidth)
+        && EqualityComparer<float>.Default.Equals(MinHeight, o.MinHeight)
+        && EqualityComparer<float>.Default.Equals(MaxWidth, o.MaxWidth)
+        && EqualityComparer<float>.Default.Equals(MaxHeight, o.MaxHeight)
+        && EqualityComparer<float>.Default.Equals(Grow, o.Grow)
+        && EqualityComparer<float>.Default.Equals(Shrink, o.Shrink)
+        && EqualityComparer<float>.Default.Equals(Basis, o.Basis)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignSelf, o.AlignSelf)
+        && EqualityComparer<FlexAlign>.Default.Equals(JustifySelf, o.JustifySelf)
+        && EqualityComparer<Edges4>.Default.Equals(Margin, o.Margin)
+        && _ecold.ValueEquals(in o._ecold);
+    public override readonly bool Equals(object? obj) => obj is PathEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(16, Key);
 }
 
-public partial struct TextEl : IElementKind<TextEl>
+public partial struct TextEl : IElementKind<TextEl>, IEquatable<TextEl>
 {
     public const ushort TypeId = 2;
     static ushort IElementKind<TextEl>.Kind => 2;
@@ -968,6 +1121,38 @@ public partial struct TextEl : IElementKind<TextEl>
         v._ecold = v._ecold.Frozen();
         v._cold = v._cold.Frozen();
     }
+
+    public readonly bool Equals(TextEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in TextEl o) =>
+        EqualityComparer<Prop<string>>.Default.Equals(Text, o.Text)
+        && EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<float>.Default.Equals(Size, o.Size)
+        && EqualityComparer<bool>.Default.Equals(Bold, o.Bold)
+        && EqualityComparer<ushort>.Default.Equals(Weight, o.Weight)
+        && EqualityComparer<float>.Default.Equals(LineHeight, o.LineHeight)
+        && EqualityComparer<Prop<ColorF>>.Default.Equals(Color, o.Color)
+        && EqualityComparer<Action<NodeHandle>?>.Default.Equals(OnRealized, o.OnRealized)
+        && EqualityComparer<string?>.Default.Equals(FontFamily, o.FontFamily)
+        && EqualityComparer<TextWrap>.Default.Equals(Wrap, o.Wrap)
+        && EqualityComparer<TextTrim>.Default.Equals(Trim, o.Trim)
+        && EqualityComparer<int>.Default.Equals(MaxLines, o.MaxLines)
+        && EqualityComparer<float>.Default.Equals(Width, o.Width)
+        && EqualityComparer<float>.Default.Equals(Height, o.Height)
+        && EqualityComparer<float>.Default.Equals(MinWidth, o.MinWidth)
+        && EqualityComparer<float>.Default.Equals(MinHeight, o.MinHeight)
+        && EqualityComparer<float>.Default.Equals(MaxWidth, o.MaxWidth)
+        && EqualityComparer<float>.Default.Equals(MaxHeight, o.MaxHeight)
+        && EqualityComparer<float>.Default.Equals(Grow, o.Grow)
+        && EqualityComparer<float>.Default.Equals(Shrink, o.Shrink)
+        && EqualityComparer<float>.Default.Equals(Basis, o.Basis)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignSelf, o.AlignSelf)
+        && EqualityComparer<FlexAlign>.Default.Equals(JustifySelf, o.JustifySelf)
+        && EqualityComparer<Edges4>.Default.Equals(Margin, o.Margin)
+        && _ecold.ValueEquals(in o._ecold)
+        && _cold.ValueEquals(in o._cold);
+    public override readonly bool Equals(object? obj) => obj is TextEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(2, Key);
 }
 
 /// <summary>
@@ -979,7 +1164,7 @@ public partial struct TextEl : IElementKind<TextEl>
 /// accent foreground + underline are the CALLER's styling (HyperlinkForeground, generic.xaml:1120-1122).
 /// No per-span italic: the shaper has no style axis yet (faces resolve by family+weight only).
 /// </summary>
-public partial struct SpanTextEl : IElementKind<SpanTextEl>
+public partial struct SpanTextEl : IElementKind<SpanTextEl>, IEquatable<SpanTextEl>
 {
     public const ushort TypeId = 12;
     static ushort IElementKind<SpanTextEl>.Kind => 12;
@@ -1080,13 +1265,51 @@ public partial struct SpanTextEl : IElementKind<SpanTextEl>
     {
         v._ecold = v._ecold.Frozen();
     }
+
+    public readonly bool Equals(SpanTextEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in SpanTextEl o) =>
+        EqualityComparer<Prop<TextSpans>>.Default.Equals(Spans, o.Spans)
+        && EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<Action<int>?>.Default.Equals(OnSpanClick, o.OnSpanClick)
+        && EqualityComparer<TextSpan[]?>.Default.Equals(OverflowSuffix, o.OverflowSuffix)
+        && EqualityComparer<float>.Default.Equals(Size, o.Size)
+        && EqualityComparer<ushort>.Default.Equals(Weight, o.Weight)
+        && EqualityComparer<ColorF>.Default.Equals(Color, o.Color)
+        && EqualityComparer<string?>.Default.Equals(FontFamily, o.FontFamily)
+        && EqualityComparer<float>.Default.Equals(CharSpacing, o.CharSpacing)
+        && EqualityComparer<float>.Default.Equals(LineHeight, o.LineHeight)
+        && EqualityComparer<LineStacking>.Default.Equals(LineStacking, o.LineStacking)
+        && EqualityComparer<TextLineBounds>.Default.Equals(LineBounds, o.LineBounds)
+        && EqualityComparer<TextWrap>.Default.Equals(Wrap, o.Wrap)
+        && EqualityComparer<TextTrim>.Default.Equals(Trim, o.Trim)
+        && EqualityComparer<int>.Default.Equals(MaxLines, o.MaxLines)
+        && EqualityComparer<TextAlign>.Default.Equals(TextAlign, o.TextAlign)
+        && EqualityComparer<FontFeatures>.Default.Equals(FontFeatures, o.FontFeatures)
+        && EqualityComparer<bool>.Default.Equals(IsTextSelectionEnabled, o.IsTextSelectionEnabled)
+        && EqualityComparer<ColorF>.Default.Equals(SelectionHighlightColor, o.SelectionHighlightColor)
+        && EqualityComparer<float>.Default.Equals(Width, o.Width)
+        && EqualityComparer<float>.Default.Equals(Height, o.Height)
+        && EqualityComparer<float>.Default.Equals(MinWidth, o.MinWidth)
+        && EqualityComparer<float>.Default.Equals(MinHeight, o.MinHeight)
+        && EqualityComparer<float>.Default.Equals(MaxWidth, o.MaxWidth)
+        && EqualityComparer<float>.Default.Equals(MaxHeight, o.MaxHeight)
+        && EqualityComparer<float>.Default.Equals(Grow, o.Grow)
+        && EqualityComparer<float>.Default.Equals(Shrink, o.Shrink)
+        && EqualityComparer<float>.Default.Equals(Basis, o.Basis)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignSelf, o.AlignSelf)
+        && EqualityComparer<FlexAlign>.Default.Equals(JustifySelf, o.JustifySelf)
+        && EqualityComparer<Edges4>.Default.Equals(Margin, o.Margin)
+        && _ecold.ValueEquals(in o._ecold);
+    public override readonly bool Equals(object? obj) => obj is SpanTextEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(12, Key);
 }
 
 /// <summary>
 /// An async image (album art): shows <see cref="Placeholder"/> until the decode lands, then the bitmap. Decode is
 /// off-thread + cached + residency-pinned while on screen (see <c>ImageCache</c>).
 /// </summary>
-public partial struct ImageEl : IElementKind<ImageEl>
+public partial struct ImageEl : IElementKind<ImageEl>, IEquatable<ImageEl>
 {
     public const ushort TypeId = 8;
     static ushort IElementKind<ImageEl>.Kind => 8;
@@ -1177,6 +1400,36 @@ public partial struct ImageEl : IElementKind<ImageEl>
     {
         v._ecold = v._ecold.Frozen();
     }
+
+    public readonly bool Equals(ImageEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in ImageEl o) =>
+        EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<Prop<string>>.Default.Equals(Source, o.Source)
+        && EqualityComparer<float>.Default.Equals(Width, o.Width)
+        && EqualityComparer<float>.Default.Equals(Height, o.Height)
+        && EqualityComparer<float>.Default.Equals(AspectRatio, o.AspectRatio)
+        && EqualityComparer<ImageFit>.Default.Equals(Fit, o.Fit)
+        && EqualityComparer<float>.Default.Equals(FocusX, o.FocusX)
+        && EqualityComparer<float>.Default.Equals(FocusY, o.FocusY)
+        && EqualityComparer<float>.Default.Equals(FocusFrameX, o.FocusFrameX)
+        && EqualityComparer<float>.Default.Equals(FocusFrameY, o.FocusFrameY)
+        && EqualityComparer<float>.Default.Equals(DecodePx, o.DecodePx)
+        && EqualityComparer<CornerRadius4>.Default.Equals(Corners, o.Corners)
+        && EqualityComparer<Prop<ColorF>>.Default.Equals(Placeholder, o.Placeholder)
+        && EqualityComparer<string?>.Default.Equals(BlurHash, o.BlurHash)
+        && EqualityComparer<ImageTransition?>.Default.Equals(RevealTransition, o.RevealTransition)
+        && EqualityComparer<BakedBlurSpec?>.Default.Equals(BakedBlur, o.BakedBlur)
+        && EqualityComparer<bool>.Default.Equals(KeepWhileHidden, o.KeepWhileHidden)
+        && EqualityComparer<ColorF>.Default.Equals(ColorOverlay, o.ColorOverlay)
+        && EqualityComparer<ImageMaskSpec?>.Default.Equals(Mask, o.Mask)
+        && EqualityComparer<float>.Default.Equals(Saturation, o.Saturation)
+        && EqualityComparer<Edges4>.Default.Equals(Margin, o.Margin)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignSelf, o.AlignSelf)
+        && EqualityComparer<FlexAlign>.Default.Equals(JustifySelf, o.JustifySelf)
+        && _ecold.ValueEquals(in o._ecold);
+    public override readonly bool Equals(object? obj) => obj is ImageEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(8, Key);
 }
 
 /// <summary>A single ThemedIcon vector layer (leaf): a colorless coverage mask (interned in
@@ -1185,7 +1438,7 @@ public partial struct ImageEl : IElementKind<ImageEl>
 /// (a role→color thunk reading <c>Tok</c>) so <c>RethemeAll</c> live-recolors it with no re-raster — never a frozen
 /// ctor color (component-props-contract.md). Reconciled onto <c>VisualKind.IconLayer</c> where <c>ImageId</c> doubles
 /// as the PathId; the recorder emits <c>DrawIconMask</c>.</summary>
-public partial struct IconLayerEl : IElementKind<IconLayerEl>
+public partial struct IconLayerEl : IElementKind<IconLayerEl>, IEquatable<IconLayerEl>
 {
     public const ushort TypeId = 15;
     static ushort IElementKind<IconLayerEl>.Kind => 15;
@@ -1231,6 +1484,20 @@ public partial struct IconLayerEl : IElementKind<IconLayerEl>
     {
         v._ecold = v._ecold.Frozen();
     }
+
+    public readonly bool Equals(IconLayerEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in IconLayerEl o) =>
+        EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<int>.Default.Equals(PathId, o.PathId)
+        && EqualityComparer<float>.Default.Equals(Size, o.Size)
+        && EqualityComparer<Prop<ColorF>>.Default.Equals(Tint, o.Tint)
+        && EqualityComparer<Edges4>.Default.Equals(Margin, o.Margin)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignSelf, o.AlignSelf)
+        && EqualityComparer<FlexAlign>.Default.Equals(JustifySelf, o.JustifySelf)
+        && _ecold.ValueEquals(in o._ecold);
+    public override readonly bool Equals(object? obj) => obj is IconLayerEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(15, Key);
 }
 
 /// <summary>
@@ -1238,7 +1505,7 @@ public partial struct IconLayerEl : IElementKind<IconLayerEl>
 /// (layout.md §6): layout arranges the content at the content-box origin and publishes <c>ContentSize</c>; the
 /// <c>-ScrollOffset</c> translation is the content's <c>LocalTransform</c>, written by Input on wheel/drag.
 /// </summary>
-public partial struct ScrollEl : IElementKind<ScrollEl>
+public partial struct ScrollEl : IElementKind<ScrollEl>, IEquatable<ScrollEl>
 {
     public const ushort TypeId = 5;
     static ushort IElementKind<ScrollEl>.Kind => 5;
@@ -1365,4 +1632,43 @@ public partial struct ScrollEl : IElementKind<ScrollEl>
         v._ecold = v._ecold.Frozen();
         v = v with { Content = v.Content.Freeze() };
     }
+
+    public readonly bool Equals(ScrollEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in ScrollEl o) =>
+        EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<Element>.Default.Equals(Content, o.Content)
+        && EqualityComparer<bool>.Default.Equals(Horizontal, o.Horizontal)
+        && EqualityComparer<bool>.Default.Equals(ContentSized, o.ContentSized)
+        && EqualityComparer<bool>.Default.Equals(Zoomable, o.Zoomable)
+        && EqualityComparer<float>.Default.Equals(MinZoom, o.MinZoom)
+        && EqualityComparer<float>.Default.Equals(MaxZoom, o.MaxZoom)
+        && EqualityComparer<float>.Default.Equals(Width, o.Width)
+        && EqualityComparer<float>.Default.Equals(Height, o.Height)
+        && EqualityComparer<float>.Default.Equals(MinWidth, o.MinWidth)
+        && EqualityComparer<float>.Default.Equals(MinHeight, o.MinHeight)
+        && EqualityComparer<float>.Default.Equals(MaxWidth, o.MaxWidth)
+        && EqualityComparer<float>.Default.Equals(MaxHeight, o.MaxHeight)
+        && EqualityComparer<float>.Default.Equals(Grow, o.Grow)
+        && EqualityComparer<float>.Default.Equals(Shrink, o.Shrink)
+        && EqualityComparer<float>.Default.Equals(Basis, o.Basis)
+        && EqualityComparer<FlexAlign>.Default.Equals(AlignSelf, o.AlignSelf)
+        && EqualityComparer<FlexAlign>.Default.Equals(JustifySelf, o.JustifySelf)
+        && EqualityComparer<Edges4>.Default.Equals(Margin, o.Margin)
+        && EqualityComparer<Edges4>.Default.Equals(Padding, o.Padding)
+        && EqualityComparer<ColorF>.Default.Equals(Fill, o.Fill)
+        && EqualityComparer<CornerRadius4>.Default.Equals(Corners, o.Corners)
+        && EqualityComparer<ScrollEdgeCues>.Default.Equals(EdgeCues, o.EdgeCues)
+        && EqualityComparer<EdgeFadeSpec?>.Default.Equals(EdgeFade, o.EdgeFade)
+        && EqualityComparer<bool>.Default.Equals(AutoEdgeFade, o.AutoEdgeFade)
+        && EqualityComparer<float>.Default.Equals(AutoEdgeFadeBand, o.AutoEdgeFadeBand)
+        && EqualityComparer<bool>.Default.Equals(AlwaysShowScrollbar, o.AlwaysShowScrollbar)
+        && EqualityComparer<FluentGpu.Scene.SnapSpec?>.Default.Equals(Snap, o.Snap)
+        && EqualityComparer<string?>.Default.Equals(ScrollKey, o.ScrollKey)
+        && EqualityComparer<bool>.Default.Equals(SuppressScrollBar, o.SuppressScrollBar)
+        && EqualityComparer<Action<NodeHandle>?>.Default.Equals(OnRealized, o.OnRealized)
+        && EqualityComparer<FluentGpu.Scroll.Runtime.ScrollHandle?>.Default.Equals(Handle, o.Handle)
+        && _ecold.ValueEquals(in o._ecold);
+    public override readonly bool Equals(object? obj) => obj is ScrollEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(5, Key);
 }

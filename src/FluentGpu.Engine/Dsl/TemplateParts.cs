@@ -48,7 +48,7 @@ public sealed class TemplateParts
     /// <summary>Any element type (a <see cref="TextEl"/> glyph part, an image…). Modifiers must be type-preserving.</summary>
     public void Set<T>(string part, Func<T, T> modify) where T : struct, IElement
     {
-        _map[part] = el => el is T t ? modify(t) : el;
+        _map[part] = el => el.Is(out T t) ? Element.From(modify(t)) : el;
     }
 
     internal bool TryApply(string part, Element el, out Element result)
@@ -73,5 +73,5 @@ public static class TemplatePartsExtensions
     /// part has no modifier; keeps the ORIGINAL element if a modifier changed the record type (parts style, slots
     /// restructure). The control re-asserts its mechanics-critical props on the result.</summary>
     public static T Apply<T>(this TemplateParts? parts, string part, T el) where T : struct, IElement
-        => parts is not null && parts.TryApply(part, el, out var modified) && modified is T typed ? typed : el;
+        => parts is not null && parts.TryApply(part, Element.From(in el), out var modified) && modified.Is(out T typed) ? typed : el;
 }

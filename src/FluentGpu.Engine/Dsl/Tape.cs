@@ -163,7 +163,7 @@ internal sealed class FrozenElement<T> : FrozenElement
 }
 
 /// <summary>A rarely-set group of an element's channels (a "cold group"), held by reference from the element value.</summary>
-internal interface IColdGroup<TSelf> where TSelf : struct, IColdGroup<TSelf>
+internal interface IColdGroup<TSelf> : IEquatable<TSelf> where TSelf : struct, IColdGroup<TSelf>
 {
     static abstract TSelf CreateDefault();
     /// <summary>Freeze the element-valued members of a group being frozen (most groups have none).</summary>
@@ -220,4 +220,12 @@ internal readonly struct ColdRef<T> where T : struct, IColdGroup<T>
 
     /// <summary>Same group (the reference, not the values): the reconciler's quick no-change test before comparing values.</summary>
     internal bool SameAs(in ColdRef<T> o) => ReferenceEquals(_box, o._box) && _slot == o._slot && _stamp == o._stamp;
+
+    /// <summary>Same values (the element's value equality; the record compared its cold group by value).</summary>
+    internal bool ValueEquals(in ColdRef<T> o)
+    {
+        if (SameAs(in o)) return true;
+        T a = Value;
+        return a.Equals(o.Value);
+    }
 }

@@ -111,9 +111,34 @@ public readonly partial struct Element : IElement, IEquatable<Element>
     /// <summary>The same element (identity, the former <c>ReferenceEquals</c>).</summary>
     public bool SameAs(Element other) => ReferenceEquals(Obj, other.Obj) && Id == other.Id && Epoch == other.Epoch;
     public int IdentityHash() => Obj is not null ? RuntimeHelpers.GetHashCode(Obj) : HashCode.Combine(Id, Epoch);
-    public bool Equals(Element other) => SameAs(other);
-    public override bool Equals(object? obj) => obj is Element e && SameAs(e);
-    public override int GetHashCode() => IdentityHash();
+    /// <summary>Value equality, as the element records had (same kind, every channel equal; children by list identity).</summary>
+    public bool Equals(Element other)
+    {
+        if (SameAs(other)) return true;
+        ushort k = ElementTypeId;
+        if (k != other.ElementTypeId) return false;
+        if (Obj is HeapElement h) return other.Obj is HeapElement oh && h.Equals(oh);
+        return k switch
+        {
+            1 => Ref<BoxEl>().EqualsIn(in other.Ref<BoxEl>()),
+            2 => Ref<TextEl>().EqualsIn(in other.Ref<TextEl>()),
+            3 => Ref<ComponentEl>().EqualsIn(in other.Ref<ComponentEl>()),
+            5 => Ref<ScrollEl>().EqualsIn(in other.Ref<ScrollEl>()),
+            7 => Ref<ShowEl>().EqualsIn(in other.Ref<ShowEl>()),
+            8 => Ref<ImageEl>().EqualsIn(in other.Ref<ImageEl>()),
+            9 => Ref<GridEl>().EqualsIn(in other.Ref<GridEl>()),
+            11 => Ref<PolylineStrokeEl>().EqualsIn(in other.Ref<PolylineStrokeEl>()),
+            12 => Ref<SpanTextEl>().EqualsIn(in other.Ref<SpanTextEl>()),
+            15 => Ref<IconLayerEl>().EqualsIn(in other.Ref<IconLayerEl>()),
+            16 => Ref<PathEl>().EqualsIn(in other.Ref<PathEl>()),
+            17 => Ref<ListRowEl>().EqualsIn(in other.Ref<ListRowEl>()),
+            18 => Ref<SeriesEl>().EqualsIn(in other.Ref<SeriesEl>()),
+            19 => Ref<SpriteFieldEl>().EqualsIn(in other.Ref<SpriteFieldEl>()),
+            _ => false,
+        };
+    }
+    public override bool Equals(object? obj) => obj is Element e && Equals(e);
+    public override int GetHashCode() => Obj is HeapElement h ? h.GetHashCode() : HashCode.Combine(ElementTypeId, Key);
 
     private Element FreezeAs<T>() where T : struct, IElementKind<T>
     {

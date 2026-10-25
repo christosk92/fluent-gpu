@@ -38,7 +38,7 @@ public sealed partial class TreeReconciler
         // The wiring below captures `node` in closures, and C# allocates their display class on ENTRY of the method that
         // declares them — bound or not. Nearly every node binds no Visible: test before entering (page-mount RCA, allocations).
         // `prev` (the static→bound flip pass): a Visible already bound on the previous element already has its effect.
-        if (el.Visible.IsBound && (prev is null || !prev.Visible.IsBound)) BindPresenceCore(node, el);
+        if (el.Visible.IsBound && (prev is not { } pv || !pv.Visible.IsBound)) BindPresenceCore(node, el);
     }
 
     private void BindPresenceCore(NodeHandle node, Element el)

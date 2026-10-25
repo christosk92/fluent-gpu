@@ -10,7 +10,7 @@ namespace FluentGpu.Hooks;
 /// <see cref="ComponentType"/>, and reconciles its rendered output as this node's content. This is what lets the
 /// framework compose many stateful components rather than one root.
 /// </summary>
-public partial struct ComponentEl : IElementKind<ComponentEl>
+public partial struct ComponentEl : IElementKind<ComponentEl>, IEquatable<ComponentEl>
 {
     public const ushort TypeId = 3;
     static ushort IElementKind<ComponentEl>.Kind => 3;
@@ -66,6 +66,19 @@ public partial struct ComponentEl : IElementKind<ComponentEl>
     {
         v._ecold = v._ecold.Frozen();
     }
+
+    public readonly bool Equals(ComponentEl o) => EqualsIn(in o);
+    internal readonly bool EqualsIn(in ComponentEl o) =>
+        EqualityComparer<Func<Component>>.Default.Equals(Factory, o.Factory)
+        && EqualityComparer<Type>.Default.Equals(ComponentType, o.ComponentType)
+        && EqualityComparer<string?>.Default.Equals(Key, o.Key)
+        && EqualityComparer<Prop<bool>>.Default.Equals(Visible, o.Visible)
+        && EqualityComparer<Func<Element>?>.Default.Equals(SkeletonProxy, o.SkeletonProxy)
+        && EqualityComparer<bool>.Default.Equals(DeriveRenderedOutput, o.DeriveRenderedOutput)
+        && EqualityComparer<object?>.Default.Equals(Props, o.Props)
+        && _ecold.ValueEquals(in o._ecold);
+    public override readonly bool Equals(object? obj) => obj is ComponentEl { } o && EqualsIn(in o);
+    public override readonly int GetHashCode() => HashCode.Combine(3, Key);
 }
 
 /// <summary>Fluent helper: <c>Embed.Comp(() =&gt; new MyComponent())</c> embeds a stateful child component;
