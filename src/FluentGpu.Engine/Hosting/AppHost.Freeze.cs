@@ -1,3 +1,5 @@
+using FluentGpu.Animation;
+using System.Diagnostics;
 using FluentGpu.Hosting.Threading;
 using FluentGpu.Rhi;
 
@@ -124,6 +126,19 @@ public sealed partial class AppHost
     private FreezeToken? _fzToken;
     private double _fzStartMs, _fzThawStartMs;
     private float _fzDissolveMs;
+    // The dissolve's identity (one per thaw, never 0 once thawed). A render thread presenting the dissolve samples it on its own
+    // present-time clock and reports the identity of the dissolve it finished; the UI releases the freeze on that report.
+    private uint _fzDissolveId;
+    private uint _renderDissolveDoneId;            // render thread writes (Volatile), UI reads
+    // Render thread: the dissolve being presented, its start on the present-time clock (NaN = no dissolve frame presented yet), the
+    // steady interval of the frame that showed t = 0 and whether the start resolved (the pending-start rule).
+    private uint _rdId;
+    private double _rdStartMs = double.NaN;
+    private float _rdHoldRefMs;
+    private bool _rdResolved;
+    /// <summary>A render-clocked dissolve the render side never finished (a parked window presents nothing) is released by the UI
+    /// clock after this many dissolve durations.</summary>
+    private const float RenderDissolveFallback = 2f;
     private DwmPlan? _fzDwm;
     private bool _fzCapturePending, _fzDwmStartRun;
     private FreezeEnd _fzCut;                  // a cut waiting for its Release frame (Active = none)
@@ -203,6 +218,7 @@ public sealed partial class AppHost
         _fzPhase = FreezePhase.Dissolving;
         _fzThawStartMs = _timers.NowMs;
         _fzDissolveMs = ms > 0f ? ms : 0f;
+        if (++_fzDissolveId == 0) _fzDissolveId = 1;
         _fzDwm = dwm;
         _fzDwmStartRun = false;
         CloseFreezeSnap();   // the transaction's frames are done: the new theme's motion runs normally from here
@@ -263,15 +279,20 @@ public sealed partial class AppHost
         // Dissolving.
         if (!_fzDwmStartRun) RunDwmEdges(start: true, end: false);
         float u = _fzDissolveMs <= 0f ? 1f : (float)((_timers.NowMs - _fzThawStartMs) / _fzDissolveMs);
+        // With a render thread the dissolve runs on ITS clock (RenderDissolveT): it ends when the render side has presented t = 1
+        // (or, if it never presents — a parked window — after RenderDissolveFallback durations on this clock). Inline, this clock is it.
+        bool done = OwningRenderThread is null
+            ? u >= 1f
+            : Volatile.Read(ref _renderDissolveDoneId) == _fzDissolveId || u >= RenderDissolveFallback;
         // A backend that cannot dissolve thaws as a cut: the new frame at once.
-        if (u >= 1f || !_swapchain.SupportsFrameDissolve)
+        if (done || _fzDissolveMs <= 0f || !_swapchain.SupportsFrameDissolve)
         {
             RunDwmEdges(start: false, end: true);
             EndFreezeLocal(FreezeEnd.Thawed);
             FrameTrace.Theme("dissolve.end", null, u);
             return FreezeKind.Release;
         }
-        t = u < 0f ? 0f : u;
+        t = u < 0f ? 0f : (u > 1f ? 1f : u);
         FrameTrace.Theme("dissolve", null, t);
         WakeFrame();   // the next dissolve frame is owed (the loop keeps running until the dissolve completes)
         return FreezeKind.Dissolve;
@@ -317,7 +338,7 @@ public sealed partial class AppHost
 
     /// <summary>Presenting side: act on the freeze directive of the frame about to be presented (after its submit, before the flip).
     /// Capture snapshots the back buffer; Hold holds the present; Dissolve arms the cross-dissolve; Release drops the snapshot.</summary>
-    private void FreezeBeforePresent(in Threading.RenderFrame rf, ref bool hold)
+    private void FreezeBeforePresent(in Threading.RenderFrame rf, ref bool hold, bool renderClock = false)
     {
         switch (rf.Freeze)
         {
@@ -338,12 +359,57 @@ public sealed partial class AppHost
                 hold = true;
                 break;
             case FreezeKind.Dissolve:
-                if (_frozenSnapshot is { } s) _swapchain.DissolveNextPresent(s, rf.DissolveT);
+                if (_frozenSnapshot is { } s) _swapchain.DissolveNextPresent(s, renderClock && rf.DissolveId != 0 ? RenderDissolveT(in rf, hold) : rf.DissolveT);
                 break;
             case FreezeKind.Release:
                 ReleaseFrozenSnapshot();
                 break;
         }
+    }
+
+    /// <summary>Render thread: whether <paramref name="rf"/> carries a dissolve this thread has not finished presenting. While true the
+    /// render loop re-presents the retained frame every tick (HasOwnRenderMotion) and never elides the turn, so the dissolve advances at
+    /// display rate whatever the UI thread is doing.</summary>
+    private bool RenderDissolveActive(in Threading.RenderFrame rf)
+        => rf.Freeze == FreezeKind.Dissolve && rf.DissolveId != 0 && _frozenSnapshot is not null
+           && Volatile.Read(ref _renderDissolveDoneId) != rf.DissolveId;
+
+    /// <summary>Render thread, for the present about to be made: the dissolve's t on this thread's present-time clock (the turn's
+    /// predicted present, RenderPresentSec). The first presented dissolve frame shows t = 0 and the start resolves there; the next
+    /// frame steps by the real time since, capped to one steady frame when that first frame ran long (AnimEngine.PendingStartStep —
+    /// the rule every entrance follows). A held present (<paramref name="held"/>) is not shown: it keeps t = 0 and takes no start.
+    /// The curve stays linear over the authored duration; only t = 0 moved from the UI's thaw call to the first presented frame.</summary>
+    private float RenderDissolveT(in Threading.RenderFrame rf, bool held)
+    {
+        if (rf.DissolveMs <= 0f) return 1f;
+        double nowMs = RenderPresentSec(RenderTurnTickQpc()) * 1000.0;
+        if (rf.DissolveId != _rdId)
+        {
+            _rdId = rf.DissolveId;
+            _rdStartMs = double.NaN;
+            _rdResolved = false;
+        }
+        float t;
+        if (double.IsNaN(_rdStartMs))
+        {
+            if (held) return 0f;
+            _rdStartMs = nowMs;
+            _rdHoldRefMs = (float)(RenderPeriodTicks() * 1000.0 / Stopwatch.Frequency);
+            t = 0f;
+        }
+        else
+        {
+            if (!_rdResolved && nowMs > _rdStartMs)
+            {
+                float first = AnimEngine.PendingStartStep((float)(nowMs - _rdStartMs), _rdHoldRefMs);
+                _rdStartMs = nowMs - first;
+                _rdResolved = true;
+            }
+            t = (float)Math.Clamp((nowMs - _rdStartMs) / rf.DissolveMs, 0.0, 1.0);
+        }
+        if (FrameTrace.Enabled) FrameTrace.Theme("dissolve.r", null, t, (float)FrameTrace.MsFromAbsMs(nowMs));
+        if (t >= 1f && !held) Volatile.Write(ref _renderDissolveDoneId, rf.DissolveId);
+        return t;
     }
 
     private void ReleaseFrozenSnapshot()
