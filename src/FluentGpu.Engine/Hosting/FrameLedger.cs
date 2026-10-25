@@ -202,6 +202,18 @@ public static class FrameLedger
         };
     }
 
+    // ── the frame trace's streaming drain (FrameTrace.cs; writer thread, no allocation) ─────────────────────────────────
+
+    internal static long UiCount => s_ui?.Count ?? 0;
+    internal static long RenderCount => s_render?.Count ?? 0;
+    internal static long GpuCount => s_gpu?.Count ?? 0;
+
+    /// <summary>Copy the UI records from <paramref name="pos"/> on into <paramref name="dst"/> and advance it; <paramref name="lost"/> =
+    /// records the ring overwrote before they were read.</summary>
+    internal static int CopyUi(ref long pos, LedgerUiFrame[] dst, out long lost) { lost = 0; return s_ui?.CopyInto(ref pos, dst, out lost) ?? 0; }
+    internal static int CopyRender(ref long pos, LedgerRenderTurn[] dst, out long lost) { lost = 0; return s_render?.CopyInto(ref pos, dst, out lost) ?? 0; }
+    internal static int CopyGpu(ref long pos, LedgerGpuFrame[] dst, out long lost) { lost = 0; return s_gpu?.CopyInto(ref pos, dst, out lost) ?? 0; }
+
     // ── record paths (zero allocation) ──────────────────────────────────────────────────────────────────────────────
 
     /// <summary>UI THREAD of the owner. Stamps <see cref="LedgerUiFrame.Seq"/> and pushes.</summary>
@@ -382,6 +394,28 @@ internal sealed class LedgerRing<T> where T : unmanaged
         long i = _count;
         _items[(int)(i & _mask)] = item;
         Volatile.Write(ref _count, i + 1);
+    }
+
+    /// <summary>Copy up to <c>dst.Length</c> records from <paramref name="pos"/> on (oldest first) and advance it past them; records the
+    /// producer already overwrote are skipped and counted in <paramref name="lost"/>. No allocation (the frame trace's drain).</summary>
+    public int CopyInto(ref long pos, T[] dst, out long lost)
+    {
+        long end = Count;
+        long start = Math.Max(pos, end - _items.Length);
+        lost = start - pos;
+        int n = (int)Math.Min(end - start, dst.Length);
+        for (int i = 0; i < n; i++) dst[i] = _items[(int)((start + i) & _mask)];
+        // A slot the producer lapped while it was copied holds a newer record: drop the overtaken prefix.
+        long floor = Count - _items.Length;
+        int skip = floor > start ? (int)Math.Min(floor - start, n) : 0;
+        if (skip > 0)
+        {
+            Array.Copy(dst, skip, dst, 0, n - skip);
+            n -= skip;
+            lost += skip;
+        }
+        pos = start + skip + n;
+        return n;
     }
 
     /// <summary>Every record pushed at or after <paramref name="from"/> still in the ring, oldest first. The copy is not atomic

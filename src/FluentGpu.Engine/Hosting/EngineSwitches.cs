@@ -129,6 +129,9 @@ public static class EngineSwitches
     public static int MemDiagSeconds;
     public static bool ResizeDiag;
     public static bool MotionDiag;
+    /// <summary><c>--fg dissolve-ui-clock</c>: the theme dissolve on the UI thread's clock from the thaw call (before audit PERF r3 MOTION
+    /// M1), for an owner A/B of the feel. Default off: the render thread's present-time clock, t = 0 on the first presented frame.</summary>
+    public static bool DissolveUiClock;
     public static bool LayoutDiag;
     public static bool LayoutOverflow;
     public static bool LayoutVerify;
@@ -260,6 +263,7 @@ public static class EngineSwitches
                 return true;
             case "resize": ResizeDiag = true; return true;
             case "motion": MotionDiag = true; return true;
+            case "dissolve-ui-clock": DissolveUiClock = true; return true;
             case "layout": LayoutDiag = true; return true;
             case "layout-overflow": LayoutOverflow = true; return true;
             case "layout-verify": LayoutVerify = true; return true;
@@ -296,6 +300,10 @@ public static class EngineSwitches
             case "video-nv12": Nv12VideoOutput = true; return true;
             case "video-overlay": VideoOverlay = true; return true;
             case "playready-sl2000": ForcePlayReadySl2000 = true; return true;
+            case "frame-trace":
+                // `--fg frame-trace[=PATH]`: the frame/animation/input timeline (FrameTrace.cs); started by the platform once the host exists.
+                FrameTrace.RequestedPath = value ?? "";
+                return true;
             case "ledger":
                 Ledger = true;
                 if (!string.IsNullOrEmpty(value)) FrameLedger.DumpPath = value;

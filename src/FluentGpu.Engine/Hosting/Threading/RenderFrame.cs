@@ -58,8 +58,15 @@ public struct RenderFrame
     /// exactly the frame that carries <see cref="FreezeKind.Dissolve"/> or <see cref="FreezeKind.Release"/>).</summary>
     public FreezeKind Freeze;
 
-    /// <summary>The dissolve progress 0..1 of a <see cref="FreezeKind.Dissolve"/> frame: <c>(1-t)·snapshot + t·this frame</c>.</summary>
+    /// <summary>The dissolve progress 0..1 of a <see cref="FreezeKind.Dissolve"/> frame: <c>(1-t)·snapshot + t·this frame</c>, on the
+    /// UI's clock. The inline path (no render thread) presents it; a render thread samples its own clock instead (<see cref="DissolveMs"/>).</summary>
     public float DissolveT;
+
+    /// <summary>The dissolve's duration (ms) and its identity (one per thaw) on a <see cref="FreezeKind.Dissolve"/> frame. The presenting
+    /// render thread samples the dissolve at each present's predicted time, t = 0 on the first presented dissolve frame (the
+    /// pending-start rule of every entrance), so a frame the UI could not produce in time neither stalls nor skips it.</summary>
+    public float DissolveMs;
+    public uint DissolveId;
 
     /// <summary>How many entries of the slot's video-intent block this publication carries (F070): the snapshot of the UI-owned
     /// <c>VideoSurfaceRegistry</c> taken at publish, read through <see cref="SceneFramePublisher.VideoIntents"/>. The render thread
