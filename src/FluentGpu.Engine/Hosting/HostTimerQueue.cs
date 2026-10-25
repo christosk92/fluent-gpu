@@ -95,6 +95,28 @@ public sealed class HostTimerQueue
     public bool HasDueNow() => HasDue(_nowMs());
 
     /// <summary>The earliest due time (ms) if any timer is armed — the loop's wait is shortened to reach it.</summary>
+    /// <summary>Is a timer due at <paramref name="nowMs"/> whose fire is a STATE CHANGE, and still current? A timeout whose cell has not been
+    /// re-armed or cancelled since (its generation), a debounced or a throttled value. The host captures FLIP rects for such a frame: the
+    /// fire is that frame's commit and animates like any other state change (AppHost). A UseInterval's TICK is not one: it steps a
+    /// continuous value (a seek rail's pixel stepper, a clock), which the host leaves, as it leaves a frame-clock poller, to the frames that
+    /// capture anyway. False while held (a SnapScope). A scan of the due entries' callback targets; allocates nothing.</summary>
+    internal bool AnyDueStateChange(double nowMs)
+    {
+        if (_count == 0 || _holdDepth > 0) return false;
+        for (int i = 0; i < _count; i++)
+        {
+            ref Entry e = ref _heap[i];
+            if (e.DueMs > nowMs) continue;
+            switch (e.Callback.Target)
+            {
+                case FluentGpu.Hooks.IntervalCell: continue;                           // a tick
+                case FluentGpu.Hooks.TimeoutCell t when t.Gen != e.Gen: continue;      // re-armed or cancelled since: its fire is a no-op
+                default: return true;
+            }
+        }
+        return false;
+    }
+
     public bool TryPeekEarliest(out double dueMs)
     {
         if (_count > 0 && _holdDepth == 0) { dueMs = _heap[0].DueMs; return true; }
