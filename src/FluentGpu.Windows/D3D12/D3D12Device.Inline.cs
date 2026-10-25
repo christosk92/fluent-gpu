@@ -53,7 +53,7 @@ public sealed unsafe partial class D3D12Device
     /// <summary>Replay item <paramref name="i"/>'s segment into the target of the open pass (its origin at window px
     /// (<paramref name="ox"/>, <paramref name="oy"/>), <paramref name="tw"/>×<paramref name="th"/>), cut to the item's
     /// scissor (clip ∩ the repaint / repair rect), then hand the pass back to the compositor.</summary>
-    private void DrawInline(in CompositeFrame frame, in CompositeItem it, int ox, int oy, int tw, int th)
+    private void DrawInline(in CompositeFrame frame, in CompositeItem it, int ox, int oy, int tw, int th, bool rebind = true)
     {
         int r = RowOf(it.SliceId);
         if (r < 0) return;
@@ -75,7 +75,7 @@ public sealed unsafe partial class D3D12Device
         // the replay leaves the pass open or suspended (an inline group layer it closed resumed its own target): put the
         // composite target back and the compositor's bindings with it
         if (!_inRenderPass || _passRtv.ptr != target.ptr) { _frameInlineReopens++; BeginPass(target, pw, ph, PassLoad.Preserve); }
-        BindCompositor(tw, th);
+        if (rebind) BindCompositor(tw, th);   // DrawRange defers it to its next compositor draw (a run of inline items binds once)
         _frameInlineItems++;
     }
 }

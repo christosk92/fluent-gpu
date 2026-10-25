@@ -76,6 +76,10 @@ internal sealed unsafe class SurfacePool : IDisposable
     private int _retiredCount;
     private ID3D12DescriptorHeap* _rtvHeap;
     private ID3D12DescriptorHeap* _srvHeap;
+    // The heaps' start handles never change for a heap object: read once (audit PERF r3 COMP — every TileSrv / ScratchSrv / Rtv
+    // asked the driver again, ~6 % of a group repair's CPU).
+    private D3D12_CPU_DESCRIPTOR_HANDLE _rtvStart, _srvCpuStart;
+    private D3D12_GPU_DESCRIPTOR_HANDLE _srvGpuStart;
     private uint _rtvInc, _srvInc;
     private int _bank;
     private int _turn;
@@ -92,6 +96,7 @@ internal sealed unsafe class SurfacePool : IDisposable
         ID3D12DescriptorHeap* rhp;
         Check(_device->CreateDescriptorHeap(&rh, __uuidof<ID3D12DescriptorHeap>(), (void**)&rhp), "SurfacePool.RtvHeap");
         _rtvHeap = rhp;
+        _rtvStart = _rtvHeap->GetCPUDescriptorHandleForHeapStart();
         _rtvInc = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         D3D12MemoryDiagnostics.Track(_rtvHeap, "Tiles.RtvHeap", (ulong)rh.NumDescriptors * _rtvInc);
 
@@ -102,6 +107,8 @@ internal sealed unsafe class SurfacePool : IDisposable
         ID3D12DescriptorHeap* shp;
         Check(_device->CreateDescriptorHeap(&sh, __uuidof<ID3D12DescriptorHeap>(), (void**)&shp), "SurfacePool.SrvHeap");
         _srvHeap = shp;
+        _srvCpuStart = _srvHeap->GetCPUDescriptorHandleForHeapStart();
+        _srvGpuStart = _srvHeap->GetGPUDescriptorHandleForHeapStart();
         _srvInc = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         D3D12MemoryDiagnostics.Track(_srvHeap, "Tiles.SrvHeap", (ulong)sh.NumDescriptors * _srvInc);
         for (int i = 0; i < _tiles.Length; i++) _tiles[i].SrvStamp = int.MinValue;
@@ -523,7 +530,7 @@ internal sealed unsafe class SurfacePool : IDisposable
     // ── internals ─────────────────────────────────────────────────────────────────────────────────────────────────
     private D3D12_CPU_DESCRIPTOR_HANDLE Rtv(int index)
     {
-        var h = _rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        var h = _rtvStart;
         h.ptr += (nuint)index * _rtvInc;
         return h;
     }
@@ -533,7 +540,7 @@ internal sealed unsafe class SurfacePool : IDisposable
         int slot = _bank * (_tileCap + ScratchCap) + index;
         if (e.SrvStamp != _turn)
         {
-            var cpu = _srvHeap->GetCPUDescriptorHandleForHeapStart();
+            var cpu = _srvCpuStart;
             cpu.ptr += (nuint)slot * _srvInc;
             D3D12_SHADER_RESOURCE_VIEW_DESC sd = default;
             sd.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -543,7 +550,7 @@ internal sealed unsafe class SurfacePool : IDisposable
             _device->CreateShaderResourceView(e.Res, &sd, cpu);
             e.SrvStamp = _turn;
         }
-        var gpu = _srvHeap->GetGPUDescriptorHandleForHeapStart();
+        var gpu = _srvGpuStart;
         gpu.ptr += (ulong)slot * _srvInc;
         return gpu;
     }

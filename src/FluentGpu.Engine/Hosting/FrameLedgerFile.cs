@@ -76,7 +76,7 @@ public sealed class LedgerSnapshot
 /// little-endian as they sit in memory. Compact (no text) and lossless; <see cref="LedgerSnapshot.WriteCsv"/> is the readable form.</summary>
 public static class FrameLedgerFile
 {
-    public const int Version = 3;
+    public const int Version = 4;   // v3 (UI: the UI frame's work drivers) + v3 (COMP: the GPU frame's work census) merged
     private static ReadOnlySpan<byte> Magic => "FGLEDGER"u8;
 
     public static void Write(Stream s, LedgerSnapshot snap)
@@ -216,7 +216,7 @@ public static class FrameLedgerCsv
     public static string Gpu(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Gpu.Length * 160);
-        sb.AppendLine("seq,observedMs,publishedMs,gpuStartMs,gpuEndMs,sampleSeq,submitSeq,missedSamples,gpuMs,passWholeMs,passCount,passesDropped,uploadsMs,bakedBlurMs,clearMs,sceneMs,glyphBandMs,tileRasterMs,offscreenMs,compositeMs");
+        sb.AppendLine("seq,observedMs,publishedMs,gpuStartMs,gpuEndMs,sampleSeq,submitSeq,missedSamples,gpuMs,passWholeMs,passCount,passesDropped,uploadsMs,bakedBlurMs,clearMs,sceneMs,glyphBandMs,tileRasterMs,offscreenMs,compositeMs,psTile,psOffscreen,psComposite,renderPasses,draws,compositeDraws,compositeQuadPx,compositeFeatherPx,repaintPx");
         foreach (ref readonly var r in s.Gpu.AsSpan())
         {
             sb.Append(r.Seq).Append(',');
@@ -225,7 +225,10 @@ public static class FrameLedgerCsv
             T(sb, r.GpuMs); T(sb, r.PassWholeMs);
             sb.Append(r.PassCount).Append(',').Append(r.PassesDropped).Append(',');
             T(sb, r.UploadsMs); T(sb, r.BakedBlurMs); T(sb, r.ClearMs); T(sb, r.SceneMs); T(sb, r.GlyphBandMs); T(sb, r.TileRasterMs);
-            T(sb, r.OffscreenMs); T(sb, r.CompositeMs, last: true);
+            T(sb, r.OffscreenMs); T(sb, r.CompositeMs);
+            sb.Append(r.PsTileRaster).Append(',').Append(r.PsOffscreen).Append(',').Append(r.PsComposite).Append(',')
+              .Append(r.RenderPasses).Append(',').Append(r.Draws).Append(',').Append(r.CompositeDraws).Append(',')
+              .Append(r.CompositeQuadPx).Append(',').Append(r.CompositeFeatherPx).Append(',').Append(r.RepaintPx);
             sb.AppendLine();
         }
         return sb.ToString();
