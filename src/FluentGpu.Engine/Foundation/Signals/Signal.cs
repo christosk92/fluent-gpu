@@ -40,7 +40,7 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
 {
     private T _value;
     private readonly IEqualityComparer<T> _cmp;
-    private RefList<Computation> _subs;
+    private SubList _subs;
 
     public Signal(T initial, IEqualityComparer<T>? comparer = null)
     {
@@ -77,11 +77,11 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
     /// assert <c>AppHost.FrameClockPollerCount</c> returns to 0 when playback/animation stops, catching that regression class.</summary>
     public int SubscriberCount => _subs.Count;
 
-    /// <summary>The <paramref name="i"/>-th subscribed computation, for a diagnostic walk that NAMES subscribers rather
-    /// than counting them (<c>WakeDiagnostics</c> appends each one's <see cref="Computation.DiagOwner"/> to the
-    /// always-on <c>[wake]</c> census). Index-based rather than an enumerator so the report-time walk is a plain loop
-    /// over the live list — no snapshot, no allocation. UI-thread only, like every other member here.</summary>
-    internal Computation SubscriberAt(int i) => _subs[i];
+    /// <summary>The <paramref name="i"/>-th subscriber (an object computation or a table row), for a diagnostic walk that
+    /// NAMES subscribers rather than counting them (<c>WakeDiagnostics</c> appends each one's owner to the always-on
+    /// <c>[wake]</c> census). Index-based rather than an enumerator so the report-time walk is a plain loop over the live
+    /// list — no snapshot, no allocation. UI-thread only, like every other member here.</summary>
+    internal Sub SubscriberAt(int i) => _subs[i];
 
     /// <summary>Bumped once on every subscribe and every actual unsubscribe. A cheap "has the live subscriber SET
     /// changed" check for a diagnostic that wants to re-walk <see cref="SubscriberAt"/> only when membership actually
@@ -95,8 +95,16 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
     private void Subscribe()
     {
         var c = Tracking.Current;
-        if (c is null) return;
-        if (!_subs.Contains(c)) { _subs.Add(c); c.AddSource(this); SubscriberSetVersion++; }
+        if (c is not null)
+        {
+            var s = new Sub(c);
+            if (!_subs.Contains(s)) { _subs.Add(s); c.AddSource(this); SubscriberSetVersion++; }
+        }
+        else if (Tracking.Table is { } t)
+        {
+            var s = new Sub(t, Tracking.Row);
+            if (!_subs.Contains(s)) { _subs.Add(s); t.AddSource(Tracking.Row, this); SubscriberSetVersion++; }
+        }
     }
 
     private void NotifySubscribers()
@@ -114,7 +122,7 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
 
     string ISignalSource.DiagKind => "Signal<" + typeof(T).Name + ">";
 
-    void ISignalSource.Unsubscribe(Computation c) { if (_subs.Remove(c)) SubscriberSetVersion++; }
+    void ISignalSource.Unsubscribe(in Sub s) { if (_subs.Remove(s)) SubscriberSetVersion++; }
 
     // A signal is its own source of truth: a write IS the push, so there is never anything to pull. (The pull half of
     // the push-pull cut-off only has work to do on a Memo.)
@@ -129,7 +137,7 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
 public sealed class FloatSignal : ISignalSource, IReadSignal<float>
 {
     private float _value;
-    private RefList<Computation> _subs;
+    private SubList _subs;
 
     public FloatSignal(float initial = 0f) => _value = initial;
 
@@ -166,11 +174,19 @@ public sealed class FloatSignal : ISignalSource, IReadSignal<float>
     private void Subscribe()
     {
         var c = Tracking.Current;
-        if (c is null) return;
-        if (!_subs.Contains(c)) { _subs.Add(c); c.AddSource(this); }
+        if (c is not null)
+        {
+            var s = new Sub(c);
+            if (!_subs.Contains(s)) { _subs.Add(s); c.AddSource(this); }
+        }
+        else if (Tracking.Table is { } t)
+        {
+            var s = new Sub(t, Tracking.Row);
+            if (!_subs.Contains(s)) { _subs.Add(s); t.AddSource(Tracking.Row, this); }
+        }
     }
 
-    void ISignalSource.Unsubscribe(Computation c) => _subs.Remove(c);
+    void ISignalSource.Unsubscribe(in Sub s) => _subs.Remove(s);
 
     // Always current by construction — see Signal<T>.EnsureFresh.
     void ISignalSource.EnsureFresh() { }
