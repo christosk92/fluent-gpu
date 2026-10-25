@@ -18,8 +18,11 @@ namespace FluentGpu.Rhi.D3D12;
 // for byte once the GPU passed the frame: pixels that differ and the largest channel delta. It checks what is ON SCREEN — a
 // tile kept across turns because its phase held (the point of the snap) as well as one rastered this turn. A bounded number
 // per turn, round-robin over the placements so a still page is covered over a few turns. Diagnostics only.
-// `--fg footprint-validate` rides the same machinery: the shadow is the tile's own phase with the footprint skip OFF
-// (D3D12Device.OpFootprints.cs — every op decoded), so a mismatch is a primitive the skip dropped that the decoder draws.
+// `--fg footprint-validate` rides the same machinery: TWO fresh rasters of the tile, this turn, at its own phase — one with the
+// footprint skip ON, one with it OFF (D3D12Device.OpFootprints.cs — every op decoded) — so a mismatch is a primitive the skip
+// dropped that the decoder draws, and nothing else: comparing the RESIDENT tile instead mixed in what changed since it was
+// rastered without changing its content key (seen: 1/255 on 5–32 px of lyrics tiles late in a long sweep, in the base build
+// as well, while the two fresh rasters agree), which is not the skip's claim.
 public sealed unsafe partial class D3D12Device
 {
     private struct PhaseCheck
@@ -98,6 +101,24 @@ public sealed unsafe partial class D3D12Device
         int tileX = p.Key.Tx * TileGrid.W + row.Frame.OriginX, tileY = p.Key.Ty * TileGrid.H + row.Frame.OriginY;
         SliceRow raw = row;
         if (kind == 0) raw.Frame = row.Frame with { PhaseX = row.RefPhaseX, PhaseY = row.RefPhaseY };
+        // the footprint check's subject: the same tile rastered now WITH the skip (its table built for the row)
+        int skipScratch = -1;
+        if (kind == 1)
+        {
+            skipScratch = _surfaces.AcquireScratch(p.W, p.H, fence);
+            if (skipScratch < 0) { _surfaces.ReleaseScratch(scratch); skipped++; return false; }
+            _replayFoot = FootprintsOf(in frame, in row, 2, out _replayFootN);
+            EndPassIfOpen();
+            ScratchBarrier(skipScratch, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+            var krtv = _surfaces.ScratchRtv(skipScratch);
+            BeginPass(krtv, p.W, p.H, PassLoad.Clear);
+            int imgSlotK = _imgRecSlot;
+            _imgRecSlot = -1;
+            ReplaySegment(in frame, in raw, -tileX, -tileY, p.W, p.H, krtv,
+                new RectF(p.Key.Tx * (float)TileGrid.W, p.Key.Ty * (float)TileGrid.H, p.W, p.H));
+            _imgRecSlot = imgSlotK;
+            EndPassIfOpen();
+        }
         _replayFoot = null; _replayFootN = 0;   // the shadow decodes every op (the footprint check's reference)
         EndPassIfOpen();
         ScratchBarrier(scratch, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -112,6 +133,7 @@ public sealed unsafe partial class D3D12Device
         if (DroppedInstanceCount() != dropped || _glyphs.DroppedInstances != glyphDropped || _frameImagesInFlight != inFlight)
         {
             _surfaces.ReleaseScratch(scratch);
+            if (skipScratch >= 0) _surfaces.ReleaseScratch(skipScratch);
             skipped++;
             InvalidateCmdState();
             return false;
@@ -132,12 +154,21 @@ public sealed unsafe partial class D3D12Device
             c.B = CreateReadback(total, "PhaseValidate.Readback");
             c.Bytes = total;
         }
-        ID3D12Resource* tile = _surfaces.TileResource(p.Surface);
-        Barrier(tile, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
         ScratchBarrier(scratch, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
-        CopyToReadback(tile, c.A, fp, p.W, p.H);
+        if (skipScratch >= 0)
+        {
+            ScratchBarrier(skipScratch, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
+            CopyToReadback(_surfaces.ScratchResource(skipScratch), c.A, fp, p.W, p.H);
+            _surfaces.ReleaseScratch(skipScratch);
+        }
+        else
+        {
+            ID3D12Resource* tile = _surfaces.TileResource(p.Surface);
+            Barrier(tile, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
+            CopyToReadback(tile, c.A, fp, p.W, p.H);
+            Barrier(tile, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
         CopyToReadback(_surfaces.ScratchResource(scratch), c.B, fp, p.W, p.H);
-        Barrier(tile, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         _surfaces.ReleaseScratch(scratch);
         c.Pitch = fp.Footprint.RowPitch;
         c.W = p.W; c.H = p.H; c.Turn = _compositeTurn; c.Key = p.Key;
