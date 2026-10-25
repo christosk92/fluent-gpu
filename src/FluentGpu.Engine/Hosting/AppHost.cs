@@ -5080,7 +5080,7 @@ public sealed partial class AppHost : IDisposable
             _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx, Composited: compositeSwapchain));
         }
         finally { parentRenderThread?.Resume(); }
-        _reconciler = new TreeReconciler(_scene, strings, _runtime);
+        _reconciler = new TreeReconciler(_scene, strings, _runtime) { Fonts = fonts };
         _reconciler.RegisterPendingEffectContext = RegisterPendingEffectContext;
         _layout = new FlexLayout(_scene, fonts);
         _invalidator = new LayoutInvalidator(_scene, _layout);
@@ -7518,6 +7518,7 @@ public sealed partial class AppHost : IDisposable
     private void FlushToQuiescence()
     {
         var r = _runtime.Flush();
+        _reconciler.EndTextPrefetchPass();   // a flush is a text-prefetch pass (Reconciler.TextPrefetch.cs)
         NoteReactiveFlush(in r);
         if (r.HasPending) WakeFrame();
     }
@@ -7536,6 +7537,7 @@ public sealed partial class AppHost : IDisposable
         ReactiveFlushResult r;
         using (_reconciler.PushSuppressBoundTransitions())
             r = _runtime.Flush();
+        _reconciler.EndTextPrefetchPass();
         _rebindFlushAllocBytesThisFrame += GC.GetAllocatedBytesForCurrentThread() - before;
         NoteReactiveFlush(in r);
         if (r.HasPending) WakeFrame();   // only a throwing unit can leave work here

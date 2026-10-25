@@ -3151,6 +3151,7 @@ public sealed partial class TreeReconciler
         SetPaintText(ref paint, next);
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.LayoutDirty);
+        NoteTextWrite(node);
     }
 
     private void FireTextColor(Bind<ColorF> fx)
@@ -6478,10 +6479,11 @@ public sealed partial class TreeReconciler
                 paint.TextDecorations = (byte)((t.Underline ? NodePaint.UnderlineBit : 0)
                                              | (t.Strikethrough ? NodePaint.StrikethroughBit : 0));
                 _scene.SetDynamicText(node, t.DynamicText);
+                bool textWritten = isMount;
                 if (!t.Text.IsBound)
                 {
                     var newText = _strings.Intern(t.Text.Value);
-                    if (paint.Text != newText) { SetPaintText(ref paint, newText); MarkLayoutShape(node); }
+                    if (paint.Text != newText) { SetPaintText(ref paint, newText); MarkLayoutShape(node); textWritten = true; }
                 }
 
                 ref LayoutInput li = ref _scene.Layout(node);
@@ -6493,6 +6495,7 @@ public sealed partial class TreeReconciler
                     MinSizeDip: float.IsNaN(t.MinSize) ? 0f : t.MinSize, Case: t.Case,
                     Align: t.TextAlign, Features: t.FontFeatures, Fit: t.FitMode);
                 TextFitContract.Check(in prevStyle, in li.TextStyle, t.Text.IsBound ? "(bound)" : t.Text.Value);
+                if (textWritten || prevStyle != li.TextStyle) NoteTextWrite(node);   // the shaping workers start on it now
                 li.Margin = t.Margin;
                 li.Width = t.Width; li.Height = t.Height;
                 li.MinW = t.MinWidth; li.MinH = t.MinHeight; li.MaxW = t.MaxWidth; li.MaxH = t.MaxHeight;
@@ -6527,9 +6530,11 @@ public sealed partial class TreeReconciler
                 ref LayoutInput li = ref _scene.Layout(node);
                 var famId = _strings.Intern(st.FontFamily);
                 if (li.TextStyle.FontFamily != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.FontFamily); }
+                TextStyle prevSpanStyle = li.TextStyle;
                 li.TextStyle = new TextStyle(famId, st.Size, st.Weight != 0 ? st.Weight : (ushort)400,
                     st.Wrap, st.Trim, st.MaxLines, st.CharSpacing, st.LineHeight, st.LineStacking, st.LineBounds, runId,
                     Align: st.TextAlign, Features: st.FontFeatures);
+                if (isMount || prevSpanStyle != li.TextStyle) NoteTextWrite(node);   // the shaping workers start on it now
                 li.Margin = st.Margin;
                 li.Width = st.Width; li.Height = st.Height;
                 li.MinW = st.MinWidth; li.MinH = st.MinHeight; li.MaxW = st.MaxWidth; li.MaxH = st.MaxHeight;
