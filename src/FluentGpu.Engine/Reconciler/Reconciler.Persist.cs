@@ -30,7 +30,6 @@ public sealed partial class TreeReconciler
     {
         public string Key = "";
         public NodeHandle Root;
-        public Element? El;
         public long Seq;          // the generation its expiry timer carries (an adopted entry's timer fires into nothing)
         public double DeadlineMs; // informational (the timer owns the expiry): when it is unmounted without an adopter
     }
@@ -76,7 +75,7 @@ public sealed partial class TreeReconciler
             if (_scene.IsLive(parked.Root))
             {
                 _persistLive[key] = node;
-                AdoptPersisted(node, entry, parked.Root, parked.El);
+                AdoptPersisted(node, entry, parked.Root);
                 return;
             }
         }
@@ -103,31 +102,30 @@ public sealed partial class TreeReconciler
         SetSubtreeParked(content, parked: true);
         _scene.Detach(content);
         _reconciled = true;
-        var el = entry.Rendered;
-        entry.Rendered = null;
+        entry.HasRendered = false;
 
         if (_persistWaiting.Remove(key, out var waiter) && _scene.IsLive(waiter) && _comps.TryGetValue(waiter, out var we))
         {
             // The keyed diff mounted the new slot first: hand the subtree over now, in the same pass.
             we.PersistWaiting = false;
             _persistLive[key] = waiter;
-            AdoptPersisted(waiter, we, content, el);
+            AdoptPersisted(waiter, we, content);
             we.Schedule();   // its first render (skipped while it waited) reconciles build() against the adopted subtree
             return;
         }
 
-        var p = new ParkedPersist { Key = key, Root = content, El = el, Seq = ++_persistSeq, DeadlineMs = PersistNowMs + Flow.PersistParkMs };
+        var p = new ParkedPersist { Key = key, Root = content, Seq = ++_persistSeq, DeadlineMs = PersistNowMs + Flow.PersistParkMs };
         _persistParked[key] = p;
         PersistTimers?.Schedule(p.DeadlineMs, p.Seq, _persistExpire ??= ExpireParkedPersist, typeof(PersistSlot));
     }
 
     /// <summary>Re-parent <paramref name="root"/> under the slot at <paramref name="node"/>, un-park it (unless the slot itself mounted
     /// parked) and render every component and binding in it once against the new ancestors.</summary>
-    private void AdoptPersisted(NodeHandle node, CompEntry entry, NodeHandle root, Element? el)
+    private void AdoptPersisted(NodeHandle node, CompEntry entry, NodeHandle root)
     {
         _scene.Detach(root);
         _scene.AppendChild(node, root);
-        entry.Rendered = el;
+        entry.HasRendered = true;
         SetSubtreeParked(root, parked: entry.Parked);
         RenderPersistedOnce(root);
         _scene.Mark(root, NodeFlags.LayoutDirty);   // its constraints are the new parent's

@@ -52,7 +52,7 @@ public sealed partial class TreeReconciler
         public readonly Component Comp;
         /// <summary>The render row (RxTable) and this entry's index in the reconciler's component list (the row's payload).</summary>
         public readonly int Row, Id;
-        public Element? Rendered; public Type Type = null!; public bool Parked; public int ParkEpoch; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; public bool PersistWaiting; public bool ThemeCatchUp;
+        public bool HasRendered; public Type Type = null!; public bool Parked; public int ParkEpoch; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; public bool PersistWaiting; public bool ThemeCatchUp;
         private bool _lifetimeDisposed;
 
         public CompEntry(TreeReconciler rec, NodeHandle node, Component comp)
@@ -384,7 +384,6 @@ public sealed partial class TreeReconciler
             l = next;
         }
     }
-    private readonly Dictionary<int, Element?> _showState = new();             // last-mounted branch per ShowEl node
     private readonly Dictionary<int, ShowEl> _showEl = new();                  // latest ShowEl per boundary node (parent re-renders replace it — see UpdateShow)
     private readonly Dictionary<int, int> _showEffect = new();              // the Show boundary effect, rescheduled by UpdateShow
     private readonly Dictionary<int, ForElBase> _forEl = new();                       // latest ForElBase per boundary node (parent re-renders replace it — see UpdateFor)
@@ -403,7 +402,7 @@ public sealed partial class TreeReconciler
     private static readonly LayoutInput EmptyBoundaryLayout = LayoutInput.Default;  // what an EMPTY boundary mirrors (MirrorParticipation)
     // Skeleton-loading: per SkelRegionEl node, the last branch (0 none / 1 shimmer / 2 real / 3 failed), the last-mounted
     // child element (for ReconcileSingleChild's type-compare), and the reveal-group token (for the group coordinator).
-    private readonly Dictionary<int, (byte Branch, Element? El, object? Group)> _skelState = new();
+    private readonly Dictionary<int, (byte Branch, object? Group)> _skelState = new();
     private readonly Dictionary<int, SkelRegionEl> _skelEl = new();
     private readonly Dictionary<int, int> _skelEffect = new();
     private readonly HashSet<int> _skelForce = new();
@@ -462,7 +461,6 @@ public sealed partial class TreeReconciler
     private readonly Dictionary<int, int> _pendingImageId = new();
 
     private Component? _root;
-    private Element? _oldRoot;
     /// <summary>Per node, the element it was last mounted or reconciled against (PERF r3 MODEL M4b, DESIGN 2.3).</summary>
     private readonly NodeRecords _records = new();
     private Effect? _rootEffect;
@@ -860,7 +858,6 @@ public sealed partial class TreeReconciler
         if (!sceneRoot.IsNull && _scene.IsLive(sceneRoot)) UnmountSubtree(sceneRoot);
         TearDownPersisted();
         _persistTeardown = false;
-        _oldRoot = null;
     }
 
     private void RunRoot(Component root)
@@ -900,16 +897,12 @@ public sealed partial class TreeReconciler
             // LayoutDirty is marked by WriteColumns (layout-input / grid / clip-flag change) and by structural
             // reconcile paths — an identical-shape root re-render must not force a full solve.
         }
-        _oldRoot = newRoot;
         _root?.Context.SetHostNode(_scene.Root);
     }
 
-    /// <summary>Imperative full reconcile of an explicit element tree (tests / non-host callers).</summary>
-    public void ReconcileRoot(Element newRoot, Element? oldRoot)
-    {
-        _oldRoot = oldRoot;
-        RenderRootDiff(newRoot);
-    }
+    /// <summary>Imperative full reconcile of an explicit element tree (tests / non-host callers). The old side is the scene's
+    /// node records (PERF r3 MODEL M4b); <paramref name="oldRoot"/> is no longer read.</summary>
+    public void ReconcileRoot(Element newRoot, Element? oldRoot) => RenderRootDiff(newRoot);
 
     /// <summary>Re-realize any virtual-list windows flagged <see cref="NodeFlags.VirtualRangeDirty"/> (the host's scroll
     /// step found the plan's present-time window outside the realized one) — granular, no component re-render. Every
@@ -1475,7 +1468,7 @@ public sealed partial class TreeReconciler
         // the debt, so cancel the queue slot (the drain skips a cancelled entry without spending its budget).
         entry.QueuedReplay = false;
         _renderCount++;
-        bool firstRender = entry.Rendered is null;
+        bool firstRender = !entry.HasRendered;
         bool census = _renderCensus is not null;
         long t0 = 0, b0 = 0;
         if (census) { t0 = Stopwatch.GetTimestamp(); b0 = GC.GetAllocatedBytesForCurrentThread(); }
@@ -1487,7 +1480,7 @@ public sealed partial class TreeReconciler
         byte causeTag = 0;
         {
             cause = entry.TakeStaleCause();
-            causeTag = entry.Rendered is null ? (byte)1 : cause is not null && ReferenceEquals(cause, entry.PropsSig) ? (byte)2 : (byte)0;
+            causeTag = !entry.HasRendered ? (byte)1 : cause is not null && ReferenceEquals(cause, entry.PropsSig) ? (byte)2 : (byte)0;
         }
         // E20: a page back from a park mid-theme-fade renders as a late joiner of that fade (Reconciler.ThemeFade.cs).
         float savedThemeMs = 0f, savedThemeFromT = 0f;
@@ -1523,7 +1516,7 @@ public sealed partial class TreeReconciler
         MirrorParticipation(node, _scene.FirstChild(node));
         RemirrorAncestors(node);   // an enclosing boundary that did not re-render still mirrors this anchor
         comp.Context.SetHostNode(_scene.FirstChild(node));
-        entry.Rendered = newRendered;
+        entry.HasRendered = true;
         if (MountCensusEnabled) NoteCensusRender(entry, firstRender, cause);
         // Scoped relayout: mark the rendered root only when reconcile mutated structure or a layout-affecting
         // column. Starting the dirty walk HERE (not only at the deep mutation site) clears ContentSized scroll
@@ -1696,7 +1689,6 @@ public sealed partial class TreeReconciler
         // The effect reads the LATEST stored ShowEl (not its mount-time capture): parent re-renders replace the stored
         // element and reschedule this effect (UpdateShow), like the skeleton boundary.
         int mountIdx = (int)node.Raw.Index;
-        _showState[mountIdx] = null;
         _showEl[mountIdx] = se;
         WriteAnchorColumns(node, se, old: null);   // before the first branch mounts (mirrors MountComponent)
         int row = NewNodeRow(RowKindShow, node);
@@ -1713,7 +1705,6 @@ public sealed partial class TreeReconciler
         if (!_showEl.TryGetValue(idx, out var cur)) return;
         Element? desired = cur.When() ? cur.Then : cur.Else;
         ReconcileSingleChild(node, desired);
-        _showState[idx] = desired;
         MirrorParticipation(node, _scene.FirstChild(node));
         RemirrorAncestors(node);   // a component/provider anchor above mirrors THIS anchor and did not re-render
     }
@@ -1731,7 +1722,7 @@ public sealed partial class TreeReconciler
     private void MountSkeletonRegion(NodeHandle node, SkelRegionEl se)
     {
         int mountIdx = (int)node.Raw.Index;
-        _skelState[mountIdx] = (0, null, se.Group);
+        _skelState[mountIdx] = (0, se.Group);
         _skelEl[mountIdx] = se;
         if (se.Group is { } grp) SkelGroupCoordinator.Register(grp, mountIdx);
 
@@ -1788,7 +1779,7 @@ public sealed partial class TreeReconciler
                 // Re-pointed mid-load: the new group's round waits for this member's Ready edge too.
                 if (st.Branch == 1) SkelGroupCoordinator.Loading(next.Group, idx);
             }
-            if (_skelState.TryGetValue(idx, out st)) _skelState[idx] = (st.Branch, st.El, next.Group);
+            if (_skelState.TryGetValue(idx, out st)) _skelState[idx] = (st.Branch, next.Group);
         }
 
         _skelEl[idx] = next;
@@ -1801,7 +1792,7 @@ public sealed partial class TreeReconciler
         if (!_scene.IsLive(node)) return;
         int idx = (int)node.Raw.Index;
         if (!_skelEl.TryGetValue(idx, out var se)) return;
-        var (lastBranch, lastEl, _) = _skelState.TryGetValue(idx, out var st) ? st : ((byte)0, (Element?)null, se.Group);
+        var (lastBranch, _) = _skelState.TryGetValue(idx, out var st) ? st : ((byte)0, se.Group);
 
         byte branch = se.Failed() ? (byte)3 : se.Pending() ? (byte)1 : (byte)2;   // 1 shimmer / 2 real / 3 failed
         bool sameBranch = branch == lastBranch;
@@ -1849,7 +1840,7 @@ public sealed partial class TreeReconciler
         MirrorParticipation(node, _scene.FirstChild(node));
         // LayoutDirty: ReplaceSingleChild / ReconcileSingleChild (structural) and WriteColumns (layout-input change)
         // already mark. A force re-run on an unchanged Ready branch (parent re-render) must not page-dirty the region.
-        _skelState[idx] = (branch, desired, se.Group);
+        _skelState[idx] = (branch, se.Group);
 
         // Hide the enclosing scrollbar while this region is loading (branch 1): the short skeleton → tall real swap
         // would otherwise pop the rail from a tiny thumb to its real size. Restored on Ready/Failed.
@@ -4978,7 +4969,6 @@ public sealed partial class TreeReconciler
         _relativeKey.Remove(idx);
         _providerSig.Remove(idx);
         _mirroredChild.Remove(idx);
-        _showState.Remove(idx);
         _showEl.Remove(idx);
         _showEffect.Remove(idx);
         _forEl.Remove(idx);
