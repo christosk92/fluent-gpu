@@ -173,6 +173,7 @@ public sealed partial class SliceRecorder
         public bool Sliding;       // this pass: a posed transition layer composited as a SLIDE GROUP (members at rest; PlaceChild)
         public float RestDx, RestDy;   // this pass: the accumulated offset WITHOUT this slice's own pose (its parent's), exact
         public bool PoseHeld;          // this pass: a transition layer's pose is the one it had last pass (a parked pose, not a slide)
+        public bool Slid;              // it has slid as a slide group since its pose was last 0 (the rest snap and PoseHeld apply)
         public float LastPoseDx, LastPoseDy;
         public bool Held;          // this pass: cut last pass under a budget, its share is reserved until it registers (CountBudget)
         public bool RefusedCut;    // its last walk folded a cut inline for want of budget / a slot (never partially kept)
@@ -2139,9 +2140,10 @@ public sealed partial class SliceRecorder
         c.Visited = true;
         ChildGeometry(child, in m, scene, accDx, accDy, parentAccDx, parentAccDy, in parentClip,
             out float cdx, out float cdy, out float pdx, out float pdy, out RectF clip);
-        // A transition layer within SlideRestPx of its free pose (the last frames of an ease-out slide) places AT its free pose:
-        // the slide ends on exactly the frame it comes to rest on (no last bilinear frame against a crisp first rest frame).
-        if (SlideGroups && c.Fractional && (cdx != accDx || cdy != accDy))
+        // A SLIDING transition layer within SlideRestPx of its free pose (the last frames of an ease-out slide) places AT its free
+        // pose: the slide ends on exactly the frame it comes to rest on (no last bilinear frame against a crisp first rest frame).
+        // Only a layer that has slid as a slide group (c.Slid): every other transition layer keeps its exact placement.
+        if (SlideGroups && c.Slid && c.Fractional && (cdx != accDx || cdy != accDy))
         {
             float ds = scene.DeviceScale > 0f ? scene.DeviceScale : 1f;
             if (MathF.Abs((cdx - accDx) * ds) < SlideRestPx && MathF.Abs((cdy - accDy) * ds) < SlideRestPx) { cdx = accDx; cdy = accDy; }
@@ -2160,7 +2162,8 @@ public sealed partial class SliceRecorder
         c.PoseDx = cdx - accDx; c.PoseDy = cdy - accDy;
         c.RestDx = accDx; c.RestDy = accDy;
         c.Sliding = false;
-        c.PoseHeld = SlideGroups && c.PoseDx == c.LastPoseDx && c.PoseDy == c.LastPoseDy;
+        if (c.PoseDx == 0f && c.PoseDy == 0f) c.Slid = false;   // back at its free pose: the slide is over
+        c.PoseHeld = SlideGroups && c.Slid && c.PoseDx == c.LastPoseDx && c.PoseDy == c.LastPoseDy;
         c.LastPoseDx = c.PoseDx; c.LastPoseDy = c.PoseDy;
 
         // A composite-time STICKY clip (CompositeSliceFlags.StickyClip): the node's ClipTop pose, a half-plane that is
@@ -2247,30 +2250,21 @@ public sealed partial class SliceRecorder
         // CompositeLayer's fade takes) — renders its surface at REST: everything it encloses places with the pose removed, so
         // its tiles keep their phase for the whole slide instead of re-rastering at a new one every frame, and the surface is
         // drawn at the pose with a bilinear sample (CompositeItem.SubPxX/Y). Only while the layer moves and fades (an opacity
-        // group exists only between 0.001 and 0.999): at its free pose there is no slide and nothing changes. A leaf layer
-        // takes a group too while it slides (its own segments, drawn through the one surface: no seams between its tiles).
+        // group exists only between 0.001 and 0.999): at its free pose there is no slide and nothing changes.
+        // THE RULE (a net win by construction): a layer becomes a slide group only when (1) today's plan ALREADY composites it
+        // through a group surface — it encloses slices (not a leaf) and its fade is not distributed — so no surface is added,
+        // (2) what it encloses holds TILED content (EnclosesTiles): the tiles a new sub-pixel phase re-rasters every frame, and
+        // (3) some of it is on screen (an off-screen group composites nothing, so nothing of it re-rasters). Anything else — a
+        // leaf layer, a distributed fade, a group of inline segments / posed images / low-res or feedback boundaries — keeps
+        // today's exact path: there is nothing to save there. (In the frame bench only the page swap qualifies.)
         // The group's own clip, rounded clip and footprint stay where it is drawn (window); what it encloses gets them
         // carried back by the pose.
         // The rest offset is taken where it is exact — the offset BEFORE the pose was added (RestDx), never cdx − pose, whose
         // float rounding would move the members' phase by noise from frame to frame (and re-raster them, item 1's bug class).
         float sdx = 0f, sdy = 0f, rdx = cdx, rdy = cdy, prdx = accDx, prdy = accDy;   // prdx: the parent's offset at rest
-        if (SlideGroups && layer.HasLayer && !sticky && (LayerKind)layer.Layer.Kind == LayerKind.Opacity && layer.Layer.BlurSigma <= 0f)
+        if (layer.HasLayer && !leaf)
         {
-            ref Rec pr = ref _recs[parentSlot];
-            if (c.Fractional && (c.PoseDx != 0f || c.PoseDy != 0f))
-            {
-                sdx = c.PoseDx; sdy = c.PoseDy; rdx = c.RestDx; rdy = c.RestDy; c.Sliding = true;
-            }
-            else if (c.Role == (int)SliceRole.Layer && pr.Fractional && pr.NodeIndex == c.NodeIndex && (pr.PoseDx != 0f || pr.PoseDy != 0f)
-                && cdx == accDx && cdy == accDy)
-            {
-                sdx = pr.PoseDx; sdy = pr.PoseDy; rdx = pr.RestDx; rdy = pr.RestDy; prdx = rdx; prdy = rdy; pr.Sliding = true;
-            }
-        }
-        bool slide = sdx != 0f || sdy != 0f;
-        if (layer.HasLayer && (!leaf || slide))
-        {
-            if (!slide && Distributable(child, in m, in layer.Layer, scene, cdx, cdy, accDx, accDy, in childClip, dist.Count,
+            if (Distributable(child, in m, in layer.Layer, scene, cdx, cdy, accDx, accDy, in childClip, dist.Count,
                     sticky ? Offset(stickyWc, cdx, cdy) : RectF.Infinite))
             {
                 // A DISTRIBUTED edge fade (gpu-renderer.md §13.1e): no group surface — every item below carries the
@@ -2279,6 +2273,19 @@ public sealed partial class SliceRecorder
                 PlaceSlot(child, scene, cdx, cdy, accDx, accDy, childClip, ownClip, stickyY, cdy, cull, round, roundR, default,
                     dist.With(in layer.Layer), in dist, false, ref repaint);
                 return;
+            }
+            if (SlideGroups && !sticky && (LayerKind)layer.Layer.Kind == LayerKind.Opacity && layer.Layer.BlurSigma <= 0f)
+            {
+                ref Rec pr = ref _recs[parentSlot];
+                bool own = c.Fractional && (c.PoseDx != 0f || c.PoseDy != 0f);
+                bool parents = !own && c.Role == (int)SliceRole.Layer && pr.Fractional && pr.NodeIndex == c.NodeIndex
+                    && (pr.PoseDx != 0f || pr.PoseDy != 0f) && cdx == accDx && cdy == accDy;
+                // and only while some of it is on screen: an invisible group's tiles are not composited, so they do not re-raster
+                if ((own || parents) && !ClipAnd(clip, Offset(c.Bounds, cdx, cdy)).IsEmpty && EnclosesTiles(child, 0))
+                {
+                    if (own) { sdx = c.PoseDx; sdy = c.PoseDy; rdx = c.RestDx; rdy = c.RestDy; c.Sliding = true; c.Slid = true; }
+                    else { sdx = pr.PoseDx; sdy = pr.PoseDy; rdx = pr.RestDx; rdy = pr.RestDy; prdx = rdx; prdy = rdy; pr.Sliding = true; pr.Slid = true; }
+                }
             }
             // A layer slice with children: one group surface holds the slice AND its descendants (exact group semantics).
             // The group item carries the distributed ancestor fades (it is one item of theirs); its enclosed items none.
@@ -2311,6 +2318,36 @@ public sealed partial class SliceRecorder
             if (liftThumbs) PlaceTrailingThumbs(child, scene, cdx, cdy, accDx, accDy, in childClip, in cull, in round, roundR, in dist, ref repaint);
         }
         else PlaceSlot(child, scene, cdx, cdy, accDx, accDy, childClip, ownClip, stickyY, cdy, cull, round, roundR, layer, in dist, in dist, false, ref repaint);
+    }
+
+    /// <summary>Does the subtree at <paramref name="s"/> hold a segment that composites from TILES — what a new sub-pixel phase
+    /// re-rasters? Not: an empty segment, an inline one (<see cref="InlineSegment"/>'s slice-level terms), a low-res or
+    /// feedback boundary's (one downscaled surface, no tiles). Plan-level terms that would force tiles (a leaf layer, a rounded
+    /// clip, a distributed fade) are not looked at, so a group it misses keeps today's path (never the other way round).</summary>
+    private bool EnclosesTiles(int s, int depth)
+    {
+        if (depth > 32) return false;
+        ref Rec r = ref _recs[s];
+        ScanSlot(s);
+        int marks = _scanMarkCount[s];
+        // a posed image layer whose stream is one plain image composites as one bilinear Image item, no tiles (BuildComposite)
+        bool posedImage = r.Pose == PoseKind.Posed && marks == 0 && AnalyzePosedImage(s, out _, out _);
+        if (!(r.LowRes > 1 && r.Kind == SliceKind.Effect) && !r.HasFeedback && !posedImage)
+            for (int k = 0; k <= marks; k++)
+            {
+                ref readonly ScanSeg sg = ref _scanSegs[s]![k];
+                if (sg.Bounds.IsEmpty) continue;
+                bool inline = InlineMaxCommands > 0 && r.Kind == SliceKind.Static && r.Pose == PoseKind.None && !r.Screen
+                    && !sg.Heavy && sg.Commands <= InlineMaxCommands;
+                if (!inline) return true;
+            }
+        for (int i = 0; i < marks; i++)
+        {
+            CompositeSliceCmd m = _scanMarks[s]![i].Cmd;
+            int child = Find(m.NodeIndex, m.Gen, m.Sub);
+            if (child >= 0 && EnclosesTiles(child, depth + 1)) return true;
+        }
+        return false;
     }
 
     // ── the distribution test (gpu-renderer.md §13.1e) ─────────────────────────────────────────────────────────────
