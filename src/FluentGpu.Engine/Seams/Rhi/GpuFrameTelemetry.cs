@@ -31,7 +31,24 @@ public readonly record struct GpuPassTiming(GpuPassKind Kind, int TargetWidthPx,
 /// monotonic; <paramref name="WholeMs"/> spans frame start → end; <paramref name="PassesDropped"/> counts intervals past
 /// <see cref="GpuPassTimeline.MaxPasses"/> that were folded into the last recorded one;
 /// <paramref name="BackBufferTransitions"/> counts the back buffer's resource-state transitions in that frame.</summary>
-public readonly record struct GpuPassFrameSummary(ulong Sequence, float WholeMs, int PassCount, int PassesDropped, int BackBufferTransitions);
+public readonly record struct GpuPassFrameSummary(ulong Sequence, float WholeMs, int PassCount, int PassesDropped, int BackBufferTransitions,
+    GpuFrameWork Work = default);
+
+/// <summary>The CLOCK-INDEPENDENT work of one composite submit, published with its pass timeline (audit PERF r3 COMP): the GPU's
+/// own pipeline-statistics counts per composite phase (pixel-shader invocations: the fragments each phase shaded) and what the
+/// submit encoded. GPU milliseconds are work divided by a clock the governor chooses (the Adreno's DVFS); these counts are the
+/// work itself, so a change is proven in them and not only in ms. Zero when the device has no pipeline-statistics queries.</summary>
+/// <param name="PsTileRaster">Pixel-shader invocations of the tile-raster phase.</param>
+/// <param name="PsOffscreen">... of the offscreen phase (groups, self-blurs, backdrops, degraded chunks).</param>
+/// <param name="PsComposite">... of the back-buffer composite pass.</param>
+/// <param name="RenderPasses">D3D12 render passes the submit opened (each a bin load / store on a tiler).</param>
+/// <param name="Draws">Draw calls the submit recorded.</param>
+/// <param name="CompositeDraws">Draw calls of the back-buffer composite pass.</param>
+/// <param name="CompositeQuadPx">Quad pixels the composite pass drew (each quad ∩ its scissor): the CPU's count of what
+/// <paramref name="PsComposite"/> measures.</param>
+/// <param name="CompositeFeatherPx">... of those, drawn through the per-pixel analytic feather.</param>
+public readonly record struct GpuFrameWork(ulong PsTileRaster, ulong PsOffscreen, ulong PsComposite, int RenderPasses, int Draws,
+    int CompositeDraws, long CompositeQuadPx, long CompositeFeatherPx);
 
 /// <summary>Bounds of the pass-granular GPU timeline.</summary>
 public static class GpuPassTimeline

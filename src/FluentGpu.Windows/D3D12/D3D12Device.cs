@@ -4661,6 +4661,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _cmdList->ResolveQueryData(_passQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, b, (uint)m + 1u,
             _passTsReadback, (ulong)b * sizeof(ulong));
         Rec(RecordedOp.ResolveQuery, b, (uint)m + 1u, aux: 1);   // aux=1: the pass-timeline bank
+        WorkResolve(slot);
         _ring.PassCount[slot] = m;   // intervals
         _ring.PassDropped[slot] = _passDropped;
         _ring.PassBackBufferTransitions[slot] = _frameBackBufferTransitions;
@@ -4692,7 +4693,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         ulong first = _passTsData[b], last = _passTsData[b + (uint)n];
         float whole = last > first ? (float)((last - first) * toMs) : 0f;
-        owner.PublishGpuPassTimeline(_passScratch.AsSpan(0, n), whole, _ring.PassDropped[slot], _ring.PassBackBufferTransitions[slot]);
+        owner.PublishGpuPassTimeline(_passScratch.AsSpan(0, n), whole, _ring.PassDropped[slot], _ring.PassBackBufferTransitions[slot], CollectWork(slot));
     }
 
     // Lazily create the always-on two-query heap + readback buffer on the first submit (the queue exists by then).
@@ -4802,6 +4803,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _passTsReadback->Release(); _passTsReadback = null; _passTsData = null;
         }
         if (_passQueryHeap != null) { _passQueryHeap->Release(); _passQueryHeap = null; }
+        ReleaseWorkCensus();
 
         // Ring-keyed banks (Phase 1 §3.3). The execution timer's Owner/OwnerSubmit and the pass timeline's PassOwner are
         // separate arrays; clear both sets of retired state.
@@ -5449,6 +5451,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     private long _passVersion, _passSequence;
     private int _passValid, _passCount, _passDropped, _passBackBufferTransitions;
     private float _passWholeMs;
+    private GpuFrameWork _passWork;
     private readonly GpuPassTiming[] _passes = new GpuPassTiming[GpuPassTimeline.MaxPasses];
     // Always-on device counters of this target's most recent successful submit (same seqlock shape).
     private long _countersVersion;
@@ -5557,11 +5560,13 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
         return false;
     }
 
-    internal void PublishGpuPassTimeline(ReadOnlySpan<GpuPassTiming> passes, float wholeMs, int dropped, int backBufferTransitions)
+    internal void PublishGpuPassTimeline(ReadOnlySpan<GpuPassTiming> passes, float wholeMs, int dropped, int backBufferTransitions,
+        in GpuFrameWork work = default)
     {
         int count = Math.Min(passes.Length, _passes.Length);
         System.Threading.Interlocked.Increment(ref _passVersion);
         for (int i = 0; i < count; i++) _passes[i] = passes[i];
+        _passWork = work;
         _passCount = count;
         _passDropped = dropped;
         _passBackBufferTransitions = backBufferTransitions;
@@ -5587,6 +5592,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
             if ((before & 1L) != 0) continue;
             int valid = _passValid, count = _passCount, dropped = _passDropped, bbt = _passBackBufferTransitions;
             float whole = _passWholeMs;
+            GpuFrameWork work = _passWork;
             long sequence = _passSequence;
             int copy = Math.Min(count, dst.Length);
             for (int i = 0; i < copy; i++) dst[i] = _passes[i];
@@ -5594,7 +5600,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
             long after = System.Threading.Volatile.Read(ref _passVersion);
             if (before != after) continue;
             if (valid == 0 || sequence == 0) break;
-            summary = new GpuPassFrameSummary(unchecked((ulong)sequence), whole, count, dropped, bbt);
+            summary = new GpuPassFrameSummary(unchecked((ulong)sequence), whole, count, dropped, bbt, work);
             return copy;
         }
         summary = default;

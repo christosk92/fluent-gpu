@@ -167,11 +167,13 @@ public sealed unsafe partial class D3D12Device
 
         // 1. tiles (any scratch leased here is an inline folded layer inside a tile)
         PassBoundary(GpuPassKind.TileRaster, TileGrid.W, TileGrid.H);
+        WorkPhase(0);
         int inl0 = _surfaces.ScratchLeases; long inlPx0 = _surfaces.ScratchPx;
         RasterTiles(in frame);
         _offInlineN += _surfaces.ScratchLeases - inl0; _offInlinePx += _surfaces.ScratchPx - inlPx0;
         // 2. offscreen
         PassBoundary(GpuPassKind.Offscreen, (int)_w, (int)_h);
+        WorkPhase(1);
         PrepareTop(in frame);   // PrepareRange per top-level item + occlusion (D3D12Device.Occlusion.cs)
         // 3. the composite pass
         PassBoundary(GpuPassKind.Composite, (int)sc.W, (int)sc.H);
@@ -182,6 +184,9 @@ public sealed unsafe partial class D3D12Device
         // Partial present (D3D12Device.PartialPresent.cs): what changed since this back buffer last received a frame.
         PpComputeDirty(in frame, sc);
         PpPlanRepaint(sc, f);
+        // the work census (D3D12Device.WorkCensus.cs): the composite phase's query, or on a census frame one query per item
+        if (ItemCensusDecide()) WorkPhaseEnd(); else WorkPhase(2);
+        _compositeCensusOn = _passOn;
         if (_ppPartial)
         {
             // PRESERVE: the buffer already holds every pixel outside the repaint rects; each rect is cleared and recomposited.
@@ -198,6 +203,9 @@ public sealed unsafe partial class D3D12Device
             if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, 0, frame.Items.Length, 0, 0, (int)_w, (int)_h, -1);
         }
         EndPassIfOpen();
+        _compositeCensusOn = false;
+        WorkPhaseEnd();
+        ItemCensusResolve();
         PpEndFrame(sc, f);
         if (TileDamage.PresentValidate) QueuePresentCheck(in frame, backBuffer);
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
@@ -1479,6 +1487,7 @@ public sealed unsafe partial class D3D12Device
                 if (it.Kind == CompositeKind.Group) i = Math.Min(items.Length, i + 1 + it.GroupCount) - 1;
                 continue;
             }
+            int census = ItemCensusBegin(), item = i;   // diagnostics: this item's fragments (D3D12Device.WorkCensus.cs)
             switch (it.Kind)
             {
                 case CompositeKind.Group:
@@ -1541,6 +1550,7 @@ public sealed unsafe partial class D3D12Device
                     break;
                 }
             }
+            ItemCensusEnd(census, in frame, item);
         }
     }
 
@@ -1650,6 +1660,7 @@ public sealed unsafe partial class D3D12Device
             if (hasFill) _compositor.Color(in fill);
             ItemParams(in it, ox, oy, feathers && p.Feathered);
             _compositor.Draw(_cmdList, pso, srv);
+            CompositeDrawCensus(p.X0, p.Y0, p.X1, p.Y1, in _itemScissor, p.Feathered);
             if (p.Feathered)
             {
                 float w = MathF.Min(p.X1, _itemScissor.Right) - MathF.Max(p.X0, _itemScissor.Left);

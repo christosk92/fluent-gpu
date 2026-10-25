@@ -192,6 +192,10 @@ public sealed partial class AppHost
                 gr.PassCount = ps.PassCount;
                 gr.PassesDropped = ps.PassesDropped;
                 for (int i = 0; i < n; i++) gr.AddPassMs(passes[i].Kind, passes[i].Ms);
+                GpuFrameWork wk = ps.Work;
+                gr.PsTileRaster = (long)wk.PsTileRaster; gr.PsOffscreen = (long)wk.PsOffscreen; gr.PsComposite = (long)wk.PsComposite;
+                gr.RenderPasses = wk.RenderPasses; gr.Draws = wk.Draws; gr.CompositeDraws = wk.CompositeDraws;
+                gr.CompositeQuadPx = wk.CompositeQuadPx; gr.CompositeFeatherPx = wk.CompositeFeatherPx;
             }
         }
         FrameLedger.RecordGpu(ref gr);

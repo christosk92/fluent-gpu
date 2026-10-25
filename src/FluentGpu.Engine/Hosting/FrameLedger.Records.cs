@@ -195,6 +195,11 @@ public struct LedgerGpuFrame
     public int PassCount, PassesDropped;
     /// <summary>Summed interval time per <see cref="GpuPassKind"/> (ms).</summary>
     public float UploadsMs, BakedBlurMs, ClearMs, SceneMs, GlyphBandMs, TileRasterMs, OffscreenMs, CompositeMs;
+    /// <summary>The submit's clock-independent work (<see cref="GpuFrameWork"/>, with the pass timeline only): pixel-shader
+    /// invocations per composite phase, render passes, draws, and the composite pass's draws and quad pixels.</summary>
+    public long PsTileRaster, PsOffscreen, PsComposite;
+    public int RenderPasses, Draws, CompositeDraws, Reserved;
+    public long CompositeQuadPx, CompositeFeatherPx;
 
     /// <summary>Add <paramref name="ms"/> to the accumulator of <paramref name="kind"/>.</summary>
     public void AddPassMs(GpuPassKind kind, float ms)
