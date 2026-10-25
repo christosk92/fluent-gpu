@@ -112,11 +112,17 @@ public static class ContextMenu
     /// fires at realization only and goes stale the first time a factory-built element re-renders (the stale-null
     /// capture opened menus at the window origin on re-rendered Home cards).</summary>
     public static BoxEl Attach(BoxEl element, IOverlayService svc, Func<ContextMenuModel?> factory, ContextMenuOptions? options = null)
+        => element with { OnContextRequested = Handler(element.OnContextRequested, svc, factory, options) };
+
+    /// <summary>The context-request handler <see cref="Attach"/> installs: <paramref name="own"/> (the element's own handler) runs
+    /// FIRST (routed-event flavor), then the menu opens. For a caller that composes it into a handler of its own without the
+    /// element clone <see cref="Attach"/> makes.</summary>
+    public static Action<ContextRequestEventArgs> Handler(Action<ContextRequestEventArgs>? own, IOverlayService svc, Func<ContextMenuModel?> factory,
+                                                          ContextMenuOptions? options = null)
     {
         var opts = options ?? ContextMenuOptions.Default;
         Action<ContextRequestEventArgs> open = args => Open(svc, factory, opts, args);
-        // Chain: the element's own handler runs FIRST (routed-event flavor), then ours opens.
-        return element with { OnContextRequested = TemplateParts.Chain(element.OnContextRequested, open) };
+        return TemplateParts.Chain(own, open)!;
     }
 
     private static void Open(IOverlayService svc, Func<ContextMenuModel?> factory, ContextMenuOptions opts, ContextRequestEventArgs args)

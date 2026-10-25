@@ -1226,9 +1226,17 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             && held.HoldColumns(w > 1f ? perPageColumns : 0, raisePending ? laidOut.CardW : 0f)
             && Context.Scene is { } holdScene && ShelfViewport is { IsNull: false } holdVp && holdScene.IsLive(holdVp) && holdScene.HasScroll(holdVp))
             holdScene.Mark(holdVp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
-        // The cards' width hint lands in THIS render's flush (the slots read it, never this render), so a re-fit draws the cards at the width
-        // their cells take in this frame's layout instead of one frame later (a layout effect's write re-rendered them on the next frame).
-        if (!_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
+        // The cards' width hint. On a RE-FIT of a seated strip (a resize, a band push) it lands in THIS render's flush (the slots read it, never this
+        // render), so the cards draw at the width their cells take in this frame's layout instead of one frame later (a layout effect's write
+        // re-rendered them on the next frame: the Classic home cards lagged their cells by two frames, audit FU item 9). Before the strip's FIRST
+        // seat it lands from the layout effect below, as it always did: the slots realized against a provisional width before the first layout,
+        // and a write in the render that follows the first measure re-rendered every one of them inside the mount frame (audit FU2: mount-frame
+        // re-renders 16 -> ~115 per navigation burst, ShelfCardSlot 99 of them).
+        if (!_firstRealize && !_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
+        UseLayoutEffect(() =>
+        {
+            if (!_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
+        }, cardW);
         int perPageItems = Math.Max(1, perPageColumns * (_measured ? 1 : _rows));
         int pageCount = PageCountFor(_count, perPageColumns, leadSpan);   // E7 — span-aware (identity when leadSpan==1)
         int maxPage = pageCount - 1;
