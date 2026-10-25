@@ -403,7 +403,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _glyphs is null || _imageTextures is null
             ? ""
             : $"glyphs={_glyphs.CachedGlyphCount} runs={_glyphs.CachedRunCount} atlasGen={_glyphs.AtlasResetCount} quadPool={_glyphs.QuadPoolRetained}" +
-              $" atlasEdge={_glyphs.AtlasEdge} atlasRows={_glyphs.AtlasOccupiedRows} atlasCpu={_glyphs.AtlasCpuBytes} quadPoolBytes={_glyphs.QuadPoolBytes}" +
+              $" atlasEdge={_glyphs.AtlasEdge} atlasRows={_glyphs.AtlasOccupiedRows} atlasCpu={_glyphs.AtlasCpuBytes} quadPoolBytes={_glyphs.QuadPoolBytes} colorPoolBytes={_glyphs.ColorPoolBytes}" +
               $" | tex: atlas={_imageTextures.AtlasImageCount} pages={_imageTextures.AtlasPageCount} pooledFree={_imageTextures.PooledTextureCount} retired={_imageTextures.RetiredCount}" +
               $" srv={_imageTextures.DescriptorSlotsUsed}/{_imageTextures.DescriptorCapacity} high={_imageTextures.DescriptorHighWater} rejected={_imageTextures.DroppedThisRun}" +
               // The shared per-frame upload arena: bytes it holds across every bank (already inside `gpu bytes`, since
@@ -2089,6 +2089,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts,
                             g.SpanRunId, g.ForceColor != 0, g.InMotion * (1f / 255f), g.Typography);
                         _frameGlyphInstanceCount += _glyphInsts.Count - before;
+                        PublishGlyphInk(in g, before);
                         NoteGlyphHaloCoverage(before, ink, RepaintCull.GlyphHalo(g.FontSize));
                         if (_glyphInsts.Count > before)
                             NotePendingText(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,
@@ -2892,6 +2893,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             int n = sp.TrimIdle(nowMs, completed, GpuProfile.IsWeak);
             if (n >= 0) next = n;
         }
+        _glyphs?.TrimIdlePools(nowMs);   // the shaped-run pools back to their resting depth once shaping stopped (no wake of its own)
         for (int i = 0; i < _swapchains.Count; i++)
         {
             var sc = _swapchains[i];

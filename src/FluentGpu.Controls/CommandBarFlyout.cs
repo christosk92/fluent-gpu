@@ -619,7 +619,7 @@ internal sealed class CommandBarFlyoutBody : Component
             if (Header is null) return body.ToArray();
             var all = new List<Element>(body.Count + 2)
             {
-                Header,
+                Header.Value,
                 new BoxEl
                 {
                     Height = 1f,
@@ -641,7 +641,7 @@ internal sealed class CommandBarFlyoutBody : Component
         if (secondaryOnly)
         {
             var menuChildren = new List<Element>(2) { BuildOverflow(expandUp: false, secondaryOnly: true, OnRowKey) };
-            if (closeClock is not null) menuChildren.Add(closeClock);
+            if (closeClock is not null) menuChildren.Add(closeClock.Value);
             var menuRoot = new BoxEl
             {
                 Direction = 1,
@@ -700,7 +700,7 @@ internal sealed class CommandBarFlyoutBody : Component
         if (!showOverflow)
         {
             var collapsedChildren = new List<Element>(2) { primaryRow };
-            if (closeClock is not null) collapsedChildren.Add(closeClock);
+            if (closeClock is not null) collapsedChildren.Add(closeClock.Value);
             var collapsedRoot = new BoxEl
             {
                 Direction = 1,
@@ -732,8 +732,8 @@ internal sealed class CommandBarFlyoutBody : Component
         var children = new List<Element>(5);
         if (expandUp) { children.Add(overflow); children.Add(seam); children.Add(primaryRow); }
         else { children.Add(primaryRow); children.Add(seam); children.Add(overflow); }
-        if (collapseClock is not null) children.Add(collapseClock);
-        if (closeClock is not null) children.Add(closeClock);
+        if (collapseClock is not null) children.Add(collapseClock.Value);
+        if (closeClock is not null) children.Add(closeClock.Value);
 
         var root = new BoxEl
         {

@@ -87,7 +87,7 @@ public sealed partial class TreeReconciler
     {
         if (Wire(lr.Cells.IsBound, prev?.Cells.IsBound == true))
         {
-            var fx = new BindEffect<RowCells>(Runtime, lr, static e => e is ListRowEl x ? x.Cells : default);
+            var fx = NewBind<RowCells>(lr, static e => e is ListRowEl x ? x.Cells : default);
             AddBinding(node, fx.Start(() =>
             {
                 NodeBindingFireCount++;
@@ -104,7 +104,7 @@ public sealed partial class TreeReconciler
 
         if (Wire(lr.Fill.IsBound, prev?.Fill.IsBound == true))
         {
-            var fx = new BindEffect<ColorF>(Runtime, lr, static e => e is ListRowEl x ? x.Fill : default);
+            var fx = NewBind<ColorF>(lr, static e => e is ListRowEl x ? x.Fill : default);
             AddBinding(node, fx.Start(() =>
             {
                 NodeBindingFireCount++;
@@ -120,7 +120,7 @@ public sealed partial class TreeReconciler
         }
         if (Wire(lr.HoverFill.IsBound, prev?.HoverFill.IsBound == true))
         {
-            var fx = new BindEffect<ColorF>(Runtime, lr, static e => e is ListRowEl x ? x.HoverFill : default);
+            var fx = NewBind<ColorF>(lr, static e => e is ListRowEl x ? x.HoverFill : default);
             AddBinding(node, fx.Start(() =>
             {
                 NodeBindingFireCount++;
@@ -138,7 +138,7 @@ public sealed partial class TreeReconciler
         {
             // Rides the generic PressedFill channel/state (ListRowEl.SelectedFill doc comment) — a row has no
             // separate pressed visual, so Selected repurposes the third paint-fill slot every element already has.
-            var fx = new BindEffect<ColorF>(Runtime, lr, static e => e is ListRowEl x ? x.SelectedFill : default);
+            var fx = NewBind<ColorF>(lr, static e => e is ListRowEl x ? x.SelectedFill : default);
             AddBinding(node, fx.Start(() =>
             {
                 NodeBindingFireCount++;
@@ -154,7 +154,7 @@ public sealed partial class TreeReconciler
         }
         if (Wire(lr.Placeholder.IsBound, prev?.Placeholder.IsBound == true))
         {
-            var fx = new BindEffect<bool>(Runtime, lr, static e => e is ListRowEl x ? x.Placeholder : default);
+            var fx = NewBind<bool>(lr, static e => e is ListRowEl x ? x.Placeholder : default);
             AddBinding(node, fx.Start(() =>
             {
                 NodeBindingFireCount++;

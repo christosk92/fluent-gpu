@@ -437,7 +437,7 @@ internal readonly record struct ShelfFit(ShelfPager Pager, float MinCardW, float
 internal readonly record struct ShelfChrome(string? Title, Element? Header, bool HasCustomPager)
 {
     public bool Equals(ShelfChrome other)
-        => Title == other.Title && ReferenceEquals(Header, other.Header) && HasCustomPager == other.HasCustomPager;
+        => Title == other.Title && Header.SameAs(other.Header) && HasCustomPager == other.HasCustomPager;
     public override int GetHashCode() => HashCode.Combine(Title, Header is null, HasCustomPager);
 }
 
@@ -999,7 +999,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     /// <summary>Does a card animate its own size (a <c>Layout</c> or <c>Animate</c> transition with a Size channel)?</summary>
     static bool OwnsSize(Element card)
         => card.Layout is { } layout && (layout.Channels & TransitionChannels.Size) != 0
-           || card is BoxEl { Animate: { } animate } && (animate.Channels & TransitionChannels.Size) != 0;
+           || card.Is(out BoxEl cardBox) && cardBox.Animate is { } animate && (animate.Channels & TransitionChannels.Size) != 0;
 
     Func<float, float>? _cardHeight;              // null in measured mode (the engine measures instead); live (ApplyFit)
     readonly bool _measured;
@@ -1580,7 +1580,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         Element? headerEl = BuildHeader(hp, headerCount, headerPrev, headerNext);
 
         Element[] children = headerEl is null ? [ body with { Key = "body" } ]
-            : [ headerEl with { Key = "header" }, body with { Key = "body" } ];
+            : [ headerEl.Value with { Key = "header" }, body with { Key = "body" } ];
         return _parts.Apply(PagedShelf.PartRoot, new BoxEl
         {
             // LiftClearance of the header gap lives INSIDE the strip's clip (the item container's top pad), so the
@@ -2027,7 +2027,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                     OnRealized = ProbeRealized(i),
                     Children = [ CardAt(i, cardW) ],
                 };
-            sampleCells[i] = cell;
+            sampleCells[i] = cell.Value;
         }
         Element probeHost = new BoxEl
         {
@@ -2151,7 +2151,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             ?? (_title is null ? null : _parts.Apply(PagedShelf.PartHeader, new BoxEl { Children = [ Heading(_title) ] }));
 
         var row = new List<Element>(4);
-        if (titleEl is not null) row.Add(titleEl);
+        if (titleEl is not null) row.Add(titleEl.Value);
         row.Add(new BoxEl { Grow = 1f });   // spacer pushes the pager to the trailing edge
 
         if (_customPager is { } customPager)

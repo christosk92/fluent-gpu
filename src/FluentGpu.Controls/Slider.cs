@@ -671,7 +671,7 @@ internal sealed partial class SliderCore : Component
         return new BoxEl
         {
             Direction = 1,
-            Children = clock is null ? [withHeader] : [withHeader, clock],
+            Children = clock is null ? [withHeader] : [withHeader, clock.Value],
         };
     }
 }

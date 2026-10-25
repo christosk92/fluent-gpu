@@ -2261,6 +2261,22 @@ public sealed partial class SliceRecorder
     /// <summary>At most this many item footprints are tested per distributed fade (past it the fade stays a group).</summary>
     private const int MaxFootprints = 128;
     private readonly RectF[] _fp = new RectF[MaxFootprints];
+    // Where each footprint came from, for the per-op refinement (OpsDisjoint): the slot and segment it paints (segment −1 =
+    // a nested group surface: one opaque-to-the-test box), its placement, the self-blur reach it spreads by and its clip.
+    private readonly int[] _fpSlot = new int[MaxFootprints], _fpSeg = new int[MaxFootprints];
+    private readonly float[] _fpDx = new float[MaxFootprints], _fpDy = new float[MaxFootprints], _fpHalo = new float[MaxFootprints];
+    private readonly RectF[] _fpClip = new RectF[MaxFootprints];
+    /// <summary>The per-op refinement tests at most this many op boxes per item inside one overlap (past it the item's whole
+    /// footprint counts).</summary>
+    private const int MaxOpBoxes = 64;
+    private readonly RectF[] _opBoxA = new RectF[MaxOpBoxes], _opBoxB = new RectF[MaxOpBoxes];
+    private float _inkScale = 1f;
+    /// <summary><c>--fg box-fade-test</c>: the distribution test compares the items' footprint boxes only, as before the
+    /// per-op refinement (the A/B arm).</summary>
+    public static bool BoxFadeTest;
+    /// <summary><c>--fg group-fades</c>: every edge fade composites through its group surface (the reference arm of the
+    /// distribution's equivalence check).</summary>
+    public static bool GroupFadesSwitch;
 
     /// <summary>
     /// May the edge fade on <paramref name="child"/>'s marker be DISTRIBUTED — composited as an analytic feather on every
@@ -2276,9 +2292,10 @@ public sealed partial class SliceRecorder
     private bool Distributable(int child, in CompositeSliceCmd m, in PushLayerCmd l, SceneRecordingSnapshot scene,
         float cdx, float cdy, float accDx, float accDy, in RectF clip, int inherited, in RectF ownSticky)
     {
-        if (ForceGroupFades || !m.Has(CompositeSliceFlags.DistributeFade)) return false;
+        if (ForceGroupFades || GroupFadesSwitch || !m.Has(CompositeSliceFlags.DistributeFade)) return false;
         if ((LayerKind)l.Kind != LayerKind.EdgeFade || l.BlurSigma > 0f || l.GroupAlpha < 0.999f) return false;
         if (inherited + 1 > 2) return false;
+        _inkScale = scene.DeviceScale;   // the glyph ink key's device scale (OpBoxesIn)
         int n = 0;
         bool ok = true;
         CollectFootprints(child, scene, cdx, cdy, accDx, accDy, in clip, inherited + 1, 0f, true, in ownSticky, ref n, ref ok);
@@ -2312,6 +2329,7 @@ public sealed partial class SliceRecorder
                 if (!fp.IsEmpty)
                 {
                     if (n == MaxFootprints) { ok = false; return; }
+                    _fpSlot[n] = slot; _fpSeg[n] = k; _fpDx[n] = accDx; _fpDy[n] = accDy; _fpHalo[n] = halo; _fpClip[n] = clip;
                     _fp[n++] = fp;
                 }
             }
@@ -2339,7 +2357,7 @@ public sealed partial class SliceRecorder
             {
                 PushLayerCmd cl = PosedLayer(in cm, pdx, pdy, csticky, in cwc);
                 int start = n;
-                if (!ForceGroupFades && own == 1 && cm.Has(CompositeSliceFlags.DistributeFade) && cl.BlurSigma <= 0f
+                if (!ForceGroupFades && !GroupFadesSwitch && own == 1 && cm.Has(CompositeSliceFlags.DistributeFade) && cl.BlurSigma <= 0f
                     && cl.GroupAlpha >= 0.999f && feathers + 1 <= 2)
                 {
                     // a nested fade that itself distributes: its items join ours (carrying one more feather)
@@ -2356,6 +2374,7 @@ public sealed partial class SliceRecorder
                 if (!groupClip.IsInfinite) gfp = gfp.Intersect(groupClip);
                 if (gfp.IsEmpty) continue;
                 if (n == MaxFootprints) { ok = false; return; }
+                _fpSlot[n] = c; _fpSeg[n] = -1;
                 _fp[n++] = gfp;
                 // a group enclosing an acrylic backdrop / a video hole: its backdrop mini-composite reads what lies beneath
                 // the group, which distribution changes — keep the fade a group
@@ -2383,9 +2402,10 @@ public sealed partial class SliceRecorder
         return true;
     }
 
-    /// <summary>No two footprints in [<paramref name="a"/>, <paramref name="b"/>) overlap inside the region where the fade
+    /// <summary>No two items of [<paramref name="a"/>, <paramref name="b"/>) both paint inside the region where the fade
     /// <paramref name="l"/>'s feather is strictly between 0 and 1 (its enabled band strips and active corner squares; the
-    /// whole plane when its intensity is below 1).</summary>
+    /// whole plane when its intensity is below 1): their footprints miss each other there, or — refined per op — no op of
+    /// one meets an op of the other there (<see cref="OpsDisjoint"/>).</summary>
     private bool Disjoint(int a, int b, in PushLayerCmd l)
     {
         Span<RectF> bands = stackalloc RectF[8];
@@ -2395,10 +2415,97 @@ public sealed partial class SliceRecorder
             {
                 RectF o = _fp[i].Intersect(_fp[j]);
                 if (o.IsEmpty) continue;
-                if (everywhere) return false;
-                for (int k = 0; k < nb; k++) if (!o.Intersect(bands[k]).IsEmpty) return false;
+                if (everywhere) { if (!OpsDisjoint(i, j, in o)) return false; continue; }
+                for (int k = 0; k < nb; k++)
+                {
+                    RectF r = o.Intersect(bands[k]);
+                    if (!r.IsEmpty && !OpsDisjoint(i, j, in r)) return false;
+                }
             }
         return true;
+    }
+
+    // ── the per-op refinement (audit PERF r3 RASTER, item 8) ─────────────────────────────────────────────────────────
+    // A segment's footprint is the UNION of its ops' boxes, so two items whose footprints meet inside a band strip need not
+    // both paint anywhere there: home-scroll's page segment between two shelves spans from its section header down into
+    // the next shelf strip's box, and the shelf's box starts above its cards — 23 % of its frames composited the page's fade
+    // through a group surface (+3.6 M offscreen fragments a frame) for an overlap of empty space. The pixel condition is
+    // f·αA·αB·(1−f) = 0: where no op of A paints, αA = 0. An item's pixels lie inside the boxes of the ops it replays (the
+    // same SliceOpBounds footprints, clipped as the scissor clips them, the decode-time cull and the tile wants already rest
+    // on — an op paints nothing outside its box), moved by its placement, spread by its self-blur reach, cut by its clip:
+    // when no box of A meets a box of B inside the overlap, no pixel there has both αA and αB above 0. Kept whole (its
+    // footprint counts as one box): a nested group surface, a segment opened inside a layer or a stencil scope (its prefix's
+    // layer may spread or wash what it encloses), a downscaled or feedback slice (its composite filters or trails its
+    // pixels past its ops), and an item with more than MaxOpBoxes ops in the overlap. A zero-alpha fill paints nothing (the
+    // footprint leaves it out too).
+    private bool OpsDisjoint(int i, int j, in RectF r)
+    {
+        if (BoxFadeTest) return false;
+        int na = OpBoxesIn(i, in r, _opBoxA);
+        if (na == 0) return true;   // item i paints nothing inside r
+        int nb = OpBoxesIn(j, in r, _opBoxB);
+        for (int x = 0; x < na; x++)
+            for (int y = 0; y < nb; y++)
+                if (!_opBoxA[x].Intersect(_opBoxB[y]).IsEmpty) return false;
+        return true;
+    }
+
+    /// <summary>The boxes (window DIP, inside <paramref name="r"/>) where footprint <paramref name="i"/>'s item may paint:
+    /// its ops' boxes, or its whole footprint when it cannot be split (see above).</summary>
+    private int OpBoxesIn(int i, in RectF r, RectF[] dst)
+    {
+        int slot = _fpSlot[i], seg = _fpSeg[i];
+        if (seg < 0 || (uint)slot >= (uint)_cOps.Length || _cOps[slot] is not { } ops) return Whole(i, in r, dst);
+        ref Rec rec = ref _recs[slot];
+        ref ScanSeg sg = ref _scanSegs[slot][seg];
+        if (rec.LowRes != 0 || rec.HasFeedback || sg.Heavy) return Whole(i, in r, dst);
+        ReadOnlySpan<byte> bytes = _arenas[slot]!.Bytes;
+        int count = _cOpCount[slot];
+        int lo = 0, hi = count;   // the first op of the segment (the table is in stream order)
+        while (lo < hi) { int mid = (lo + hi) >> 1; if (ops[mid].Pos < sg.ByteStart) lo = mid + 1; else hi = mid; }
+        float dx = _fpDx[i], dy = _fpDy[i], halo = _fpHalo[i];
+        RectF clip = _fpClip[i];
+        int n = 0;
+        for (int k = lo; k < count && ops[k].Pos < sg.ByteEnd; k++)
+        {
+            ref readonly FluentGpu.Render.Evidence.TileOp op = ref ops[k];
+            if (op.Clip || op.Bounds.IsEmpty) continue;   // a clip scope paints nothing
+            RectF ob = op.Bounds;
+            if (!op.Scope && op.Pos + sizeof(int) <= bytes.Length)
+            {
+                var code = (DrawOp)MemoryMarshal.Read<int>(bytes[op.Pos..]);
+                if (!RepaintStreamSafety.TryBodySize(code, out int body) || op.Pos + sizeof(int) + body > bytes.Length) return Whole(i, in r, dst);
+                ReadOnlySpan<byte> payload = bytes.Slice(op.Pos + sizeof(int), body);
+                if (InvisibleFill(code, payload)) continue;
+                // a glyph run paints only its shaped quads (GlyphInk, published by the device that replayed it), not the
+                // 1.5-em halo box its footprint carries; without a published extent the box stands
+                if (code == DrawOp.DrawGlyphRun && body >= Unsafe.SizeOf<DrawGlyphRunCmd>())
+                {
+                    var g = MemoryMarshal.Read<DrawGlyphRunCmd>(payload);
+                    if (GlyphInk.TryGet(GlyphInk.Key(in g, _inkScale), out RectF rel))
+                    {
+                        RectF lb = GlyphInk.LocalBox(in g, in rel);
+                        if (lb.IsEmpty) continue;   // it draws no quad
+                        ob = g.Transform.TransformBounds(lb).Intersect(ob);   // still cut by the clip its footprint was cut by
+                        if (ob.IsEmpty) continue;
+                    }
+                }
+            }
+            RectF w = Offset(ob, dx, dy);
+            if (halo > 0f) w = new RectF(w.X - halo, w.Y - halo, w.W + 2f * halo, w.H + 2f * halo);
+            if (!clip.IsInfinite) w = w.Intersect(clip);
+            w = w.Intersect(r);
+            if (w.IsEmpty) continue;
+            if (n == dst.Length) return Whole(i, in r, dst);
+            dst[n++] = w;
+        }
+        return n;
+    }
+
+    private int Whole(int i, in RectF r, RectF[] dst)
+    {
+        dst[0] = _fp[i].Intersect(r);
+        return dst[0].IsEmpty ? 0 : 1;
     }
 
     /// <summary>The window-DIP regions where an edge-fade layer's feather is strictly between 0 and 1: each enabled band

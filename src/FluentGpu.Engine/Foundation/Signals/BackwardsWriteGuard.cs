@@ -56,18 +56,18 @@ public static class BackwardsWriteGuard
     // `subs` is the signal's subscriber list — if it already contains `current`, that computation READ this signal
     // earlier THIS run (RunComputation cleared the links at run start), so this write is a read+write. `valueType` is
     // used only to build the (rare) violation message, so it never allocates on the passing path.
-    internal static void CheckWrite(Computation? current, in RefList<Computation> subs, Type valueType)
+    internal static void CheckWrite(Computation? current, in SubList subs, Type valueType)
     {
         if (current is null || ReferenceEquals(current, _lastReported)) return;
-        if (!subs.Contains(current)) return;
+        if (!subs.Contains(new Sub(current))) return;
         Report(current, "Signal<" + valueType.Name + ">");
     }
 
     /// <summary>The <see cref="FloatSignal"/> variant — no generic type to name, so it passes a literal description.</summary>
-    internal static void CheckWriteFloat(Computation? current, in RefList<Computation> subs)
+    internal static void CheckWriteFloat(Computation? current, in SubList subs)
     {
         if (current is null || ReferenceEquals(current, _lastReported)) return;
-        if (!subs.Contains(current)) return;
+        if (!subs.Contains(new Sub(current))) return;
         Report(current, "FloatSignal");
     }
 

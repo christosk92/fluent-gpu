@@ -1059,7 +1059,7 @@ public sealed class MediaPlayerElement : Component
                 Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 HitTestVisible = false,
                 Animate = LoadingMotion,
-                Children = [statusOverlay!],
+                Children = [statusOverlay!.Value],
             };
         // Captions MOVE, controls do not: the caption baseline lifts by the chrome's measured height while the chrome
         // is up and settles back when it hides, animated on the same clock (a transform-only FLIP — no relayout churn).

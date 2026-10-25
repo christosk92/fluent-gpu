@@ -319,7 +319,7 @@ internal sealed class WakeDiagnostics
             if (i > 0) sb.Append(',');
             var c = sig.SubscriberAt(i);
             if (c.DiagOwner is { } owner) sb.Append(owner.GetType().Name);
-            else sb.Append('?').Append(c.GetType().Name);
+            else sb.Append('?').Append(c.DiagTypeName);
         }
         if (n > shown) sb.Append(CultureInfo.InvariantCulture, $",+{n - shown}");
     }
@@ -433,7 +433,7 @@ internal sealed class WakeDiagnostics
     private static string PollerName(FluentGpu.Signals.Signal<object?> clock, int i)
     {
         var c = clock.SubscriberAt(i);
-        return c.DiagOwner is { } owner ? owner.GetType().Name : c.GetType().Name;
+        return c.DiagOwner is { } owner ? owner.GetType().Name : c.DiagTypeName;
     }
 
     /// <summary>Append <c>pollersSeen=N:Name×frames,…</c> (or <c>pollersSeen=0</c>) for the window just closed — every

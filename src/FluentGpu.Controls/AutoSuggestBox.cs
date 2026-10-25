@@ -769,7 +769,7 @@ public sealed class AutoSuggestBox : Component
             Width = Grow > 0f ? float.NaN : width,
             Grow = Grow,
             MaxWidth = Grow > 0f && MaxFillWidth > 0f ? MaxFillWidth : float.NaN,
-            Children = suggestions is null ? [field] : [field, suggestions],
+            Children = suggestions is null ? [field] : [field, suggestions.Value],
         };
     }
 

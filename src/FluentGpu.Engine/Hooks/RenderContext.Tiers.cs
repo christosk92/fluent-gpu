@@ -119,7 +119,7 @@ public sealed partial class RenderContext
             RegisterCell(__k, cell, cleanupCapable: true);
             cell.Effect = Own(new Effect(Rt, cell.Run));   // runs now: the fresh resolve; re-runs when the source changes
         }
-        else cell = (TierCell)_cells[idx];
+        else cell = (TierCell)CellAt(idx);
         return cell.Slot.Committed;
     }
 }

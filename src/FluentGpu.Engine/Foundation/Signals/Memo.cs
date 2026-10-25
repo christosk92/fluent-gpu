@@ -25,7 +25,7 @@ public sealed class Memo<T> : Computation, ISignalSource, IReadSignal<T>
 {
     private readonly Func<T> _fn;
     private readonly IEqualityComparer<T> _cmp;
-    private RefList<Computation> _subs;
+    private SubList _subs;
     private readonly Action _compute;   // stable delegate (`_next = _fn()`) — no closure allocated per recompute
     private T _value = default!;
     private T _next = default!;
@@ -104,11 +104,20 @@ public sealed class Memo<T> : Computation, ISignalSource, IReadSignal<T>
     private void SubscribeReader()
     {
         var c = Tracking.Current;
-        if (c is null || c == this) return;
-        if (!_subs.Contains(c)) { _subs.Add(c); c.AddSource(this); }
+        if (c is not null)
+        {
+            if (c == this) return;
+            var s = new Sub(c);
+            if (!_subs.Contains(s)) { _subs.Add(s); c.AddSource(this); }
+        }
+        else if (Tracking.Table is { } t)
+        {
+            var s = new Sub(t, Tracking.Row);
+            if (!_subs.Contains(s)) { _subs.Add(s); t.AddSource(Tracking.Row, this); }
+        }
     }
 
-    void ISignalSource.Unsubscribe(Computation c)
+    void ISignalSource.Unsubscribe(in Sub c)
     {
         // The last reader left: let go of upstream now (a re-running reader re-links through its next read).
         if (_subs.Remove(c) && _subs.Count == 0 && _releaseWhenUnobserved) ReleaseSources();
