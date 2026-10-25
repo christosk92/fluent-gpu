@@ -170,12 +170,14 @@ public sealed unsafe partial class D3D12Device
 
         // 1. tiles (any scratch leased here is an inline folded layer inside a tile)
         PassBoundary(GpuPassKind.TileRaster, TileGrid.W, TileGrid.H);
+        WorkPhase(0);
         int inl0 = _surfaces.ScratchLeases; long inlPx0 = _surfaces.ScratchPx;
         RasterTiles(in frame);
         if (TileDamage.PhaseValidate || TileDamage.FootprintValidate) QueuePhaseChecks(in frame);
         _offInlineN += _surfaces.ScratchLeases - inl0; _offInlinePx += _surfaces.ScratchPx - inlPx0;
         // 2. offscreen
         PassBoundary(GpuPassKind.Offscreen, (int)_w, (int)_h);
+        WorkPhase(1);
         PrepareTop(in frame);   // PrepareRange per top-level item + occlusion (D3D12Device.Occlusion.cs)
         // 3. the composite pass
         PassBoundary(GpuPassKind.Composite, (int)sc.W, (int)sc.H);
@@ -186,6 +188,9 @@ public sealed unsafe partial class D3D12Device
         // Partial present (D3D12Device.PartialPresent.cs): what changed since this back buffer last received a frame.
         PpComputeDirty(in frame, sc);
         PpPlanRepaint(sc, f);
+        // the work census (D3D12Device.WorkCensus.cs): the composite phase's query, or on a census frame one query per item
+        if (ItemCensusDecide()) WorkPhaseEnd(); else WorkPhase(2);
+        _compositeCensusOn = _passOn;
         if (_ppPartial)
         {
             // PRESERVE: the buffer already holds every pixel outside the repaint rects; each rect is cleared and recomposited.
@@ -197,11 +202,16 @@ public sealed unsafe partial class D3D12Device
         {
             // The pass's CLEAR load op writes the clear colour: like DISCARD it never reads the previous contents, and on
             // a tiler it is a per-bin fast clear instead of a full-window quad.
-            BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, frame.Info.Clear);
+            // A window-covering opaque ground fill becomes the clear colour and is not drawn (D3D12Device.ClearFold.cs).
+            BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, ClearFoldDecide(in frame));
             BindCompositor((int)_w, (int)_h);
             if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, 0, frame.Items.Length, 0, 0, (int)_w, (int)_h, -1);
+            _foldItem = -1; _foldPending = false;
         }
         EndPassIfOpen();
+        _compositeCensusOn = false;
+        WorkPhaseEnd();
+        ItemCensusResolve();
         PpEndFrame(sc, f);
         if (TileDamage.PresentValidate) QueuePresentCheck(in frame, backBuffer);
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
@@ -1478,6 +1488,10 @@ public sealed unsafe partial class D3D12Device
         bool feathers = (_frameKnockouts & GpuKnockouts.EdgeFadesOff) == 0;
         bool allDirect = (_frameKnockouts & GpuKnockouts.ForceFullDirect) != 0;
         ulong fence = _fenceValue + 1;
+        // An inline replay leaves its own pipelines' root signature, heaps and viewport bound: the compositor is rebound before
+        // the next item it draws, and at the end — not after every inline item (a run of inline items binds once). Exact: the
+        // skipped binds are state-only, and the device's binding cache describes what the replay left (audit PERF r3 COMP).
+        bool rebind = false;
         for (int i = a; i < b && i < items.Length; i++)
         {
             ref readonly CompositeItem it = ref items[i];
@@ -1493,6 +1507,9 @@ public sealed unsafe partial class D3D12Device
                 if (it.Kind == CompositeKind.Group) i = Math.Min(items.Length, i + 1 + it.GroupCount) - 1;
                 continue;
             }
+            bool inline = it.Kind == CompositeKind.Direct && InlineDirect(in it) && !allDirect;
+            if (rebind && !inline) { BindCompositor(tw, th); rebind = false; }
+            int census = ItemCensusBegin(), item = i;   // diagnostics: this item's fragments (D3D12Device.WorkCensus.cs)
             switch (it.Kind)
             {
                 case CompositeKind.Group:
@@ -1524,7 +1541,14 @@ public sealed unsafe partial class D3D12Device
                     break;
                 }
                 case CompositeKind.Direct:
-                    if (InlineDirect(in it) && !allDirect) { DrawInline(in frame, in it, ox, oy, tw, th); break; }
+                    if (inline)
+                    {
+                        _foldPending = i == _foldItem;   // its first fill was folded into the clear (ClearFold)
+                        DrawInline(in frame, in it, ox, oy, tw, th, rebind: false);
+                        _foldPending = false;
+                        rebind = true;
+                        break;
+                    }
                     DrawSurfaceItem(in it, i, ox, oy, feathers);
                     break;
                 case CompositeKind.Image:
@@ -1555,7 +1579,9 @@ public sealed unsafe partial class D3D12Device
                     break;
                 }
             }
+            ItemCensusEnd(census, in frame, item);
         }
+        if (rebind) BindCompositor(tw, th);
     }
 
     /// <summary>The texel-load PSO an item composites with: copy, SCREEN (BoxEl.LayerBlend.Screen) or source-over.</summary>
@@ -1664,6 +1690,7 @@ public sealed unsafe partial class D3D12Device
             if (hasFill) _compositor.Color(in fill);
             ItemParams(in it, ox, oy, feathers && p.Feathered);
             _compositor.Draw(_cmdList, pso, srv);
+            CompositeDrawCensus(p.X0, p.Y0, p.X1, p.Y1, in _itemScissor, p.Feathered);
             if (p.Feathered)
             {
                 float w = MathF.Min(p.X1, _itemScissor.Right) - MathF.Max(p.X0, _itemScissor.Left);

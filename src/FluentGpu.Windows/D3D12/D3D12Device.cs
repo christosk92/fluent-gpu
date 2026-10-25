@@ -2028,6 +2028,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         while (pos + sizeof(int) <= cmds.Length) pos = DecodeOne(cmds, pos);
     }
 
+    /// <summary>An op whose effective alpha is EXACTLY zero (its opacity, or its colour's alpha and the second colour's where the
+    /// op has one) paints nothing and is skipped (audit PERF r3 COMP). Exact by construction: every pipeline it would reach outputs
+    /// premultiplied colour × alpha, so the source is (0, 0, 0, 0), and source-over (dst·(1 − 0) + 0), additive (dst + 0) and
+    /// DestOut (dst·(1 − 0)) all leave the destination unchanged. Nothing else is skipped with it: these ops write no stencil, open
+    /// no clip and feed no counter a later op reads (the rect count is diagnostics; a pending-text flush only batches). An app keeps
+    /// faded-out scrims mounted at opacity 0 (Wavee's sheet scrim, the setup cover): ~5.5 M of home-scroll's 16.5 M composite
+    /// fragments per frame were such fills. <c>--fg no-zero-cull</c> draws them anyway (the A/B arm and identity control).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ZeroAlpha(float opacity, float alpha, float alpha2 = 0f)
+        => FluentGpu.Render.Tiles.TileDamage.ZeroAlphaCull && (opacity == 0f || (alpha == 0f && alpha2 == 0f));
+
     private int DecodeOne(ReadOnlySpan<byte> cmds, int pos)
     {
         int op = MemoryMarshal.Read<int>(cmds.Slice(pos));
@@ -2038,6 +2049,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<FillRoundRectCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<FillRoundRectCmd>();
+                    if (ZeroAlpha(c.Opacity, c.Fill.A, c.FillKind == 1 ? c.ColorB.A : 0f) || FoldSkip(in c)) break;   // paints nothing (ZeroAlpha) / is the clear (ClearFold)
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
@@ -2154,6 +2166,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawRoundRectStrokeCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>();
+                    if (ZeroAlpha(c.Opacity, c.Color.A)) break;
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
                              RepaintCull.StrokeHalo(c.StrokeWidth))) break;
@@ -2204,6 +2217,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawShadowCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawShadowCmd>();
+                    if (ZeroAlpha(c.Opacity, c.Color.A)) break;
                     // The shadow quad is the caster box TRANSLATED by (OffsetX, OffsetY) and inflated by spread + the
                     // gaussian tail — shift the box, then use the symmetric halo (ShadowPipeline VS).
                     if (Cull(c.Rect.X + c.OffsetX, c.Rect.Y + c.OffsetY, c.Rect.W, c.Rect.H,
@@ -2308,6 +2322,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawGradientRectCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGradientRectCmd>();
+                    if (ZeroAlpha(c.Opacity, 1f)) break;
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
@@ -2334,6 +2349,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawGradientStrokeCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGradientStrokeCmd>();
+                    if (ZeroAlpha(c.Opacity, 1f)) break;
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
                              RepaintCull.StrokeHalo(c.StrokeWidth))) break;
@@ -4663,6 +4679,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _cmdList->ResolveQueryData(_passQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, b, (uint)m + 1u,
             _passTsReadback, (ulong)b * sizeof(ulong));
         Rec(RecordedOp.ResolveQuery, b, (uint)m + 1u, aux: 1);   // aux=1: the pass-timeline bank
+        WorkResolve(slot);
         _ring.PassCount[slot] = m;   // intervals
         _ring.PassDropped[slot] = _passDropped;
         _ring.PassBackBufferTransitions[slot] = _frameBackBufferTransitions;
@@ -4694,7 +4711,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         ulong first = _passTsData[b], last = _passTsData[b + (uint)n];
         float whole = last > first ? (float)((last - first) * toMs) : 0f;
-        owner.PublishGpuPassTimeline(_passScratch.AsSpan(0, n), whole, _ring.PassDropped[slot], _ring.PassBackBufferTransitions[slot]);
+        owner.PublishGpuPassTimeline(_passScratch.AsSpan(0, n), whole, _ring.PassDropped[slot], _ring.PassBackBufferTransitions[slot], CollectWork(slot));
     }
 
     // Lazily create the always-on two-query heap + readback buffer on the first submit (the queue exists by then).
@@ -4804,6 +4821,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _passTsReadback->Release(); _passTsReadback = null; _passTsData = null;
         }
         if (_passQueryHeap != null) { _passQueryHeap->Release(); _passQueryHeap = null; }
+        ReleaseWorkCensus();
 
         // Ring-keyed banks (Phase 1 §3.3). The execution timer's Owner/OwnerSubmit and the pass timeline's PassOwner are
         // separate arrays; clear both sets of retired state.
@@ -5452,6 +5470,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     private long _passVersion, _passSequence;
     private int _passValid, _passCount, _passDropped, _passBackBufferTransitions;
     private float _passWholeMs;
+    private GpuFrameWork _passWork;
     private readonly GpuPassTiming[] _passes = new GpuPassTiming[GpuPassTimeline.MaxPasses];
     // Always-on device counters of this target's most recent successful submit (same seqlock shape).
     private long _countersVersion;
@@ -5560,11 +5579,13 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
         return false;
     }
 
-    internal void PublishGpuPassTimeline(ReadOnlySpan<GpuPassTiming> passes, float wholeMs, int dropped, int backBufferTransitions)
+    internal void PublishGpuPassTimeline(ReadOnlySpan<GpuPassTiming> passes, float wholeMs, int dropped, int backBufferTransitions,
+        in GpuFrameWork work = default)
     {
         int count = Math.Min(passes.Length, _passes.Length);
         System.Threading.Interlocked.Increment(ref _passVersion);
         for (int i = 0; i < count; i++) _passes[i] = passes[i];
+        _passWork = work;
         _passCount = count;
         _passDropped = dropped;
         _passBackBufferTransitions = backBufferTransitions;
@@ -5590,6 +5611,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
             if ((before & 1L) != 0) continue;
             int valid = _passValid, count = _passCount, dropped = _passDropped, bbt = _passBackBufferTransitions;
             float whole = _passWholeMs;
+            GpuFrameWork work = _passWork;
             long sequence = _passSequence;
             int copy = Math.Min(count, dst.Length);
             for (int i = 0; i < copy; i++) dst[i] = _passes[i];
@@ -5597,7 +5619,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
             long after = System.Threading.Volatile.Read(ref _passVersion);
             if (before != after) continue;
             if (valid == 0 || sequence == 0) break;
-            summary = new GpuPassFrameSummary(unchecked((ulong)sequence), whole, count, dropped, bbt);
+            summary = new GpuPassFrameSummary(unchecked((ulong)sequence), whole, count, dropped, bbt, work);
             return copy;
         }
         summary = default;
