@@ -44,11 +44,18 @@ public sealed unsafe partial class TextLayoutEngine
         /// with the render thread), at least one.</summary>
         private static int Workers => Math.Clamp(Environment.ProcessorCount / 3, 1, 4);
 
-        public void Enqueue(in ShapeJob job)
+        /// <summary>Start the workers (each builds its engine on its own thread right away), so the first page's prefetch finds them
+        /// warm. Idempotent; the font system calls it when it is built.</summary>
+        public void Start()
         {
             if (Interlocked.Exchange(ref _started, 1) == 0)
                 for (int i = 0; i < Workers; i++)
                     new Thread(Run) { IsBackground = true, Name = "fgpu-shape-" + i }.Start();
+        }
+
+        public void Enqueue(in ShapeJob job)
+        {
+            Start();
             lock (_gate) _jobs.Enqueue(job);
             Enqueued++;
             _signal.Release();
@@ -62,6 +69,7 @@ public sealed unsafe partial class TextLayoutEngine
                 _signal.Wait();
                 ShapeJob j;
                 lock (_gate) { if (!_jobs.TryDequeue(out j)) continue; }
+                if (!ShapeStore.Shared.ClaimInFlight(j.Key)) continue;   // a measure took it back, or it is stored already
                 try
                 {
                     engine.Layout(j.Text.AsSpan(), j.Family, j.Weight, j.Size, float.PositiveInfinity, 0, 0, 0, j.CharSpacing, j.LineHeight,

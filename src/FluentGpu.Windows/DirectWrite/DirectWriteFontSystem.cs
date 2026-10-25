@@ -24,6 +24,7 @@ public sealed class DirectWriteFontSystem : IFontSystem, IDisposable
     {
         _strings = strings;
         TextSeam.Default = this;   // last-constructed wins (the InputHooks.Current.Default convention) — see TextSeam
+        if (CanPrefetchShapes) TextLayoutEngine.ShapePrefetchPool.Shared.Start();   // warm shaping workers before the first page (C4)
     }
 
     /// <inheritdoc/>

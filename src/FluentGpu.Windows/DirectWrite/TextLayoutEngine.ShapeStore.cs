@@ -58,9 +58,10 @@ public sealed unsafe partial class TextLayoutEngine
         }
         private long _tick;
         private readonly List<int> _evictScratch;
-        // Keys a prefetch worker is shaping right now (TextLayoutEngine.Prefetch.cs): a measure that misses on one waits for the
-        // worker's store instead of shaping the same string a second time.
-        private readonly HashSet<long> _inFlight = new();
+        // Keys handed to the prefetch workers (TextLayoutEngine.Prefetch.cs), false while queued, true once a worker runs it. A
+        // measure that misses a RUNNING key waits for the worker's store instead of shaping the string a second time; a QUEUED key
+        // it takes back (removes) and shapes itself, so it never waits behind the queue - the worker skips a job no longer here.
+        private readonly Dictionary<long, bool> _inFlight = new();
 
         public ShapeStore(int cap)
         {
@@ -158,7 +159,19 @@ public sealed unsafe partial class TextLayoutEngine
         /// <summary>Hand <paramref name="key"/> to a prefetch worker: false when it is stored already or a worker has it.</summary>
         public bool BeginInFlight(long key)
         {
-            lock (_gate) return !_index.ContainsKey(key) && _inFlight.Add(key);
+            lock (_gate) return !_index.ContainsKey(key) && _inFlight.TryAdd(key, false);
+        }
+
+        /// <summary>A worker takes <paramref name="key"/> off the queue: true (now running) unless a measure took it back or it is stored.</summary>
+        public bool ClaimInFlight(long key)
+        {
+            lock (_gate)
+            {
+                if (!_inFlight.ContainsKey(key)) return false;                                    // taken back by a measure
+                if (_index.ContainsKey(key)) { _inFlight.Remove(key); Monitor.PulseAll(_gate); return false; }
+                _inFlight[key] = true;
+                return true;
+            }
         }
 
         /// <summary>The worker is done with <paramref name="key"/> (stored, found stored, or failed): no measure waits on it any more.</summary>
@@ -174,10 +187,11 @@ public sealed unsafe partial class TextLayoutEngine
             waitedTicks = 0;
             lock (_gate)
             {
-                if (!_inFlight.Contains(key)) return false;
+                if (!_inFlight.TryGetValue(key, out bool running)) return false;
+                if (!running) { _inFlight.Remove(key); return false; }   // still queued: take it back and shape it here
                 long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 long deadline = t0 + System.Diagnostics.Stopwatch.Frequency * maxMs / 1000;
-                while (_inFlight.Contains(key))
+                while (_inFlight.ContainsKey(key))
                 {
                     long now = System.Diagnostics.Stopwatch.GetTimestamp();
                     if (now >= deadline) break;
