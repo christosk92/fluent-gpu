@@ -151,6 +151,8 @@ public sealed partial class SliceTable
         _rows = new SliceRow[sliceCap];
         _live = new bool[sliceCap];
         _openedFrame = new int[sliceCap];
+        _geoFrame = new int[sliceCap];
+        Array.Fill(_geoFrame, int.MinValue);
         _degraded = new bool[sliceCap];
         _hasVp = new bool[sliceCap];
         _horizontal = new bool[sliceCap];
@@ -258,6 +260,7 @@ public sealed partial class SliceTable
     /// every 16th turn, evicts tiles idle for more than <see cref="IdleEvictFrames"/> turns.</summary>
     public void BeginFrame(int frame)
     {
+        _geoDeferred = 0;
         _frame = frame;
         _reqCount = 0;
         _n0 = _n1 = _n2 = 0;
@@ -371,6 +374,7 @@ public sealed partial class SliceTable
                 _geoCause = row.Kind != kind ? GeoKind : row.Frame.OriginX != frame.OriginX || row.Frame.OriginY != frame.OriginY ? GeoOrigin
                     : row.Frame.PhaseX != frame.PhaseX || row.Frame.PhaseY != frame.PhaseY ? GeoPhase
                     : row.Identity != identity ? GeoIdentity : GeoResidual;
+                _geoFrame[s] = _frame;
                 InvalidateSlice(s, InvalidationReason.SliceGeometry);
             }
         }
@@ -422,6 +426,15 @@ public sealed partial class SliceTable
     }
 
     // ── invalidation ──────────────────────────────────────────────────────────────────────────────────────────
+    /// <summary>Non-visible tiles of a slice whose geometry is moving are not rastered (default; see Request).
+    /// <c>--fg no-defer-geometry</c> rasters them every turn as before (the A/B arm).</summary>
+    public static bool DeferMovingGeometry = true;
+    private readonly int[] _geoFrame;   // per slice: the turn its geometry last moved (OpenSlice's SliceGeometry)
+    private int _geoDeferred;
+
+    /// <summary>Non-visible geometry rasters Request deferred this turn (diagnostics).</summary>
+    public int GeometryDeferredThisFrame => _geoDeferred;
+
     // Diagnostics (the raster ledger, audit PERF r3 RASTER): WHICH part of a slice's geometry moved when a tile went
     // SliceGeometry — its kind, its device origin, its sub-pixel phase, its identity, only its residual (an effect slice's
     // content moved inside its grid cell), or its surface extent.
@@ -555,6 +568,17 @@ public sealed partial class SliceTable
             if (ts.Invalid == InvalidationReason.None && ts.Surface >= 0) CheckContent(t, in key, ref content);
 
             if (ts.Invalid == InvalidationReason.None || _pendingFrame[t] == _frame) continue;
+            // A tile this turn does not composite (ahead / behind), invalid only because its slice's geometry moved, while
+            // that geometry is STILL moving (it moved again this turn: a sliding page's sub-pixel phase): its raster would
+            // be stale by the next turn and no pixel of it is shown in this one. It stays invalid and rasters when it is
+            // requested visible (Resolve rasters every visible tile in the submission that composites it, so it can never
+            // show blank) or on the first turn the geometry holds (audit PERF r3 RASTER).
+            if (DeferMovingGeometry && ord != TileGrid.OrderVisible && ts.Invalid == InvalidationReason.SliceGeometry
+                && _geoFrame[sliceId] == _frame)
+            {
+                _geoDeferred++;
+                continue;
+            }
             _pendingFrame[t] = _frame;
             ts.CoveredLo = lo;
             ts.CoveredHi = hi;
