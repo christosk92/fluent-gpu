@@ -299,7 +299,7 @@ public sealed class CompositorAnimationSnapshot
         if (row.Node != _lastAddedNode) { _distinctNodes++; _lastAddedNode = row.Node; }
         ref var target = ref _entries[_count++];
         int count = keys?.Length ?? 0;
-        if (target.Keys is null || target.Keys.Length != count) target.Keys = new Keyframe[count];
+        if (target.Keys is null || target.Keys.Length != count) target.Keys = count == 0 ? [] : new Keyframe[count];
         keys.AsSpan().CopyTo(target.Keys);
         target.Row = row;
         target.Row.NextOnNode = target.Row.NextActive = -1;
@@ -310,7 +310,15 @@ public sealed class CompositorAnimationSnapshot
     }
     internal void EndCapture()
     {
-        if (_oldCount > _count) Array.Clear(_entries, _count, _oldCount - _count);
+        // Clear the rows this capture no longer carries but KEEP their key arrays: a slot re-filled by a later capture reuses
+        // its array when the key count matches (two keys, almost always), instead of allocating one per animation per
+        // publication. Clearing the whole entry here was 0.5 MB per 10 s of navigation (PERF r3 UI). Nothing reads past Count.
+        for (int i = _count; i < _oldCount; i++)
+        {
+            Keyframe[] keys = _entries[i].Keys;
+            _entries[i] = default;
+            _entries[i].Keys = keys;
+        }
     }
 }
 
