@@ -99,7 +99,6 @@ public sealed unsafe partial class D3D12Device
         SliceRow raw = row;
         if (kind == 0) raw.Frame = row.Frame with { PhaseX = row.RefPhaseX, PhaseY = row.RefPhaseY };
         _replayFoot = null; _replayFootN = 0;   // the shadow decodes every op (the footprint check's reference)
-        _referenceReplay = kind == 1;          // ...and breaks its batch at every clip change
         EndPassIfOpen();
         ScratchBarrier(scratch, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var srtv = _surfaces.ScratchRtv(scratch);
@@ -109,7 +108,6 @@ public sealed unsafe partial class D3D12Device
         ReplaySegment(in frame, in raw, -tileX, -tileY, p.W, p.H, srtv,
             new RectF(p.Key.Tx * (float)TileGrid.W, p.Key.Ty * (float)TileGrid.H, p.W, p.H));
         _imgRecSlot = imgSlot;
-        _referenceReplay = false;
         EndPassIfOpen();
         if (DroppedInstanceCount() != dropped || _glyphs.DroppedInstances != glyphDropped || _frameImagesInFlight != inFlight)
         {

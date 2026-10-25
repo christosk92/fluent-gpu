@@ -2711,46 +2711,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void EnsureDesiredScissor(in RECT next, float lw, float lh)
     {
         if (_desiredScissorValid && SameRect(in _desiredScissor, in next)) return;
-        // The pending batch is drawn under the scissor current at its flush, cut to the target (SetScissorRect): a clip that
-        // differs only OUTSIDE the target (a page / list / row clip wider than the tile) leaves that rect unchanged, so the
-        // batch keeps going instead of breaking into another draw (audit PERF r3 RASTER). Painter order within the merged
-        // batch is the decoder's own rule (CoverPendingText breaks it where a primitive would cover pending text).
-        if (HasPendingSegment() && !(MergeEqualScissors && _desiredScissorValid && SameTargetScissor(in _desiredScissor, in next)))
-            FlushSegment(lw, lh);
+        if (HasPendingSegment()) FlushSegment(lw, lh);
         _desiredScissor = next;
         _desiredScissorValid = true;
-    }
-
-    /// <summary>Batches across clips that cut the target identically are not broken (default). <c>--fg no-scissor-merge</c>
-    /// breaks at every clip change as before (the A/B arm).</summary>
-    private bool MergeEqualScissors => FluentGpu.Render.Tiles.TileDamage.MergeScissors && !_referenceReplay;
-
-    /// <summary>The validators' REFERENCE replay (footprint-validate's shadow): every op decoded, every clip change a break.</summary>
-    private bool _referenceReplay;
-
-    /// <summary>Do <paramref name="a"/> and <paramref name="b"/> (replay px) set the same scissor on the target — the clamp
-    /// <see cref="SetScissorRect"/> applies (the partial-raster clamp, then the target's extent)?</summary>
-    private bool SameTargetScissor(in RECT a, in RECT b)
-    {
-        RECT ta = TargetScissorOf(a), tb = TargetScissorOf(b);
-        return SameRect(in ta, in tb);
-    }
-
-    private RECT TargetScissorOf(RECT sc)
-    {
-        sc = ClampToReplay(sc);
-        int tw = _targetWidth > 0 ? _targetWidth : (int)_w;
-        int th = _targetHeight > 0 ? _targetHeight : (int)_h;
-        RECT t = new()
-        {
-            left = Math.Clamp(sc.left - _targetOriginX, 0, tw),
-            top = Math.Clamp(sc.top - _targetOriginY, 0, th),
-            right = Math.Clamp(sc.right - _targetOriginX, 0, tw),
-            bottom = Math.Clamp(sc.bottom - _targetOriginY, 0, th),
-        };
-        if (t.right < t.left) t.right = t.left;
-        if (t.bottom < t.top) t.bottom = t.top;
-        return t;
     }
 
     private void PushScissor(in ClipCmd clip)

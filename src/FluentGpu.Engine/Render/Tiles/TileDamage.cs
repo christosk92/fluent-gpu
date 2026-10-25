@@ -65,10 +65,6 @@ public static class TileDamage
     /// (default; the backend's per-segment footprint table). <c>--fg no-op-footprints</c> decodes every op (the A/B arm).</summary>
     public static bool OpFootprints = true;
 
-    /// <summary>A replay keeps its batch across clips that cut the target identically (default). <c>--fg no-scissor-merge</c>
-    /// breaks at every clip change (the A/B arm).</summary>
-    public static bool MergeScissors = true;
-
     /// <summary>The backend keeps retired surface textures (bounded) for the next create of their size instead of releasing
     /// them (default). <c>--fg no-texture-recycle</c> releases them once the GPU passed them (the A/B arm).</summary>
     public static bool RecycleTextures = true;
