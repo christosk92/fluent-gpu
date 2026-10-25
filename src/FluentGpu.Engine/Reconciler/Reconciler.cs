@@ -387,7 +387,6 @@ public sealed partial class TreeReconciler
     private readonly Dictionary<int, Element?> _showState = new();             // last-mounted branch per ShowEl node
     private readonly Dictionary<int, ShowEl> _showEl = new();                  // latest ShowEl per boundary node (parent re-renders replace it — see UpdateShow)
     private readonly Dictionary<int, int> _showEffect = new();              // the Show boundary effect, rescheduled by UpdateShow
-    private readonly Dictionary<int, (Element[] Prev, int Len)> _forState = new();   // last realized children per ForEl node
     private readonly Dictionary<int, ForElBase> _forEl = new();                       // latest ForElBase per boundary node (parent re-renders replace it — see UpdateFor)
     private readonly Dictionary<int, int> _forEffect = new();                      // the For boundary effect, rescheduled by UpdateFor
     private readonly Dictionary<int, float> _childStagger = new();                   // node → per-child Enter stagger (ms): a parent's Element.Stagger, read by SynthesizeDeclarative
@@ -884,8 +883,7 @@ public sealed partial class TreeReconciler
 
     private void RenderRootDiff(Element newRoot)
     {
-        if (RecordVerifyOn && !_scene.Root.IsNull) VerifyOld("root", _scene.Root, _oldRoot);
-        if (_scene.Root.IsNull || _oldRoot is not { } oldRootEl || oldRootEl.ElementTypeId != newRoot.ElementTypeId)
+        if (_scene.Root.IsNull || !_records.Has((int)_scene.Root.Raw.Index) || _scene.ElementTypeId(_scene.Root) != newRoot.ElementTypeId)
         {
             if (!_scene.Root.IsNull) Remove(_scene.Root);
             var node = _scene.CreateNode(newRoot.ElementTypeId);
@@ -898,7 +896,7 @@ public sealed partial class TreeReconciler
         }
         else
         {
-            Update(_scene.Root, newRoot, oldRootEl);
+            Update(_scene.Root, newRoot);
             // LayoutDirty is marked by WriteColumns (layout-input / grid / clip-flag change) and by structural
             // reconcile paths — an identical-shape root re-render must not force a full solve.
         }
@@ -1108,16 +1106,19 @@ public sealed partial class TreeReconciler
 
     // ── Update ────────────────────────────────────────────────────────────────────────────────────
 
-    private void Update(NodeHandle node, Element newEl, Element oldEl)
+    /// <summary>Reconcile <paramref name="node"/> against <paramref name="newEl"/>. The old side is the node's RECORD (the element
+    /// it was last mounted or reconciled against, PERF r3 MODEL M4b); the same element again (the former
+    /// <c>ReferenceEquals(newEl, oldEl)</c>) skips the whole subtree.</summary>
+    private void Update(NodeHandle node, Element newEl)
     {
-        if (RecordVerifyOn) VerifyOld("update", node, oldEl);
-        UpdateCore(node, newEl, oldEl);
-        _records.Store((int)node.Raw.Index, newEl);
+        int idx = (int)node.Raw.Index;
+        if (_records.IsSource(idx, newEl)) return;
+        UpdateCore(node, newEl, _records.Get(idx));
+        _records.Store(idx, newEl);
     }
 
     private void UpdateCore(NodeHandle node, Element newEl, Element oldEl)
     {
-        if (newEl.SameAs(oldEl)) return;
         if (_renderCensus is not null) _censusUpdates++;
 
         if (newEl.Is(out ComponentEl nce))
@@ -1186,7 +1187,6 @@ public sealed partial class TreeReconciler
             WriteColumns(node, nse, isMount: false);
             RewireBinds(node, nse);   // a re-render that binds Visible with a new thunk/signal re-points the mount bind (or unwires it)
             if (nse.Visible.IsBound && !oldEl.Visible.IsBound) WireGainedBinds(node, nse, oldEl);   // static→bound Visible
-            var oldContent = (oldEl.AsKind<ScrollEl>())?.Content;
             var content = _scene.FirstChild(node);
             if (content.IsNull)
             {
@@ -1195,9 +1195,9 @@ public sealed partial class TreeReconciler
                 Mount(content, nse.Content);
                 MarkLayoutShape(node);
             }
-            else if (oldContent is { } oc && oc.ElementTypeId == nse.Content.ElementTypeId)
+            else if (_records.Has((int)content.Raw.Index) && _scene.ElementTypeId(content) == nse.Content.ElementTypeId)
             {
-                Update(content, nse.Content, oc);
+                Update(content, nse.Content);
             }
             else
             {
@@ -1273,8 +1273,7 @@ public sealed partial class TreeReconciler
             else
                 _providerSig[idx] = (np.Channel, new Signal<object?>(np.Value));
 
-            Element? oldChild = oldEl.Is(out ContextProviderEl ocp) ? ocp.Child : null;
-            ReconcileSingleChild(node, np.Child, oldChild);
+            ReconcileSingleChild(node, np.Child);
             MirrorParticipation(node, _scene.FirstChild(node));
             return;
         }
@@ -1300,7 +1299,7 @@ public sealed partial class TreeReconciler
             if (gained) WireGainedBinds(node, newEl, oldEl);
             if (BindContract.CompiledIn && BindContract.Enabled && (unwired || gained)) CheckBindingShape(node, newEl);
         }
-        ReconcileChildren(node, ChildrenOf(newEl).AsSpan(), ChildrenOf(oldEl).AsSpan());
+        ReconcileChildren(node, ChildrenOf(newEl).AsSpan());
     }
 
     /// <summary>GEN-01 (wired): true unless <paramref name="a"/> and <paramref name="b"/> are the same leaf element
@@ -1328,14 +1327,9 @@ public sealed partial class TreeReconciler
     /// varies with a measured width or an expansion target exist today and rely on being updated), so the semantic stays
     /// as-is and the report below (UNCONDITIONAL — see <see cref="ReuseGuard.KeyIgnoredInSingleChildSlot"/>) makes the
     /// dropped request loud instead of silent, in every build a user actually runs.</para></summary>
-    private void ReconcileSingleChild(NodeHandle parent, Element? newChildOpt, Element? oldChild)
+    private void ReconcileSingleChild(NodeHandle parent, Element? newChildOpt)
     {
         var child = _scene.FirstChild(parent);
-        if (RecordVerifyOn)
-        {
-            if (!child.IsNull) VerifyOld("single", child, oldChild);
-            else if (oldChild is { } stray) VerifyOld("single-nochild", parent, stray);
-        }
         if (newChildOpt is not { } newChild)
         {
             if (!child.IsNull) { Remove(child); MarkLayoutShape(parent); }
@@ -1348,7 +1342,7 @@ public sealed partial class TreeReconciler
             Mount(c, newChild);
             MarkLayoutShape(parent);
         }
-        else if (oldChild is { } oldEl && oldEl.ElementTypeId == newChild.ElementTypeId)
+        else if (_records.Has((int)child.Raw.Index) && _scene.ElementTypeId(child) == newChild.ElementTypeId)
         {
             // ALWAYS ON (unlike every other ReuseGuard report — this one is not DEBUG/FLUENTGPU_DIAG-gated): the author
             // asked for a REMOUNT via a changed key and this slot cannot deliver one. Same-type + both keys present +
@@ -1357,9 +1351,9 @@ public sealed partial class TreeReconciler
             // the hot path: two reference reads (Element.Key), and only when both are non-empty, one ordinal compare;
             // ReuseGuard.KeyIgnoredInSingleChildSlot owns the per-site dedupe that keeps a legitimately-varying-every-frame
             // key (a measured width baked into a root key) a single log line instead of one per frame.
-            if (newChild.Key is { Length: > 0 } nk && oldEl.Key is { Length: > 0 } ok && nk != ok)
-                ReportKeyIgnoredInSingleChildSlot(newChild, oldEl, ok, nk);
-            Update(child, newChild, oldEl);
+            if (newChild.Key is { Length: > 0 } nk && _records.KeyOf((int)child.Raw.Index) is { Length: > 0 } ok && nk != ok)
+                ReportKeyIgnoredInSingleChildSlot(newChild, _records.Get((int)child.Raw.Index), ok, nk);
+            Update(child, newChild);
         }
         else
         {
@@ -1520,7 +1514,7 @@ public sealed partial class TreeReconciler
             t1 = census ? Stopwatch.GetTimestamp() : 0;
             _layoutShapeMutated = false;
             FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Reconcile);
-            try { ReconcileSingleChild(node, newRendered, entry.Rendered); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+            try { ReconcileSingleChild(node, newRendered); } finally { FluentGpu.Hosting.MountProf.Exit(); }
         }
         finally { if (catchUp) EndThemeCatchUp(savedThemeMs, savedThemeFromT); }
         // Nested component renders (children mounted/re-rendered inside this reconcile) report their own rows; this
@@ -1718,8 +1712,7 @@ public sealed partial class TreeReconciler
         int idx = (int)node.Raw.Index;
         if (!_showEl.TryGetValue(idx, out var cur)) return;
         Element? desired = cur.When() ? cur.Then : cur.Else;
-        _showState.TryGetValue(idx, out var last);
-        ReconcileSingleChild(node, desired, last);
+        ReconcileSingleChild(node, desired);
         _showState[idx] = desired;
         MirrorParticipation(node, _scene.FirstChild(node));
         RemirrorAncestors(node);   // a component/provider anchor above mirrors THIS anchor and did not re-render
@@ -1846,7 +1839,7 @@ public sealed partial class TreeReconciler
         }
         else
         {
-            ReconcileSingleChild(node, desired, lastEl);
+            ReconcileSingleChild(node, desired);
         }
         // Inherit the active branch's layout participation (Grow/size) onto this transparent boundary — exactly like a
         // component (ReconcileComponent) or KeepAlive (ReconcileKeepAlive) does. Without it the SkelRegion node keeps its
@@ -1948,10 +1941,8 @@ public sealed partial class TreeReconciler
         // Grow (mirrors RealizeBoundWindow) — no fresh new Element[n] each run, so the nav-churn Gen0 stays flat.
         Element[] buf = Array.Empty<Element>();
         int n = cur.Fill(ref buf);
-        var prev = _forState.TryGetValue(idx, out var p) ? p : (Array.Empty<Element>(), 0);
-        ReconcileChildren(node, buf.AsSpan(0, n), prev.Item1.AsSpan(0, prev.Item2));
-        if (prev.Item1.Length > 0) { Array.Clear(prev.Item1, 0, prev.Item2); ArrayPool<Element>.Shared.Return(prev.Item1); }
-        _forState[idx] = (buf, n);
+        ReconcileChildren(node, buf.AsSpan(0, n));
+        if (buf.Length > 0) { Array.Clear(buf, 0, n); ArrayPool<Element>.Shared.Return(buf); }
     }
 
     /// <summary>
@@ -2117,7 +2108,7 @@ public sealed partial class TreeReconciler
 
             if (entry.El.ElementTypeId == desired.ElementTypeId)
             {
-                Update(entry.Root, desired, entry.El);
+                Update(entry.Root, desired);
                 entry.El = desired;
                 // Land the authored pose before any Enter seeds over it: an Enter that names fewer channels than the
                 // exit did, or none (reduced motion), would otherwise show the page faded out or offset.
@@ -4484,7 +4475,7 @@ public sealed partial class TreeReconciler
                 newNodes[i] = oldNodes[os];
                 used[os] = true;
                 _realizeSlotIndex = firstIndex + i;
-                Update(oldNodes[os], nk, ok);
+                Update(oldNodes[os], nk);
                 _realizeSlotIndex = -1;
             }
             else newNodes[i] = NodeHandle.Null;
@@ -4514,7 +4505,7 @@ public sealed partial class TreeReconciler
                 // handlers, so its focus-lost edge reaches the item that had focus.
                 OnSlotRebound?.Invoke(oldNodes[match]);
                 _realizeSlotIndex = firstIndex + i;
-                Update(oldNodes[match], nk, oldKids[match]);
+                Update(oldNodes[match], nk);
                 _realizeSlotIndex = -1;
                 // The node now shows a DIFFERENT item: transient interaction state must not travel with it (the old
                 // code freed the node, which dropped this state implicitly).
@@ -4693,28 +4684,41 @@ public sealed partial class TreeReconciler
         }
     }
 
-    internal void ReconcileChildren(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids)
+    /// <summary>The keyed child diff of <paramref name="node"/>: the new side is <paramref name="newKids"/>, the old side the node's
+    /// scene children (their keys from the node records, PERF r3 MODEL M4b).</summary>
+    internal void ReconcileChildren(NodeHandle node, ReadOnlySpan<Element> newKids)
     {
         _childReconcileRevision++;
-        int oldN = oldKids.Length, newN = newKids.Length;
+        int oldN = _scene.ChildCount(node), newN = newKids.Length;
         if (oldN == 0 && newN == 0) return;
 
         if (oldN <= StackScratchMax && newN <= StackScratchMax)
         {
-            ReconcileChildrenCore(node, newKids, oldKids,
+            ReconcileChildrenCore(node, newKids, oldN,
                 stackalloc NodeHandle[oldN], stackalloc bool[oldN], stackalloc NodeHandle[newN]);
             return;
         }
 
         if (_renderCensus is not null) _censusPlans++;
-        ReconcilePlannedChildren(node, newKids, oldKids);
+        ReconcilePlannedChildren(node, newKids, oldN);
     }
 
-    private void ReconcileChildrenCore(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids,
+    /// <summary>The old child's key (its record's).</summary>
+    private string? OldKey(NodeHandle child) => _records.KeyOf((int)child.Raw.Index);
+
+    /// <summary><see cref="UnkeyedPairing.Ordinal"/> over the scene's old children (their record keys).</summary>
+    private bool UnkeyedOrdinal(ReadOnlySpan<NodeHandle> oldNodes, ReadOnlySpan<Element> newKids)
+    {
+        int balance = 0;
+        foreach (var c in oldNodes) if (OldKey(c) is null) balance++;
+        foreach (var e in newKids) if (e.Key is null) balance--;
+        return balance == 0;
+    }
+
+    private void ReconcileChildrenCore(NodeHandle node, ReadOnlySpan<Element> newKids, int oldN,
                                        Span<NodeHandle> oldNodes, Span<bool> used, Span<NodeHandle> newNodes)
     {
-        int oldN = oldKids.Length, newN = newKids.Length;
-        if (RecordVerifyOn) VerifyOldChildren(node, oldKids);
+        int newN = newKids.Length;
         if (oldN > 0)
         {
             int i = 0;
@@ -4724,7 +4728,7 @@ public sealed partial class TreeReconciler
         Dictionary<string, int>? keyMap = null;
         if (oldN > 32)
             for (int j = 0; j < oldN; j++)
-                if (oldKids[j].Key is string k) (keyMap ??= new()).TryAdd(k, j);
+                if (OldKey(oldNodes[j]) is string k) (keyMap ??= new()).TryAdd(k, j);
 
         bool structural = false;
         // A PURE reorder (same key set, different order — e.g. a list reverse) creates/removes nothing, but the
@@ -4760,13 +4764,13 @@ public sealed partial class TreeReconciler
             if (nk.Key is string key)
             {
                 if (keyMap is not null && keyMap.TryGetValue(key, out int mapped)
-                    && !used[mapped] && oldKids[mapped].ElementTypeId == nk.ElementTypeId)
+                    && !used[mapped] && _scene.ElementTypeId(oldNodes[mapped]) == nk.ElementTypeId)
                     match = mapped;
                 else if (keyMap is null)
                 {
                     for (int oldIndex = 0; oldIndex < oldN; oldIndex++)
                     {
-                        if (used[oldIndex] || oldKids[oldIndex].ElementTypeId != nk.ElementTypeId || oldKids[oldIndex].Key != key) continue;
+                        if (used[oldIndex] || _scene.ElementTypeId(oldNodes[oldIndex]) != nk.ElementTypeId || OldKey(oldNodes[oldIndex]) != key) continue;
                         match = oldIndex;
                         break;
                     }
@@ -4774,17 +4778,17 @@ public sealed partial class TreeReconciler
             }
             else
             {
-                if (unkeyedMode == 0) unkeyedMode = UnkeyedPairing.Ordinal(oldKids, newKids) ? 1 : 2;
+                if (unkeyedMode == 0) unkeyedMode = UnkeyedOrdinal(oldNodes[..oldN], newKids) ? 1 : 2;
                 if (unkeyedMode == 1)
                 {
-                    while (unkeyedCursor < oldN && oldKids[unkeyedCursor].Key is not null) unkeyedCursor++;
+                    while (unkeyedCursor < oldN && OldKey(oldNodes[unkeyedCursor]) is not null) unkeyedCursor++;
                     if (unkeyedCursor < oldN)
                     {
                         int ordinal = unkeyedCursor++;   // consumed whether or not the type matches
-                        if (!used[ordinal] && oldKids[ordinal].ElementTypeId == nk.ElementTypeId) match = ordinal;
+                        if (!used[ordinal] && _scene.ElementTypeId(oldNodes[ordinal]) == nk.ElementTypeId) match = ordinal;
                     }
                 }
-                else if (i < oldN && !used[i] && oldKids[i].Key is null && oldKids[i].ElementTypeId == nk.ElementTypeId)
+                else if (i < oldN && !used[i] && OldKey(oldNodes[i]) is null && _scene.ElementTypeId(oldNodes[i]) == nk.ElementTypeId)
                     match = i;
             }
 
@@ -4793,7 +4797,7 @@ public sealed partial class TreeReconciler
                 used[match] = true;
                 if (match < lastMatch) moved = true; else lastMatch = match;
                 newNodes[i] = oldNodes[match];
-                Update(oldNodes[match], nk, oldKids[match]);
+                Update(oldNodes[match], nk);
             }
         }
 
@@ -4979,11 +4983,6 @@ public sealed partial class TreeReconciler
         _showEffect.Remove(idx);
         _forEl.Remove(idx);
         _forEffect.Remove(idx);
-        if (_forState.Remove(idx, out var fs) && fs.Prev.Length > 0)   // return the pooled For buffer (finding #6)
-        {
-            Array.Clear(fs.Prev, 0, fs.Len);
-            ArrayPool<Element>.Shared.Return(fs.Prev);
-        }
         _skelEl.Remove(idx);
         _skelEffect.Remove(idx);
         _skelForce.Remove(idx);

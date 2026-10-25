@@ -8,7 +8,7 @@ public sealed partial class TreeReconciler : IChildReconcileCommitter
     private readonly Stack<ChildReconcilePlan> _childPlans = new();
     private ulong _childReconcileRevision;
 
-    private void ReconcilePlannedChildren(NodeHandle parent, ReadOnlySpan<Element> desired, ReadOnlySpan<Element> previous)
+    private void ReconcilePlannedChildren(NodeHandle parent, ReadOnlySpan<Element> desired, int oldCount)
     {
         // Nested Update/Mount can reconcile another large container: each active invocation leases a separate plan.
         var plan = _childPlans.Count == 0 ? new ChildReconcilePlan() : _childPlans.Pop();
@@ -16,10 +16,10 @@ public sealed partial class TreeReconciler : IChildReconcileCommitter
         NodeHandle outerStaggerParent = _staggerDiffParent;
         int outerStaggerBase = _staggerDiffBase;
         _staggerDiffParent = parent;
-        _staggerDiffBase = previous.Length;
+        _staggerDiffBase = oldCount;
         try
         {
-            plan.Begin(_scene, parent, desired, previous, _childReconcileRevision);
+            plan.Begin(_scene, _records, parent, desired, oldCount, _childReconcileRevision);
             plan.Step(long.MaxValue);
             if (!plan.Commit(this)) throw new InvalidOperationException("Committed child topology changed during isolated planning.");
         }
@@ -52,7 +52,7 @@ public sealed partial class TreeReconciler : IChildReconcileCommitter
         return child.IsNull;
 #pragma warning restore CS0162
     }
-    void IChildReconcileCommitter.Update(NodeHandle node, Element desired, Element previous) => Update(node, desired, previous);
+    void IChildReconcileCommitter.Update(NodeHandle node, Element desired) => Update(node, desired);
     void IChildReconcileCommitter.SaveDeparting(NodeHandle node) => PreSaveScroll(node);
     NodeHandle IChildReconcileCommitter.Mount(NodeHandle parent, Element desired)
     {

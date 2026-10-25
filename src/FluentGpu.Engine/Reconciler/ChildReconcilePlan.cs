@@ -14,7 +14,9 @@ internal enum ChildReconcilePhase : byte { Empty, Indexing, Matching, Ready, Com
 /// </summary>
 internal sealed class ChildReconcilePlan
 {
-    private Element[] _old = [], _desired = [];
+    private Element[] _desired = [];
+    private string?[] _oldKeys = [];      // the old children's keys (their node records), snapshot at Begin
+    private ushort[] _oldTypes = [];      // the old children's element type ids
     private NodeHandle[] _oldNodes = [], _newNodes = [];
     private int[] _matches = [];
     private bool[] _used = [];
@@ -35,26 +37,31 @@ internal sealed class ChildReconcilePlan
     internal ChildReconcilePlan() : this(Stopwatch.GetTimestamp) { }
     internal ChildReconcilePlan(Func<long> timestamp) => _timestamp = timestamp;
 
-    internal void Begin(SceneStore scene, NodeHandle parent, ReadOnlySpan<Element> desired, ReadOnlySpan<Element> old,
+    internal void Begin(SceneStore scene, NodeRecords records, NodeHandle parent, ReadOnlySpan<Element> desired, int oldCount,
         ulong revision)
     {
         Reset();
-        Grow(ref _old, old.Length); Grow(ref _desired, desired.Length);
-        Grow(ref _oldNodes, old.Length); Grow(ref _used, old.Length);
+        Grow(ref _oldKeys, oldCount); Grow(ref _oldTypes, oldCount); Grow(ref _desired, desired.Length);
+        Grow(ref _oldNodes, oldCount); Grow(ref _used, oldCount);
         Grow(ref _newNodes, desired.Length); Grow(ref _matches, desired.Length);
         // These two copies are the plan's snapshot-isolation contract, not incidental cost: a budgeted caller may
         // yield Step across frames, during which the caller's own buffer (e.g. ForEl's pooled Fill buffer) can be
         // mutated or returned to a pool before Commit runs — gate.child-plan-yield-commit pins exactly this by
         // mutating the caller's array right after Begin. Element is a reference type, so both copies are a pointer
         // memmove (reused, pre-grown arrays — no allocation), not a deep copy; that cost is legitimate and stays.
-        old.CopyTo(_old); desired.CopyTo(_desired);
-        _oldCount = old.Length; _newCount = desired.Length;
+        desired.CopyTo(_desired);
+        _oldCount = oldCount; _newCount = desired.Length;
         _oldNodes.AsSpan(0, _oldCount).Clear();
         _newNodes.AsSpan(0, _newCount).Clear();
         _used.AsSpan(0, _oldCount).Clear();
         _matches.AsSpan(0, _newCount).Fill(-1);
         var child = scene.FirstChild(parent);
-        for (int i = 0; i < _oldCount && !child.IsNull; i++, child = scene.NextSibling(child)) _oldNodes[i] = child;
+        for (int i = 0; i < _oldCount && !child.IsNull; i++, child = scene.NextSibling(child))
+        {
+            _oldNodes[i] = child;
+            _oldKeys[i] = records.KeyOf((int)child.Raw.Index);
+            _oldTypes[i] = scene.ElementTypeId(child);
+        }
         Parent = parent; Revision = revision; _lastMatch = -1;
         _changed = _oldCount != _newCount;
         Phase = _oldCount > 32 ? ChildReconcilePhase.Indexing : ChildReconcilePhase.Matching;
@@ -78,7 +85,7 @@ internal sealed class ChildReconcilePlan
             {
                 if (_cursor < _oldCount)
                 {
-                    if (_old[_cursor].Key is { } key) _keys.TryAdd(key, _cursor);
+                    if (_oldKeys[_cursor] is { } key) _keys.TryAdd(key, _cursor);
                     _cursor++;
                     continue;
                 }
@@ -93,11 +100,11 @@ internal sealed class ChildReconcilePlan
                 if (_oldCount > 32)
                 {
                     if (_keys.TryGetValue(desiredKey, out int found) && !_used[found]
-                        && _old[found].ElementTypeId == desired.ElementTypeId) match = found;
+                        && _oldTypes[found] == desired.ElementTypeId) match = found;
                 }
                 else
                     for (int i = 0; i < _oldCount; i++)
-                        if (!_used[i] && _old[i].Key == desiredKey && _old[i].ElementTypeId == desired.ElementTypeId)
+                        if (!_used[i] && _oldKeys[i] == desiredKey && _oldTypes[i] == desired.ElementTypeId)
                         { match = i; break; }
             }
             else
@@ -108,18 +115,18 @@ internal sealed class ChildReconcilePlan
                 // type matches, a mismatch consumes the ordinal/slot. The mode's counting pass runs once, at the first
                 // unkeyed desired child (pure-keyed lists never pay it) — one pure O(old+new) read over the snapshot.
                 if (_unkeyedMode == 0)
-                    _unkeyedMode = UnkeyedPairing.Ordinal(_old.AsSpan(0, _oldCount), _desired.AsSpan(0, _newCount)) ? 1 : 2;
+                    _unkeyedMode = UnkeyedPairing.Ordinal(_oldKeys.AsSpan(0, _oldCount), _desired.AsSpan(0, _newCount)) ? 1 : 2;
                 if (_unkeyedMode == 1)
                 {
-                    while (_unkeyedCursor < _oldCount && _old[_unkeyedCursor].Key is not null) _unkeyedCursor++;
+                    while (_unkeyedCursor < _oldCount && _oldKeys[_unkeyedCursor] is not null) _unkeyedCursor++;
                     if (_unkeyedCursor < _oldCount)
                     {
                         int ordinal = _unkeyedCursor++;
-                        if (!_used[ordinal] && _old[ordinal].ElementTypeId == desired.ElementTypeId) match = ordinal;
+                        if (!_used[ordinal] && _oldTypes[ordinal] == desired.ElementTypeId) match = ordinal;
                     }
                 }
-                else if (index < _oldCount && !_used[index] && _old[index].Key is null
-                    && _old[index].ElementTypeId == desired.ElementTypeId) match = index;
+                else if (index < _oldCount && !_used[index] && _oldKeys[index] is null
+                    && _oldTypes[index] == desired.ElementTypeId) match = index;
             }
             _matches[index] = match;
             if (match < 0) { _changed = true; continue; }
@@ -145,7 +152,7 @@ internal sealed class ChildReconcilePlan
                 int match = _matches[i];
                 if (match < 0) continue;
                 _newNodes[i] = _oldNodes[match];
-                target.Update(_oldNodes[match], _desired[i], _old[match]);
+                target.Update(_oldNodes[match], _desired[i]);
             }
             // Preserve scroll before incoming mounts consume the memory entry. Lifecycle order is deliberate:
             // matched updates, departing scroll capture, incoming mounts, departing cleanup, then final child order.
@@ -169,7 +176,7 @@ internal sealed class ChildReconcilePlan
 
     internal void Reset()
     {
-        Array.Clear(_old, 0, _oldCount); Array.Clear(_desired, 0, _newCount);
+        Array.Clear(_oldKeys, 0, _oldCount); Array.Clear(_desired, 0, _newCount);
         _keys.Clear(); _oldCount = _newCount = _cursor = _unkeyedMode = _unkeyedCursor = 0;
         Parent = default; Revision = 0; Phase = ChildReconcilePhase.Empty;
     }
@@ -192,10 +199,10 @@ internal static class UnkeyedPairing
     /// keyed churn must not shift unkeyed identity. False ⇒ an unkeyed child was added or removed ⇒ the former same-index
     /// pairing, which is what an unkeyed insert/remove means positionally and which keeps a keyed⇄unkeyed flip at one
     /// slot from shifting its unkeyed siblings. One pure pass over both spans; no allocation.</summary>
-    internal static bool Ordinal(ReadOnlySpan<Element> old, ReadOnlySpan<Element> desired)
+    internal static bool Ordinal(ReadOnlySpan<string?> oldKeys, ReadOnlySpan<Element> desired)
     {
         int balance = 0;
-        foreach (var e in old) if (e.Key is null) balance++;
+        foreach (var k in oldKeys) if (k is null) balance++;
         foreach (var e in desired) if (e.Key is null) balance--;
         return balance == 0;
     }
@@ -204,7 +211,7 @@ internal static class UnkeyedPairing
 internal interface IChildReconcileCommitter
 {
     bool Validate(NodeHandle parent, ulong revision, ReadOnlySpan<NodeHandle> originalNodes);
-    void Update(NodeHandle node, Element desired, Element previous);
+    void Update(NodeHandle node, Element desired);
     void SaveDeparting(NodeHandle node);
     NodeHandle Mount(NodeHandle parent, Element desired);
     void Remove(NodeHandle node);
