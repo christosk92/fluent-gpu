@@ -160,7 +160,7 @@ public sealed class EditableText : Component
     /// <summary>Replace the left-affix element on the live instance.</summary>
     internal void SetLeftAffix(Element? affix)
     {
-        if (ReferenceEquals(LeftAffix, affix)) return;
+        if (LeftAffix.SameAs(affix)) return;
         LeftAffix = affix;
         if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
     }
@@ -170,7 +170,7 @@ public sealed class EditableText : Component
     /// so this bumps a render-subscribed epoch to re-render the field with the new affix lane.</summary>
     internal void SetRightAffix(Element? affix)
     {
-        if (ReferenceEquals(RightAffix, affix)) return;
+        if (RightAffix.SameAs(affix)) return;
         RightAffix = affix;
         if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
     }

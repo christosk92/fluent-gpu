@@ -2160,9 +2160,9 @@ public sealed class ItemsView : Component, IPropsHost
         if (RepaintBoundary)
         {
             if (rowBind is { } rb)
-                rowBind = i => { var e = rb(i); return e is BoxEl b ? b with { IsolateLayout = true, ClipToBounds = true } : e; };
+                rowBind = i => { var e = rb(i); return e.Is(out BoxEl b) ? b with { IsolateLayout = true, ClipToBounds = true } : e; };
             var rt = realizeTemplate;
-            realizeTemplate = i => { var e = rt(i); return e is BoxEl b ? b with { IsolateLayout = true, ClipToBounds = true } : e; };
+            realizeTemplate = i => { var e = rt(i); return e.Is(out BoxEl b) ? b with { IsolateLayout = true, ClipToBounds = true } : e; };
         }
 
         // Wheel line-height hint (ScrollState.LineDip, S6): a fixed main-axis pitch is one Windows "line" — a stack
@@ -2283,7 +2283,7 @@ public sealed class ItemsView : Component, IPropsHost
         => i =>
         {
             var el = template(i);
-            return el is BoxEl b && b.Animate is null ? b with { Animate = spec } : el;
+            return el.Is(out BoxEl b) && b.Animate is null ? b with { Animate = spec } : el;
         };
 
     /// <summary>Wrap/Inline small-collection fallback (<see cref="RepeatKind.Wrap"/>/<see cref="RepeatKind.Inline"/>):
