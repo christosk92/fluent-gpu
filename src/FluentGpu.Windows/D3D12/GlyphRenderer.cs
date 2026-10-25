@@ -558,11 +558,14 @@ float4 PSMain(VSOutG i) : SV_Target
 
         e = new GlyphEntry { Advance = advance, BearingX = bounds.left, BearingY = bounds.top, W = w, H = h };
         Diag.Set("text.glyph", "last", $"ch='{ch}' gi={gi} {w}x{h}x{SubPixelPhases} adv={advance:0.0}");
-        if (w > 0 && h > 0) PackOrReset(ref e, stack, w, PhaseStackHeight(h));   // a successful pack marks its rows dirty
+        if (w > 0 && h > 0) PackOrReset(ref e, stack.AsSpan(0, w * PhaseStackHeight(h)), w, PhaseStackHeight(h));   // a successful pack marks its rows dirty
         Diag.Count("text.glyph", "rasterized");
         _cache[key] = e;
         return e;
     }
+
+    // The phase stack's grow-once scratch (TryRasterizePhaseStack).
+    private byte[] _phaseStack = new byte[16 * 1024];
 
     /// <summary>Rasterize <see cref="SubPixelPhases"/> vertically-offset variants of one glyph run and stack them into a
     /// single R8 image of <c>w × (h · SubPixelPhases)</c>, phase p occupying rows <c>[p·h, (p+1)·h)</c>.
@@ -605,7 +608,12 @@ float4 PSMain(VSOutG i) : SV_Target
         box = union;
         w = union.right - union.left;
         h = union.bottom - union.top;
-        stack = new byte[w * PhaseStackHeight(h)];                 // zero-filled: the gutter rows stay transparent
+        // ONE grow-once scratch, zeroed for the rows this glyph uses (the gutter rows stay transparent): the atlas store copies
+        // the stack in TryPack, so nothing keeps it past the call (audit PERF r3 RASTER: a new byte[] per rasterized glyph).
+        int n = w * PhaseStackHeight(h);
+        if (_phaseStack.Length < n) _phaseStack = new byte[Math.Max(n, 2 * _phaseStack.Length)];
+        else Array.Clear(_phaseStack, 0, n);
+        stack = _phaseStack;
 
         for (int p = 0; p < SubPixelPhases; p++)
         {
@@ -1382,7 +1390,7 @@ float4 PSMain(VSOutG i) : SV_Target
         bool hasInk = TryRasterizePhaseStack(&run, out RECT bounds, out int w, out int h, out byte[] stack);
         if (!hasInk) { bounds = default; w = 0; h = 0; }
         e = new GlyphEntry { Advance = 0f, BearingX = bounds.left, BearingY = bounds.top, W = w, H = h };
-        if (w > 0 && h > 0) PackOrReset(ref e, stack, w, PhaseStackHeight(h));   // a successful pack marks its rows dirty
+        if (w > 0 && h > 0) PackOrReset(ref e, stack.AsSpan(0, w * PhaseStackHeight(h)), w, PhaseStackHeight(h));   // a successful pack marks its rows dirty
         Diag.Count("text.glyph", "rasterized");
         _cache[key] = e;
         return e;

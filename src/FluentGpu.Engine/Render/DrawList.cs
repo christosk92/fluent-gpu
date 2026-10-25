@@ -533,7 +533,7 @@ public sealed class DrawList
     public int PriorByteLength => _priorLen;
     public int PriorSortLength => _priorSortLen;
 
-    public void Reset() { _len = 0; _sortLen = 0; CommandCount = 0; _opcodeStats = default; }
+    public void Reset() { if (_retiredBufN + _retiredSortN != 0) ReturnRetired(); _len = 0; _sortLen = 0; CommandCount = 0; _opcodeStats = default; }
 
     /// <summary>Start a record pass while preserving the previous command/sort arenas for clean-span copies.</summary>
     public void SwapAndReset()
@@ -1066,7 +1066,10 @@ public sealed class DrawList
         if (_sortLen + extra <= _sort.Length) return;
         int n = _sort.Length * 2;
         while (n < _sortLen + extra) n *= 2;
-        Array.Resize(ref _sort, n);
+        var ns = System.Buffers.ArrayPool<ulong>.Shared.Rent(n);
+        Array.Copy(_sort, ns, _sortLen);
+        RetireSort(_sort);
+        _sort = ns;
     }
 
     private void Ensure(int extra)
@@ -1074,9 +1077,40 @@ public sealed class DrawList
         if (_len + extra <= _buf.Length) return;
         int n = _buf.Length * 2;
         while (n < _len + extra) n *= 2;
-        var nb = GC.AllocateUninitializedArray<byte>(n, pinned: false);
+        var nb = System.Buffers.ArrayPool<byte>.Shared.Rent(n);
         Array.Copy(_buf, nb, _len);
+        RetireBuf(_buf);
         _buf = nb;
+    }
+
+    // GROWTH THROUGH THE SHARED POOL (audit PERF r3 RASTER: DrawList.Ensure was the render thread's largest allocator during
+    // navigation — every arena of a new page doubled its way up, twice: the current and the prior buffer). A grown-out buffer
+    // returns to the pool only at the next SwapAndReset / Reset, never mid-pass: a span of it taken before the growth may still
+    // be read until the pass that wrote it is over. Sizes are powers of two from the constructor's (the pool's buckets).
+    private byte[]?[] _retiredBufs = new byte[]?[4];
+    private ulong[]?[] _retiredSorts = new ulong[]?[4];
+    private int _retiredBufN, _retiredSortN;
+
+    private void RetireBuf(byte[] b)
+    {
+        if (b.Length < 16 || !System.Numerics.BitOperations.IsPow2(b.Length)) return;   // not a pool bucket size: the GC takes it
+        if (_retiredBufN == _retiredBufs.Length) Array.Resize(ref _retiredBufs, _retiredBufN * 2);
+        _retiredBufs[_retiredBufN++] = b;
+    }
+
+    private void RetireSort(ulong[] b)
+    {
+        if (b.Length < 16 || !System.Numerics.BitOperations.IsPow2(b.Length)) return;
+        if (_retiredSortN == _retiredSorts.Length) Array.Resize(ref _retiredSorts, _retiredSortN * 2);
+        _retiredSorts[_retiredSortN++] = b;
+    }
+
+    /// <summary>Hand the buffers this list grew out of back to the pool (between passes: nothing reads them any more).</summary>
+    private void ReturnRetired()
+    {
+        for (int i = 0; i < _retiredBufN; i++) { System.Buffers.ArrayPool<byte>.Shared.Return(_retiredBufs[i]!); _retiredBufs[i] = null; }
+        for (int i = 0; i < _retiredSortN; i++) { System.Buffers.ArrayPool<ulong>.Shared.Return(_retiredSorts[i]!); _retiredSorts[i] = null; }
+        _retiredBufN = _retiredSortN = 0;
     }
 
     // ── raw access for the slice recorder (Render/SliceRecorder) and the headless composite model ───────────────────

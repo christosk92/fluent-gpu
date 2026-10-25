@@ -68,7 +68,7 @@ public sealed unsafe partial class D3D12Device
 
     private void BuildFootprints(ReadOnlySpan<byte> stream, ref OpFoot[]? table, out int count)
     {
-        table ??= new OpFoot[64];
+        table ??= new OpFoot[1024];   // one segment's ops: sized once for a page-sized segment, doubled past it
         int n = 0, pos = 0;
         while (pos + sizeof(int) <= stream.Length)
         {
