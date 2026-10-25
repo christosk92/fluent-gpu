@@ -172,6 +172,7 @@ public sealed unsafe partial class D3D12Device
         PassBoundary(GpuPassKind.TileRaster, TileGrid.W, TileGrid.H);
         int inl0 = _surfaces.ScratchLeases; long inlPx0 = _surfaces.ScratchPx;
         RasterTiles(in frame);
+        if (TileDamage.PhaseValidate) QueuePhaseChecks(in frame);
         _offInlineN += _surfaces.ScratchLeases - inl0; _offInlinePx += _surfaces.ScratchPx - inlPx0;
         // 2. offscreen
         PassBoundary(GpuPassKind.Offscreen, (int)_w, (int)_h);

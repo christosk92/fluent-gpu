@@ -84,7 +84,10 @@ public enum ImageAtlasExperiment : byte
 /// <c>no-partial-keep</c> — a slice with a dirty nested slice re-walks whole instead of keeping its own arena and walking only
 /// the nested one (the A/B arm, <c>SceneRecorder.PartialKeep.cs</c>). <c>rewalk-validate</c> — every partial keep is re-walked
 /// instead and checked: the bytes it would have kept, the inputs it would have re-entered with, the offsets it would have used.
-/// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).</item>
+/// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).
+/// <c>raw-phase</c> — a slice under a composited transition layer rasters at its raw float placement even when that is a
+/// whole pixel up to float noise (<c>SliceRecorder.FractionalPx</c>; the A/B arm). <c>phase-validate</c> — every composited
+/// tile whose placement was snapped is re-rastered at the raw phase into a shadow surface and compared.</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -273,6 +276,8 @@ public static class EngineSwitches
             case "group-repair-validate": GroupRepairValidate = true; return true;
             case "no-partial-raster": FluentGpu.Render.Tiles.TileDamage.Enabled = false; return true;
             case "damage-validate": FluentGpu.Render.Tiles.TileDamage.Validate = true; return true;
+            case "phase-validate": FluentGpu.Render.Tiles.TileDamage.PhaseValidate = true; return true;
+            case "raw-phase": FluentGpu.Render.SliceRecorder.CanonicalPhase = false; return true;
             case "rewalk-validate": FluentGpu.Render.SceneRecordingContext.PartialKeepValidate = true; return true;
             case "no-partial-keep": FluentGpu.Render.SceneRecordingContext.PartialKeepEnabled = false; return true;
             case "damage-log": FluentGpu.Render.Tiles.TileDamage.Log = true; return true;

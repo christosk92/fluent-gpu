@@ -610,6 +610,28 @@ public sealed partial class SliceRecorder
     /// exact (sub-pixel) offset — see <see cref="SliceFrame.PhaseX"/>.</summary>
     internal void SetFractional(int slot) => _recs[slot].Fractional = true;
 
+    /// <summary>How close to a whole device pixel a FRACTIONAL placement must be to be taken as that pixel: 2⁻¹⁰ px. See
+    /// <see cref="FractionalPx"/>.</summary>
+    internal const float FractionalSnap = 1f / 1024f;
+
+    /// <summary>The placement (device px) a slice under a composited transition layer is rastered and composited at (its
+    /// whole-pixel part places the item, the rest is <see cref="SliceFrame.PhaseX"/>): <paramref name="px"/> = <c>AccDx·scale</c>,
+    /// a float sum of layout offsets and a device-snapped scroll translate. A placement that is a whole pixel therefore
+    /// arrives with float noise (measured ±2⁻¹⁴..3·2⁻¹⁴ px): raw, the phase flipped between 0, 6.1e-5 and 0.99994 on scroll
+    /// steps and every flip re-rastered every tile of the page (SliceGeometry, audit PERF r3 RASTER). Within
+    /// <see cref="FractionalSnap"/> of a whole pixel the placement IS that pixel (phase exactly 0 on every turn); any other
+    /// value is returned unchanged, so a real sub-pixel offset (a sliding page) rasters exactly as before.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static float FractionalPx(float px)
+    {
+        float r = MathF.Round(px);
+        return CanonicalPhase && MathF.Abs(px - r) <= FractionalSnap ? r : px;
+    }
+
+    /// <summary>Near-whole fractional placements snap to the pixel (default). <c>--fg raw-phase</c> turns it off (the A/B
+    /// arm: the raw float placement, as before).</summary>
+    public static bool CanonicalPhase = true;
+
     private bool UnderFractional(int slot)
     {
         for (int s = slot, guard = 0; s >= 0 && guard < 64; s = _recs[s].Parent, guard++)
@@ -2436,7 +2458,7 @@ public sealed partial class SliceRecorder
                     // extent of what it encloses (+ its blur reach): a group moved rigidly by an ancestor scroll keeps its
                     // surface origin relative to its content — the group-cache key (GroupCacheKey) then matches.
                     var gT = UnderFractional(e.Slot)
-                        ? Affine2D.Translation(MathF.Floor(e.AccDx * scale), MathF.Floor(e.AccDy * scale))
+                        ? Affine2D.Translation(MathF.Floor(FractionalPx(e.AccDx * scale)), MathF.Floor(FractionalPx(e.AccDy * scale)))
                         : Affine2D.Translation(MathF.Round(e.AccDx * scale), MathF.Round(e.AccDy * scale));
                     RectF gFoot = ScalePx(e.Rect, scale);
                     if (!gFoot.IsEmpty && gSigma > 0f)
@@ -2518,10 +2540,14 @@ public sealed partial class SliceRecorder
             bool fractional = UnderFractional(e.Slot);
             float phaseX = 0f, phaseY = 0f;
             int originX = (int)ox, originY = (int)oy;
+            // The placement this segment rasters and composites at: the exact offset under a fractional layer, on the
+            // whole pixel when it is one up to float noise (FractionalPx) — one value for the phase, the item transform and the
+            // opaque rect below.
+            float placeX = fractional ? FractionalPx(e.AccDx * scale) : e.AccDx * scale;
+            float placeY = fractional ? FractionalPx(e.AccDy * scale) : e.AccDy * scale;
             if (fractional)
             {
-                float px = e.AccDx * scale, py = e.AccDy * scale;
-                phaseX = px - MathF.Floor(px); phaseY = py - MathF.Floor(py);
+                phaseX = placeX - MathF.Floor(placeX); phaseY = placeY - MathF.Floor(placeY);
                 ox -= phaseX; oy -= phaseY;
             }
             var frame = new SliceFrame(originX, originY, residualX, residualY, scale, phaseX, phaseY);
@@ -2533,6 +2559,8 @@ public sealed partial class SliceRecorder
 
             ref SliceRow row = ref table.Row(id);
             row.ContentKey = ContentKey(e.Slot, e.Segment, ox, oy, scale);
+            row.RefPhaseX = fractional ? e.AccDx * scale - MathF.Floor(placeX) : 0f;
+            row.RefPhaseY = fractional ? e.AccDy * scale - MathF.Floor(placeY) : 0f;
             int arenaBase = withStreams ? StreamOffsetOf(e.Slot) : 0;
             row.StreamBase = arenaBase;
             row.DrawListStart = arenaBase + sg.ByteStart;
@@ -2628,7 +2656,7 @@ public sealed partial class SliceRecorder
             if (e.HasLayer) LayerParams(in e.Layer, e.InnerClip, scale, out alpha, out sigma, out feather, out srcPx);
             ApplyDist(in e.Dist, scale, ref alpha, ref feather, out EdgeFeather feather2);
             var transform = fractional
-                ? Affine2D.Translation(originX + MathF.Floor(e.AccDx * scale), originY + MathF.Floor(e.AccDy * scale))
+                ? Affine2D.Translation(originX + MathF.Floor(placeX), originY + MathF.Floor(placeY))
                 : Affine2D.Translation(ox + MathF.Round(e.AccDx * scale), oy + MathF.Round(e.AccDy * scale));
             RectF clipPx = StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH);
             if (r.Pose == PoseKind.Posed)
@@ -2662,7 +2690,7 @@ public sealed partial class SliceRecorder
                 clipPx,
                 RadiiPx(e.RoundR, scale), feather, sigma, default, r.Screen ? CompositeItem.BlendScreen : (byte)0, RoundPx(e.RoundRect, e.RoundR, scale), 0, e.HasLayer ? (byte)1 : (byte)0, srcPx,
                 feather2, default, e.Dist.Count, lowRes,
-                claimsCover && !posedImage ? OpaquePx(in sg.Opaque, in e, scale, alpha, sigma, in feather, in feather2, in clipPx) : default,
+                claimsCover && !posedImage ? OpaquePx(in sg.Opaque, in e, scale, placeX, placeY, alpha, sigma, in feather, in feather2, in clipPx) : default,
                 r.HasFeedback ? r.Feedback.Spec : default, r.HasFeedback ? r.Feedback.Warp : default, r.HasFeedback ? r.Feedback.EffectiveDecay : 0f,
                 subX, subY),
                 in e.Layer, in e.Dist, in e);
@@ -2820,12 +2848,12 @@ public sealed partial class SliceRecorder
     /// or at the whole-pixel placement round(AccDx·scale) (+ a residual): the rect is the INTERSECTION of both. The backend
     /// turns it into the whole pixels the composited item writes opaque. Only an item that composites its pixels unchanged
     /// can hide what lies beneath it: alpha 1, no blur, no feather, no rounded clip, no distributed fade.</summary>
-    private static RectF OpaquePx(in RectF opaque, in Plan e, float scale, float alpha, float sigma,
+    private static RectF OpaquePx(in RectF opaque, in Plan e, float scale, float ex, float ey, float alpha, float sigma,
         in EdgeFeather feather, in EdgeFeather feather2, in RectF clipPx)
     {
         if (opaque.IsEmpty || alpha < 1f || sigma > 0f || e.RoundR > 0f || e.Dist.Count > 0) return default;
         if (feather.Rect.W > 0f || feather.Rect.H > 0f || feather2.Rect.W > 0f || feather2.Rect.H > 0f) return default;
-        float ex = e.AccDx * scale, ey = e.AccDy * scale, rx = MathF.Round(ex), ry = MathF.Round(ey);
+        float rx = MathF.Round(ex), ry = MathF.Round(ey);
         float x0 = opaque.X * scale + MathF.Max(ex, rx), y0 = opaque.Y * scale + MathF.Max(ey, ry);
         float x1 = opaque.Right * scale + MathF.Min(ex, rx), y1 = opaque.Bottom * scale + MathF.Min(ey, ry);
         bool unbounded = clipPx.W <= 0f && clipPx.H <= 0f && clipPx.X == 0f && clipPx.Y == 0f;

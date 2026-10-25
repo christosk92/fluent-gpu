@@ -14,6 +14,8 @@ public sealed unsafe partial class D3D12Device
     // at 0), and the clean subtrees the span index culled whole.
     private readonly long[] _rcOpTally = new long[32];
     private long _rcSpansSkippedTally;
+    private long _rcCulledTally;   // primitives the decode-time cull dropped (every replay)
+    private long _rcCulled0;
 
     // This submit's raster phase (reset by RcBeginSubmit).
     private long _rcGlyphTicks, _rcRasterTicks;
@@ -50,6 +52,7 @@ public sealed unsafe partial class D3D12Device
     {
         Array.Copy(_rcOpTally, _rcOps0, _rcOpTally.Length);
         _rcSpans0 = _rcSpansSkippedTally;
+        _rcCulled0 = _rcCulledTally;
         _rcPasses = _frameRenderPasses;
         _rcGlyphInsts = _frameGlyphInstanceCount;
         _rcDraws = GpuDrawCount.Frame;
@@ -72,7 +75,9 @@ public sealed unsafe partial class D3D12Device
         _rcPasses = _frameRenderPasses - _rcPasses;
         _rcGlyphInsts = _frameGlyphInstanceCount - _rcGlyphInsts;
         _rcDraws = GpuDrawCount.Frame - _rcDraws;
+        _rcCulledEnd = _rcCulledTally;
     }
+    private long _rcCulledEnd;
 
     /// <summary>SubmitComposite's tail: publish <see cref="LastRasterCost"/>.</summary>
     private void RcEndSubmit()
@@ -97,6 +102,7 @@ public sealed unsafe partial class D3D12Device
             (float)(_rcGlyphTicks * toMs), (float)(_rcRasterTicks * toMs), _rcRasters, _rcPartial, rastered ? _rcPasses : 0, _rcPx,
             (int)ops, (int)rects, (int)glyphs, (int)d[(int)DrawOp.DrawImage], (int)paths, (int)series, (int)scopes,
             rastered ? (int)(_rcSpansSkippedTally - _rcSpans0) : 0,
-            rastered ? _rcGlyphInsts : 0, rastered ? _rcDraws : 0, (int)(all - _rcSubmitOps0));
+            rastered ? _rcGlyphInsts : 0, rastered ? _rcDraws : 0, (int)(all - _rcSubmitOps0),
+            rastered ? (int)(_rcCulledEnd - _rcCulled0) : 0);
     }
 }

@@ -113,6 +113,11 @@ public struct SliceRow
     /// identical bytes under identical framing, so anything derived from the stream alone (its glyph preparation, its op
     /// records, their diff) can be reused instead of recomputed every turn.</summary>
     public ulong ContentKey;
+    /// <summary>Diagnostics (<c>--fg phase-validate</c>): the sub-pixel phase the segment would raster at with its RAW placement
+    /// (<c>AccDx·scale</c> before <c>SliceRecorder.FractionalPx</c>), relative to the same whole-pixel part as
+    /// <see cref="SliceFrame.PhaseX"/> (so it may be slightly below 0 or above 1). Equal to the frame's phase when nothing
+    /// was snapped.</summary>
+    public float RefPhaseX, RefPhaseY;
 }
 
 /// <summary>One entry of a slice's span index (§A.4): a clean subtree's slice-space bounds (device px, halos included) and

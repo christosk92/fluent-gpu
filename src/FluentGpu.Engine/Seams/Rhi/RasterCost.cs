@@ -17,13 +17,14 @@ namespace FluentGpu.Rhi;
 /// index culled whole.</item>
 /// <item><see cref="GlyphInstances"/>: glyph quads the rasters emitted; <see cref="Draws"/>: draw calls they issued.</item>
 /// <item><see cref="SubmitOps"/>: ops EVERY replay of the submit decoded (the rasters, the offscreen surfaces, the inline
-/// segments the composite pass replays into the back buffer).</item>
+/// segments the composite pass replays into the back buffer); <see cref="Culled"/>: primitives of the rasters the
+/// decode-time cull dropped (decoded, then found to miss the tile).</item>
 /// </list>
 /// </summary>
 public readonly record struct RasterCost(
     float GlyphPrepMs, float RasterMs, int Rasters, int Partial, int Passes, long Px,
     int Ops, int Rects, int Glyphs, int Images, int Paths, int Series, int Scopes, int SpansSkipped,
-    int GlyphInstances, int Draws, int SubmitOps = 0);
+    int GlyphInstances, int Draws, int SubmitOps = 0, int Culled = 0);
 
 public partial interface IGpuDevice
 {

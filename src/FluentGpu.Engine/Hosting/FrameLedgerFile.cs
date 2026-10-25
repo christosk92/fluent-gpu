@@ -186,7 +186,7 @@ public static class FrameLedgerCsv
     public static string Render(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Render.Length * 200);
-        sb.AppendLine("seq,waitStartMs,startMs,slotOpenMs,doneMs,endMs,turnMs,slotWaitMs,workMs,tickSeq,tickMs,kind,outcome,flags,publishSeq,submitSeq,cpuMs,allocBytes,stageMs,recMs,subMs,fenceMs,latMs,presMs,videoMs,damageCoverage,fullReason,tilesRastered,missedTicks,cpuTimeMs,buildMs,glyphPrepMs,rasterMs,rasters,partialRasters,rasterPasses,rasterPx,rasterOps,opsRect,opsGlyph,opsImage,opsPath,opsSeries,opsScope,spansSkipped,glyphInsts,rasterDraws,submitOps");
+        sb.AppendLine("seq,waitStartMs,startMs,slotOpenMs,doneMs,endMs,turnMs,slotWaitMs,workMs,tickSeq,tickMs,kind,outcome,flags,publishSeq,submitSeq,cpuMs,allocBytes,stageMs,recMs,subMs,fenceMs,latMs,presMs,videoMs,damageCoverage,fullReason,tilesRastered,missedTicks,cpuTimeMs,buildMs,glyphPrepMs,rasterMs,rasters,partialRasters,rasterPasses,rasterPx,rasterOps,opsRect,opsGlyph,opsImage,opsPath,opsSeries,opsScope,spansSkipped,glyphInsts,rasterDraws,submitOps,rasterCulled");
         foreach (ref readonly var r in s.Render.AsSpan())
         {
             sb.Append(r.Seq).Append(',');
@@ -206,7 +206,7 @@ public static class FrameLedgerCsv
             sb.Append(rc.Rasters).Append(',').Append(rc.Partial).Append(',').Append(rc.Passes).Append(',').Append(rc.Px).Append(',')
               .Append(rc.Ops).Append(',').Append(rc.Rects).Append(',').Append(rc.Glyphs).Append(',').Append(rc.Images).Append(',')
               .Append(rc.Paths).Append(',').Append(rc.Series).Append(',').Append(rc.Scopes).Append(',').Append(rc.SpansSkipped).Append(',')
-              .Append(rc.GlyphInstances).Append(',').Append(rc.Draws).Append(',').Append(rc.SubmitOps);
+              .Append(rc.GlyphInstances).Append(',').Append(rc.Draws).Append(',').Append(rc.SubmitOps).Append(',').Append(rc.Culled);
             sb.AppendLine();
         }
         return sb.ToString();

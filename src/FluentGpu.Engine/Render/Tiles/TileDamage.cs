@@ -75,6 +75,11 @@ public static class TileDamage
     /// the last presented frame (a model of what DWM shows is kept and compared).</summary>
     public static bool PresentValidate;
 
+    /// <summary><c>--fg phase-validate</c> (audit PERF r3 RASTER): every composited tile of a slice whose fractional placement
+    /// was snapped to its whole pixel (<c>SliceRecorder.FractionalPx</c>) is re-rastered at its RAW phase into a shadow surface and the
+    /// two are compared byte for byte (the count of differing pixels and the largest channel delta are logged).</summary>
+    public static bool PhaseValidate;
+
     /// <summary><c>--fg damage-validate</c>: the backend re-rasters every partially rastered tile whole into a shadow
     /// surface and compares the two byte for byte (a mismatch is logged with its extent).</summary>
     public static bool Validate;

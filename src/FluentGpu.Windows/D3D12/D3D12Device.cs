@@ -2693,7 +2693,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         if (!_cullActive) return false;
         RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
-        return !RepaintCull.Keep(l, t, r, b, halo, in _cullRect);
+        if (RepaintCull.Keep(l, t, r, b, halo, in _cullRect)) return false;
+        _rcCulledTally++;
+        return true;
     }
 
     private bool HasPendingSegment()
@@ -5304,6 +5306,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _surfaces?.Dispose(); _surfaces = null;
         ReleaseGroupRepairValidation();
         ReleaseDamageChecks();
+        ReleasePhaseChecks();
         ReleasePresentChecks();
         ReleaseFrameDissolveResources();   // E2: retained snapshots and the dissolve's command list (the GPU was drained above)
         _compositor?.Dispose(); _compositor = null;
