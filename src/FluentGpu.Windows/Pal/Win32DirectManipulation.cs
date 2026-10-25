@@ -219,10 +219,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable, IDmContactSi
         long nowMs = Environment.TickCount64;
         ServiceEngageTimeout(nowMs);
         long nowQpc = Stopwatch.GetTimestamp();
-        double refreshMs = clock.RefreshQpc > 0 ? clock.RefreshQpc * 1000.0 / Stopwatch.Frequency : 0.0;
-        double leadMs = (clock.Flags & FrameClockFlags.Unpaced) != 0
-            ? 0.0
-            : Math.Clamp((clock.PresentQpc - nowQpc) * 1000.0 / Stopwatch.Frequency, 0.0, refreshMs);
+        double leadMs = ContactStamp.LeadMs(in clock, nowQpc);   // one rule for DM and the bench's synthetic producer (F1 switch)
         PumpOnce(nowQpc, nowMs, leadMs, ContactStamp.ForFrame(in clock, nowQpc));
     }
 

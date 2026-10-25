@@ -36,5 +36,21 @@ public static class ContactStamp
     /// whose clock is <paramref name="clock"/> carries: <c>PresentQpc + RefreshQpc</c> when the clock knows its refresh
     /// and present, else <paramref name="nowQpc"/> (the producer's own read of the time).</summary>
     public static long ForFrame(in FluentGpu.Pal.FrameClock clock, long nowQpc)
-        => clock.RefreshQpc > 0 && clock.PresentQpc > 0 ? clock.PresentQpc + clock.RefreshQpc : nowQpc;
+        => clock.RefreshQpc > 0 && clock.PresentQpc > 0
+            ? clock.PresentQpc + (FluentGpu.Hosting.EngineSwitches.TouchpadSameTick ? 0 : clock.RefreshQpc)
+            : nowQpc;
+
+    /// <summary>The composition hint (ms) a frame-aligned contact producer hands DirectManipulation for a produced frame: what DM
+    /// predicts the finger to. Default: <c>clamp(PresentQpc − now, 0, one refresh)</c> (DM's own latency compensation, at most
+    /// one refresh). Under <c>--fg tp-lead</c> (lane SCROLL F1): the time until the sample is actually shown, its stamp
+    /// (<see cref="ForFrame"/>), at most four refreshes. 0 on an unpaced clock. Not rounded (the producer rounds to DM's ms).</summary>
+    public static double LeadMs(in FluentGpu.Pal.FrameClock clock, long nowQpc)
+    {
+        if ((clock.Flags & FluentGpu.Pal.FrameClockFlags.Unpaced) != 0 || clock.RefreshQpc <= 0) return 0.0;
+        double toMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        double refreshMs = clock.RefreshQpc * toMs;
+        if (FluentGpu.Hosting.EngineSwitches.TouchpadLead)
+            return System.Math.Clamp((ForFrame(in clock, nowQpc) - nowQpc) * toMs, 0.0, 4.0 * refreshMs);
+        return System.Math.Clamp((clock.PresentQpc - nowQpc) * toMs, 0.0, refreshMs);
+    }
 }

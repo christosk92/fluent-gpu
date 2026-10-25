@@ -33,7 +33,9 @@ public readonly record struct MotionFeel(
     double WheelRiseS,                // C1 blend-in (s) at the start of a wheel Cubic: from the carried velocity onto the front-loaded kick
     double AccelUnityGapS,            // spin EMA (s) at/above which a notch travels the full WheelNotchDip; below it gapEma/this (constant speed)
     double TouchpadWheelDip,          // DIP per 120 raw units of a touchpad's wheel-packet fallback stream (not the mouse notch)
-    double TouchpadReleaseCapDipPerS) // ceiling of a composition-timed (DirectManipulation) touchpad release velocity; 0 = none
+    double TouchpadReleaseCapDipPerS, // ceiling of a composition-timed (DirectManipulation) touchpad release velocity; 0 = none
+    double PresentLiftCoastS = 0.0,   // a fast composition-timed contact coasts this long (s) past its newest sample instead of standing still (0 = hold, the default)
+    double PresentLiftCoastMinV = 0.0) // ... only when its ring velocity is at least this (DIP/s): a fast finger does not stop dead
 {
 }
 
@@ -78,6 +80,10 @@ public static class FeelProfiles
         // 12 of 14 flicks released at 8.1-10.9k DIP/s whatever the finger speed, the highest at 10 865 DIP/s. DM's pan
         // gain makes the engine's ring read 50-100k DIP/s on the same flicks, so a DM release is capped at WinUI's.
         TouchpadReleaseCapDipPerS: 10865.0);
+
+    /// <summary><c>--fg tp-release</c>'s values (lane SCROLL F3): DM raises its lift edge 1–5 frames after the last motion, so a
+    /// fast contact coasts up to 25 ms (three 120 Hz frames) past its newest sample, on the very curve its fling will follow.</summary>
+    public const double PresentLiftCoastDefaultS = 0.025, PresentLiftCoastDefaultMinV = 1500.0;
 
     /// <summary>The owner's "momentum" tuning: one notch reads as one track row and each notch
     /// glides for longer.</summary>

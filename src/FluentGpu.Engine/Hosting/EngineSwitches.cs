@@ -150,9 +150,22 @@ public static class EngineSwitches
     public static bool PreciseWait = true;
     /// <summary>Present at sync-interval 0 (+ ALLOW_TEARING) instead of 1.</summary>
     public static bool NoVsync;
-    /// <summary><c>--fg no-output-vblank</c>: keep the DComp compositor clock as the tick source even when the window's panel runs
-    /// at another rate (the A/B arm of the per-monitor vblank source, Win32CompositorClock / OutputVBlankPump).</summary>
-    public static bool NoOutputVBlank;
+    /// <summary><c>--fg panel-vblank</c> (OPT-IN, experimental): when the window's panel runs at another rate than the DComp
+    /// compositor clock, take ticks from that panel's own vblank (Win32CompositorClock / OutputVBlankPump). Off by default: the
+    /// 2026-10-25 on-screen test (100 Hz panel beside a 120 Hz laptop) gave even 10 ms content steps but ~3 % of panel frames
+    /// without a new present (the present slot retires on DWM's 120 Hz cadence), and DXGI's frame statistics report DWM's global
+    /// lattice, so the panel-side result is not attested yet (scratch/p3scroll/PROGRESS.md).</summary>
+    public static bool PanelVBlank;
+    /// <summary><c>--fg tp-lead</c> (feel A/B, default off): DirectManipulation's composition hint is the time until the sample is
+    /// actually SHOWN (its stamp, <c>ContactStamp.ForFrame</c>) instead of at most one refresh, so DM predicts the finger to the
+    /// photon (lane SCROLL F1).</summary>
+    public static bool TouchpadLead;
+    /// <summary><c>--fg tp-sametick</c> (feel A/B, default off): a touchpad sample is stamped for THIS tick's present and the render
+    /// turn of that tick waits (bounded) for the UI's contact pump, one refresh less input-to-photon (lane SCROLL F2).</summary>
+    public static bool TouchpadSameTick;
+    /// <summary><c>--fg tp-release</c> (feel A/B, default off): a fast composition-timed contact keeps coasting through DM's
+    /// lift latency instead of standing still, and its fling continues that coast (lane SCROLL F3).</summary>
+    public static bool TouchpadRelease;
     /// <summary>Start the host with its pass-granular GPU timeline on.</summary>
     public static bool GpuPassTiming;
     /// <summary>Non-blocking secondary present (F085, <c>--fg present-nowait</c>): a detached pop-out's Present carries
@@ -294,7 +307,16 @@ public static class EngineSwitches
             case "opaque": OpaqueWindow = true; return true;
             case "no-precise-wait": PreciseWait = false; return true;
             case "no-vsync": NoVsync = true; return true;
-            case "no-output-vblank": NoOutputVBlank = true; return true;
+            case "panel-vblank": PanelVBlank = true; return true;
+            case "tp-lead": TouchpadLead = true; return true;
+            case "tp-sametick": TouchpadSameTick = true; return true;
+            case "tp-release":
+                TouchpadRelease = true;
+                // Feel as data: the switch only seeds the registry; the plan author reads the feel at author time.
+                FluentGpu.Scroll.Diag.ScrollTunables.Apply(FluentGpu.Scroll.Diag.ScrollTunables.Current with
+                    { PresentLiftCoastS = FluentGpu.Scroll.Motion.FeelProfiles.PresentLiftCoastDefaultS,
+                      PresentLiftCoastMinV = FluentGpu.Scroll.Motion.FeelProfiles.PresentLiftCoastDefaultMinV });
+                return true;
             case "present-nowait": NonBlockingSecondaryPresent = true; return true;
             case "gpu-timing": GpuPassTiming = true; return true;
             case "video-nv12": Nv12VideoOutput = true; return true;

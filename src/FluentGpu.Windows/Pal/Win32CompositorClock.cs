@@ -352,10 +352,10 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
 
     /// <summary>Waiter thread: should the ticks come from the window's own panel vblank? Only once the DComp clock's beat is
     /// measured, when the window's panel period differs from it by more than 2 %, for a monitor not refused since the last
-    /// reprobe, and never with an injected (test) wait or under <c>--fg no-output-vblank</c>.</summary>
+    /// reprobe, never with an injected (test) wait, and only under the opt-in <c>--fg panel-vblank</c>.</summary>
     private bool WantPanelVBlank()
     {
-        if (_waitForClock is not null || FluentGpu.Hosting.EngineSwitches.NoOutputVBlank) return false;
+        if (_waitForClock is not null || !FluentGpu.Hosting.EngineSwitches.PanelVBlank) return false;
         long window = Volatile.Read(ref _windowPeriodQpc), beat = _dcompBeatQpc;
         nint mon = Volatile.Read(ref _windowMonitor);
         if (window <= 0 || beat <= 0 || mon == 0 || mon == _refusedMonitor) return false;

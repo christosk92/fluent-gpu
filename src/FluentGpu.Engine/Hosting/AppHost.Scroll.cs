@@ -660,6 +660,40 @@ public sealed partial class AppHost
         }
     }
 
+    // ── F2 (--fg tp-sametick): this tick's contact sample, shown by this tick's render turn ─────────────────────────────
+    // A frame-aligned producer's sample is stamped for THIS tick's present (ContactStamp.ForFrame), one refresh earlier than the
+    // default. The render turn of that tick would race the UI's write of it (both wake on the same tick, ±0.5 ms), so the render
+    // thread waits — bounded — until the UI has dispatched the tick's pumped contact events; a UI later than the bound is shown
+    // the previous sample (what the default shows one tick later). Counted, never unbounded.
+    private long _contactPumpFrameQpc;          // UI writes (Volatile): the frame tick whose contact pump has been dispatched
+    private int _contactProducerLive;           // UI writes (Volatile): a frame-aligned producer is live
+    private long _contactPumpWaits, _contactPumpTimeouts;
+
+    /// <summary>UI thread, after the pump's events were dispatched (plan slots written).</summary>
+    private void NoteContactPumped()
+    {
+        Volatile.Write(ref _contactProducerLive, _window.ScrollProducerLive ? 1 : 0);
+        Volatile.Write(ref _contactPumpFrameQpc, _palFrameClock.FrameQpc);
+    }
+
+    /// <summary>Render thread: wait (at most a quarter refresh, ≤ 2 ms) for the UI's contact pump of tick <paramref name="tickQpc"/>.</summary>
+    private void AwaitContactPump(long tickQpc)
+    {
+        if (tickQpc == 0 || Volatile.Read(ref _contactProducerLive) == 0 || Volatile.Read(ref _contactPumpFrameQpc) >= tickQpc) return;
+        long bound = Math.Min(Stopwatch.Frequency / 500, RenderPeriodTicks() / 4);
+        long deadline = Stopwatch.GetTimestamp() + bound;
+        _contactPumpWaits++;
+        var spin = new SpinWait();
+        while (Volatile.Read(ref _contactPumpFrameQpc) < tickQpc)
+        {
+            if (Stopwatch.GetTimestamp() >= deadline) { _contactPumpTimeouts++; return; }
+            spin.SpinOnce(sleep1Threshold: -1);
+        }
+    }
+
+    /// <summary>F2 diagnostics: render turns that waited for the UI's contact pump, and those the bound cut short.</summary>
+    public (long Waits, long Timeouts) ContactPumpWaits => (Volatile.Read(ref _contactPumpWaits), Volatile.Read(ref _contactPumpTimeouts));
+
     // ── render thread ───────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>The predicted present time of the render turn woken by compositor tick <paramref name="tickQpc"/>
@@ -676,6 +710,7 @@ public sealed partial class AppHost
     private bool TickRenderScroll(Threading.SceneRenderFrame sceneFrame, bool fresh, double presentSec)
     {
         Threading.ThreadGuard.AssertRender();
+        if (EngineSwitches.TouchpadSameTick) AwaitContactPump(RenderTurnTickQpc());
         if (fresh) _renderPoser.Adopt(sceneFrame.Scene.ScrollCoverage);
         _renderSink.Bind(sceneFrame.Scene);
         _renderPlanEpochPosed = _planSlots.Epoch;   // before the Tick: a write during it is posed by the next turn

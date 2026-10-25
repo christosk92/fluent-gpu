@@ -6410,6 +6410,8 @@ public sealed partial class AppHost : IDisposable
             int scrollPumped = _window.PumpScroll(in _palFrameClock, _scrollPumpRing);
             if (scrollPumped > 0 && _fzPhase != FreezePhase.Frozen)
                 _dispatcher.Dispatch(_scrollPumpRing.Drain(), _scrollPumpRing.DrainVelocitySamples());
+            // F2 (--fg tp-sametick): tell the render thread this tick's contact samples are in the plan slots (it waits, bounded).
+            if (EngineSwitches.TouchpadSameTick) NoteContactPumped();
 
             // The frame step: plans → this frame's offsets/motion, realize windows, chrome, the FLIP-suppression latch
             // (a reconcile landing while a user scroll moves content this frame or the last must SNAP, not fly).

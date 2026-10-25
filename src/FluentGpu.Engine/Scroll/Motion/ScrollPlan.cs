@@ -74,13 +74,35 @@ public readonly struct ContactRing
     /// two samples or a horizon narrower than the minimum span.</summary>
     public readonly double V;
 
-    private ContactRing(ReadOnlySpan<double> t, ReadOnlySpan<double> p, byte count, double v)
+    /// <summary>The lift coast (lane SCROLL F3, <c>--fg tp-release</c>; all 0 = off): past its newest sample a composition-timed
+    /// ring whose |V| ≥ <see cref="CoastMinV"/> continues on <c>p + V'/K·(1 − e^(−K·e))</c> for e ≤ <see cref="CoastS"/>
+    /// (V' = V capped at <see cref="CoastCap"/>) instead of holding: the curve its fling follows, so a lift that DM reports frames
+    /// late neither stands still nor jumps.</summary>
+    public readonly float CoastK, CoastS, CoastMinV, CoastCap;
+
+    private ContactRing(ReadOnlySpan<double> t, ReadOnlySpan<double> p, byte count, double v, float coastK, float coastS, float coastMinV, float coastCap)
     {
         _t0 = t[0]; _t1 = t[1]; _t2 = t[2]; _t3 = t[3]; _t4 = t[4]; _t5 = t[5]; _t6 = t[6]; _t7 = t[7];
         _p0 = p[0]; _p1 = p[1]; _p2 = p[2]; _p3 = p[3]; _p4 = p[4]; _p5 = p[5]; _p6 = p[6]; _p7 = p[7];
         Count = count;
         V = v;
+        CoastK = coastK; CoastS = coastS; CoastMinV = coastMinV; CoastCap = coastCap;
     }
+
+    /// <summary>This ring with the lift coast armed (see <see cref="CoastK"/>).</summary>
+    public ContactRing WithCoast(double k, double seconds, double minV, double cap)
+    {
+        Span<double> ts = stackalloc double[8];
+        Span<double> ps = stackalloc double[8];
+        CopyTo(ts, ps);
+        return new ContactRing(ts, ps, Count, V, (float)k, (float)seconds, (float)minV, (float)cap);
+    }
+
+    /// <summary>True when the lift coast applies to this ring's current velocity.</summary>
+    public bool Coasts => CoastS > 0f && CoastK > 0f && Math.Abs(V) >= CoastMinV && Count >= 2;
+
+    /// <summary>The coast's velocity: V capped at <see cref="CoastCap"/> (0 = uncapped).</summary>
+    public double CoastV => CoastCap > 0f && Math.Abs(V) > CoastCap ? Math.Sign(V) * (double)CoastCap : V;
 
     private void CopyTo(Span<double> t, Span<double> p)
     {
@@ -114,7 +136,7 @@ public readonly struct ContactRing
             ps[7] = pos;
             n = 8;
         }
-        return new ContactRing(ts, ps, (byte)n, LsqVelocity(ts, ps, n, horizonS, minSpanS));
+        return new ContactRing(ts, ps, (byte)n, LsqVelocity(ts, ps, n, horizonS, minSpanS), CoastK, CoastS, CoastMinV, CoastCap);
     }
 
     /// <summary>The least-squares velocity over the current samples with an explicit horizon/minimum span (the same
@@ -208,7 +230,17 @@ public readonly struct ContactRing
         v = V;
         if (t >= ts[last])
         {
-            if (clock == ContactClock.Present) return ps[last];
+            if (clock == ContactClock.Present)
+            {
+                if (!Coasts) return ps[last];
+                // F3: the lift coast (see CoastK): the fling's own curve, then a hold once CoastS has elapsed.
+                double k = CoastK, vc = CoastV;
+                double ec = t - ts[last];
+                if (ec > CoastS) ec = CoastS;
+                double decay = Math.Exp(-k * ec);
+                v = ec < CoastS ? vc * decay : 0.0;
+                return ps[last] + vc / k * (1.0 - decay);
+            }
             double gap = ts[last] - ts[last - 1];
             if (!(gap >= ResampleMinDeltaS) || gap > ResampleMaxDeltaS) return ps[last];
             double maxPredict = gap * 0.5 < ResampleMaxPredictionS ? gap * 0.5 : ResampleMaxPredictionS;
@@ -255,7 +287,7 @@ public readonly struct ContactRing
         Span<double> ps = stackalloc double[8];
         CopyTo(ts, ps);
         for (int i = 0; i < Count; i++) ts[i] += dt;
-        return new ContactRing(ts, ps, Count, V);
+        return new ContactRing(ts, ps, Count, V, CoastK, CoastS, CoastMinV, CoastCap);
     }
 
     /// <summary>Moves every sample's POSITION by <paramref name="delta"/> (times and <see cref="V"/> untouched) — a
@@ -267,7 +299,7 @@ public readonly struct ContactRing
         Span<double> ps = stackalloc double[8];
         CopyTo(ts, ps);
         for (int i = 0; i < Count; i++) ps[i] += delta;
-        return new ContactRing(ts, ps, Count, V);
+        return new ContactRing(ts, ps, Count, V, CoastK, CoastS, CoastMinV, CoastCap);
     }
 
     /// <summary>Time of the most recent sample, or −∞ if empty.</summary>

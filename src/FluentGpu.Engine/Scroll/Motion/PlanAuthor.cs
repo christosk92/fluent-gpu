@@ -132,6 +132,8 @@ public static class PlanAuthor
     {
         ContactRing ring = default;
         ring = ring.WithSample(t, pos, feel.FlingImpulseWindowS, feel.VelocityMinSpanS);
+        if (clock == ContactClock.Present && feel.PresentLiftCoastS > 0.0)
+            ring = ring.WithCoast(feel.FlingDecayPerS, feel.PresentLiftCoastS, feel.PresentLiftCoastMinV, feel.TouchpadReleaseCapDipPerS);
         return new ScrollPlan(default, default, default, default, 0, prev.Vp, prev.Gen, prev.Seq + 1, prev.Min, prev.Max,
             prev.ViewportExtent, prev.RubberC, clock, OverpanPolicy.RubberBand, MotionKind.Drag, ring);
     }
@@ -185,6 +187,18 @@ public static class PlanAuthor
             ContactRelease.Stopped => true,
             _ => prev.Ring.Count > 0 && tLift - prev.Ring.LastT > StoppedAfterS(prev.Ring, in feel),
         };
+        // F3 (--fg tp-release): a fast composition-timed contact has been coasting since its newest sample (ContactRing.CoastK);
+        // a MOVING lift continues that very curve — from the lift while the coast is still running, else from where it held —
+        // so the release neither stands still nor jumps nor loses the speed decayed over DM's lift latency.
+        if (!stopped && prev.Clock == ContactClock.Present && prev.Ring.Coasts && release == ContactRelease.Moving)
+        {
+            double vc = prev.Ring.CoastV;
+            double held = tNow - tLift;
+            if (held <= prev.Ring.CoastS)
+                return Coast(in prev, tLift, prev.Ring.Eval(tLift, prev.Clock, out _), vc, in feel);
+            double pHeld = prev.Ring.Eval(tNow, prev.Clock, out _);
+            return Coast(in prev, tNow, pHeld, vc * Math.Exp(-prev.Ring.CoastK * prev.Ring.CoastS), in feel);
+        }
         double vLift = stopped ? 0.0 : prev.Ring.V;
         double v0 = tNow > tLift ? vLift * Math.Exp(-feel.FlingDecayPerS * (tNow - tLift)) : vLift;
         // A composition-timed (DirectManipulation) touchpad release starts no faster than WinUI's measured plateau
