@@ -13,4 +13,8 @@ public static class TextDiagnostics
     /// no store (a real itemize and shape) and the two are compared field by field (box, metrics, every glyph, cluster and line);
     /// a summary per engine every 5 s, the first mismatches printed with their text.</summary>
     public static bool ShapeValidate;
+
+    /// <summary><c>--fg no-shape-prefetch</c>: the layout pass does not hand first-visit text to the shaping workers (the A/B arm):
+    /// every new string shapes inside its measure on the UI thread, as before C4 step 4.</summary>
+    public static bool NoShapePrefetch;
 }

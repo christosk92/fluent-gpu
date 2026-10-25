@@ -373,6 +373,36 @@ public sealed partial class FlexLayout
         _fonts = fonts;
     }
 
+    // ── Shape prefetch (PERF r3 UI, C4 step 4) ──────────────────────────────────────────────────────────────────────────────
+    // Before a pass measures, hand the font system every text node in the subtrees it will solve whose measure cache holds no
+    // entry for its CURRENT text and style (a node mounted or retexted since it was last measured): the backend shapes those on
+    // its workers while the pass runs, and the measure finds them shaped (IFontSystem.PrefetchShape; the DirectWrite backend's
+    // TextLayoutEngine.Prefetch.cs). A clean subtree is skipped whole: the pass rides its measure ring and measures none of its
+    // text. Reads only (no column, flag or cache is written), and the measure's answer is the same with or without it.
+    private void PrefetchText(NodeHandle n)
+    {
+        if (_scene.IsLayoutClean(n)) return;
+        ref NodePaint paint = ref _scene.Paint(n);
+        if (paint.VisualKind == VisualKind.Text)
+        {
+            if (paint.Text.IsEmpty) return;
+            ref LayoutInput li = ref _scene.Layout(n);
+            int epoch = FluentGpu.Text.FontRegistry.Shared.BodyVersion;
+            if (_scene.TryGetMeasureCache(n, out var mc)
+                && (SameShape(in mc.E0, paint.Text, in li.TextStyle, epoch) || SameShape(in mc.E1, paint.Text, in li.TextStyle, epoch)))
+                return;   // measured before with this text and style: its shape is (or was) stored
+            _fonts.PrefetchShape(paint.Text, in li.TextStyle);
+            _dPrefetch++;
+            return;
+        }
+        for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c)) PrefetchText(c);
+    }
+
+    private static bool SameShape(in TextMeasureEntry e, StringId text, in TextStyle style, int fontEpoch)
+        => e.Valid && e.Text == text && e.FontEpoch == fontEpoch && e.Style == style;
+
+    private int _dPrefetch;
+
     public void Run(NodeHandle root)
     {
         if (root.IsNull) return;
@@ -440,6 +470,7 @@ public sealed partial class FlexLayout
     public void Run(NodeHandle root, Size2 window)
     {
         if (root.IsNull) return;
+        if (_fonts.CanPrefetchShapes) PrefetchText(root);
         // Snapshot so the per-Run print stays per-call even though the counters are now frame accumulators (host-reset).
         FluentGpu.Hosting.MountProf.RootSolves++;
         int m0 = _dMeasure, th0 = _dTextHit, tm0 = _dTextMiss, a0 = _dArrange, mh0 = _dMeasureMemoHit;
@@ -460,6 +491,7 @@ public sealed partial class FlexLayout
     public void RunSubtree(NodeHandle node)
     {
         if (node.IsNull) return;
+        if (_fonts.CanPrefetchShapes) PrefetchText(node);
         FluentGpu.Hosting.MountProf.SubtreeSolves++;
         BeginMeasurePass();
         ref LayoutInput li = ref _scene.Layout(node);

@@ -96,6 +96,7 @@ public enum ImageAtlasExperiment : byte
 /// <c>shape-census</c> — every text layout engine reports its shape-cache hits and misses (first-ever / already shaped by
 /// another engine / re-shaped after its own eviction), shaping and re-wrap time and retained bytes every 5 s (diagnostic).
 /// <c>shape-validate</c> — every shape-store hit is laid out again with a real shape and compared glyph by glyph (diagnostic).
+/// <c>no-shape-prefetch</c> — first-visit text shapes inside its measure on the UI thread instead of on the shaping workers (the A/B arm).
 /// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).
 /// <c>raw-phase</c> — a slice under a composited transition layer rasters at its raw float placement even when that is a
 /// whole pixel up to float noise (<c>SliceRecorder.FractionalPx</c>; the A/B arm). <c>phase-validate</c> — every composited
@@ -303,6 +304,7 @@ public static class EngineSwitches
             case "mount-census": FluentGpu.Reconciler.TreeReconciler.MountCensusEnabled = true; return true;
             case "shape-census": FluentGpu.Text.TextDiagnostics.ShapeCensus = true; return true;
             case "shape-validate": FluentGpu.Text.TextDiagnostics.ShapeValidate = true; return true;
+            case "no-shape-prefetch": FluentGpu.Text.TextDiagnostics.NoShapePrefetch = true; return true;
             case "no-partial-keep": FluentGpu.Render.SceneRecordingContext.PartialKeepEnabled = false; return true;
             case "damage-log": FluentGpu.Render.Tiles.TileDamage.Log = true; return true;
             case "no-precise-present": FluentGpu.Render.Tiles.TileDamage.PrecisePresent = false; return true;

@@ -195,6 +195,36 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
         return (long)h;
     }
 
+    /// <summary>The shape key of a layout call, and the inputs it is derived from as shaping sees them: the weight clamped to the
+    /// DWRITE range, an empty family replaced by the theme's body chain (E9: every cache keys on the CHAIN, so a body-font change
+    /// misses instead of replaying the previous font's glyphs), the case transform applied (E19: into this engine's reused buffer,
+    /// length preserving, so every cluster/caret index is the same), the OpenType features, and a spanned run's effective spans.
+    /// The ONE derivation: <see cref="Layout"/> and the prefetch's <see cref="ShapeKeyFor"/> both use it. 0 for empty text.</summary>
+    private long KeyOf(ref ReadOnlySpan<char> text, ref string family, ref int weight, float size, float charSpacing, float lineHeight, int stacking,
+        int lineBounds, ReadOnlySpan<SpanStyle> spans, StringTable? names, int typography, out uint features, out ReadOnlySpan<SpanKey> spanKeys)
+    {
+        if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
+        _registry.SyncBody();
+        if (string.IsNullOrEmpty(family)) family = _registry.BodyChain;
+        TextCase textCase = TextTypography.CaseOf(typography);
+        if (textCase != TextCase.AsWritten) text = _case.Get(text, textCase);
+        features = (uint)TextTypography.FeaturesOf(typography);
+        spanKeys = default;
+        if (text.Length == 0) return 0;
+        long key = ShapeHash(text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features);
+        if (!spans.IsEmpty)
+        {
+            spanKeys = EffectiveSpans(spans, family, weight, size, names);
+            key = SpanHash(key, spanKeys);
+        }
+        return key;
+    }
+
+    /// <summary>The shape key <see cref="Layout"/> would use for this call (the prefetch's: UI thread, on the engine that will measure it).</summary>
+    internal long ShapeKeyFor(ReadOnlySpan<char> text, string family, int weight, float size, float charSpacing, float lineHeight, int stacking,
+        int lineBounds, ReadOnlySpan<SpanStyle> spans, StringTable? names, int typography)
+        => KeyOf(ref text, ref family, ref weight, size, charSpacing, lineHeight, stacking, lineBounds, spans, names, typography, out _, out _);
+
     private static long ShapeHash(ReadOnlySpan<char> text, string? family, int weight, float size, float charSpacing, float lineHeight, int stacking, int lineBounds, uint features)
     {
         ulong h = 14695981039346656037UL; const ulong P = 1099511628211UL;
@@ -264,34 +294,26 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
     {
         long censusT0 = TextDiagnostics.ShapeCensus && !_isValidator ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;   // --fg shape-census
         ReadOnlySpan<char> argText = text; string argFamily = family; int argWeight = weight;   // --fg shape-validate re-lays the call as made
-        if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
-        // E9: a run with no family of its own shapes in the theme's body chain. Key every cache on the CHAIN, not on "", so a
-        // body-font change misses the shape cache instead of replaying glyphs of the previous font.
-        _registry.SyncBody();
-        if (string.IsNullOrEmpty(family)) family = _registry.BodyChain;
-        // E19: the case transform is applied HERE, at shaping, into a reused buffer - the written text is never rewritten,
-        // nothing is allocated per render, and (length preserving) every cluster/caret index is the same.
-        TextCase textCase = TextTypography.CaseOf(typography);
-        if (textCase != TextCase.AsWritten) text = _case.Get(text, textCase);
+        long shapeKey = KeyOf(ref text, ref family, ref weight, size, charSpacing, lineHeight, stacking, lineBounds, spans, names, typography,
+            out uint features, out ReadOnlySpan<SpanKey> spanKeys);
         _glyphCount = 0; _laidCount = 0; _clusterCount = 0; _lineRecCount = 0; _spanEllCount = 0;
-        uint features = (uint)TextTypography.FeaturesOf(typography);
         _align = TextTypography.AlignOf(typography);
         _alignWidth = alignWidth;
 
-        // Shape cache: a width-only change replays only WrapAndPosition (shaping is width-independent). Plain text only
-        // (spanned inline runs re-shape — never the resize hot path). On a hit, restore the shaped state and re-wrap.
-        bool cacheable = text.Length > 0 && _store is not null;   // spanned runs too (C4 step 3): their key adds the spans' effective inputs
-        ReadOnlySpan<SpanKey> spanKeys = default;
-        long shapeKey = 0;
+        // Shape cache: a width-only change replays only WrapAndPosition (shaping is width-independent). Spanned runs too (C4
+        // step 3: their key adds the spans' effective inputs). On a hit, restore the shaped state and re-wrap.
+        bool cacheable = text.Length > 0 && _store is not null;
         if (cacheable)
         {
-            shapeKey = ShapeHash(text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features);
-            if (!spans.IsEmpty)
+            bool hitStore = _store!.TryRestore(shapeKey, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features, spanKeys, this, out float hitLineH);
+            // A prefetch worker shaping this very string (TextLayoutEngine.Prefetch.cs): wait for its store rather than shape it twice.
+            // (Never on a worker's own engine: the key in flight is the one it is about to shape.)
+            if (!hitStore && !_isPrefetchWorker && _store.WaitInFlight(shapeKey, PrefetchWaitMs, out long waited))
             {
-                spanKeys = EffectiveSpans(spans, family, weight, size, names);
-                shapeKey = SpanHash(shapeKey, spanKeys);
+                _cWaits++; _cWaitTicks += waited;
+                hitStore = _store.TryRestore(shapeKey, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features, spanKeys, this, out hitLineH);
             }
-            if (_store!.TryRestore(shapeKey, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features, spanKeys, this, out float hitLineH))
+            if (hitStore)
             {
                 WrapAndPosition(size, 1f, hitLineH, maxWidth, wrap, trim, maxLines, _ellFace, overflowSuffixStart);
                 if (TextDiagnostics.ShapeValidate && !_isValidator)

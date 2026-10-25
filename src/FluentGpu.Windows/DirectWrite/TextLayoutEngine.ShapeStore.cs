@@ -58,6 +58,9 @@ public sealed unsafe partial class TextLayoutEngine
         }
         private long _tick;
         private readonly List<int> _evictScratch;
+        // Keys a prefetch worker is shaping right now (TextLayoutEngine.Prefetch.cs): a measure that misses on one waits for the
+        // worker's store instead of shaping the same string a second time.
+        private readonly HashSet<long> _inFlight = new();
 
         public ShapeStore(int cap)
         {
@@ -148,6 +151,40 @@ public sealed unsafe partial class TextLayoutEngine
                 r.Baseline = e.Baseline; r.UnderlineY = e.UnderlineY; r.UnderlineThickness = e.UnderlineThickness; r.StrikeY = e.StrikeY;
                 r.LineH = lineH; r.EllGid = e._ellGid; r.EllAdv = e._ellAdv; r.EllFace = e._ellFace; r.EllSize = e._ellSize;
                 r.Tick = ++_tick;
+                if (_inFlight.Remove(key)) Monitor.PulseAll(_gate);   // a measure waiting on this key's prefetch wakes to a hit
+            }
+        }
+
+        /// <summary>Hand <paramref name="key"/> to a prefetch worker: false when it is stored already or a worker has it.</summary>
+        public bool BeginInFlight(long key)
+        {
+            lock (_gate) return !_index.ContainsKey(key) && _inFlight.Add(key);
+        }
+
+        /// <summary>The worker is done with <paramref name="key"/> (stored, found stored, or failed): no measure waits on it any more.</summary>
+        public void EndInFlight(long key)
+        {
+            lock (_gate) { if (_inFlight.Remove(key)) Monitor.PulseAll(_gate); }
+        }
+
+        /// <summary>A measure missed <paramref name="key"/>: if a worker is shaping it, wait (at most <paramref name="maxMs"/>) until the
+        /// worker is done. True when it waited (the caller looks again); false when no worker had it (the caller shapes).</summary>
+        public bool WaitInFlight(long key, int maxMs, out long waitedTicks)
+        {
+            waitedTicks = 0;
+            lock (_gate)
+            {
+                if (!_inFlight.Contains(key)) return false;
+                long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                long deadline = t0 + System.Diagnostics.Stopwatch.Frequency * maxMs / 1000;
+                while (_inFlight.Contains(key))
+                {
+                    long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                    if (now >= deadline) break;
+                    Monitor.Wait(_gate, 1);
+                }
+                waitedTicks = System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+                return true;
             }
         }
 

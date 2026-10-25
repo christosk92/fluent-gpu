@@ -20,6 +20,7 @@ public sealed unsafe partial class TextLayoutEngine
     private int _censusBit;
     private long _censusLastDump;
     private long _cLayouts, _cHits, _cMisses, _cFresh, _cCross, _cOwn, _cUncacheable, _cSpannedHits, _cSpannedMisses, _cShapeTicks, _cSpannedTicks, _cWrapTicks;
+    private long _cPrefetched, _cWaits, _cWaitTicks;   // always counted (an increment each): prefetches handed to the workers, measures that waited on one
 
     private void CensusLayout(bool hit, bool cacheable, bool spanned, long key, long t0, long t1)
     {
@@ -63,7 +64,9 @@ public sealed unsafe partial class TextLayoutEngine
             $"uncacheable={_cUncacheable} spannedHits={_cSpannedHits} spannedMisses={_cSpannedMisses} spannedMs={_cSpannedTicks * f:F1} shapeMs={_cShapeTicks * f:F1} " +
             $"usPerShape={(_cFresh + _cCross + _cOwn == 0 ? 0 : _cShapeTicks * f * 1000 / (_cFresh + _cCross + _cOwn)):F1} " +
             $"wrapMs={_cWrapTicks * f:F1} usPerLayout={(_cLayouts == 0 ? 0 : _cWrapTicks * f * 1000 / _cLayouts):F1} " +
+            $"prefetched={_cPrefetched} waits={_cWaits} waitMs={_cWaitTicks * f:F2} workerShapes={ShapePrefetchPool.Shared.Shaped} " +
             $"storeEntries={entries} chars={chars} glyphs={glyphs} storeKB={bytes / 1024}");
         _cLayouts = _cHits = _cMisses = _cFresh = _cCross = _cOwn = _cUncacheable = _cSpannedHits = _cSpannedMisses = _cShapeTicks = _cSpannedTicks = _cWrapTicks = 0;
+        _cPrefetched = _cWaits = _cWaitTicks = 0;
     }
 }
