@@ -98,6 +98,7 @@ public enum ImageAtlasExperiment : byte
 /// <c>shape-validate</c> — every shape-store hit is laid out again with a real shape and compared glyph by glyph (diagnostic).
 /// <c>measure-census</c> — every real measure classified against the node's earlier ones in the frame (first / same width again /
 /// new width by its distance), by phase, node kind and solve kind, every 5 s (diagnostic).
+/// <c>no-measure-flat</c> — a re-measure inside the node's measure-validity interval descends anyway (the A/B arm of C1).
 /// <c>no-shape-prefetch</c> — first-visit text shapes inside its measure on the UI thread instead of on the shaping workers (the A/B arm).
 /// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).
 /// <c>raw-phase</c> — a slice under a composited transition layer rasters at its raw float placement even when that is a
@@ -306,6 +307,7 @@ public static class EngineSwitches
             case "mount-census": FluentGpu.Reconciler.TreeReconciler.MountCensusEnabled = true; return true;
             case "shape-census": FluentGpu.Text.TextDiagnostics.ShapeCensus = true; return true;
             case "measure-census": FluentGpu.Layout.FlexLayout.MeasureCensusEnabled = true; return true;
+            case "no-measure-flat": FluentGpu.Layout.FlexLayout.MeasureFlatEnabled = false; return true;
             case "shape-validate": FluentGpu.Text.TextDiagnostics.ShapeValidate = true; return true;
             case "no-shape-prefetch": FluentGpu.Text.TextDiagnostics.NoShapePrefetch = true; return true;
             case "no-partial-keep": FluentGpu.Render.SceneRecordingContext.PartialKeepEnabled = false; return true;

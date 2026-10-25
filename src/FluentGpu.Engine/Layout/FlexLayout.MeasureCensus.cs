@@ -23,7 +23,7 @@ public sealed partial class FlexLayout
     private bool _mcArranging;
     private long _mcLastDump;
     private long _mcFrames, _mcReal, _mcFirst, _mcRepeat, _mcNoise, _mcSmall, _mcReal1, _mcInf, _mcArrangePhase, _mcText, _mcRow, _mcCol,
-                 _mcRootSolves, _mcSubtreeSolves, _mcTextNew, _mcRepeatText, _mcNewSame, _mcNewDiff, _mcNewSameText;
+                 _mcRootSolves, _mcSubtreeSolves, _mcTextNew, _mcRepeatText, _mcNewSame, _mcNewDiff, _mcNewSameText, _mcFlatHits;
 
     private void CensusFrameStart()
     {
@@ -75,9 +75,9 @@ public sealed partial class FlexLayout
             $"[measure-census] frames={_mcFrames} realMeasures={_mcReal} first={_mcFirst} repeatSameWidth={_mcRepeat} (text {_mcRepeatText}) " +
             $"newWidth: noise<0.01={_mcNoise} <1={_mcSmall} >=1={_mcReal1} unbounded={_mcInf} (text {_mcTextNew}) arrangePhase={_mcArrangePhase} " +
             $"kind: text={_mcText} row={_mcRow} col/other={_mcCol} rootSolves={_mcRootSolves} subtreeSolves={_mcSubtreeSolves} nodesCreatedTotal={created} " +
-            $"newWidthResult: same={_mcNewSame} (text {_mcNewSameText}) different={_mcNewDiff}");
+            $"newWidthResult: same={_mcNewSame} (text {_mcNewSameText}) different={_mcNewDiff} intervalHits={_mcFlatHits}");
         _mcFrames = _mcReal = _mcFirst = _mcRepeat = _mcNoise = _mcSmall = _mcReal1 = _mcInf = _mcArrangePhase = _mcText = _mcRow = _mcCol = 0;
-        _mcRootSolves = _mcSubtreeSolves = _mcTextNew = _mcRepeatText = _mcNewSame = _mcNewDiff = _mcNewSameText = 0;
+        _mcRootSolves = _mcSubtreeSolves = _mcTextNew = _mcRepeatText = _mcNewSame = _mcNewDiff = _mcNewSameText = _mcFlatHits = 0;
     }
 
     /// <summary>The general path's result for a real measure: for a NEW-width re-measure, whether it came out the same size as the
