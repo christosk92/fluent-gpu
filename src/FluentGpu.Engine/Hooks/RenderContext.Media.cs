@@ -34,7 +34,7 @@ public sealed partial class RenderContext
             cell = new MediaPlayerCell { Player = builder.Build() };
             RegisterCell(__k, cell, cleanupCapable: true);
         }
-        else cell = (MediaPlayerCell)_cells[idx];
+        else cell = (MediaPlayerCell)CellAt(idx);
         return cell.Player;
     }
 

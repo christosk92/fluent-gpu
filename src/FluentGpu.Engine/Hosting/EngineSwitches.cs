@@ -109,7 +109,11 @@ public enum ImageAtlasExperiment : byte
 /// <c>no-op-footprints</c> — a tile replay decodes every op of its segment instead of skipping the primitives whose
 /// footprint misses the tile (the A/B arm). <c>footprint-validate</c> — composited tiles are re-rastered without the skip
 /// into a shadow surface and compared. <c>no-defer-geometry</c> — a non-visible tile of a slice whose geometry is moving
-/// rasters every turn as before (the A/B arm of <c>SliceTable.DeferMovingGeometry</c>).</item>
+/// rasters every turn as before (the A/B arm of <c>SliceTable.DeferMovingGeometry</c>). <c>box-fade-test</c> — the edge-fade
+/// distribution test compares item footprint boxes only, without the per-op refinement (the A/B arm). <c>group-fades</c> —
+/// every edge fade composites through its group surface (the reference of the distribution's equivalence check).
+/// <c>ink-validate</c> — every replayed glyph run's quads are checked against the glyph ink extent the fade distribution test
+/// read for it (<c>GlyphInk</c>; breaches are logged).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -303,6 +307,9 @@ public static class EngineSwitches
             case "no-op-footprints": FluentGpu.Render.Tiles.TileDamage.OpFootprints = false; return true;
             case "no-defer-geometry": FluentGpu.Render.Tiles.SliceTable.DeferMovingGeometry = false; return true;
             case "raw-phase": FluentGpu.Render.SliceRecorder.CanonicalPhase = false; return true;
+            case "box-fade-test": FluentGpu.Render.SliceRecorder.BoxFadeTest = true; return true;
+            case "ink-validate": FluentGpu.Render.Tiles.TileDamage.InkValidate = true; return true;
+            case "group-fades": FluentGpu.Render.SliceRecorder.GroupFadesSwitch = true; return true;
             case "rewalk-validate": FluentGpu.Render.SceneRecordingContext.PartialKeepValidate = true; return true;
             case "capture-validate": FluentGpu.Scene.SceneRecordingSnapshot.ParityValidateEveryCapture = true; return true;
             case "no-ledgered-capture": FluentGpu.Scene.SceneRecordingSnapshot.LedgeredCaptureEnabled = false; return true;

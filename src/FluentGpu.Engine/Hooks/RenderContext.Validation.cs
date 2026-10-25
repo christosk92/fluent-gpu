@@ -39,7 +39,7 @@ public sealed partial class RenderContext
         int idx = LookupCell(__hf, __hl, out var __k);
         DisposableCell cell;
         if (idx < 0) { cell = new DisposableCell { Disposable = register() }; RegisterCell(__k, cell, cleanupCapable: true); }
-        else cell = (DisposableCell)_cells[idx];
+        else cell = (DisposableCell)CellAt(idx);
         return cell.Disposable;
     }
 

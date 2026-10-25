@@ -46,11 +46,11 @@ public sealed partial class TreeReconciler
         if (BindContract.CompiledIn && BindContract.Enabled && el.MorphId is not null)
             BindContract.MorphVisibleBind(el.GetType().Name);
 
-        var fx = new BindEffect<bool>(Runtime, el, static e => e.Visible);
-        AddBinding(node, fx.Start(this, node, static f => f.Rec!.FirePresence((BindEffect<bool>)f)));
+        var fx = NewBind<bool>(el, static e => e.Visible);
+        AddBinding(node, fx.Start(node, static f => f.Rec.FirePresence((Bind<bool>)f)));
     }
 
-    private void FirePresence(BindEffect<bool> fx)
+    private void FirePresence(Bind<bool> fx)
     {
         NodeHandle node = fx.Node;
         NodeBindingFireCount++;

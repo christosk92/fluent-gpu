@@ -688,7 +688,7 @@ public sealed class TabView : Component
                 // Reorderable.Item wires the drag gesture + FLIP displacement; it is NOT a focus stop (the plate
                 // inside is) — its keyboard-lift mode would double the strip's tab stops, and WinUI reorders tabs
                 // by pointer here.
-                ? ((BoxEl)ro.Item(idx, wrapper, key: "tab#" + idx)) with { Focusable = false, TabStop = false }
+                ? ro.Item(idx, wrapper, key: "tab#" + idx).As<BoxEl>() with { Focusable = false, TabStop = false }
                 : wrapper with { Key = "tab#" + idx };
         }
 
@@ -757,9 +757,9 @@ public sealed class TabView : Component
             Children = [scrollHost],
         };
         if (CanReorderTabs)
-            scrollArea = ((BoxEl)ro.List(scrollArea)) with { Key = "tabs", Grow = 0f, Shrink = 1f };
+            scrollArea = ro.List(scrollArea).As<BoxEl>() with { Key = "tabs", Grow = 0f, Shrink = 1f };
         else
-            scrollArea = ((BoxEl)scrollArea) with { Key = "tabs" };
+            scrollArea = scrollArea.As<BoxEl>() with { Key = "tabs" };
 
         // Leading inset: LeftContentColumn MinWidth=2 (TabView.xaml:31) + the ItemsPresenter's 4px header cell
         // (:117-120) — static here (WinUI's header cell scrolls with the tabs).
@@ -859,7 +859,7 @@ public sealed class TabView : Component
             // The SAME surface as the selected header (SolidBackgroundFillColorTertiary, themeresources:85) — the
             // selected tab fuses flush with its content.
             Fill = Tok.FillSolidTertiary,
-            Children = body is null ? [] : [body],
+            Children = body is null ? [] : [body.Value],
         };
         content = Parts.Apply(PartContent, content) with { Children = content.Children };
 

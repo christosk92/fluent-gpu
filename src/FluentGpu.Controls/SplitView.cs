@@ -213,7 +213,7 @@ public static class SplitView
 
             Element[] kids = paneCol is null
                 ? [watcher, contentBox]
-                : right ? [watcher, contentBox, paneCol] : [watcher, paneCol, contentBox];
+                : right ? [watcher, contentBox, paneCol.Value] : [watcher, paneCol.Value, contentBox];
             root = new BoxEl { Direction = 0, Grow = 1f, ClipToBounds = true, Children = kids };
         }
         else
@@ -274,8 +274,8 @@ public static class SplitView
 
             Element[] zk = paneLayer is null
                 ? [baseRow]
-                : open ? [baseRow, dismiss, Aligned(paneLayer, slide: !compactOverlay)]
-                       : [baseRow, Aligned(paneLayer, slide: false)];
+                : open ? [baseRow, dismiss, Aligned(paneLayer.Value, slide: !compactOverlay)]
+                       : [baseRow, Aligned(paneLayer.Value, slide: false)];
 
             // VK_ESCAPE (and gamepad B) light-dismisses the open overlay pane (core SplitView.cpp:574-578) —
             // bubbled here from the focused pane descendant, the WinUI KeyDown-on-the-control routing.

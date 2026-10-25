@@ -166,7 +166,7 @@ public static partial class SettingsCard
         Element[] kids = wrap
             ? content is null
                 ? [header]
-                : [header, new BoxEl { Height = VerticalHeaderContentSpacing }, content]
+                : [header, new BoxEl { Height = VerticalHeaderContentSpacing }, content.Value]
             : [BuildRightRow(o, s, header, content)];
 
         return Root(o, s, new BoxEl { Direction = 1, Children = kids });
@@ -211,7 +211,7 @@ public static partial class SettingsCard
     static Element BuildRightRow(Options o, Style s, Element header, Element? content)
     {
         var kids = new List<Element>(3) { header };
-        if (content is not null) kids.Add(content);
+        if (content is not null) kids.Add(content.Value);
         if (ActionGlyph(o, s) is { } action) kids.Add(action);
 
         var columns = new List<TrackSize>(kids.Count) { TrackSize.Star() };
@@ -233,7 +233,7 @@ public static partial class SettingsCard
         if (!hideIcon && (hasIconElement || o.HeaderIcon is { Length: > 0 }))
         {
             Element iconChild = hasIconElement
-                ? o.HeaderIconElement!
+                ? o.HeaderIconElement!.Value
                 : new TextEl(o.HeaderIcon!)
                 {
                     Size = s.HeaderIconSize,
@@ -308,7 +308,7 @@ public static partial class SettingsCard
             MinWidth = ContentMinWidth,
             Grow = 0f,
             Shrink = 0f,
-            Children = o.Content is null ? [] : [o.Content],
+            Children = o.Content is null ? [] : [o.Content.Value],
         });
 
         return content;

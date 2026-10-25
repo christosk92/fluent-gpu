@@ -7557,7 +7557,7 @@ public sealed partial class AppHost : IDisposable
         long period = RefreshPeriodQpcOrDefault();
         if (_slowUnits.Note(r.LongestUnitTicks, period, Stopwatch.GetTimestamp(), Stopwatch.Frequency, out int more))
         {
-            object? owner = r.LongestUnit?.DiagOwner;
+            object? owner = r.LongestOwner ?? r.LongestUnit?.DiagOwner;
             string who = owner is null ? (r.LongestUnit?.GetType().Name ?? "?") : owner.GetType().Name;
             Diag.Line(string.Create(CultureInfo.InvariantCulture,
                 $"[signals.slow-unit] one reactive unit ran {r.LongestUnitTicks * 1000.0 / Stopwatch.Frequency:0.00} ms (owner={who}; frame period {period * 1000.0 / Stopwatch.Frequency:0.00} ms){(more > 0 ? $"; {more} more since the last report" : "")}"));

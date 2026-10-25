@@ -124,7 +124,7 @@ public static class DragChip
                                Source = spec.ArtSource!, Width = ArtSize, Height = ArtSize,
                                Corners = Radii.ControlAll, Fit = ImageFit.Cover, DecodePx = ArtSize * 2f,
                            });
-        if (art is not null) content.Add(art);
+        if (art is not null) content.Add(art.Value);
 
         var lines = new System.Collections.Generic.List<Element>(3);
         if (!string.IsNullOrEmpty(spec.Title))

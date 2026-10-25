@@ -105,7 +105,7 @@ public static class ItemContainer
         // Content layer (the "Placeholder for child", xaml:115) — fills the container. A PartDelta.Foreground recolors
         // a TextEl child in place; a PartDelta.Padding insets the content lane (non-text content has no single
         // foreground, so Foreground is ignored for it).
-        Element laneContent = child is TextEl ct && partDelta.Foreground is { } fg ? ct with { Color = fg } : child;
+        Element laneContent = child.Is(out TextEl ct) && partDelta.Foreground is { } fg ? ct with { Color = fg } : child;
         children[w++] = new BoxEl { Key = "ic-content", Padding = partDelta.Padding ?? default, Children = [laneContent] };
 
         if (selectedVisible)
