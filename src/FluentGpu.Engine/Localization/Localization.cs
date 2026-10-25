@@ -41,6 +41,15 @@ public static class Localization
     private static string _default = "en-US";
     private static bool _pseudo;
 
+    // Lock-free reads (PERF r3 UI): Get/Format run on every text render, on the UI thread and the data threads alike, and took
+    // Gate only to read these three fields: ~22 ms per 10 s of UI-thread Monitor.Enter_Slowpath in a navigation burst (Debug).
+    // Every writer publishes an immutable copy under Gate (RebuildChain, the only chain writer, runs after every culture and
+    // pseudo change; the PseudoLocalize setter publishes itself), so one volatile read yields the same consistent triple the
+    // locked read did.
+    private sealed record ReadState(bool Pseudo, Dictionary<string, string>[] Chain, string Culture);
+    private static volatile ReadState s_read = new(false, System.Array.Empty<Dictionary<string, string>>(), "en-US");
+    private static void PublishReadState() => s_read = new ReadState(_pseudo, _chain, _current);
+
     // The NEUTRAL fallback floor: the built-in, ship-with-the-assembly neutral strings a library registers for its OWN
     // user-facing text (the control kit does this — see FluentGpu.Controls, whose generated module initializer calls
     // RegisterNeutral). It is consulted LAST in every resolution (after the active culture, its parent, and the default
@@ -77,7 +86,7 @@ public static class Localization
     public static bool PseudoLocalize
     {
         get { lock (Gate) return _pseudo; }
-        set { lock (Gate) _pseudo = value; BumpEpoch(); }
+        set { lock (Gate) { _pseudo = value; PublishReadState(); } BumpEpoch(); }
     }
 
     /// <summary>The set of cultures that have a loaded table (the language picker's options).</summary>
@@ -216,8 +225,8 @@ public static class Localization
     public static string Get(string key)
     {
         _ = CultureEpoch.Value;   // SUBSCRIBE the calling thunk/computation — this is the reactive hook
-        bool pseudo; Dictionary<string, string>[] chain;
-        lock (Gate) { pseudo = _pseudo; chain = _chain; }
+        var state = s_read;
+        bool pseudo = state.Pseudo; Dictionary<string, string>[] chain = state.Chain;
 
         string resolved = Lookup(chain, key, out bool found);
         if (!found) return $"[{key}]";        // missing key is loud, not blank
@@ -230,8 +239,8 @@ public static class Localization
     public static string Format(string key, params (string Name, object Value)[] args)
     {
         _ = CultureEpoch.Value;   // SUBSCRIBE
-        bool pseudo; Dictionary<string, string>[] chain; string culture;
-        lock (Gate) { pseudo = _pseudo; chain = _chain; culture = _current; }
+        var state = s_read;
+        bool pseudo = state.Pseudo; Dictionary<string, string>[] chain = state.Chain; string culture = state.Culture;
 
         string template = Lookup(chain, key, out bool found);
         if (!found) return $"[{key}]";
@@ -243,8 +252,8 @@ public static class Localization
     public static string Format(string key, IReadOnlyDictionary<string, object> args)
     {
         _ = CultureEpoch.Value;
-        bool pseudo; Dictionary<string, string>[] chain; string culture;
-        lock (Gate) { pseudo = _pseudo; chain = _chain; culture = _current; }
+        var state = s_read;
+        bool pseudo = state.Pseudo; Dictionary<string, string>[] chain = state.Chain; string culture = state.Culture;
 
         string template = Lookup(chain, key, out bool found);
         if (!found) return $"[{key}]";
@@ -270,8 +279,7 @@ public static class Localization
     /// form). Useful for conditional UI / tests.</summary>
     public static bool Has(string key)
     {
-        Dictionary<string, string>[] chain;
-        lock (Gate) chain = _chain;
+        Dictionary<string, string>[] chain = s_read.Chain;
         Lookup(chain, key, out bool found);
         return found;
     }
@@ -310,6 +318,7 @@ public static class Localization
         // all of them (or when none are loaded) still resolves to its built-in neutral string.
         if (_neutral.Count > 0) order.Add(_neutral);
         _chain = order.ToArray();
+        PublishReadState();
     }
 
     /// <summary>The parent culture (region stripped): <c>"fr-FR" → "fr"</c>; a bare language has no parent (null).</summary>
