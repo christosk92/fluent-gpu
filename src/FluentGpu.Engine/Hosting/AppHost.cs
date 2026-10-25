@@ -1902,7 +1902,12 @@ public sealed partial class AppHost : IDisposable
             slices.LastRasteredTiles, (int)(slices.LastRasteredBytes / 1024));
     }
 
-    private readonly object _tileCensusLock = new();
+    // A sequence lock (PERF r3 UI): one writer (the composite turn: the render thread, or the UI thread inline - never both),
+    // readers on the UI thread every painted frame (FrameStats) and in the app's frame hooks. A monitor here made the UI thread
+    // spin in Monitor.Enter_Slowpath behind the render thread (~20 ms per 10 s of navigation, Debug) for a ~200-byte copy. The
+    // writer makes the sequence odd, writes, makes it even; a reader retries until it copied between two equal even reads, so it
+    // returns exactly one published census, never a torn one, and never blocks the writer.
+    private int _tileCensusSeq;
     private FluentGpu.Render.Tiles.TileCensus _tileCensus;
 
     /// <summary>Publish the composite turn's tile census (render thread, or the UI thread inline) for the UI-side frame stats.</summary>
@@ -1911,12 +1916,31 @@ public sealed partial class AppHost : IDisposable
         var c = FluentGpu.Render.Tiles.TileCensus.Capture(tiles, slices.LastItems.Length, slices.LastRasteredTiles,
             slices.LastExposedTileMissing, slices.LastCoverageClamps, slices.LastBudgetBytes, slices.LastStats, _device.LastCompositeCache,
             _device.LastLostPlacements);   // a placed tile whose slot held no texture composited nothing (must be 0)
-        lock (_tileCensusLock) _tileCensus = c;
+        Interlocked.Increment(ref _tileCensusSeq);   // odd: writing (a full fence on both sides)
+        _tileCensus = c;
+        Interlocked.Increment(ref _tileCensusSeq);   // even: published
         NoteStaleTiles(tiles, c.StaleTiles);   // the stale-tile invariant: TileInvariants tally + the edge-gated [tiles.stale] line
     }
 
     /// <summary>The latest composite turn's retained-tile census (any thread).</summary>
-    public FluentGpu.Render.Tiles.TileCensus LastTileCensus { get { lock (_tileCensusLock) return _tileCensus; } }
+    public FluentGpu.Render.Tiles.TileCensus LastTileCensus
+    {
+        get
+        {
+            var spin = new SpinWait();
+            while (true)
+            {
+                int before = Volatile.Read(ref _tileCensusSeq);
+                if ((before & 1) == 0)
+                {
+                    var c = _tileCensus;
+                    Interlocked.MemoryBarrier();   // the copy completes before the sequence is re-read
+                    if (Volatile.Read(ref _tileCensusSeq) == before) return c;
+                }
+                spin.SpinOnce();
+            }
+        }
+    }
 
     /// <summary>Arm this frame's one-shot present pacing (render thread, immediately before the submit that consumes it).
     /// Deliberately NOT armed for a frame the byte-identical skip elides — a suppress-once flag left standing would be
