@@ -99,7 +99,7 @@ public sealed class ToolTip : Component
     public static Style FluentStyle() => new();
 
     public Element Target = s_noTarget;
-    private static readonly BoxEl s_noTarget = new();   // shared: an element is immutable, and a Wrap form never reads it
+    private static readonly BoxEl s_noTarget = Ui.Static(() => new BoxEl());   // shared: an element is immutable, and a Wrap form never reads it
     public string Text = "";
     /// <inheritdoc cref="Wrap(Element, string, float, float)"/>
     public float Grow;

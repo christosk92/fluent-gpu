@@ -438,7 +438,7 @@ public sealed partial class AppHost
     /// not the transaction's to absorb (it propagates as before); a throw while the rollback itself flushes ends the transaction first.</summary>
     private bool TxAbsorbFault(Exception ex)
     {
-        if (_tx is not { } run) return false;
+        if (_tx is not { } run || ex is FluentGpu.Dsl.StaleElementException) return false;   // a stale element read is never absorbed
         if (run.Phase == TxPhase.Settling && run.Fault is null)
         {
             run.Fault = ex;

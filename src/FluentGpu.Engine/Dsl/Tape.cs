@@ -45,16 +45,64 @@ public static class Tape
 
     internal static uint Stamp => t_stamp;
 
+    /// <summary>Run <paramref name="build"/> with no region open: every element it builds is frozen (heap, valid forever). For a value
+    /// that outlives any render and may be built inside one: a static field's initializer runs on the first read, which can be in
+    /// a render (<see cref="Ui.Static{T}(Func{T})"/>).</summary>
+    public static T Outside<T>(Func<T> build)
+    {
+        int saved = t_depth;
+        t_depth = 0;
+        try { return build(); }
+        finally { t_depth = saved; }
+    }
+
     /// <summary>Open a region; returns the token <see cref="End"/> takes.</summary>
     /// <summary><see cref="Begin()"/> naming the code that builds in the region (probe mode keeps it per stamp for the escape log).</summary>
     public static int Begin(string label)
     {
         int t = Begin();
         if (ProbePath is not null) s_probeLabels[t_stamp] = label;
+        else if (FluentGpu.Foundation.Diag.CompiledIn) { int r = (int)(t_stamp & (LabelRing - 1)); s_ringStamp[r] = t_stamp; s_ringLabel[r] = label; }
         return t;
     }
 
+    // DEBUG / FLUENTGPU_DIAG: the label of each recent region by stamp, so a stale read names the code that built the element.
+    private const int LabelRing = 4096;
+    private static readonly uint[] s_ringStamp = new uint[LabelRing];
+    private static readonly string?[] s_ringLabel = new string?[LabelRing];
+
+    private static string BuiltIn(uint stamp)
+    {
+        stamp &= 0x7FFF_FFFFu;
+        if (s_probeLabels.TryGetValue(stamp, out var l)) return l;
+        int r = (int)(stamp & (LabelRing - 1));
+        return s_ringStamp[r] == stamp ? s_ringLabel[r] ?? "?" : "?";
+    }
+
+    private static long s_staleReads;
+    /// <summary>Reads of an element after the render that built it ended (every mode; the inspector gate fails on any).</summary>
+    public static long StaleReads => Interlocked.Read(ref s_staleReads);
+    /// <summary>The first stale read's message (null while there was none).</summary>
+    public static string? FirstStale { get; private set; }
+
     private static readonly Dictionary<uint, string> s_probeLabels = new();
+
+    /// <summary>Probe mode: what the reconciler is running for app code right now (a skeleton region's content thunk), named in
+    /// the escape log.</summary>
+    public static string? ProbeNote;
+
+    /// <summary>Probe mode: the app method behind a delegate (through one level of closure: Skel.Region's own lambdas wrap the
+    /// app's), for <see cref="ProbeNote"/>.</summary>
+    public static string DescribeDelegate(Delegate? d)
+    {
+        if (d is null) return "null";
+        var target = d.Target;
+        if (target is not null)
+            foreach (var f in target.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+                if (f.GetValue(target) is Delegate inner && inner.Method.DeclaringType?.Namespace?.StartsWith("FluentGpu.Hooks", StringComparison.Ordinal) != true)
+                    return inner.Method.DeclaringType?.FullName + "." + inner.Method.Name;
+        return d.Method.DeclaringType?.FullName + "." + d.Method.Name;
+    }
 
     public static int Begin()
     {
@@ -94,17 +142,26 @@ public static class Tape
     internal static void Register(TapeColumn c) => (t_columns ??= new List<TapeColumn>()).Add(c);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    internal static void StaleRecord(int slot, uint stamp, string column) =>
-        throw new InvalidOperationException(
-            $"A {column} node record was read through a handle taken before the node was reconciled again (node slot {slot}, stamp {stamp}).");
+    internal static void StaleRecord(int slot, uint stamp, string column)
+    {
+        string msg = $"A {column} node record was read through a handle taken before the node was reconciled again (node slot {slot}, stamp {stamp}).";
+        Interlocked.Increment(ref s_staleReads);
+        FirstStale ??= msg;
+        throw new StaleElementException(msg);
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void Stale(int slot, uint stamp, string column)
     {
-        if (ProbePath is not null) { ProbeStale(slot, stamp, column); return; }
-        throw new InvalidOperationException(
-            $"A {column} built during a render was used after that render's reconcile returned (slot {slot}, stamp {stamp}). " +
-            "An element that must outlive its render has to be frozen (el.Freeze()) or built where it is used (DESIGN 2.2, escapes).");
+        Interlocked.Increment(ref s_staleReads);
+        if (ProbePath is not null) { FirstStale ??= $"{column} built in [{BuiltIn(stamp)}]"; ProbeStale(slot, stamp, column); return; }
+        // Never silent, never recycled bytes: the read fails here in every build (Release reaches the app's crash path; the
+        // reconciler's fault sinks rethrow this type), and the inspector's gate fails on the count.
+        string msg = $"A {column} built during a render of [{BuiltIn(stamp)}] was read after that render's reconcile returned " +
+            $"(slot {slot}, stamp {stamp}, read in [{(t_depth > 0 ? BuiltIn(t_stamp) : "no region")}]). An element that outlives its render " +
+            "must be frozen (el.Freeze()), built where it is used, or be a static built with Ui.Static (DESIGN 2.2, escapes).";
+        FirstStale ??= msg;
+        throw new StaleElementException(msg);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -131,7 +188,8 @@ public static class Tape
             last = name; kept++;
         }
         string built = s_probeLabels.TryGetValue(stamp & 0x7FFF_FFFFu, out var lbl) ? lbl : "?";
-        string sig = column + " built in [" + built + "] | " + sb;
+        string reading = t_depth > 0 && s_probeLabels.TryGetValue(t_stamp, out var rl) ? rl : "(no region)";
+        string sig = column + " built in [" + built + "] read in [" + reading + "]" + (ProbeNote is { } note ? " via [" + note + "]" : "") + " | " + sb;
         if (s_probeOut is null)
         {
             string path = ProbePath!.Replace("{pid}", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -402,4 +460,11 @@ internal readonly struct ColdRef<T> where T : struct, IColdGroup<T>
         T a = Value;
         return a.Equals(o.Value);
     }
+}
+
+/// <summary>An element (or a node record) read after the render that built it ended (PERF r3 MODEL M4b): a bug in the code that
+/// let it escape. Never swallowed by the reconciler's or the host's fault sinks.</summary>
+public sealed class StaleElementException : InvalidOperationException
+{
+    public StaleElementException(string message) : base(message) { }
 }

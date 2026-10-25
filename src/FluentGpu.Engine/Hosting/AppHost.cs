@@ -5612,7 +5612,7 @@ public sealed partial class AppHost : IDisposable
             // trace (Wavee's `--crash-probe throw` ran for 90 s "healthy"). Route it to the diagnostic sink the host
             // app wires into its log; the frame continues exactly as before.
             try { a(); }
-            catch (Exception ex) { Diag.Sink?.Invoke("[post] posted UI action threw (frame continues): " + ex); }
+            catch (Exception ex) when (ex is not FluentGpu.Dsl.StaleElementException) { Diag.Sink?.Invoke("[post] posted UI action threw (frame continues): " + ex); }
         }
         // Re-arm on leftovers: _uiPosts is NOT a term in ComputeWakeReasons(), so a ceiling-truncated drain could
         // otherwise idle-gate before its next slice ran. (Every Post also carries its own WM_NULL, so the WAKE is already

@@ -1116,7 +1116,7 @@ public sealed partial class TreeReconciler
     }
 
     /// <summary>Open a tape region around a call into app element-building code (<c>--fg tape</c>; 0 = regions off).</summary>
-    private static int TapeOpen(string label) => !Tape.RegionsEnabled ? 0 : Tape.ProbePath is null ? Tape.Begin() : Tape.Begin(label);
+    private static int TapeOpen(string label) => !Tape.RegionsEnabled ? 0 : Tape.Begin(label);
     private static void TapeClose(int token) { if (token != 0) Tape.End(token); }
 
     /// <summary>The node's record (the element it was last mounted or reconciled against); valid until its next store.</summary>
@@ -1146,6 +1146,7 @@ public sealed partial class TreeReconciler
                 WriteAnchorColumns(node, nce, oce);
                 if (nce.Props is { } p)
                 {
+                    ElementFreezer.FreezeObject(p);   // P2 escapes: see MountComponent
                     // Re-pushed live props — THE core delivery. This runs during the parent's render-effect (inside the
                     // flush) or a ReconcileRoot: the write marks the child's render-effect stale and it drains in the
                     // SAME flush (the flush while-loop coalesces — no next-frame defer, no torn intermediate paint).
@@ -1273,6 +1274,7 @@ public sealed partial class TreeReconciler
         {
             WriteAnchorColumns(node, np, oldEl);
             int idx = (int)node.Raw.Index;
+            ElementFreezer.FreezeObject(np.Value);   // P2 escapes: see MountProvider
             if (_providerSig.TryGetValue(idx, out var e) && ReferenceEquals(e.Channel, np.Channel))
                 e.Sig.Value = np.Value;                                  // notify consumers iff changed
             else
@@ -1408,6 +1410,9 @@ public sealed partial class TreeReconciler
         FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.CompSetup);
         ComponentsMountedTotal++;
         var comp = ce.Factory();
+        // P2 escapes: a factory may hand the instance elements of the render that mounts it (a field set from a capture); they
+        // outlive that render's tape region, so they are frozen now (a no-op unless --fg tape).
+        ElementFreezer.FreezeObject(comp);
         InjectContext(comp.Context, node);
         comp.Context.Owner = comp;   // diagnostic identity for the hook computations this context will create (Computation.DiagOwner)
         // Mount-under-parked-ancestor: a component can be mounted into an already-parked subtree (a reactive Show/For
@@ -1449,6 +1454,7 @@ public sealed partial class TreeReconciler
         // disposes at unmount (ReactiveCore.UnlinkSources); the signal itself is then unreferenced and collected.
         if (ce.Props is { } props)
         {
+            ElementFreezer.FreezeObject(props);   // P2 escapes: props outlive the pushing render (the child reads them on later renders)
             if (comp is IPropsHost host) host.ApplyProps(props);
             else { entry.PropsSig = new Signal<object?>(props); comp.Context.PropsSig = entry.PropsSig; }
         }
@@ -1507,7 +1513,7 @@ public sealed partial class TreeReconciler
             if (RenderFaultSink is { } faultSink)
             {
                 try { FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Render); try { newRendered = comp.RenderWithHooks(); } finally { FluentGpu.Hosting.MountProf.Exit(); } }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not StaleElementException)   // a stale element read is never absorbed
                 {
                     comp.Context.EndRender();
                     faultSink(ex);
@@ -1522,7 +1528,14 @@ public sealed partial class TreeReconciler
             FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Reconcile);
             try { ReconcileSingleChild(node, newRendered); } finally { FluentGpu.Hosting.MountProf.Exit(); }
         }
-        finally { TapeClose(tape); if (catchUp) EndThemeCatchUp(savedThemeMs, savedThemeFromT); }
+        finally
+        {
+            // P2 escapes: a component that caches elements of its own render in a field (a reuse cache) keeps them past this
+            // region; freeze them before the region closes (a frozen element is not copied again).
+            if (tape != 0) ElementFreezer.FreezeObject(comp);
+            TapeClose(tape);
+            if (catchUp) EndThemeCatchUp(savedThemeMs, savedThemeFromT);
+        }
         // Nested component renders (children mounted/re-rendered inside this reconcile) report their own rows; this
         // row's reconcile time therefore INCLUDES them — read the per-type numbers as inclusive of the subtree.
         if (census) NoteRenderCensus(comp, t1 - t0, Stopwatch.GetTimestamp() - t1, GC.GetAllocatedBytesForCurrentThread() - b0, cause, causeTag);
@@ -1545,6 +1558,7 @@ public sealed partial class TreeReconciler
 
     private void MountProvider(NodeHandle node, ContextProviderEl cp)
     {
+        ElementFreezer.FreezeObject(cp.Value);   // P2 escapes: a context value outlives the providing render
         _providerSig[(int)node.Raw.Index] = (cp.Channel, new Signal<object?>(cp.Value));
         WriteAnchorColumns(node, cp, old: null);   // base-Element props on the boundary itself, before its child mounts
         var child = _scene.CreateNode(cp.Child.ElementTypeId);
@@ -1752,8 +1766,9 @@ public sealed partial class TreeReconciler
         int idx = (int)node.Raw.Index;
         bool force = _skelForce.Remove(idx);
         int tape = TapeOpen("SkelRegion");
+        if (Tape.ProbePath is not null && _skelEl.TryGetValue(idx, out var probed)) Tape.ProbeNote = Tape.DescribeDelegate(probed.Content);
         try { ReconcileSkeletonRegion(node, force); }
-        finally { TapeClose(tape); }
+        finally { TapeClose(tape); Tape.ProbeNote = null; }
     }
 
     /// <summary>Smooth-resize (see the block comment inside): an authored Enter/Exit/Layout on the region

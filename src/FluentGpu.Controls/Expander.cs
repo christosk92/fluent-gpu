@@ -93,8 +93,11 @@ public sealed class Expander : Component
     /// (<c>Embed.Comp(new ExpanderSlots(...), …)</c>).</summary>
     public static Element Create(string header, [MountOnceContent] Element content, bool initiallyExpanded = false,
                                  Signal<bool>? isExpanded = null, Action<bool>? onChange = null)
-        => Embed.Comp(() => new Expander { Header = header, Content = content, InitiallyExpanded = initiallyExpanded,
-                                           IsExpanded = isExpanded, OnChange = onChange });
+    {
+        var frozen = content.Freeze();   // PERF r3 MODEL M4b: the factory may run after this render
+        return Embed.Comp(() => new Expander { Header = header, Content = frozen, InitiallyExpanded = initiallyExpanded,
+                                               IsExpanded = isExpanded, OnChange = onChange });
+    }
 
     /// <summary>LIVE content slots RE-PUSHED to the core (<c>Embed.Comp(slots, …)</c>; the SelectorBar/RadioButtons
     /// pattern). An <see cref="Expander"/> is an autonomous component: its <see cref="Content"/>/<see cref="HeaderContent"/>/

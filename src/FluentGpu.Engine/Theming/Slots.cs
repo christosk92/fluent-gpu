@@ -41,7 +41,8 @@ public static class Slots
     public static Element DerivableView<TProps>(ViewKey<TProps> key, TProps props, string? callerKey = null) where TProps : class
     {
         var el = (ComponentEl)View(key, props, callerKey);
-        return el with { SkeletonProxy = () => el with { DeriveRenderedOutput = true } };
+        var proxied = ((Element)el).Freeze();   // the proxy runs when a region derives, after this render (PERF r3 MODEL M4b)
+        return el with { SkeletonProxy = () => proxied.As<ComponentEl>() with { DeriveRenderedOutput = true } };
     }
 }
 
@@ -84,7 +85,7 @@ public readonly record struct ViewSlotInfo(NodeHandle Anchor, string ViewId, str
 /// </summary>
 internal sealed class ViewSlotHost<TProps> : Component, IViewSlotHost where TProps : class
 {
-    private static readonly BoxEl s_empty = new();
+    private static readonly BoxEl s_empty = Ui.Static(() => new BoxEl());
 
     private string? _lastId;
     private string? _lastTemplateId;
@@ -126,20 +127,24 @@ internal sealed class ViewSlotHost<TProps> : Component, IViewSlotHost where TPro
             : Embed.Comp<ViewSlotBodyA<TProps>, ViewSlotBodyArgs<TProps>>(body, static () => new ViewSlotBodyA<TProps>()));
         // A host DERIVED in a loading region (Slots.DerivableView) derives its body too: the body mounts and the template's output is what the
         // deriver turns into bars. Unread for a host that is not derived.
-        return el with { SkeletonProxy = () => el with { DeriveRenderedOutput = true } };
+        var proxied = ((Element)el).Freeze();   // the proxy runs when a region derives, after this render (PERF r3 MODEL M4b)
+        return el with { SkeletonProxy = () => proxied.As<ComponentEl>() with { DeriveRenderedOutput = true } };
     }
 }
 
 /// <summary>What the host hands its body. A record class: the props gate re-renders the body only when the slot args, the
 /// template (delegate equality) or the registry (reference, which carries its epoch) changed.</summary>
 internal sealed record ViewSlotBodyArgs<TProps>(ViewSlotArgs<TProps> Args, ViewTemplate<TProps> Template, ViewRegistry Registry)
-    where TProps : class;
+    : IElementHolder where TProps : class
+{
+    void IElementHolder.FreezeElements() => ElementFreezer.FreezeObject(Args);
+}
 
 /// <summary>Runs the template. Everything it reads while rendering (props, registry, an option cell, the app roles
 /// context) subscribes THIS component, so only it re-runs the template.</summary>
 internal abstract class ViewSlotBody<TProps> : Component where TProps : class
 {
-    private static readonly BoxEl s_empty = new();
+    private static readonly BoxEl s_empty = Ui.Static(() => new BoxEl());
 
     public sealed override Element Render()
     {

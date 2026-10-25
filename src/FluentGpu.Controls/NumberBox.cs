@@ -479,6 +479,7 @@ public sealed class NumberBox : Component
             }
         }
 
+        Element? mountAffix = affix?.Freeze();   // PERF r3 MODEL M4b: the factory may run after this render
         var field = Embed.Comp(() =>
         {
             var e = new EditableText
@@ -488,7 +489,7 @@ public sealed class NumberBox : Component
                 Height = s.FieldHeight,
                 Placeholder = PlaceholderText,
                 Sanitize = sanitize,
-                RightAffix = affix,
+                RightAffix = mountAffix,
                 IsEnabled = IsEnabled,
                 OnCommit = _ => ValidateInput(),                       // Enter (KeyUp ValidateInput, NumberBox.cpp:564–568)
                 OnCancel = () => SetText(FormatToText(value.Peek())),  // Escape → UpdateTextToValue (NumberBox.cpp:570–574)

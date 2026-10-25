@@ -278,7 +278,10 @@ public static class PagedShelf
         // caller-owned model (the ItemsView then does NOT mint its own), so the page can read/clear it.
         ItemsSelectionMode selectionMode = ItemsSelectionMode.None,
         SelectionModel? selection = null)
-        => Embed.Comp(new ShelfProps<T>(items, cardAt, title, header, customPager, keyOf, maxItems, onVisibleRange, leadSpan, onInvoke, leadCardAt,
+    {
+        // PERF r3 MODEL M4b: the skeleton proxy runs when a loading region derives, after this render: it reads a frozen header.
+        Element? proxyHeader = header?.Freeze();
+        return Embed.Comp(new ShelfProps<T>(items, cardAt, title, header, customPager, keyOf, maxItems, onVisibleRange, leadSpan, onInvoke, leadCardAt,
                           new ShelfFit(pager, minCardW, maxCardW, gap, fixedCardW, maxColumns, leadMinColumns, rows), cardHeight),
                       () => new PagedShelfCore<T>(cardHeight, pager,
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
@@ -292,11 +295,12 @@ public static class PagedShelf
            with
            {
                SkeletonProxy = () => Embed.Comp(new ResponsiveBox.Props(
-                       w => ShelfProxy(items, cardAt, header, title,
+                       w => ShelfProxy(items, cardAt, proxyHeader, title,
                            FillRowVirtualLayout.Fit(w, minCardW, maxCardW, gap, perPageOverride, fixedCardW, maxColumns),
                            gap, headerGap, maxItems, rows, measured, leadSpan, leadCardAt, leadMinColumns), 0f, 0f),
                    static () => new ResponsiveBox()) with { DeriveRenderedOutput = true },
            };
+    }
 
     static Element ShelfProxy<T>(IReadOnlyList<T> items, Func<T, int, float, Element> cardAt, Element? header, string? title,
                                  (int PerPage, float CardW) fit, float gap, float headerGap, int maxItems,
@@ -364,8 +368,15 @@ internal sealed record ShelfProps<T>(IReadOnlyList<T> Items, Func<T, int, float,
     ShelfFit Fit = default,
     // The card height for a fitted width (see PagedShelf.Create's cardHeight), LIVE the same way: a different height function (a
     // tier whose cards carry another caption line) re-sizes the mounted strip. Null keeps the mount's.
-    Func<float, float>? CardHeight = null)
+    Func<float, float>? CardHeight = null) : IElementHolder
 {
+    /// <summary>PERF r3 MODEL M4b escapes: the header element outlives the render that pushed it (the shelf re-reads it).</summary>
+    void IElementHolder.FreezeElements()
+    {
+        ref var header = ref ShelfPropsAccess<T>.Header(this);
+        if (header is { } h) header = h.Freeze();
+    }
+
     /// <summary>The number of items this shelf actually renders (the <see cref="MaxItems"/> clamp).</summary>
     internal int VisibleCount => Math.Min(Items.Count, Math.Max(0, MaxItems));
 
@@ -414,8 +425,21 @@ internal readonly record struct ShelfChrome(string? Title, Element? Header, bool
 
 /// <summary>The stateful core (self-measure → fit → virtualized strip + animated pager). See <see cref="PagedShelf"/>.</summary>
 
-internal sealed class PagedShelfCore<T> : Component, IPropsHost
+internal static class ShelfPropsAccess<T>
 {
+    [System.Runtime.CompilerServices.UnsafeAccessor(System.Runtime.CompilerServices.UnsafeAccessorKind.Field, Name = "<Header>k__BackingField")]
+    internal static extern ref Element? Header(ShelfProps<T> props);
+}
+
+internal sealed class PagedShelfCore<T> : Component, IPropsHost, IElementHolder
+{
+    /// <summary>PERF r3 MODEL M4b escapes: the render caches it keeps across renders (the live strip, the probe cells).</summary>
+    void IElementHolder.FreezeElements()
+    {
+        if (_liveStrip is { } s) _liveStrip = s.Freeze();
+        for (int i = 0; i < _probeCells.Length; i++) if (_probeCells[i] is { } c) _probeCells[i] = c.Freeze();
+    }
+
     // The sample size + per-pass budget live in ShelfProbeMath (pure, unit-tested). This alias keeps the array
     // dimensions and the existing call sites readable.
     const int MeasuredSampleCap = ShelfProbeMath.SampleCap;
@@ -1911,7 +1935,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
 
     // The gated-off strip's stand-in. The SAME instance every render, so the reconciler's ReferenceEquals
     // short-circuit skips it entirely; it carries the strip's key so the swap to the real ItemsView is a keyed replace.
-    static readonly Element StripPlaceholder = new BoxEl { Key = "mshelf-strip", Grow = 1f };
+    static readonly Element StripPlaceholder = Ui.Static(() => (Element)new BoxEl { Key = "mshelf-strip", Grow = 1f });
 
     /// <summary>The measured strip's ItemsView — built ONCE, on the render that actually mounts it (see
     /// <see cref="_liveStrip"/>: every field of a propless <c>Embed.Comp</c> freezes at mount, so a rebuild could only

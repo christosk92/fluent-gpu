@@ -979,7 +979,10 @@ public sealed class OverlayHost : Component
     /// anchored flyouts / menus / dialogs / toasts in a top-level ZStack. Resolve the service inside via
     /// <c>UseContext(Overlay.Service)</c>.</summary>
     public static Element Create([MountOnceContent] Element child, bool isPrimaryToastHost = true)
-        => Embed.Comp(() => new OverlayHost { Child = child, IsPrimaryToastHost = isPrimaryToastHost });
+    {
+        var frozen = child.Freeze();   // PERF r3 MODEL M4b: the factory may run after this render
+        return Embed.Comp(() => new OverlayHost { Child = frozen, IsPrimaryToastHost = isPrimaryToastHost });
+    }
 
     // WinUI MenuPopupThemeTransition timings: s_OpenDuration=250 / s_OpacityChangeDuration=83
     // (MenuPopupThemeTransition_Partial.h:23-24); ClosedRatio=0.5 for root menus (MenuFlyout_Partial.cpp:253

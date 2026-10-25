@@ -92,7 +92,7 @@ public sealed class FrozenPropsAnalyzer : DiagnosticAnalyzer
 
             // [MountOnceContent] on the source parameter/local opts the capture out — a deliberate mount-time slot
             // (the sanctioned replacement for a blanket #pragma around a static-content convenience factory).
-            if (HasMountOnceContent(rhsSymbol))
+            if (HasMountOnceContent(rhsSymbol) || IsFrozenMountOnce(rhsSymbol, context))
                 continue;
 
             // The assigned member's type must be Element (or a collection of Element) — the content-slot case.
@@ -116,6 +116,27 @@ public sealed class FrozenPropsAnalyzer : DiagnosticAnalyzer
 
     // A symbol is exempt when it (a parameter/local source, or the target field/property) carries
     // [FluentGpu.Hooks.MountOnceContent] — the declaration-site marker that the content is a deliberate mount-time slot.
+    // PERF r3 MODEL M4b: `var frozen = content.Freeze();` (or `content?.Freeze()`) where `content` is a [MountOnceContent]
+    // parameter: the same deliberate mount-time slot, frozen because the factory may run after the render that built it.
+    private static bool IsFrozenMountOnce(ISymbol symbol, SyntaxNodeAnalysisContext context)
+    {
+        if (symbol is not ILocalSymbol local) return false;
+        foreach (var r in local.DeclaringSyntaxReferences)
+        {
+            if (r.GetSyntax(context.CancellationToken) is not VariableDeclaratorSyntax { Initializer.Value: { } init }) continue;
+            ExpressionSyntax? receiver = init switch
+            {
+                InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Freeze" } ma } => ma.Expression,
+                ConditionalAccessExpressionSyntax { WhenNotNull: InvocationExpressionSyntax { Expression: MemberBindingExpressionSyntax { Name.Identifier.ValueText: "Freeze" } } } ca => ca.Expression,
+                _ => null,
+            };
+            if (receiver is IdentifierNameSyntax id
+                && context.SemanticModel.GetSymbolInfo(id, context.CancellationToken).Symbol is IParameterSymbol p && HasMountOnceContent(p))
+                return true;
+        }
+        return false;
+    }
+
     private static bool HasMountOnceContent(ISymbol symbol)
     {
         foreach (var attr in symbol.GetAttributes())

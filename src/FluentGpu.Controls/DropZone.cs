@@ -44,11 +44,17 @@ public sealed class DropZone : Component
     // STATIC content built once by the caller. A caller with per-render-changing content should key/remount the zone.
     /// <summary>A sized drop zone wrapping <paramref name="content"/>.</summary>
     public static Element Create(string[] accept, Action<DragSession> onDrop, [MountOnceContent] Element content)
-        => Embed.Comp(() => new DropZone { Accept = accept, OnDrop = onDrop, Content = content });
+    {
+        var frozen = content.Freeze();   // PERF r3 MODEL M4b: the factory may run after this render
+        return Embed.Comp(() => new DropZone { Accept = accept, OnDrop = onDrop, Content = frozen });
+    }
 
     /// <summary>A whole-window "drop anywhere" zone (spans the parent).</summary>
     public static Element Window(string[] accept, Action<DragSession> onDrop, [MountOnceContent] Element content)
-        => Embed.Comp(() => new DropZone { Accept = accept, OnDrop = onDrop, Content = content, Fill = true });
+    {
+        var frozen = content.Freeze();   // PERF r3 MODEL M4b: the factory may run after this render
+        return Embed.Comp(() => new DropZone { Accept = accept, OnDrop = onDrop, Content = frozen, Fill = true });
+    }
 
     public override Element Render()
     {

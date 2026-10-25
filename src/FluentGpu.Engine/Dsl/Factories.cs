@@ -6,6 +6,11 @@ namespace FluentGpu.Dsl;
 /// <summary>Fluent C# markup. <c>using static FluentGpu.Dsl.Ui;</c> to author trees as expressions.</summary>
 public static partial class Ui
 {
+    /// <summary>A static element (PERF r3 MODEL M4b): <c>static readonly Element X = Ui.Static(() => new BoxEl { … })</c>. A static
+    /// initializer runs on the type's first use, which can be inside a render; built here, the element is frozen (valid forever)
+    /// instead of landing on that render's tape. Required for every static field holding an element (FG0099).</summary>
+    public static T Static<T>(Func<T> build) => Tape.Outside(build);
+
     public static BoxEl VStack(float gap, params Element[] children)
         => new() { Direction = 1, Gap = gap, Children = children };
 

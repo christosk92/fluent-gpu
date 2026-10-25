@@ -65,6 +65,9 @@ public partial struct ComponentEl : IElementKind<ComponentEl>, IEquatable<Compon
     static void IElementKind<ComponentEl>.FreezeMembers(ref ComponentEl v)
     {
         v._ecold = v._ecold.Frozen();
+        // A frozen anchor (a Show branch, a frozen props tree) mounts later, when the render that built its props is gone:
+        // the props object freezes with it (in place; it is the same object the child will read).
+        ElementFreezer.FreezeObject(v.Props);
     }
 
     public readonly bool Equals(ComponentEl o) => EqualsIn(in o);
@@ -88,7 +91,7 @@ public static class Embed
 {
     /// <summary>Embed a stateful child component with no re-pushed props (the child owns its data via its own
     /// state/context/signals).</summary>
-    public static ComponentEl Comp<T>(Func<T> factory) where T : Component
+    public static ComponentEl Comp<T>([Deferred] Func<T> factory) where T : Component
         => new(factory, typeof(T));   // Func<T> converts to Func<Component> (covariant): no wrapper closure per embed
 
     /// <summary>Embed a stateful child component and RE-PUSH <paramref name="props"/> to it on every parent re-render.
@@ -96,7 +99,7 @@ public static class Embed
     /// through its <c>PropsSig</c> / <see cref="IPropsHost"/> (equality-gated) — the child reads them with
     /// <c>UseProps&lt;TProps&gt;()</c>. <typeparamref name="TProps"/> should be an immutable record so a fresh-but-equal
     /// re-push is coalesced (no child re-render).</summary>
-    public static ComponentEl Comp<T, TProps>(TProps props, Func<T> factory)
+    public static ComponentEl Comp<T, TProps>(TProps props, [Deferred] Func<T> factory)
         where T : Component where TProps : class
         => new(factory, typeof(T)) { Props = props };
 }

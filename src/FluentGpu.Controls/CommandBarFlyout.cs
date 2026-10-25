@@ -167,7 +167,10 @@ public sealed class CommandBarFlyout : Component
         // The header is a deliberate mount-time slot ([MountOnceContent]): it derives from the ContextMenu model + the
         // touch flag, both immutable for the lifetime of one menu mount, so freezing it at first mount is by design.
         [MountOnceContent] Element? header = null)
-        => Embed.Comp(() => new CommandBarFlyoutBody
+    {
+        // PERF r3 MODEL M4b: the factory runs at mount, which can be after this render (a menu opened later): freeze the header.
+        Element? frozenHeader = header?.Freeze();
+        return Embed.Comp(() => new CommandBarFlyoutBody
         {
             Primary = primary,
             Secondary = secondary,
@@ -179,8 +182,9 @@ public sealed class CommandBarFlyout : Component
             TouchInputMode = touchInputMode,
             OverflowMinWidth = overflowMinWidth,
             LabeledPrimary = labeledPrimary,
-            Header = header,
+            Header = frozenHeader,
         });
+    }
 
     static readonly AppBarCommand[] DefaultPrimary =
     [

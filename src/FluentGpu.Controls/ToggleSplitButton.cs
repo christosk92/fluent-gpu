@@ -52,7 +52,10 @@ public sealed class ToggleSplitButton : Component
     // PrimaryContent is a deliberate mount-time slot ([MountOnceContent]; see SplitButton) — static custom content,
     // keyed/remounted or signal-driven for the dynamic case.
     public static Element Create([MountOnceContent] Element primaryContent, IReadOnlyList<MenuFlyoutItem> items, Signal<bool>? isChecked = null, Action<bool>? onChange = null, bool isEnabled = true)
-        => Embed.Comp(() => new ToggleSplitButton { PrimaryContent = primaryContent, IsChecked = isChecked ?? new(false), Items = items, OnChange = onChange, IsEnabled = isEnabled });
+    {
+        var frozen = primaryContent.Freeze();   // PERF r3 MODEL M4b: the factory may run after this render
+        return Embed.Comp(() => new ToggleSplitButton { PrimaryContent = frozen, IsChecked = isChecked ?? new(false), Items = items, OnChange = onChange, IsEnabled = isEnabled });
+    }
 
     public override Element Render()
     {

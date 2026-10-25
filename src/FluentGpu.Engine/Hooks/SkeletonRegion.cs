@@ -137,13 +137,16 @@ public static class Skel
     /// leaf's shape, and on Ready the leaf reveals via a blurred cross-fade. The leaf typically binds the field's value
     /// (<c>Text = field.Bind()</c>), so it shows the value the moment it arrives.</summary>
     public static SkelRegionEl Pending<T>(this Element leaf, Loadable<T> field, SkeletonStyle? style = null)
-        => new(
+    {
+        var frozen = leaf.Freeze();   // PERF r3 MODEL M4b: the region re-reads the leaf after the building render
+        return new(
             Pending: () => field.State.Value == (byte)LoadState.Pending,
             Failed: () => field.State.Value == (byte)LoadState.Failed,
-            Content: () => leaf,
+            Content: () => frozen,
             ShimmerSource: null,   // the shimmer IS the leaf — the reconciler derives Content itself
             OnFailed: null,
             Reveal: SkelReveal.Soft, Style: style ?? SkeletonStyle.Default, Group: null);
+    }
 
     private static Element RowStack<T>(int count, Func<T?, Element> rowTemplate, float gap)
     {

@@ -19,7 +19,11 @@ public delegate Element ViewTemplate<TProps>(TProps props, in ViewContext ctx) w
 
 /// <summary>The re-pushed props of a slot host (the props channel of <c>Embed.Comp(props, factory)</c>). A record class so
 /// the reconciler's props gate compares it by value: equal args skip the template.</summary>
-public sealed record ViewSlotArgs<TProps>(ViewKey<TProps> Key, TProps Props) where TProps : class;
+public sealed record ViewSlotArgs<TProps>(ViewKey<TProps> Key, TProps Props) : FluentGpu.Dsl.IElementHolder where TProps : class
+{
+    /// <summary>PERF r3 MODEL M4b escapes: the slot's props carry elements of the render that pushed them.</summary>
+    void FluentGpu.Dsl.IElementHolder.FreezeElements() => FluentGpu.Dsl.ElementFreezer.FreezeObject(Props);
+}
 
 internal static class ViewIds
 {

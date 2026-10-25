@@ -68,10 +68,13 @@ public sealed class SplitButton : Component
     // freeze) — callers pass static custom content. Dynamic content should be reached via a signal/context inside the slot.
     public static Element Create([MountOnceContent] Element primaryContent, Action onInvoke,
         IReadOnlyList<MenuFlyoutItem> items, bool isEnabled = true, TemplateParts? parts = null)
-        => Embed.Comp(() => new SplitButton
+    {
+        var frozen = primaryContent.Freeze();   // PERF r3 MODEL M4b: the factory may run after this render
+        return Embed.Comp(() => new SplitButton
         {
-            PrimaryContent = primaryContent, OnInvoke = onInvoke, Items = items, IsEnabled = isEnabled, Parts = parts,
+            PrimaryContent = frozen, OnInvoke = onInvoke, Items = items, IsEnabled = isEnabled, Parts = parts,
         });
+    }
 
     // Frozen-props tripwire (ReuseGuard): Label/Glyph/IsEnabled freeze at mount (PrimaryContent/Items are element/list
     // slots — deliver those via a provider). A reused instance whose scalar caller-data changed is the frozen-props bug.
