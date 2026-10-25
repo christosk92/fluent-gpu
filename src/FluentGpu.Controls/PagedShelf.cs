@@ -98,6 +98,29 @@ public readonly record struct ShelfPagerContext(
     int Page, int PageCount, bool CanPrev, bool CanNext, Action Prev, Action Next, Action<int> GoTo,
     IReadSignal<int> PageSignal);
 
+/// <summary>A <see cref="PagedShelf"/>'s width-memory key: the call site that built it (<see cref="PagedShelf.Create{T}"/>'s caller info).
+/// Stable across mounts, and free of tier, form and count.</summary>
+internal readonly record struct ShelfWidthKey(string Site, int Line);
+
+/// <summary>The last width each shelf call site measured (UI thread only). A shelf mounts at it, so its cards realize at the width their
+/// cells take in the mount frame; a shelf whose width differs (a resize since, the same call site in a narrower column) measures and
+/// corrects as it always did. One entry per call site: bounded by the code, never by the content.</summary>
+internal static class ShelfWidthMemory
+{
+    static readonly Dictionary<ShelfWidthKey, float> s_widths = new();
+
+    public static bool TryGet(ShelfWidthKey key, out float width)
+    {
+        width = 0f;
+        return key.Site.Length > 0 && s_widths.TryGetValue(key, out width) && width > 1f;
+    }
+
+    public static void Set(ShelfWidthKey key, float width)
+    {
+        if (key.Site.Length > 0) s_widths[key] = width;
+    }
+}
+
 /// <summary>
 /// An external controller for a <see cref="PagedShelf"/>'s pager — for when the pager affordances (chevrons, a
 /// <see cref="PipsPager"/>) live OUTSIDE the shelf, e.g. in the app's own sticky chapter header (the shelf itself is
@@ -277,13 +300,19 @@ public static class PagedShelf
         // (the default) is byte-identical to a shelf built before this parameter existed. A non-null `selection` is the
         // caller-owned model (the ItemsView then does NOT mint its own), so the page can read/clear it.
         ItemsSelectionMode selectionMode = ItemsSelectionMode.None,
-        SelectionModel? selection = null)
+        SelectionModel? selection = null,
+        // The shelf's WIDTH MEMORY key (audit FU2c): the call site, never passed. A shelf mounts at the width its call site's last shelf
+        // measured, so its cards realize at their cell's width in the mount frame instead of at a provisional fit corrected a frame later.
+        // A call site is a stable identity with no tier, form or count in it; a shelf whose width differs is corrected as before.
+        [System.Runtime.CompilerServices.CallerFilePath] string widthSite = "",
+        [System.Runtime.CompilerServices.CallerLineNumber] int widthLine = 0)
         => Embed.Comp(new ShelfProps<T>(items, cardAt, title, header, customPager, keyOf, maxItems, onVisibleRange, leadSpan, onInvoke, leadCardAt,
                           new ShelfFit(pager, minCardW, maxCardW, gap, fixedCardW, maxColumns, leadMinColumns, rows), cardHeight),
                       () => new PagedShelfCore<T>(cardHeight, pager,
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
                                                headerGap, edgeFade, prevGlyph, nextGlyph, parts, overscan, measured,
-                                               cardWidthAgnostic, maxColumns, snap, controller, lift, leadMinColumns, selectionMode, selection))
+                                               cardWidthAgnostic, maxColumns, snap, controller, lift, leadMinColumns, selectionMode, selection,
+                                               new ShelfWidthKey(widthSite, widthLine)))
            // SkeletonProxy: the deriver can't see into this component, so hand it the header + a few real cards to derive
            // — the shelf shimmers as real cards instead of one default bar. The cards are fitted to the MEASURED slot
            // exactly as the live strip fits them (the same Fit, through Responsive's rendered-output proxy idiom): handing
@@ -1005,6 +1034,8 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // shelf for as long as a page keeps filling. Half a pixel is below the layout's own snapping granularity, so a
     // difference that small can never move a card; coalescing it costs nothing and cuts the loop at the source.
     readonly Signal<float> _measuredH = new(0f, MeasureTolerantComparer.Instance);   // probe-locked card height (measured-virtual mode)
+    readonly ShelfWidthKey _widthKey;                 // the call site (see ShelfWidthMemory)
+    bool _rendered;                                   // the first Render has run (its width hint lands before any card realizes)
     readonly Signal<float> _cardW = new(0f);          // fitted width consumed by the mounted ItemsView template
     readonly ItemsViewController _ctl = new();
     readonly ScrollHandle _shelfHandle = new();   // the strip viewport's handle: the settle/page re-sync reads its signals
@@ -1108,8 +1139,14 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                           int overscan, bool measured, bool cardWidthAgnostic, int maxColumns = 0,
                           ShelfSnap snap = ShelfSnap.None, ShelfController? controller = null,
                           ShelfLift lift = ShelfLift.Elevate, int leadMinColumns = 0,
-                          ItemsSelectionMode selectionMode = ItemsSelectionMode.None, SelectionModel? selection = null)
+                          ItemsSelectionMode selectionMode = ItemsSelectionMode.None, SelectionModel? selection = null,
+                          ShelfWidthKey widthKey = default)
     {
+        _widthKey = widthKey;
+        // The width memory (see ShelfWidthMemory): mount at the width this call site's last shelf measured. Written before any render, so
+        // nothing has subscribed: the first render fits it, writes the cards' width hint before they realize, and the first measure that
+        // agrees moves nothing.
+        if (ShelfWidthMemory.TryGet(widthKey, out float remembered)) _w.Value = remembered;
         _leadMinColumns = Math.Max(0, leadMinColumns);
         _selectionMode = selectionMode;
         _selection = selection;
@@ -1143,6 +1180,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         _watchPageScroll = WatchPageScroll;
         _onRootBounds = r =>
         {
+            if (r.W > 0f) ShelfWidthMemory.Set(_widthKey, r.W);
             if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f) _w.Value = r.W;
             TryLatchStripGated();
         };
@@ -1232,7 +1270,12 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // seat it lands from the layout effect below, as it always did: the slots realized against a provisional width before the first layout,
         // and a write in the render that follows the first measure re-rendered every one of them inside the mount frame (audit FU2: mount-frame
         // re-renders 16 -> ~115 per navigation burst, ShelfCardSlot 99 of them).
-        if (!_firstRealize && !_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
+        // The FIRST render writes it too when it already knows a real width (the call site's width memory): no card has realized yet, so the
+        // cards realize at it and nothing re-renders (audit FU2c: without it every card realized at the provisional fit and re-rendered a frame
+        // after the mount frame).
+        bool firstRender = !_rendered;
+        _rendered = true;
+        if ((!_firstRealize || firstRender && w > 1f) && !_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
         UseLayoutEffect(() =>
         {
             if (!_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;

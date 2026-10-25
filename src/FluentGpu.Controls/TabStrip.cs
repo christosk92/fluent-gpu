@@ -140,6 +140,12 @@ public sealed class TabStrip : Component
     public float TabWidth = 320f;
     public float MinTabWidth = 100f;
     public float MaxTabWidth = 360f;
+    /// <summary>The motion a tab's width change takes (a title that lands or changes length, the host's cap moving, a form re-resolving):
+    /// it must ease the width through real layout (<see cref="SizeMode.Reflow"/>, width) so the tabs after it, the "+" and the underline
+    /// follow. Null keeps the strip's own (<see cref="FormWidthMotion"/>: a <see cref="Motion.ControlFast"/> decelerate tween, whose
+    /// first frame carries over half the change). A host whose lane eases on a spring passes the same spring, so the tab inside
+    /// the lane's clip grows with it instead of stepping. Read at every render.</summary>
+    public LayoutTransition? TabWidthMotion;
     // Prop (not a raw ColorF) so a theme-dependent fill can be passed as a thunk (Prop.Of(() => Tok.X)) and follow a live
     // theme switch — a raw ColorF here freezes at mount (TabStrip is a long-lived component; its constructor args don't
     // re-read). The default is itself a live semantic thunk so callers that do not style the strip also follow retheme.
@@ -644,7 +650,7 @@ public sealed class TabStrip : Component
                 // lane not yet re-measured (the one frame of a live resize) may squeeze a cell below it.
                 Width = tabW,
                 Shrink = fixedCell ? 0f : 1f,
-                Animate = FormWidthMotion,
+                Animate = TabWidthMotion ?? FormWidthMotion,
                 DropTarget = item.DropTarget,
                 OnRealized = h => { if ((uint)index < (uint)_tabNodes.Length) _tabNodes[index] = h; },
                 Children = layers.ToArray(),
@@ -1124,7 +1130,7 @@ public sealed class TabStrip : Component
         {
             Key = item.Key ?? "tab#" + index,
             ZStack = true,
-            Animate = FormWidthMotion,
+            Animate = TabWidthMotion ?? FormWidthMotion,
             Width = item.IsPinned ? PinnedTabWidth : float.NaN,
             MinWidth = item.IsPinned ? PinnedTabWidth : MinTabWidth,
             MaxWidth = item.IsPinned ? PinnedTabWidth : MaxTabWidth,
