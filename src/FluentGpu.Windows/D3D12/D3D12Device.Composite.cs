@@ -1474,6 +1474,10 @@ public sealed unsafe partial class D3D12Device
         bool feathers = (_frameKnockouts & GpuKnockouts.EdgeFadesOff) == 0;
         bool allDirect = (_frameKnockouts & GpuKnockouts.ForceFullDirect) != 0;
         ulong fence = _fenceValue + 1;
+        // An inline replay leaves its own pipelines' root signature, heaps and viewport bound: the compositor is rebound before
+        // the next item it draws, and at the end — not after every inline item (a run of inline items binds once). Exact: the
+        // skipped binds are state-only, and the device's binding cache describes what the replay left (audit PERF r3 COMP).
+        bool rebind = false;
         for (int i = a; i < b && i < items.Length; i++)
         {
             ref readonly CompositeItem it = ref items[i];
@@ -1489,6 +1493,8 @@ public sealed unsafe partial class D3D12Device
                 if (it.Kind == CompositeKind.Group) i = Math.Min(items.Length, i + 1 + it.GroupCount) - 1;
                 continue;
             }
+            bool inline = it.Kind == CompositeKind.Direct && InlineDirect(in it) && !allDirect;
+            if (rebind && !inline) { BindCompositor(tw, th); rebind = false; }
             int census = ItemCensusBegin(), item = i;   // diagnostics: this item's fragments (D3D12Device.WorkCensus.cs)
             switch (it.Kind)
             {
@@ -1521,11 +1527,12 @@ public sealed unsafe partial class D3D12Device
                     break;
                 }
                 case CompositeKind.Direct:
-                    if (InlineDirect(in it) && !allDirect)
+                    if (inline)
                     {
                         _foldPending = i == _foldItem;   // its first fill was folded into the clear (ClearFold)
-                        DrawInline(in frame, in it, ox, oy, tw, th);
+                        DrawInline(in frame, in it, ox, oy, tw, th, rebind: false);
                         _foldPending = false;
+                        rebind = true;
                         break;
                     }
                     DrawSurfaceItem(in it, i, ox, oy, feathers);
@@ -1560,6 +1567,7 @@ public sealed unsafe partial class D3D12Device
             }
             ItemCensusEnd(census, in frame, item);
         }
+        if (rebind) BindCompositor(tw, th);
     }
 
     /// <summary>The texel-load PSO an item composites with: copy, SCREEN (BoxEl.LayerBlend.Screen) or source-over.</summary>
