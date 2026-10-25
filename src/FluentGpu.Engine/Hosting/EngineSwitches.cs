@@ -124,6 +124,9 @@ public static class EngineSwitches
     public static bool LayoutDiag;
     public static bool LayoutOverflow;
     public static bool LayoutVerify;
+    /// <summary><c>--fg record-verify=PATH</c> (PERF r3 MODEL M4b): check every old element the reconciler is handed against
+    /// the node records and write the differences to PATH (<c>{pid}</c> = the process id). Null = off.</summary>
+    public static string? RecordVerifyPath;
     public static bool RenderDiag;
     /// <summary>Image-cache trace source filter (null = trace every source while <see cref="Diag"/> is on).</summary>
     public static string? ImageTrace;
@@ -255,6 +258,7 @@ public static class EngineSwitches
             case "layout": LayoutDiag = true; return true;
             case "layout-overflow": LayoutOverflow = true; return true;
             case "layout-verify": LayoutVerify = true; return true;
+            case "record-verify": RecordVerifyPath = string.IsNullOrEmpty(value) ? null : value; return RecordVerifyPath is not null;
             case "render":
                 RenderDiag = true;
                 RenderBudget.Enabled = RenderBudget.CompiledIn;

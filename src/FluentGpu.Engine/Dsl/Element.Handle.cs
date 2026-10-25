@@ -73,6 +73,8 @@ public readonly partial struct Element : IElement, IEquatable<Element>
 
     internal Element(object obj, ushort kind) { Obj = obj; Id = (uint)kind << 24; Epoch = 0; }
     internal Element(ushort kind, int slot, uint epoch) { Obj = null; Id = ((uint)kind << 24) | (uint)slot; Epoch = epoch; }
+    /// <summary>A node record (Obj = the reconciler RecordColumn of the kind, slot = the node index).</summary>
+    internal Element(RecordColumn column, ushort kind, int slot, uint epoch) { Obj = column; Id = ((uint)kind << 24) | (uint)slot; Epoch = epoch; }
     public Element(HeapElement element) { Obj = element; Id = (uint)element.ElementTypeId << 24; Epoch = 0; }
 
     public ushort ElementTypeId => (ushort)(Id >> 24);
@@ -90,7 +92,8 @@ public readonly partial struct Element : IElement, IEquatable<Element>
     internal ref readonly T Ref<T>()
     {
         if (Obj is FrozenElement<T> f) return ref f.Value;
-        return ref TapeColumn<T>.Current.At(Slot, Epoch);
+        if (Obj is null) return ref TapeColumn<T>.Current.At(Slot, Epoch);
+        return ref Unsafe.As<RecordColumn<T>>(Obj).At(Slot, Epoch);
     }
 
     /// <summary>The element as <typeparamref name="T"/> (a copy of the value for a value kind), or false.</summary>
@@ -99,7 +102,7 @@ public readonly partial struct Element : IElement, IEquatable<Element>
         if (typeof(T).IsValueType)
         {
             ushort k = KindOf<T>.Id;
-            if (k != 0 && k == ElementTypeId && (Obj is null || Obj is FrozenElement<T>)) { value = Ref<T>(); return true; }
+            if (k != 0 && k == ElementTypeId) { value = Ref<T>(); return true; }
         }
         else if (Obj is T t) { value = t; return true; }
         value = default!;
@@ -110,7 +113,7 @@ public readonly partial struct Element : IElement, IEquatable<Element>
 
     /// <summary>The same element (identity, the former <c>ReferenceEquals</c>).</summary>
     public bool SameAs(Element other) => ReferenceEquals(Obj, other.Obj) && Id == other.Id && Epoch == other.Epoch;
-    public int IdentityHash() => Obj is not null ? RuntimeHelpers.GetHashCode(Obj) : HashCode.Combine(Id, Epoch);
+    public int IdentityHash() => Obj is FrozenElement or HeapElement ? RuntimeHelpers.GetHashCode(Obj) : HashCode.Combine(Obj is null ? 0 : RuntimeHelpers.GetHashCode(Obj), Id, Epoch);
     /// <summary>Value equality, as the element records had (same kind, every channel equal; children by list identity).</summary>
     public bool Equals(Element other)
     {
@@ -152,7 +155,7 @@ public readonly partial struct Element : IElement, IEquatable<Element>
     public Element Freeze()
     {
         if (Obj is HeapElement h) { var f = h.FreezeMembers(); return ReferenceEquals(f, h) ? this : new Element(f); }
-        if (Obj is not null || Id == 0) return this;
+        if (Obj is FrozenElement || Id == 0) return this;
         return ElementTypeId switch
         {
             1 => FreezeAs<BoxEl>(),

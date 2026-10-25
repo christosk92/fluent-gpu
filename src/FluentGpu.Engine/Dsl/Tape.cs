@@ -70,6 +70,11 @@ public static class Tape
     internal static void Register(TapeColumn c) => (t_columns ??= new List<TapeColumn>()).Add(c);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static void StaleRecord(int slot, uint stamp, string column) =>
+        throw new InvalidOperationException(
+            $"A {column} node record was read through a handle taken before the node was reconciled again (node slot {slot}, stamp {stamp}).");
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void Stale(int slot, uint stamp, string column) =>
         throw new InvalidOperationException(
             $"A {column} built during a render was used after that render's reconcile returned (slot {slot}, stamp {stamp}). " +
@@ -151,7 +156,12 @@ internal sealed class TapeColumn<T> : TapeColumn
 /// members frozen too). Valid forever, like a class element.</summary>
 internal abstract class FrozenElement
 {
+    private static int s_serial;
+    /// <summary>This object's identity as a number (never 0): a node's record keeps the serial of the frozen element it was
+    /// reconciled from, so the reconciler's identity skip (the former ReferenceEquals(newEl, oldEl)) needs no reference.</summary>
+    internal readonly uint Serial = NextSerial();
     internal abstract ushort Kind { get; }
+    private static uint NextSerial() { uint s = (uint)Interlocked.Increment(ref s_serial); return s == 0 ? (uint)Interlocked.Increment(ref s_serial) : s; }
 }
 
 internal sealed class FrozenElement<T> : FrozenElement
@@ -160,6 +170,45 @@ internal sealed class FrozenElement<T> : FrozenElement
     private readonly ushort _kind;
     internal FrozenElement(in T value, ushort kind) { Value = value; _kind = kind; }
     internal override ushort Kind => _kind;
+}
+
+/// <summary>A column of node RECORDS of one value kind (PERF r3 MODEL M4b, DESIGN 2.3), owned by a reconciler and indexed by node
+/// slot. A record handle (<c>Element{Obj = column, slot = node index, stamp}</c>) reads the value the node was last reconciled
+/// against; every store gives the slot a new stamp, so a handle taken before a store fails its check instead of silently reading
+/// the newer value.</summary>
+internal abstract class RecordColumn
+{
+    internal uint[] Stamps = new uint[256];
+    private uint _next;
+    internal uint NextStamp() { uint s = ++_next; return s == 0 ? ++_next : s; }
+    internal abstract void Clear(int slot);
+}
+
+internal sealed class RecordColumn<T> : RecordColumn
+{
+    internal T[] Items = new T[256];
+
+    internal void Ensure(int slot)
+    {
+        if (slot < Items.Length) return;
+        int n = Math.Max(Items.Length * 2, slot + 1);
+        Array.Resize(ref Items, n);
+        Array.Resize(ref Stamps, n);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ref T At(int slot, uint stamp)
+    {
+        if ((uint)slot >= (uint)Items.Length || Stamps[slot] != stamp) Tape.StaleRecord(slot, stamp, typeof(T).Name);
+        return ref Items[slot];
+    }
+
+    internal override void Clear(int slot)
+    {
+        if (slot >= Items.Length) return;
+        Items[slot] = default!;
+        Stamps[slot] = 0;
+    }
 }
 
 /// <summary>A rarely-set group of an element's channels (a "cold group"), held by reference from the element value.</summary>

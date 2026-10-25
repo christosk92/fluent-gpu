@@ -464,6 +464,8 @@ public sealed partial class TreeReconciler
 
     private Component? _root;
     private Element? _oldRoot;
+    /// <summary>Per node, the element it was last mounted or reconciled against (PERF r3 MODEL M4b, DESIGN 2.3).</summary>
+    private readonly NodeRecords _records = new();
     private Effect? _rootEffect;
     private bool _reconciled;   // set when any structural/column change happened → the host runs (scoped) layout
     // Set during Update/WriteColumns/structural reconcile when layout shape actually changed. RunComponent/RunRoot
@@ -882,6 +884,7 @@ public sealed partial class TreeReconciler
 
     private void RenderRootDiff(Element newRoot)
     {
+        if (RecordVerifyOn && !_scene.Root.IsNull) VerifyOld("root", _scene.Root, _oldRoot);
         if (_scene.Root.IsNull || _oldRoot is not { } oldRootEl || oldRootEl.ElementTypeId != newRoot.ElementTypeId)
         {
             if (!_scene.Root.IsNull) Remove(_scene.Root);
@@ -1018,6 +1021,7 @@ public sealed partial class TreeReconciler
         if (_renderCensus is not null) _censusMounts++;
         MountedNodes++;   // always-on: the cold-realize ramp's node budget is a delta across one grow (see MountedNodes)
         _reconciled = true;
+        _records.Store((int)node.Raw.Index, el);
         // Evidence names (evidence-diagnostics §A.5): a keyed node's key, for logs and exports (UI thread; mounts allocate).
         if (el.Key is { Length: > 0 } debugKey) _scene.NoteDebugKey(node, debugKey);
         // Mount-under-parked-ancestor, for EVERY node kind (not only components). A reactive boundary inside a parked
@@ -1105,6 +1109,13 @@ public sealed partial class TreeReconciler
     // ── Update ────────────────────────────────────────────────────────────────────────────────────
 
     private void Update(NodeHandle node, Element newEl, Element oldEl)
+    {
+        if (RecordVerifyOn) VerifyOld("update", node, oldEl);
+        UpdateCore(node, newEl, oldEl);
+        _records.Store((int)node.Raw.Index, newEl);
+    }
+
+    private void UpdateCore(NodeHandle node, Element newEl, Element oldEl)
     {
         if (newEl.SameAs(oldEl)) return;
         if (_renderCensus is not null) _censusUpdates++;
@@ -1320,6 +1331,11 @@ public sealed partial class TreeReconciler
     private void ReconcileSingleChild(NodeHandle parent, Element? newChildOpt, Element? oldChild)
     {
         var child = _scene.FirstChild(parent);
+        if (RecordVerifyOn)
+        {
+            if (!child.IsNull) VerifyOld("single", child, oldChild);
+            else if (oldChild is { } stray) VerifyOld("single-nochild", parent, stray);
+        }
         if (newChildOpt is not { } newChild)
         {
             if (!child.IsNull) { Remove(child); MarkLayoutShape(parent); }
@@ -4698,6 +4714,7 @@ public sealed partial class TreeReconciler
                                        Span<NodeHandle> oldNodes, Span<bool> used, Span<NodeHandle> newNodes)
     {
         int oldN = oldKids.Length, newN = newKids.Length;
+        if (RecordVerifyOn) VerifyOldChildren(node, oldKids);
         if (oldN > 0)
         {
             int i = 0;
@@ -4950,6 +4967,7 @@ public sealed partial class TreeReconciler
             _keepWhileHiddenNodes.Remove(idx);   // the slot may be reused by a node that never asked to be kept
         }
         DisposeNodeBindings(idx);
+        _records.Clear(idx);
         // Element.Stagger / RelativeTo rows are node-indexed like the rest: a freed index must not hand its stagger or its
         // FLIP anchor to the next node that reuses it (WriteColumns' own remove only covers a node that is re-written).
         _childStagger.Remove(idx);
