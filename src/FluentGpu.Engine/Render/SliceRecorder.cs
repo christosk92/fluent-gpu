@@ -2245,26 +2245,49 @@ public sealed partial class SliceRecorder
 
         ScanSlot(child);
         bool leaf = _scanMarkCount[child] == 0;
-        // A SLIDE GROUP (owner decision, round 4: sub-pixel page slides composite bilinearly): the opacity group of a POSED
-        // transition layer — on the layer's own marker, or the same node's Layer-role slice right below it (the shape a
-        // CompositeLayer's fade takes) — renders its surface at REST: everything it encloses places with the pose removed, so
-        // its tiles keep their phase for the whole slide instead of re-rastering at a new one every frame, and the surface is
-        // drawn at the pose with a bilinear sample (CompositeItem.SubPxX/Y). Only while the layer moves and fades (an opacity
-        // group exists only between 0.001 and 0.999): at its free pose there is no slide and nothing changes.
-        // THE RULE (a net win by construction): a layer becomes a slide group only when (1) today's plan ALREADY composites it
-        // through a group surface — it encloses slices (not a leaf) and its fade is not distributed — so no surface is added,
-        // (2) what it encloses holds TILED content (EnclosesTiles): the tiles a new sub-pixel phase re-rasters every frame, and
-        // (3) some of it is on screen (an off-screen group composites nothing, so nothing of it re-rasters). Anything else — a
-        // leaf layer, a distributed fade, a group of inline segments / posed images / low-res or feedback boundaries — keeps
-        // today's exact path: there is nothing to save there. (In the frame bench only the page swap qualifies.)
+        // A SLIDE GROUP (owner decision, round 4: raster once, animate at composite): a POSED transition layer (a CompositeLayer
+        // placed at its exact sub-pixel offset — its own pose, or the same node's Layer-role slice right below it, the shape a
+        // CompositeLayer's fade takes) composites through a group surface rendered at REST: everything it encloses places with
+        // the pose removed, so its tiles keep their phase for the whole move instead of re-rastering at a new one every frame,
+        // and the surface is drawn at the pose with a bilinear sample (CompositeItem.SubPxX/Y). While it fades the group is its
+        // opacity group; a translate-only layer (alpha 1 — the end of a swap whose fade finished first, or a move with no fade)
+        // gets an alpha-1 group of its own. The surface is a retained group (its content key holds still while only the pose
+        // moves), so it renders once and then only composites. At its free pose there is no slide and nothing changes.
+        // THE RULE (a net win by construction): only when (1) the layer is an unblurred opacity group or has no layer at all
+        // (never a blur, acrylic or edge fade), (2) what it encloses holds TILED content (EnclosesTiles): the tiles a new
+        // sub-pixel phase re-rasters every frame — a group of inline segments / posed images / low-res or feedback boundaries has
+        // nothing to save — and (3) some of it is on screen (an off-screen layer composites nothing, so nothing of it
+        // re-rasters). Per frame the slide then draws one surface where today re-rasters every visible tile it holds.
         // The group's own clip, rounded clip and footprint stay where it is drawn (window); what it encloses gets them
         // carried back by the pose.
         // The rest offset is taken where it is exact — the offset BEFORE the pose was added (RestDx), never cdx − pose, whose
         // float rounding would move the members' phase by noise from frame to frame (and re-raster them, item 1's bug class).
         float sdx = 0f, sdy = 0f, rdx = cdx, rdy = cdy, prdx = accDx, prdy = accDy;   // prdx: the parent's offset at rest
-        if (layer.HasLayer && !leaf)
+        bool slide = false;
+        if (SlideGroups && !sticky && (!layer.HasLayer || ((LayerKind)layer.Layer.Kind == LayerKind.Opacity && layer.Layer.BlurSigma <= 0f)))
         {
-            if (Distributable(child, in m, in layer.Layer, scene, cdx, cdy, accDx, accDy, in childClip, dist.Count,
+            ref Rec pr = ref _recs[parentSlot];
+            bool own = c.Fractional && (c.PoseDx != 0f || c.PoseDy != 0f)
+                && (layer.HasLayer || !FadeBelow(child, c.NodeIndex));   // a fade on the node's Layer-role slice slides there
+            bool parents = !own && layer.HasLayer && c.Role == (int)SliceRole.Layer && pr.Fractional && pr.NodeIndex == c.NodeIndex
+                && (pr.PoseDx != 0f || pr.PoseDy != 0f) && cdx == accDx && cdy == accDy;
+            if ((own || parents) && !ClipAnd(clip, Offset(c.Bounds, cdx, cdy)).IsEmpty && EnclosesTiles(child, 0))
+            {
+                slide = true;
+                if (!layer.HasLayer)
+                {
+                    layer.HasLayer = true;   // the alpha-1 group of a translate-only layer
+                    layer.Layer = new PushLayerCmd(Offset(c.Bounds, cdx, cdy), default, default, default, 0f, 0f, 0f, 0f,
+                        Kind: (int)LayerKind.Opacity, GroupAlpha: 1f);
+                    Mix(ref _compositeHash, 0x51DEUL);
+                }
+                if (own) { sdx = c.PoseDx; sdy = c.PoseDy; rdx = c.RestDx; rdy = c.RestDy; c.Sliding = true; c.Slid = true; }
+                else { sdx = pr.PoseDx; sdy = pr.PoseDy; rdx = pr.RestDx; rdy = pr.RestDy; prdx = rdx; prdy = rdy; pr.Sliding = true; pr.Slid = true; }
+            }
+        }
+        if (layer.HasLayer && (!leaf || slide))
+        {
+            if (!slide && Distributable(child, in m, in layer.Layer, scene, cdx, cdy, accDx, accDy, in childClip, dist.Count,
                     sticky ? Offset(stickyWc, cdx, cdy) : RectF.Infinite))
             {
                 // A DISTRIBUTED edge fade (gpu-renderer.md §13.1e): no group surface — every item below carries the
@@ -2273,19 +2296,6 @@ public sealed partial class SliceRecorder
                 PlaceSlot(child, scene, cdx, cdy, accDx, accDy, childClip, ownClip, stickyY, cdy, cull, round, roundR, default,
                     dist.With(in layer.Layer), in dist, false, ref repaint);
                 return;
-            }
-            if (SlideGroups && !sticky && (LayerKind)layer.Layer.Kind == LayerKind.Opacity && layer.Layer.BlurSigma <= 0f)
-            {
-                ref Rec pr = ref _recs[parentSlot];
-                bool own = c.Fractional && (c.PoseDx != 0f || c.PoseDy != 0f);
-                bool parents = !own && c.Role == (int)SliceRole.Layer && pr.Fractional && pr.NodeIndex == c.NodeIndex
-                    && (pr.PoseDx != 0f || pr.PoseDy != 0f) && cdx == accDx && cdy == accDy;
-                // and only while some of it is on screen: an invisible group's tiles are not composited, so they do not re-raster
-                if ((own || parents) && !ClipAnd(clip, Offset(c.Bounds, cdx, cdy)).IsEmpty && EnclosesTiles(child, 0))
-                {
-                    if (own) { sdx = c.PoseDx; sdy = c.PoseDy; rdx = c.RestDx; rdy = c.RestDy; c.Sliding = true; c.Slid = true; }
-                    else { sdx = pr.PoseDx; sdy = pr.PoseDy; rdx = pr.RestDx; rdy = pr.RestDy; prdx = rdx; prdy = rdy; pr.Sliding = true; pr.Slid = true; }
-                }
             }
             // A layer slice with children: one group surface holds the slice AND its descendants (exact group semantics).
             // The group item carries the distributed ancestor fades (it is one item of theirs); its enclosed items none.
@@ -2318,6 +2328,19 @@ public sealed partial class SliceRecorder
             if (liftThumbs) PlaceTrailingThumbs(child, scene, cdx, cdy, accDx, accDy, in childClip, in cull, in round, roundR, in dist, ref repaint);
         }
         else PlaceSlot(child, scene, cdx, cdy, accDx, accDy, childClip, ownClip, stickyY, cdy, cull, round, roundR, layer, in dist, in dist, false, ref repaint);
+    }
+
+    /// <summary>Does slot <paramref name="s"/> enclose its own node's Layer-role slice carrying a group layer this pass (the
+    /// shape a CompositeLayer's fade takes)? Then that slice is the slide group, not <paramref name="s"/>.</summary>
+    private bool FadeBelow(int s, int nodeIndex)
+    {
+        int marks = _scanMarkCount[s];
+        for (int i = 0; i < marks; i++)
+        {
+            ref readonly CompositeSliceCmd m = ref _scanMarks[s]![i].Cmd;
+            if (m.NodeIndex == nodeIndex && m.Has(CompositeSliceFlags.Layer)) return true;
+        }
+        return false;
     }
 
     /// <summary>Does the subtree at <paramref name="s"/> hold a segment that composites from TILES — what a new sub-pixel phase
