@@ -154,7 +154,7 @@ public static class FrameLedgerCsv
     public static string Ui(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Ui.Length * 220);
-        sb.AppendLine("seq,startMs,pumpMs,paintMs,flushMs,layoutMs,animMs,recordMs,submitMs,endMs,frameMs,waitStartMs,waitMs,waitRequestedMs,waitKind,exit,flags,publishSeq,uiCpuMs,processCpuMs,allocBytes,gc0,gc1,gc2,gcPauseMs,nodes,drawNodes,slices,components,damageCoverage,damageRects,fullReason,presentedTotal,missedVsyncsTotal,wakeMask,uiCpuTimeMs");
+        sb.AppendLine("seq,startMs,pumpMs,paintMs,flushMs,layoutMs,animMs,recordMs,submitMs,endMs,frameMs,waitStartMs,waitMs,waitRequestedMs,waitKind,exit,flags,publishSeq,uiCpuMs,processCpuMs,allocBytes,gc0,gc1,gc2,gcPauseMs,nodes,drawNodes,slices,components,damageCoverage,damageRects,fullReason,presentedTotal,missedVsyncsTotal,wakeMask,uiCpuTimeMs,allocFlush,allocLayout,allocAnim,allocRecord,allocSubmit,nodesCreated,nodesFreed,compsMounted,measures,arranges,textShapes,textMisses,rxUnits,bindFires,bindWrites,scopedRelayouts,rootEscapes,capReachable,capCopied,captureMs,captureFull,captureParity");
         LedgerUiFrame prev = default;
         for (int i = 0; i < s.Ui.Length; i++)
         {
@@ -176,7 +176,14 @@ public static class FrameLedgerCsv
             T(sb, r.DamageCoverage);
             sb.Append(r.DamageRects).Append(',').Append(((Rhi.RepaintFullReason)r.FullReason).ToString()).Append(',')
               .Append(r.PresentedTotal).Append(',').Append(r.MissedVsyncsTotal).Append(',').Append("0x").Append(r.WakeMask.ToString("X", Inv)).Append(',');
-            T(sb, r.UiCpuTimeTotal / 10_000.0, last: true);
+            T(sb, r.UiCpuTimeTotal / 10_000.0);
+            sb.Append(r.AllocFlush).Append(',').Append(r.AllocLayout).Append(',').Append(r.AllocAnim).Append(',').Append(r.AllocRecord).Append(',')
+              .Append(r.AllocSubmit).Append(',').Append(r.NodesCreated).Append(',').Append(r.NodesFreed).Append(',').Append(r.ComponentsMounted).Append(',')
+              .Append(r.Measures).Append(',').Append(r.Arranges).Append(',').Append(r.TextShapes).Append(',').Append(r.TextShapeMisses).Append(',')
+              .Append(r.ReactiveUnits).Append(',').Append(r.BindFires).Append(',').Append(r.BindWrites).Append(',').Append(r.ScopedRelayouts).Append(',')
+              .Append(r.RootEscapes).Append(',').Append(r.CaptureReachable).Append(',').Append(r.CaptureCopied).Append(',');
+            T(sb, r.CaptureMs);
+            sb.Append(((FluentGpu.Scene.CaptureFullReason)r.CaptureFull).ToString()).Append(',').Append(r.CaptureParity);
             sb.AppendLine();
             prev = r;
         }

@@ -1902,7 +1902,12 @@ public sealed partial class AppHost : IDisposable
             slices.LastRasteredTiles, (int)(slices.LastRasteredBytes / 1024));
     }
 
-    private readonly object _tileCensusLock = new();
+    // A sequence lock (PERF r3 UI): one writer (the composite turn: the render thread, or the UI thread inline - never both),
+    // readers on the UI thread every painted frame (FrameStats) and in the app's frame hooks. A monitor here made the UI thread
+    // spin in Monitor.Enter_Slowpath behind the render thread (~20 ms per 10 s of navigation, Debug) for a ~200-byte copy. The
+    // writer makes the sequence odd, writes, makes it even; a reader retries until it copied between two equal even reads, so it
+    // returns exactly one published census, never a torn one, and never blocks the writer.
+    private int _tileCensusSeq;
     private FluentGpu.Render.Tiles.TileCensus _tileCensus;
 
     /// <summary>Publish the composite turn's tile census (render thread, or the UI thread inline) for the UI-side frame stats.</summary>
@@ -1911,12 +1916,31 @@ public sealed partial class AppHost : IDisposable
         var c = FluentGpu.Render.Tiles.TileCensus.Capture(tiles, slices.LastItems.Length, slices.LastRasteredTiles,
             slices.LastExposedTileMissing, slices.LastCoverageClamps, slices.LastBudgetBytes, slices.LastStats, _device.LastCompositeCache,
             _device.LastLostPlacements);   // a placed tile whose slot held no texture composited nothing (must be 0)
-        lock (_tileCensusLock) _tileCensus = c;
+        Interlocked.Increment(ref _tileCensusSeq);   // odd: writing (a full fence on both sides)
+        _tileCensus = c;
+        Interlocked.Increment(ref _tileCensusSeq);   // even: published
         NoteStaleTiles(tiles, c.StaleTiles);   // the stale-tile invariant: TileInvariants tally + the edge-gated [tiles.stale] line
     }
 
     /// <summary>The latest composite turn's retained-tile census (any thread).</summary>
-    public FluentGpu.Render.Tiles.TileCensus LastTileCensus { get { lock (_tileCensusLock) return _tileCensus; } }
+    public FluentGpu.Render.Tiles.TileCensus LastTileCensus
+    {
+        get
+        {
+            var spin = new SpinWait();
+            while (true)
+            {
+                int before = Volatile.Read(ref _tileCensusSeq);
+                if ((before & 1) == 0)
+                {
+                    var c = _tileCensus;
+                    Interlocked.MemoryBarrier();   // the copy completes before the sequence is re-read
+                    if (Volatile.Read(ref _tileCensusSeq) == before) return c;
+                }
+                spin.SpinOnce();
+            }
+        }
+    }
 
     /// <summary>Arm this frame's one-shot present pacing (render thread, immediately before the submit that consumes it).
     /// Deliberately NOT armed for a frame the byte-identical skip elides — a suppress-once flag left standing would be
@@ -6279,6 +6303,7 @@ public sealed partial class AppHost : IDisposable
             DeliverPendingPlatformEvents(includeSystemColors: true);
 
             long frameStart = Stopwatch.GetTimestamp();
+            if (FrameLedger.Enabled) _ledgerAlloc = new LedgerPaintAlloc { Start = GC.GetAllocatedBytesForCurrentThread() };
             MountProf.FrameBegin();
             GapPaintStart(frameStart);                         // close + classify the UI gap since the last Paint (AppHost.UiGap.cs)
             long shapeCountAtFrameStart = _fonts.ShapeCount;   // P0: FrameStats.TextShapes reads the delta across this Paint
@@ -6588,6 +6613,7 @@ public sealed partial class AppHost : IDisposable
             if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
             long tFlush = Stopwatch.GetTimestamp();   // always-on segment timing (FrameStats.*Ms) — see below
+            if (FrameLedger.Enabled) _ledgerAlloc.Flush = GC.GetAllocatedBytesForCurrentThread();
             // Spike-gated type roster (RenderCensus): one line when the flush alone exceeded the panel's refresh interval
             // or comps are high; carried on FrameStats.Census. Peek render count WITHOUT consuming it (ConsumeRenderCount
             // runs later when assembling LastStats).
@@ -6715,6 +6741,7 @@ public sealed partial class AppHost : IDisposable
             if (reconciled) DumpSceneOnce(layoutSize);
             if (diagTick) { layoutMs0 = ElapsedMs(segStart); }   // flush/reconcile/relayout/layout-effects span (--fg resize)
             long tLayout = Stopwatch.GetTimestamp();
+            if (FrameLedger.Enabled) _ledgerAlloc.Layout = GC.GetAllocatedBytesForCurrentThread();
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             if (capturedProjections) ApplyProjections(layoutSize, keepAliveSuppressed);   // FLIP "Last+Invert+Play"
@@ -6808,6 +6835,7 @@ public sealed partial class AppHost : IDisposable
             }
             _dispatcher.TickGestureArenas(dtMs);               // 7 §7A arena timer tick (Hold long-press promotion on idle-held frames)
             long tAnim = Stopwatch.GetTimestamp();
+            if (FrameLedger.Enabled) _ledgerAlloc.Anim = GC.GetAllocatedBytesForCurrentThread();
             MountProf.Exit(); MountProf.Enter(MountProf.ImagePump);
             if (s_allocDiag) { db = Probe(SegAnim, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             // Reveal starts are stamped at the CURRENT active wall time before applying incoming textures. Never
@@ -6984,6 +7012,7 @@ public sealed partial class AppHost : IDisposable
             }
             if (!recordOnRender) _scene.ClearRecordDirty();
             long tRecord = Stopwatch.GetTimestamp();
+            if (FrameLedger.Enabled) _ledgerAlloc.Record = GC.GetAllocatedBytesForCurrentThread();
             MountProf.Exit();
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             // Modal-loop repaint (WM_EXITSIZEMOVE settle): present at SyncInterval 0 + skip the latency waitable so the
@@ -7252,6 +7281,7 @@ public sealed partial class AppHost : IDisposable
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmit = Stopwatch.GetTimestamp();
             }
+            if (FrameLedger.Enabled) _ledgerAlloc.Submit = GC.GetAllocatedBytesForCurrentThread();
             if (s_allocDiag) { db = Probe(SegSubmit, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             // 11.5 — flush queued video-surface intents into the composited presenter (render thread; the hole-punch
@@ -8429,12 +8459,10 @@ public sealed partial class AppHost : IDisposable
                 ref readonly RectF now = ref _scene.Bounds(n);
                 if (MathF.Abs(now.X - was.X) < 0.5f && MathF.Abs(now.Y - was.Y) < 0.5f) continue;
                 // Bounds are parent-relative: the move is the child's own (its line changed). Position only: the size follows the layout.
+                // Seeded after this frame's tick: present the start NOW and let the rows advance from the next tick (AnimateBoundsPresented), or
+                // this frame shows the child on its new line first and a plain seed holds its start for a second frame.
                 var pos = spec with { Channels = TransitionChannels.Position };
-                _anim.AnimateBounds(n, was, new RectF(now.X, now.Y, was.W, was.H), pos);
-                // The tick that composes the row's start has run: present the start NOW, or this frame shows the child on its new line first.
-                ref NodePaint wp = ref _scene.Paint(n);
-                wp.LocalTransform = wp.LocalTransform with { Dx = wp.LocalTransform.Dx + was.X - now.X, Dy = wp.LocalTransform.Dy + was.Y - now.Y };
-                _scene.Mark(n, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                _anim.AnimateBoundsPresented(n, was, new RectF(now.X, now.Y, was.W, was.H), pos);
             }
             _wrapMovers.Clear();
         }

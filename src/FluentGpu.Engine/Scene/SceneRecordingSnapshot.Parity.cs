@@ -55,16 +55,17 @@ public sealed partial class SceneRecordingSnapshot
     /// divergence that heals itself inside the window (the node was re-captured for another reason) was on screen for
     /// fewer than N frames. Deterministic: a per-snapshot counter, no clock, no sampling.</para>
     /// </summary>
-    private void VerifyIncrementalParity(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots)
+    private void VerifyIncrementalParity(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots, bool ledgered)
     {
         if (_inParityVerify) return;
         int every = Math.Max(ParityVerifyMinInterval, (_captured.Count + ParityNodesPerPublish - 1) / ParityNodesPerPublish);
-        if (_incrementalStreak != 1 && _incrementalStreak % every != 0) return;
+        if (!ParityValidateEveryCapture && _incrementalStreak != 1 && _incrementalStreak % every != 0) return;
         ParityVerifications++;
         var scratch = _parityScratch ??= new SceneRecordingSnapshot();
         scratch.Capture(source, extraRoots);
         bool equal = EqualsForParity(scratch, out string mismatch);
         scratch.ReleaseResources();   // balance the span-run references the scratch capture took
+        if (ParityValidateEveryCapture) NoteValidated(ledgered, equal);
         if (equal) return;
 
         IncrementalParityFailures++;
@@ -76,6 +77,23 @@ public sealed partial class SceneRecordingSnapshot
         try { CaptureCore(source, extraRoots, incremental: false, baseline: 0UL); }
         finally { _inParityVerify = false; }
     }
+
+    // ── --fg capture-validate (PERF r3 UI) ──────────────────────────────────────────────────────────────────────────
+    // The self-check on EVERY incremental capture instead of every Nth: the differential validator of the ledgered capture
+    // (TryCaptureLedgered) and of the walk path alike. One summary line every 2 s on stderr, like rewalk-validate.
+    private static long s_validated, s_validatedLedgered, s_mismatches, s_mismatchesLedgered, s_lastValidateLog;
+
+    private static void NoteValidated(bool ledgered, bool equal)
+    {
+        s_validated++;
+        if (ledgered) s_validatedLedgered++;
+        if (!equal) { s_mismatches++; if (ledgered) s_mismatchesLedgered++; }
+        long now = Environment.TickCount64;
+        if (now - s_lastValidateLog < 2000) return;
+        s_lastValidateLog = now;
+        Console.Error.WriteLine($"[capture-validate] {(s_mismatches == 0 ? "ok" : "FAIL")} checked={s_validated} ledgered={s_validatedLedgered} "
+            + $"mismatches={s_mismatches} ledgeredMismatches={s_mismatchesLedgered} ledgeredTotal={Interlocked.Read(ref LedgeredCaptures)}");
+    }
 #else
     /// <summary>Whether the DEBUG incremental-capture self-check is compiled in (false in Release).</summary>
     public const bool ParityVerifyCompiledIn = false;
@@ -86,8 +104,12 @@ public sealed partial class SceneRecordingSnapshot
     /// <summary>Always 0 in Release — the self-check is compiled out.</summary>
     internal int ParityVerifications => 0;
 
-    private void VerifyIncrementalParity(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots) { }
+    private void VerifyIncrementalParity(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots, bool ledgered) { }
 #endif
+
+    /// <summary><c>--fg capture-validate</c>: run the parity self-check on every incremental capture (DEBUG builds; Release
+    /// compiles the check out).</summary>
+    internal static bool ParityValidateEveryCapture;
 
     /// <summary>
     /// Column-level equality against another snapshot of the same scene — the invariant an incremental capture must
