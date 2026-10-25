@@ -76,7 +76,7 @@ public sealed class LedgerSnapshot
 /// little-endian as they sit in memory. Compact (no text) and lossless; <see cref="LedgerSnapshot.WriteCsv"/> is the readable form.</summary>
 public static class FrameLedgerFile
 {
-    public const int Version = 3;
+    public const int Version = 4;   // v3 (UI: the UI frame's work drivers) + v3 (COMP: the GPU frame's work census) merged
     private static ReadOnlySpan<byte> Magic => "FGLEDGER"u8;
 
     public static void Write(Stream s, LedgerSnapshot snap)
