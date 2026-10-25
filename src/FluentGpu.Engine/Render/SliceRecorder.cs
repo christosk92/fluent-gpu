@@ -170,6 +170,10 @@ public sealed partial class SliceRecorder
         public RectF Bounds;       // slice-space (pose-free window DIP) subtree bounds
         public bool PoseLocked;    // the stream holds a viewport-fixed op baked at the record-time delta
         public bool Fractional;    // a composited transition layer (NodePaint.CompositeLayer): placed at its exact sub-pixel offset
+        public bool Sliding;       // this pass: a posed transition layer composited as a SLIDE GROUP (members at rest; PlaceChild)
+        public float RestDx, RestDy;   // this pass: the accumulated offset WITHOUT this slice's own pose (its parent's), exact
+        public bool PoseHeld;          // this pass: a transition layer's pose is the one it had last pass (a parked pose, not a slide)
+        public float LastPoseDx, LastPoseDy;
         public bool Held;          // this pass: cut last pass under a budget, its share is reserved until it registers (CountBudget)
         public bool RefusedCut;    // its last walk folded a cut inline for want of budget / a slot (never partially kept)
         public float PoseDx, PoseDy;   // this turn's composite-time pose delta (OwnDelta at placement; 0 = at its free pose)
@@ -710,7 +714,9 @@ public sealed partial class SliceRecorder
         for (int s = slot, guard = 0; s >= 0 && guard < 64; s = _recs[s].Parent, guard++)
         {
             ref Rec r = ref _recs[s];
-            if (r.Fractional && (r.PoseDx != 0f || r.PoseDy != 0f)) return false;
+            // a slide group's members place at rest; a pose held from the last pass (a page parked at its exit offset) is no
+            // slide either: its float noise is snapped like a free pose's
+            if (r.Fractional && !r.Sliding && !r.PoseHeld && (r.PoseDx != 0f || r.PoseDy != 0f)) return false;
             if (s == RootSlot) break;
         }
         return true;
@@ -719,6 +725,14 @@ public sealed partial class SliceRecorder
     /// <summary>Near-whole fractional placements snap to the pixel (default). <c>--fg raw-phase</c> turns it off (the A/B
     /// arm: the raw float placement, as before).</summary>
     public static bool CanonicalPhase = true;
+
+    /// <summary>A posed transition layer that composites as an opacity group slides as a SLIDE GROUP (PlaceChild): members
+    /// rastered at rest, the surface drawn bilinearly at the pose. <c>--fg pixel-slides</c> turns it off (the A/B arm: every
+    /// member re-rastered at its exact phase each frame, as before).</summary>
+    public static bool SlideGroups = true;
+
+    /// <summary>How close to its free pose (device px, each axis) a transition layer places AT it (<see cref="SlideGroups"/>).</summary>
+    internal const float SlideRestPx = 1f / 16f;
 
     private bool UnderFractional(int slot)
     {
@@ -1727,6 +1741,9 @@ public sealed partial class SliceRecorder
         // raster's own arithmetic, floor(StickyY·s) + round(StickyDy·s): exactly the scissor the in-stream PushClip gave
         // the same content in its tiles (the paint route). NaN = none.
         public float StickyY, StickyDy;
+        // A SLIDE GROUP (GroupOpen of a posed transition layer, PlaceChild): its pose (DIP), drawn bilinearly at the surface's
+        // draw; AccDx/AccDy and everything it encloses are at the REST offset.
+        public float SlideDx, SlideDy;
     }
 
     /// <summary>Up to two ancestor edge fades DISTRIBUTED onto every item below them (gpu-renderer.md §13.1e): each item
@@ -2122,6 +2139,13 @@ public sealed partial class SliceRecorder
         c.Visited = true;
         ChildGeometry(child, in m, scene, accDx, accDy, parentAccDx, parentAccDy, in parentClip,
             out float cdx, out float cdy, out float pdx, out float pdy, out RectF clip);
+        // A transition layer within SlideRestPx of its free pose (the last frames of an ease-out slide) places AT its free pose:
+        // the slide ends on exactly the frame it comes to rest on (no last bilinear frame against a crisp first rest frame).
+        if (SlideGroups && c.Fractional && (cdx != accDx || cdy != accDy))
+        {
+            float ds = scene.DeviceScale > 0f ? scene.DeviceScale : 1f;
+            if (MathF.Abs((cdx - accDx) * ds) < SlideRestPx && MathF.Abs((cdy - accDy) * ds) < SlideRestPx) { cdx = accDx; cdy = accDy; }
+        }
 
         // The innermost rounded clip in effect at the marker (the marker's own rounded outer clip, else the containing
         // stream's).
@@ -2134,6 +2158,10 @@ public sealed partial class SliceRecorder
         }
         c.AccDx = cdx; c.AccDy = cdy;
         c.PoseDx = cdx - accDx; c.PoseDy = cdy - accDy;
+        c.RestDx = accDx; c.RestDy = accDy;
+        c.Sliding = false;
+        c.PoseHeld = SlideGroups && c.PoseDx == c.LastPoseDx && c.PoseDy == c.LastPoseDy;
+        c.LastPoseDx = c.PoseDx; c.LastPoseDy = c.PoseDy;
 
         // A composite-time STICKY clip (CompositeSliceFlags.StickyClip): the node's ClipTop pose, a half-plane that is
         // viewport-fixed while the slice rides the page. Everything below the slice inherits it exactly (childClip — the
@@ -2214,9 +2242,35 @@ public sealed partial class SliceRecorder
 
         ScanSlot(child);
         bool leaf = _scanMarkCount[child] == 0;
-        if (layer.HasLayer && !leaf)
+        // A SLIDE GROUP (owner decision, round 4: sub-pixel page slides composite bilinearly): the opacity group of a POSED
+        // transition layer — on the layer's own marker, or the same node's Layer-role slice right below it (the shape a
+        // CompositeLayer's fade takes) — renders its surface at REST: everything it encloses places with the pose removed, so
+        // its tiles keep their phase for the whole slide instead of re-rastering at a new one every frame, and the surface is
+        // drawn at the pose with a bilinear sample (CompositeItem.SubPxX/Y). Only while the layer moves and fades (an opacity
+        // group exists only between 0.001 and 0.999): at its free pose there is no slide and nothing changes. A leaf layer
+        // takes a group too while it slides (its own segments, drawn through the one surface: no seams between its tiles).
+        // The group's own clip, rounded clip and footprint stay where it is drawn (window); what it encloses gets them
+        // carried back by the pose.
+        // The rest offset is taken where it is exact — the offset BEFORE the pose was added (RestDx), never cdx − pose, whose
+        // float rounding would move the members' phase by noise from frame to frame (and re-raster them, item 1's bug class).
+        float sdx = 0f, sdy = 0f, rdx = cdx, rdy = cdy, prdx = accDx, prdy = accDy;   // prdx: the parent's offset at rest
+        if (SlideGroups && layer.HasLayer && !sticky && (LayerKind)layer.Layer.Kind == LayerKind.Opacity && layer.Layer.BlurSigma <= 0f)
         {
-            if (Distributable(child, in m, in layer.Layer, scene, cdx, cdy, accDx, accDy, in childClip, dist.Count,
+            ref Rec pr = ref _recs[parentSlot];
+            if (c.Fractional && (c.PoseDx != 0f || c.PoseDy != 0f))
+            {
+                sdx = c.PoseDx; sdy = c.PoseDy; rdx = c.RestDx; rdy = c.RestDy; c.Sliding = true;
+            }
+            else if (c.Role == (int)SliceRole.Layer && pr.Fractional && pr.NodeIndex == c.NodeIndex && (pr.PoseDx != 0f || pr.PoseDy != 0f)
+                && cdx == accDx && cdy == accDy)
+            {
+                sdx = pr.PoseDx; sdy = pr.PoseDy; rdx = pr.RestDx; rdy = pr.RestDy; prdx = rdx; prdy = rdy; pr.Sliding = true;
+            }
+        }
+        bool slide = sdx != 0f || sdy != 0f;
+        if (layer.HasLayer && (!leaf || slide))
+        {
+            if (!slide && Distributable(child, in m, in layer.Layer, scene, cdx, cdy, accDx, accDy, in childClip, dist.Count,
                     sticky ? Offset(stickyWc, cdx, cdy) : RectF.Infinite))
             {
                 // A DISTRIBUTED edge fade (gpu-renderer.md §13.1e): no group surface — every item below carries the
@@ -2235,7 +2289,8 @@ public sealed partial class SliceRecorder
             g.Slot = child; g.HasLayer = true; g.Layer = layer.Layer; g.InnerClip = layer.InnerClip;
             g.Clip = ownClip; g.RoundRect = round; g.RoundR = roundR;
             g.StickyY = stickyY; g.StickyDy = cdy;
-            g.AccDx = cdx; g.AccDy = cdy;
+            g.AccDx = rdx; g.AccDy = rdy;
+            g.SlideDx = sdx; g.SlideDy = sdy;
             g.Rect = c.Bounds.IsEmpty ? default : Offset(c.Bounds, cdx, cdy);   // the placed footprint (the group-cache region)
             g.Dist = dist;
             Mix(ref _compositeHash, layer.Layer.GroupAlpha); Mix(ref _compositeHash, layer.Layer.BlurSigma); MixRect(ref _compositeHash, ownClip);
@@ -2243,8 +2298,10 @@ public sealed partial class SliceRecorder
             Mix(ref _compositeHash, cdx); Mix(ref _compositeHash, cdy); MixDist(ref _compositeHash, in dist);
             bool liftThumbs = ChromeOverLayer(in layer.Layer) && ThumbsTrail(child);
             int posedFrom = _posedHoleCount;
-            PlaceSlot(child, scene, cdx, cdy, accDx, accDy, clip, clip, float.NaN, 0f,
-                sticky ? ClipAnd(cull, Offset(stickyWc, cdx, cdy)) : cull, round, roundR, default, default, default, liftThumbs, ref repaint);
+            RectF mClip = Offset(clip, -sdx, -sdy), mCull = Offset(sticky ? ClipAnd(cull, Offset(stickyWc, cdx, cdy)) : cull, -sdx, -sdy);
+            RectF mRound = roundR > 0f ? Offset(round, -sdx, -sdy) : round;
+            PlaceSlot(child, scene, rdx, rdy, prdx, prdy, mClip, mClip, float.NaN, 0f,
+                mCull, mRound, roundR, default, default, default, liftThumbs, ref repaint);
             // The group's band line cuts its surface where it is drawn, so every hole it encloses shows only below it: the video
             // behind each takes the line too (its erase stays unclipped by it, inside the surface).
             if (sticky)
@@ -2664,8 +2721,11 @@ public sealed partial class SliceRecorder
                         float hr = SelfBlurRegion.TapRadius(gSigma);
                         gFoot = new RectF(gFoot.X - hr, gFoot.Y - hr, gFoot.W + 2f * hr, gFoot.H + 2f * hr);
                     }
-                    AddItem(new CompositeItem(-1, CompositeKind.Group, gT, gAlpha, StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH), RadiiPx(e.RoundR, scale),
-                        gFeather, gSigma, default, 0, RoundPx(e.RoundRect, e.RoundR, scale), 0, 1, gSrc, gFeather2, gFoot, e.Dist.Count), in e.Layer, in e.Dist, in e);
+                    var gItem = new CompositeItem(-1, CompositeKind.Group, gT, gAlpha, StickyClipPx(ClipPx(e.Clip, scale), in e, scale, winW, winH), RadiiPx(e.RoundR, scale),
+                        gFeather, gSigma, default, 0, RoundPx(e.RoundRect, e.RoundR, scale), 0, 1, gSrc, gFeather2, gFoot, e.Dist.Count);
+                    // a slide group: its surface (rest) drawn at the pose, bilinearly (GroupCacheKey.Region carries the region back)
+                    if (e.SlideDx != 0f || e.SlideDy != 0f) gItem = gItem with { SubPxX = e.SlideDx * scale, SubPxY = e.SlideDy * scale };
+                    AddItem(gItem, in e.Layer, in e.Dist, in e);
                     continue;
                 }
                 case PlanKind.GroupClose:

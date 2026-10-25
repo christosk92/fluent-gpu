@@ -117,7 +117,8 @@ public enum ImageAtlasExperiment : byte
 /// read for it (<c>GlyphInk</c>; breaches are logged). <c>committed-tiles</c> — one committed texture per tile surface instead of
 /// placed resources in pooled heaps (the A/B arm of <see cref="FluentGpu.Render.Tiles.TileMemory.PlacedTiles"/>).
 /// <c>heap-probe</c> — time committed / heap / placed creates and releases once at device init. <c>heap-log</c> — a line per
-/// tile heap create / release.</item>
+/// tile heap create / release. <c>pixel-slides</c> — a sliding transition layer re-rasters its members at their exact phase
+/// every frame instead of compositing its group surface bilinearly (the A/B arm of the slide groups).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -323,6 +324,7 @@ public static class EngineSwitches
             case "committed-tiles": FluentGpu.Render.Tiles.TileMemory.PlacedTiles = false; return true;
             case "heap-probe": FluentGpu.Render.Tiles.TileMemory.HeapProbe = true; return true;
             case "heap-log": FluentGpu.Render.Tiles.TileMemory.HeapLog = true; return true;
+            case "pixel-slides": FluentGpu.Render.SliceRecorder.SlideGroups = false; return true;
             case "ink-validate": FluentGpu.Render.Tiles.TileDamage.InkValidate = true; return true;
             case "group-fades": FluentGpu.Render.SliceRecorder.GroupFadesSwitch = true; return true;
             case "rewalk-validate": FluentGpu.Render.SceneRecordingContext.PartialKeepValidate = true; return true;

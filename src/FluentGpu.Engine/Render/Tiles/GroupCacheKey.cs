@@ -33,6 +33,7 @@ public static class GroupCacheKey
     /// </summary>
     public static PixelRect Region(in CompositeItem it, int halo, int windowW, int windowH)
     {
+        if (it.Kind == CompositeKind.Group && (it.SubPxX != 0f || it.SubPxY != 0f)) return SlideRegion(in it, halo, windowW, windowH);
         if (it.Footprint.W > 0f && it.Footprint.H > 0f)
         {
             var fp = new PixelRect((int)MathF.Floor(it.Footprint.X), (int)MathF.Floor(it.Footprint.Y),
@@ -47,6 +48,28 @@ public static class GroupCacheKey
             r = Math.Min(r, (int)MathF.Ceiling(it.Clip.Right) + halo); b = Math.Min(b, (int)MathF.Ceiling(it.Clip.Bottom) + halo);
         }
         return r > l && b > t ? OnSliceGrid(in it, new PixelRect(l, t, r, b)) : default;
+    }
+
+    /// <summary>A SLIDE GROUP's region (SliceRecorder.PlaceChild): what it shows this turn — its footprint ∩ its clip ∩ the
+    /// window, where it is drawn — carried back by its pose (<see cref="CompositeItem.SubPxX"/>, px) to the REST position its
+    /// surface is rendered at, + 1 px on every side for the bilinear sample's reach.</summary>
+    private static PixelRect SlideRegion(in CompositeItem it, int halo, int windowW, int windowH)
+    {
+        float l = 0f, t = 0f, r = windowW, b = windowH;
+        if (!IsUnbounded(it.Clip))
+        {
+            l = MathF.Max(l, it.Clip.X - halo); t = MathF.Max(t, it.Clip.Y - halo);
+            r = MathF.Min(r, it.Clip.Right + halo); b = MathF.Min(b, it.Clip.Bottom + halo);
+        }
+        if (it.Footprint.W > 0f && it.Footprint.H > 0f)
+        {
+            l = MathF.Max(l, it.Footprint.X); t = MathF.Max(t, it.Footprint.Y);
+            r = MathF.Min(r, it.Footprint.Right); b = MathF.Min(b, it.Footprint.Bottom);
+        }
+        if (r <= l || b <= t) return default;
+        var rest = new PixelRect((int)MathF.Floor(l - it.SubPxX) - 1, (int)MathF.Floor(t - it.SubPxY) - 1,
+            (int)MathF.Ceiling(r - it.SubPxX) + 1, (int)MathF.Ceiling(b - it.SubPxY) + 1);
+        return OnSliceGrid(in it, rest);
     }
 
     /// <summary><paramref name="r"/> with its top-left floored onto <see cref="TileGrid.OriginGrid"/> of the item's space
