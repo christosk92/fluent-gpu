@@ -24,10 +24,27 @@ public sealed class DirectWriteFontSystem : IFontSystem, IDisposable
     {
         _strings = strings;
         TextSeam.Default = this;   // last-constructed wins (the InputHooks.Current.Default convention) — see TextSeam
+        if (CanPrefetchShapes) TextLayoutEngine.ShapePrefetchPool.Shared.Start();   // warm shaping workers before the first page (C4)
     }
 
     /// <inheritdoc/>
     public long ShapeCount => _engine.ShapeCount;
+
+    /// <inheritdoc/>
+    public bool CanPrefetchShapes => !TextDiagnostics.NoShapePrefetch;
+
+    /// <inheritdoc/>
+    /// <remarks>The call <see cref="LayoutFor"/> makes for a measure (the same family, spans, case and features; Start alignment is not
+    /// a shaping input), keyed on the measure engine and shaped by the prefetch workers into the shared shape store.</remarks>
+    public void PrefetchShape(StringId text, in TextStyle style)
+    {
+        string s = _strings.Resolve(text);
+        if (s.Length == 0) return;
+        string family = _strings.Resolve(style.FontFamily);
+        var run = style.SpanRunId != 0 ? SpanRunTable.Shared.Resolve(style.SpanRunId) : null;
+        _engine.Prefetch(s, family, style.Weight, style.SizeDip, style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
+            run?.Spans, _strings, run?.OverflowSuffixStart ?? -1, TextTypography.Pack(TextAlign.Start, style.Features, style.Case));
+    }
 
     public TextMetrics Measure(StringId text, in TextStyle style, float maxWidth = float.PositiveInfinity)
         => Measure(text, in style, maxWidth, publishArtifacts: true);
