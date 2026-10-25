@@ -39,13 +39,13 @@ public sealed partial class FlexLayout
     /// <summary>Measure-validity intervals on (default). <c>--fg no-measure-flat</c> turns them off (the A/B arm).</summary>
     public static bool MeasureFlatEnabled = true;
 
-    /// <summary>Intervals in the cross-pass ring: <c>--fg measure-flat-ring</c>, OFF by default. A ring answer is only as sound as the
-    /// subtree's dirty marks, and today some writers change layout inputs without <c>Mark(LayoutDirty)</c> (the layout-verify oracle's
-    /// unmarked-write tripwire fires on the base build too). An exact-offer ring answer rarely meets such a subtree (its offer usually
-    /// moves with its content); an interval answer does: with it on, nav-burst showed bounds divergences (a run measured while empty,
-    /// answered again after its text arrived). Within-pass intervals do not depend on dirty marks (everything they answer was measured
-    /// from the current state in the same pass) and stay on.</summary>
-    public static bool MeasureFlatRingEnabled;
+    /// <summary>Intervals in the cross-pass ring: ON by default (<c>--fg no-measure-flat-ring</c> is the A/B arm). A ring answer is only as
+    /// sound as the subtree's dirty marks: the unmarked layout-input writers the layout-verify tripwire found are marked now (PERF r3 MODEL
+    /// step 1), and an interval answer, which does not descend, is re-measured for real before an Arrange places the node at a new rect
+    /// (<see cref="RemeasureAfterRingInterval"/>: its descendants' Bounds still hold the arranged rects of the pass that stored the slot).
+    /// Evidence: the layout-verify oracle and <c>--fg measure-flat-validate</c> (which also checks every ring interval answer) read 0 over
+    /// nav-burst, playlist-scroll, home-scroll and track-change after stage-visualizer.</summary>
+    public static bool MeasureFlatRingEnabled = true;
 
     /// <summary><c>--fg measure-flat-validate</c>: every offer an interval would answer is measured for real instead (descending, with
     /// that interval withheld; the run then lays out as with intervals off) and the real size compared with the recorded one, both
@@ -54,6 +54,64 @@ public sealed partial class FlexLayout
     public static bool MeasureFlatValidate;
     private long _fvOk, _fvBad, _fvVoidOk, _fvVoidBad, _fvLastDump;
     private int _fvLogged;
+
+    private long _rvOk, _rvBad;
+
+    // Ring-interval answers of this pass (the pass id per node) and the node a re-measure runs for real (index + 1; 0 = none).
+    private int[] _ringIvPass = new int[256];
+    private uint _ringSkip;
+
+    private void NoteRingIntervalAnswer(NodeHandle node)
+    {
+        uint i = node.Raw.Index;
+        if (i >= (uint)_ringIvPass.Length) System.Array.Resize(ref _ringIvPass, System.Math.Max(_ringIvPass.Length * 2, (int)i + 1));
+        _ringIvPass[i] = _pass;
+    }
+
+    /// <summary>The node's measure this pass was a ring answer from the slot's interval, and it is about to be arranged at a new rect:
+    /// measure it for real at the offer it was answered at (its descendants' measured sizes replace the arranged rects of the old pass;
+    /// the descendants themselves may still answer from their own slots), so the Arrange reads measured base sizes.</summary>
+    private void RemeasureAfterRingInterval(NodeHandle node)
+    {
+        uint i = node.Raw.Index;
+        _ringIvPass[i] = 0;
+        ref MeasureMemo m = ref _memo[i];
+        float offer = m.AvailW;
+        m.Gen = 0;   // the within-pass memo holds the ring answer
+        uint outer = _ringSkip;
+        _ringSkip = i + 1;
+        try { MeasureCore(node, offer); }
+        finally { _ringSkip = outer; }
+    }
+
+    /// <summary>A cross-pass ring slot answered <paramref name="availW"/> from its interval: measure for real (the ring bypassed for the
+    /// subtree) and compare; the real answer is used.</summary>
+    private Size2 RingFlatValidate(NodeHandle node, float availW, Size2 ringSize, float lo, float hi)
+    {
+        bool outer = BypassMeasureRing;
+        BypassMeasureRing = true;
+        Size2 real;
+        try { real = MeasureCore(node, availW); }
+        finally { BypassMeasureRing = outer; }
+        if (real.Width == ringSize.Width && real.Height == ringSize.Height) _rvOk++;
+        else
+        {
+            _rvBad++;
+            if (_fvLogged < 64)
+            {
+                _fvLogged++;
+                System.Console.Error.WriteLine(System.FormattableString.Invariant(
+                    $"[measure-flat-validate] RING n#{node.Raw.Index} offer={availW} interval=[{lo}, {hi}] ring={ringSize.Width}x{ringSize.Height} real={real.Width}x{real.Height}")
+#if DEBUG || FLUENTGPU_DIAG
+                    + DescribeChain(node)
+#endif
+                    );
+            }
+        }
+        if (_rvOk + _rvBad > 0 && (_rvOk + _rvBad) % 2000 == 0)
+            System.Console.Error.WriteLine($"[measure-flat-validate] ring intervals: same={_rvOk} DIFFERENT={_rvBad}");
+        return real;
+    }
 
     private Size2 FlatValidate(NodeHandle node, float availW, bool guardOk)
     {

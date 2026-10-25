@@ -237,12 +237,13 @@ public sealed partial class FlexLayout
     /// <summary>P4 cross-pass measure ring lookup — see the <c>Ring0*</c>/<c>Ring1*</c> fields on <see cref="MeasureMemo"/>.
     /// Excluded for viewport/grid/z-stack roots (same conservative scope as <see cref="TryResolveSizeStable"/> and the
     /// within-pass memo — those measure paths keep no per-node record to validate against).</summary>
-    private bool TryRingHit(NodeHandle node, float availW, out Size2 size, out float flatLo, out float flatHi)
+    private bool TryRingHit(NodeHandle node, float availW, out Size2 size, out float flatLo, out float flatHi, out bool viaInterval)
     {
-        size = default; flatLo = flatHi = float.NaN;
+        size = default; flatLo = flatHi = float.NaN; viaInterval = false;
         if (Verifying || BypassMeasureRing) return false;   // --fg layout-verify: the oracle's re-solve descends for real, it never rides the ring
         uint i = node.Raw.Index;
         if (i >= (uint)_memo.Length) return false;
+        if (_ringSkip == i + 1) return false;   // RemeasureAfterRingInterval: this node measures for real
         // Two complementary validators, both required (P4 fix, 2026-09-19):
         //  - IsLayoutClean(node): SAME-FRAME dirtiness — something in this subtree is marked dirty and not yet
         //    processed/cleared, so any stored answer for it is suspect regardless of version (the parity gate's
@@ -262,13 +263,13 @@ public sealed partial class FlexLayout
             && (m.Ring0AvailW == availW || (flatOn && availW >= m.Ring0Lo && availW <= m.Ring0Hi)))   // NaN bounds compare false
         {
             sig = LayoutSig(node); sigComputed = true;
-            if (sig == m.Ring0Sig) { size = new Size2(m.Ring0W, m.Ring0H); flatLo = m.Ring0Lo; flatHi = m.Ring0Hi; return true; }
+            if (sig == m.Ring0Sig) { size = new Size2(m.Ring0W, m.Ring0H); flatLo = m.Ring0Lo; flatHi = m.Ring0Hi; viaInterval = m.Ring0AvailW != availW; return true; }
         }
         if (m.Ring1NodeGen == gen && m.Ring1Ver == curVer
             && (m.Ring1AvailW == availW || (flatOn && availW >= m.Ring1Lo && availW <= m.Ring1Hi)))
         {
             if (!sigComputed) sig = LayoutSig(node);
-            if (sig == m.Ring1Sig) { size = new Size2(m.Ring1W, m.Ring1H); flatLo = m.Ring1Lo; flatHi = m.Ring1Hi; return true; }
+            if (sig == m.Ring1Sig) { size = new Size2(m.Ring1W, m.Ring1H); flatLo = m.Ring1Lo; flatHi = m.Ring1Hi; viaInterval = m.Ring1AvailW != availW; return true; }
         }
         return false;
     }
@@ -795,10 +796,19 @@ public sealed partial class FlexLayout
         // participation fields still hash the same — so the stored size is provably still correct and Measure can
         // return WITHOUT DESCENDING at all (no children visited, no text re-shaped). Re-assert Bounds W/H exactly
         // like the within-pass hit above so Arrange (which reads Bounds for base sizes) sees the identical value.
-        if (!special && TryRingHit(node, availW, out var ringSize, out float ringLo, out float ringHi))
+        if (!special && TryRingHit(node, availW, out var ringSize, out float ringLo, out float ringHi, out bool ringViaInterval))
         {
+            // --fg measure-flat-validate also checks every ring answer an interval gave (an offer other than the slot's own).
+            if (ringViaInterval && MeasureFlatValidate) return RingFlatValidate(node, availW, ringSize, ringLo, ringHi);
+#if DEBUG || FLUENTGPU_DIAG
+            if (ringViaInterval && s_layoutVerify) NoteRingInterval(node, availW, ringSize, ringLo, ringHi);
+#endif
             _dMeasureMemoHit++;
             WriteMeasuredBounds(node, ringSize.Width, ringSize.Height);
+            // An answer from the slot's INTERVAL (another offer than the slot's own) did not descend: the descendants' Bounds still hold
+            // their ARRANGED rects of the pass that stored the slot, at the old offer, which an Arrange of this node at a new rect would
+            // read as their measured base sizes. Such an Arrange re-measures the node for real first (RemeasureAfterRingInterval).
+            if (ringViaInterval) NoteRingIntervalAnswer(node);
             // C1: the slot's interval holds for this (unchanged) subtree in this pass too, so the parent can still be flat (only with
             // ring intervals on: it extends a ring answer to other offers, as sound as the ring's dirty marks - see MeasureFlatRingEnabled).
             if (MeasureFlatEnabled && MeasureFlatRingEnabled && !_naturalProbe && !float.IsNaN(ringLo))
@@ -1145,6 +1155,7 @@ public sealed partial class FlexLayout
             }
         }
 
+        if (ei < (uint)_ringIvPass.Length && _ringIvPass[ei] == _pass) RemeasureAfterRingInterval(node);
         _dArrange++;
         SetArrangedBounds(node, new RectF(x, y, finalW, finalH));
 

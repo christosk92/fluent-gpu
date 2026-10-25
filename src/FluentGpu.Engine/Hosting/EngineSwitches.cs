@@ -99,8 +99,8 @@ public enum ImageAtlasExperiment : byte
 /// <c>measure-census</c> — every real measure classified against the node's earlier ones in the frame (first / same width again /
 /// new width by its distance), by phase, node kind and solve kind, every 5 s (diagnostic).
 /// <c>no-measure-flat</c> — a re-measure inside the node's measure-validity interval descends anyway (the A/B arm of C1).
-/// <c>measure-flat-ring</c> — the cross-pass ring also answers offers inside its slot's interval (experimental: unsound while
-/// unmarked layout-input writers exist).
+/// <c>no-measure-flat-ring</c> — the cross-pass ring answers only its slots' exact offers, not the offers inside their intervals (the A/B
+/// arm; intervals in the ring are the default).
 /// <c>measure-flat-validate</c> — every offer a measure-validity interval would answer is measured for real and compared (diagnostic).
 /// <c>no-shape-prefetch</c> — first-visit text shapes inside its measure on the UI thread instead of on the shaping workers (the A/B arm).
 /// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).
@@ -318,7 +318,8 @@ public static class EngineSwitches
             case "shape-census": FluentGpu.Text.TextDiagnostics.ShapeCensus = true; return true;
             case "measure-census": FluentGpu.Layout.FlexLayout.MeasureCensusEnabled = true; return true;
             case "no-measure-flat": FluentGpu.Layout.FlexLayout.MeasureFlatEnabled = false; return true;
-            case "measure-flat-ring": FluentGpu.Layout.FlexLayout.MeasureFlatRingEnabled = true; return true;
+            case "measure-flat-ring": FluentGpu.Layout.FlexLayout.MeasureFlatRingEnabled = true; return true;   // the default (kept for old command lines)
+            case "no-measure-flat-ring": FluentGpu.Layout.FlexLayout.MeasureFlatRingEnabled = false; return true;
             case "measure-flat-validate": FluentGpu.Layout.FlexLayout.MeasureFlatValidate = true; return true;
             case "shape-validate": FluentGpu.Text.TextDiagnostics.ShapeValidate = true; return true;
             case "no-shape-prefetch": FluentGpu.Text.TextDiagnostics.NoShapePrefetch = true; return true;
