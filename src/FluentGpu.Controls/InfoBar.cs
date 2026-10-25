@@ -302,12 +302,12 @@ public static class InfoBar
                 Grow = 1f,
                 // Inside the vertical stack the panel must not absorb the leftover column height (its Grow=1 is the
                 // *-column horizontal grow when it is the sole column child).
-                Children = panel is null ? [content] : [panel with { Grow = 0f }, content],
+                Children = panel is null ? [content] : [panel.Value with { Grow = 0f }, content],
             }
             : panel ?? new BoxEl { Grow = 1f };   // empty * column still pushes the close button to the trailing edge
 
         var children = new List<Element>(3);
-        if (icon is not null) children.Add(icon);
+        if (icon is not null) children.Add(icon.Value);
         children.Add(column);
 
         // Column 2: the close button. WinUI uses an AppBarButton-style Button: 38x38, Top-aligned, Margin 5, a 16px
@@ -414,7 +414,7 @@ public static class InfoBar
                 Margin = new Edges4(left, ActionHMargin.Top, 0f, 0f),
                 AlignSelf = FlexAlign.Start,                        // VerticalAlignment="Top"
                 Grow = 1f,                                          // last child takes the remaining width (InfoBarPanel.cpp:144-147)
-                Children = [actionButton],
+                Children = [actionButton.Value],
             });
         }
         // SHRINK IS LOAD-BEARING, not cosmetic. The panel is the "*" column of a THREE-column row (icon | panel |
@@ -485,7 +485,7 @@ public static class InfoBar
                 // A HyperlinkButton action adds its implicit-style own-margin (-12,0,0,0) on top of the orientation margin.
                 Margin = new Edges4(isHyperlinkAction ? HyperlinkActionMarginLeft : 0f, first ? 0f : ActionVMargin.Top, 0f, 0f), // 0,12,0,0 below the message
                 AlignSelf = FlexAlign.Start,                        // left-aligned action (WinUI HorizontalAlignment default)
-                Children = [actionButton],
+                Children = [actionButton.Value],
             });
         }
         return new BoxEl

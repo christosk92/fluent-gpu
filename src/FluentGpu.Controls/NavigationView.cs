@@ -663,7 +663,7 @@ public sealed class NavigationView : Component
             {
                 Padding = new Edges4(ItemMarginX + 12f, 0, ItemMarginX + 12f, 4f),
                 Animate = LabelTransition,
-                Children = [AutoSuggest],
+                Children = [AutoSuggest.Value],
             });
         }
 
@@ -860,7 +860,7 @@ public sealed class NavigationView : Component
         }
         bar.Add(new BoxEl { Grow = 1f });
         if (AutoSuggest is not null)
-            bar.Add(new BoxEl { Width = 216f, AlignSelf = FlexAlign.Center, Children = [AutoSuggest] });
+            bar.Add(new BoxEl { Width = 216f, AlignSelf = FlexAlign.Center, Children = [AutoSuggest.Value] });
         foreach (var f in footerItems)
         {
             if (f.IsHeader || f.IsSeparator) continue;
@@ -1108,7 +1108,7 @@ public sealed class NavigationView : Component
                             new BoxEl
                             {
                                 AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.End,
-                                Margin = new Edges4(0f, 2f, 2f, 0f), HitTestVisible = false, Children = [it.InfoBadge],
+                                Margin = new Edges4(0f, 2f, 2f, 0f), HitTestVisible = false, Children = [it.InfoBadge.Value],
                             },
                         ],
                     },
@@ -1163,7 +1163,7 @@ public sealed class NavigationView : Component
                     AlignSelf = FlexAlign.Center,
                     Margin = new Edges4(0, 0, it.IsExpandable ? 0 : 12f, 0),
                     HitTestVisible = false,
-                    Children = [it.InfoBadge],
+                    Children = [it.InfoBadge.Value],
                 });
             if (it.IsExpandable)
                 children.Add(ChevronCell(isExpanded));

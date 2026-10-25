@@ -513,7 +513,7 @@ public sealed class TeachingTip : Component
         // Footer button panel (ButtonsStates VSM). Both → Action(Left, Grow) | Close(Right, Grow) split with the
         // 4+4 margin gap; Action-only → full-width; footer-close-only → full-width standard.
         var footer = BuildFooter(hasAction, hasFooterClose, footerCloseUsed, requestClose);
-        if (footer is not null) contentCol.Add(footer);
+        if (footer is not null) contentCol.Add(footer.Value);
 
         // The content region carries the WinUI 12px content margin (TeachingTipContentMargin) as padding.
         var contentRegion = new BoxEl
@@ -578,9 +578,9 @@ public sealed class TeachingTip : Component
         // TemplateSettings.TopLeftHighlightMargin/TopRightHighlightMargin pair, TeachingTip.cpp:687-708).
         Element TopHighlightBar() => Embed.Comp(() => new TeachingTipTopHighlight { SplitAroundTail = tailVisible && tailSide == TailSide.Top, TailPin = tailPin });
 
-        if (hero is not null && heroTop) bodyChildren.Add(hero);
+        if (hero is not null && heroTop) bodyChildren.Add(hero.Value);
         bodyChildren.Add(nonHero);
-        if (hero is not null && !heroTop) bodyChildren.Add(hero);
+        if (hero is not null && !heroTop) bodyChildren.Add(hero.Value);
 
         // ── The solid TeachingTip card (ContentRootGrid): SolidBackgroundFillColorTertiary, SurfaceStroke 1px,
         // OverlayCornerRadius 8, content elevation shadow. ClipToBounds so the hero/fill honor the rounded corners. ──

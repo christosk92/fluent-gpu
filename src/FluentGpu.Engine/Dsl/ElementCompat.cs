@@ -37,4 +37,11 @@ public static class ElementCompat
 
     /// <summary>The element, valid for as long as it is referenced. Reference-type elements already are: the identity.</summary>
     public static T Freeze<T>(this T el) where T : Element => el;
+
+    /// <summary>The non-null element of a nullable one (the former <c>x!</c>, no runtime check): <c>x.Value</c> reads the same
+    /// here and against value-type elements, where it is <c>Nullable&lt;T&gt;.Value</c> (PERF r3 MODEL M4a batch 2).</summary>
+    extension<T>(T? e) where T : Element
+    {
+        public T Value => e!;
+    }
 }

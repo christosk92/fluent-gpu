@@ -859,7 +859,7 @@ public sealed class TabView : Component
             // The SAME surface as the selected header (SolidBackgroundFillColorTertiary, themeresources:85) — the
             // selected tab fuses flush with its content.
             Fill = Tok.FillSolidTertiary,
-            Children = body is null ? [] : [body],
+            Children = body is null ? [] : [body.Value],
         };
         content = Parts.Apply(PartContent, content) with { Children = content.Children };
 

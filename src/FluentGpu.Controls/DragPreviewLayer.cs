@@ -122,7 +122,7 @@ public sealed class DragPreviewLayer : Component
                         {
                             OnRealized = h => _settleNode = h,
                             HitTestVisible = false,
-                            Children = [body],
+                            Children = [body.Value],
                         },
                     ],
                 }],

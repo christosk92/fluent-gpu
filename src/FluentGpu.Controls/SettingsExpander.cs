@@ -139,14 +139,14 @@ sealed class SettingsExpanderCore : Component
         headerCard = o.Parts.Apply(SettingsExpander.PartHeaderCard, headerCard);
 
         var itemKids = new List<Element>(o.Items.Count * 2 + 2);
-        if (o.ItemsHeader is not null) itemKids.Add(o.ItemsHeader);
+        if (o.ItemsHeader is not null) itemKids.Add(o.ItemsHeader.Value);
         for (int i = 0; i < o.Items.Count; i++)
         {
             if (i > 0 || o.ItemsHeader is not null)
                 itemKids.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault });
             itemKids.Add(o.Items[i]);
         }
-        if (o.ItemsFooter is not null) itemKids.Add(o.ItemsFooter);
+        if (o.ItemsFooter is not null) itemKids.Add(o.ItemsFooter.Value);
 
         var items = o.Parts.Apply(SettingsExpander.PartItems, new BoxEl
         {
