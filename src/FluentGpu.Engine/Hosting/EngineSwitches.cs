@@ -91,7 +91,8 @@ public enum ImageAtlasExperiment : byte
 /// <c>no-op-footprints</c> — a tile replay decodes every op of its segment instead of skipping the primitives whose
 /// footprint misses the tile (the A/B arm). <c>footprint-validate</c> — composited tiles are re-rastered without the skip
 /// into a shadow surface and compared. <c>no-defer-geometry</c> — a non-visible tile of a slice whose geometry is moving
-/// rasters every turn as before (the A/B arm of <c>SliceTable.DeferMovingGeometry</c>).</item>
+/// rasters every turn as before (the A/B arm of <c>SliceTable.DeferMovingGeometry</c>). <c>no-scissor-merge</c> — a
+/// replay breaks its batch at every clip change, also one that cuts the target identically (the A/B arm).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -284,6 +285,7 @@ public static class EngineSwitches
             case "footprint-validate": FluentGpu.Render.Tiles.TileDamage.FootprintValidate = true; return true;
             case "no-op-footprints": FluentGpu.Render.Tiles.TileDamage.OpFootprints = false; return true;
             case "no-defer-geometry": FluentGpu.Render.Tiles.SliceTable.DeferMovingGeometry = false; return true;
+            case "no-scissor-merge": FluentGpu.Render.Tiles.TileDamage.MergeScissors = false; return true;
             case "raw-phase": FluentGpu.Render.SliceRecorder.CanonicalPhase = false; return true;
             case "rewalk-validate": FluentGpu.Render.SceneRecordingContext.PartialKeepValidate = true; return true;
             case "no-partial-keep": FluentGpu.Render.SceneRecordingContext.PartialKeepEnabled = false; return true;

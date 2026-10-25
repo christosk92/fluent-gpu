@@ -65,6 +65,10 @@ public static class TileDamage
     /// (default; the backend's per-segment footprint table). <c>--fg no-op-footprints</c> decodes every op (the A/B arm).</summary>
     public static bool OpFootprints = true;
 
+    /// <summary>A replay keeps its batch across clips that cut the target identically (default). <c>--fg no-scissor-merge</c>
+    /// breaks at every clip change (the A/B arm).</summary>
+    public static bool MergeScissors = true;
+
     /// <summary>The partial-present diff uses the precise damage (default): a re-rastered tile dirties only what its raster
     /// wrote, and an item STRUCTURE change dirties only the items that moved. <c>--fg no-precise-present</c> restores the
     /// whole-placement / whole-frame behaviour (the A/B arm).</summary>
