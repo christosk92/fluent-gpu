@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <!-- wip/flip only (PERF r3 MODEL trial-flip harvest): compile this project metadata-only, so dependents can be checked. -->
+    <ProduceOnlyReferenceAssembly Condition="$([System.String]::Copy(';$(FlipRefOnly);').Contains(';$(MSBuildProjectName);'))">true</ProduceOnlyReferenceAssembly>
     <IsAotCompatible>true</IsAotCompatible>
     <!-- Existing files keep their per-subsystem namespaces (FluentGpu.Foundation, FluentGpu.Scene, ...); this only
          seeds NEW files, which would otherwise inherit the project-name root (FluentGpu.Engine). -->
