@@ -93,6 +93,8 @@ public enum ImageAtlasExperiment : byte
 /// DEBUG parity self-check on every capture instead of every Nth; a summary line every 2 s). <c>no-ledgered-capture</c> — an
 /// incremental capture always re-walks the reachable tree instead of copying only the ledgered rows when the tree's topology
 /// is unchanged (the A/B arm, <c>SceneRecordingSnapshot.TryCaptureLedgered</c>).
+/// <c>shape-census</c> — every text layout engine reports its shape-cache hits and misses (first-ever / already shaped by
+/// another engine / re-shaped after its own eviction), shaping and re-wrap time and retained bytes every 10 s (diagnostic).
 /// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
@@ -286,6 +288,7 @@ public static class EngineSwitches
             case "capture-validate": FluentGpu.Scene.SceneRecordingSnapshot.ParityValidateEveryCapture = true; return true;
             case "no-ledgered-capture": FluentGpu.Scene.SceneRecordingSnapshot.LedgeredCaptureEnabled = false; return true;
             case "mount-census": FluentGpu.Reconciler.TreeReconciler.MountCensusEnabled = true; return true;
+            case "shape-census": FluentGpu.Text.TextDiagnostics.ShapeCensus = true; return true;
             case "no-partial-keep": FluentGpu.Render.SceneRecordingContext.PartialKeepEnabled = false; return true;
             case "damage-log": FluentGpu.Render.Tiles.TileDamage.Log = true; return true;
             case "no-precise-present": FluentGpu.Render.Tiles.TileDamage.PrecisePresent = false; return true;

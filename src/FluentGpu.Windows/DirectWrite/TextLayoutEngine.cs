@@ -70,7 +70,7 @@ public struct LaidLine
 /// later phases; query edge mapping is leading=left (LTR — BiDi-correct edges arrive with the RTL workstream, but the
 /// scan is already cluster-correct and walks the visual order).
 /// </summary>
-public sealed unsafe class TextLayoutEngine : IDisposable
+public sealed unsafe partial class TextLayoutEngine : IDisposable
 {
     // Faces come from the one shared registry (E9), never from a private cache.
     private readonly FontRegistry _registry;
@@ -294,6 +294,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         ReadOnlySpan<SpanStyle> spans = default, StringTable? names = null, int overflowSuffixStart = -1,
         int typography = 0, float alignWidth = float.PositiveInfinity)
     {
+        long censusT0 = TextDiagnostics.ShapeCensus ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;   // --fg shape-census
         if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
         // E9: a run with no family of its own shapes in the theme's body chain. Key every cache on the CHAIN, not on "", so a
         // body-font change misses the shape cache instead of replaying glyphs of the previous font.
@@ -321,6 +322,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                 RestoreShape(hit);
                 hit.Tick = ++_shapeTick;
                 WrapAndPosition(size, 1f, hit.LineH, maxWidth, wrap, trim, maxLines, _ellFace, overflowSuffixStart);
+                if (censusT0 != 0) CensusLayout(hit: true, cacheable, shapeKey, censusT0, 0);
                 return;
             }
         }
@@ -458,7 +460,9 @@ public sealed unsafe class TextLayoutEngine : IDisposable
 
         ShapeCount++;   // an actual itemize+shape pass (this was a cache miss); a re-wrap returns above without bumping it
         if (cacheable) StoreShape(shapeKey, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features, lineH);
+        long censusT1 = censusT0 != 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         WrapAndPosition(size, scale, lineH, maxWidth, wrap, trim, maxLines, (nint)face, overflowSuffixStart);
+        if (censusT0 != 0) CensusLayout(hit: false, cacheable, shapeKey, censusT0, censusT1);
     }
 
     // A word wraps to the next line only when it overruns the box by MORE than this sub-pixel slack. The box width
