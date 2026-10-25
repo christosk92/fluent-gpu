@@ -221,10 +221,10 @@ public static class ContextMenu
         var children = new List<Element>(4);
         if (header is not null)
         {
-            children.Add(header);
+            children.Add(header.Value);
             if (style.HeaderDivider) children.Add(HeaderDivider());
         }
-        if (strip is not null) children.Add(strip);
+        if (strip is not null) children.Add(strip.Value);
         children.Add(menu);
         return new BoxEl
         {

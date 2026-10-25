@@ -432,11 +432,11 @@ public sealed class EditableText : Component
         }
 
         var rowChildren = new List<Element>(3);
-        if (LeftAffix is not null) rowChildren.Add(LeftAffix);
+        if (LeftAffix is not null) rowChildren.Add(LeftAffix.Value);
         rowChildren.Add(lane);
         if (RightAffix is not null)
         {
-            rowChildren.Add(RightAffix);
+            rowChildren.Add(RightAffix.Value);
         }
         else if (ShowDeleteButton && !AcceptsReturn && !Mask && IsEnabled && !IsReadOnly && focused && !emptySig.Value)
         {

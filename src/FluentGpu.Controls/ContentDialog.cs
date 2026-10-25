@@ -438,7 +438,7 @@ public sealed class ContentDialog : Component
         // now — colour-independent — so this is a fidelity choice, not the old painted band's wrong-plate hazard.) A style that
         // wants the overflow seen feathers it (Style.ContentEdgeFade).
         Element contentBody = Content is not null
-            ? new ScrollEl { Content = Content, ContentSized = true, MaxHeight = st.MaxHeight - 200f, EdgeCues = ScrollEdgeCues.None, AutoEdgeFade = st.ContentEdgeFade }
+            ? new ScrollEl { Content = Content.Value, ContentSized = true, MaxHeight = st.MaxHeight - 200f, EdgeCues = ScrollEdgeCues.None, AutoEdgeFade = st.ContentEdgeFade }
             : new TextEl(Message) { Size = st.MessageSize, Color = st.MessageColor, Wrap = TextWrap.Wrap };
 
         Element TitleRow(Style st, Action close)
@@ -485,7 +485,7 @@ public sealed class ContentDialog : Component
             if (st.SeparatorThickness > 0f) cardChildren.Add(new BoxEl { Height = st.SeparatorThickness, Fill = st.SeparatorColor });
             // A Footer replaces the built-in buttons inside the command space (same chrome), letting a reactive
             // component swap the actions per phase without re-opening the dialog.
-            Element[] commandKids = Footer is not null ? [Footer] : commandChildren;
+            Element[] commandKids = Footer is not null ? [Footer.Value] : commandChildren;
             var commandRow = new BoxEl
             {
                 Direction = 0,

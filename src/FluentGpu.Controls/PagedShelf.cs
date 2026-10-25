@@ -1537,7 +1537,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         Element? headerEl = BuildHeader(hp, headerCount, headerPrev, headerNext);
 
         Element[] children = headerEl is null ? [ body with { Key = "body" } ]
-            : [ headerEl with { Key = "header" }, body with { Key = "body" } ];
+            : [ headerEl.Value with { Key = "header" }, body with { Key = "body" } ];
         return _parts.Apply(PagedShelf.PartRoot, new BoxEl
         {
             // LiftClearance of the header gap lives INSIDE the strip's clip (the item container's top pad), so the
@@ -1984,7 +1984,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                     OnRealized = ProbeRealized(i),
                     Children = [ CardAt(i, cardW) ],
                 };
-            sampleCells[i] = cell;
+            sampleCells[i] = cell.Value;
         }
         Element probeHost = new BoxEl
         {
@@ -2108,7 +2108,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             ?? (_title is null ? null : _parts.Apply(PagedShelf.PartHeader, new BoxEl { Children = [ Heading(_title) ] }));
 
         var row = new List<Element>(4);
-        if (titleEl is not null) row.Add(titleEl);
+        if (titleEl is not null) row.Add(titleEl.Value);
         row.Add(new BoxEl { Grow = 1f });   // spacer pushes the pager to the trailing edge
 
         if (_customPager is { } customPager)

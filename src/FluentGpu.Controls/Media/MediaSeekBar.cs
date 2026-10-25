@@ -379,7 +379,7 @@ public sealed class MediaSeekBar : Component
         {
             ZStack = true, Grow = 1f, Height = HitHeight, AlignItems = FlexAlign.Center,
             HitTestVisible = false,
-            Children = spinner is null ? [rail, thumb] : [rail, thumb, spinner],
+            Children = spinner is null ? [rail, thumb] : [rail, thumb, spinner.Value],
         };
 
         // Pixel-due ticker (UseInterval — not FrameClock.Tick, which pins the host at panel rate via FrameClockPoller).
@@ -407,8 +407,8 @@ public sealed class MediaSeekBar : Component
             OnDragCanceled = interactive ? OnCanceled : null,
             OnPointerWheel = interactive ? OnWheel : null,   // wheel over the seek bar = ±5 s
             Children = ticker is null
-                ? previewTicker is null ? [stack] : [stack, previewTicker]
-                : previewTicker is null ? [stack, ticker] : [stack, ticker, previewTicker],
+                ? previewTicker is null ? [stack] : [stack, previewTicker.Value]
+                : previewTicker is null ? [stack, ticker.Value] : [stack, ticker.Value, previewTicker.Value],
         };
     }
 
