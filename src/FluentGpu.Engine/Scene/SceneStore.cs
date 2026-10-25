@@ -114,6 +114,7 @@ public sealed partial class SceneStore : ISceneBackend
     private NodeFlags[] _flags;
     private byte[] _recordDirty;
     private byte[] _recordDirtySelf;
+    private bool[] _shapeHanded;   // the reconciler handed this text node's current text and style to the shaping workers
     private byte[] _recordDirtyDescendant;
     private int[] _recordDirtyWrote;
     private int _recordDirtyWroteCount;
@@ -339,6 +340,7 @@ public sealed partial class SceneStore : ISceneBackend
         _subtreeVersion = new uint[capacity];
         _recordDirty = new byte[capacity];
         _recordDirtySelf = new byte[capacity];
+        _shapeHanded = new bool[capacity];
         _recordDirtyDescendant = new byte[capacity];
         _recordDirtyWrote = new int[capacity];
         _recordDirtyStamp = new RecordDirtyStamps[capacity];
@@ -387,6 +389,10 @@ public sealed partial class SceneStore : ISceneBackend
     /// <summary>In-flight implicit brush transitions — O(1) census of the <c>_brushAnims</c> side-table.</summary>
     public int BrushAnimCount => _brushAnims.Count;
 
+    /// <summary>The reconciler handed this text node's CURRENT text and style to the shaping workers (Reconciler.TextPrefetch.cs): the
+    /// layout pass's own prefetch walk skips it. Set and cleared only by the reconciler's text writes.</summary>
+    public ref bool ShapeHanded(NodeHandle h) => ref _shapeHanded[h.Raw.Index];
+
     public bool IsLive(NodeHandle h)
         => h.Raw.Index > 0 && h.Raw.Index < (uint)_high && _gen[h.Raw.Index] == h.Raw.Gen;
 
@@ -412,6 +418,7 @@ public sealed partial class SceneStore : ISceneBackend
         _recordDirty[idx] = 0;
         _recordDirtySelf[idx] = 0;
         _recordDirtyDescendant[idx] = 0;
+        _shapeHanded[idx] = false;
         MarkRecordDirty(idx);
         _click[idx] = null;
         _boundsChanged[idx] = null;
@@ -2785,6 +2792,7 @@ public sealed partial class SceneStore : ISceneBackend
         Array.Resize(ref _aux, n);
         Array.Resize(ref _subtreeVersion, n);   // P4 fix: per-node subtree-content version, parallel to _aux (SceneStore.Aux.cs)
         Array.Resize(ref _recordDirty, n); Array.Resize(ref _recordDirtySelf, n); Array.Resize(ref _recordDirtyDescendant, n);
+        Array.Resize(ref _shapeHanded, n);
         Array.Resize(ref _recordDirtyWrote, n); Array.Resize(ref _recordDirtyStamp, n);
         if (_recordDirtyWroteCount > n) _recordDirtyWroteCount = n;
         // P8 capture ledger: sized WITH the columns (like _recordDirtyWrote/_recordDirtyStamp) so a steady frame never

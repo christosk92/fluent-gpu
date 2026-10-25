@@ -38,6 +38,7 @@ public sealed partial class TreeReconciler
             {
                 li.TextStyle = li.TextStyle with { SpanRunId = runId };
                 NodeBindingWriteCount++;
+                NoteTextWrite(node);   // the shaping workers start on it now
             }
         }));
     }
