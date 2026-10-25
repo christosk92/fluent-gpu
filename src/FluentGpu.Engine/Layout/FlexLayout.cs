@@ -154,7 +154,7 @@ public sealed partial class FlexLayout
 
     /// <summary>Host-driven per-frame reset: zero the diag counters at the top of a frame so DiagMeasure/Arrange/TextMiss
     /// read that frame's total after all layout (full + scoped + phase-7 reflow) has run. Cheap; no-op meaning when off.</summary>
-    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dTextSharedHit = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = 0; }
+    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dTextSharedHit = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = 0; if (MeasureCensusEnabled) CensusFrameStart(); }
 
     // Within-pass Measure memo. Measure(node, availW) is a PURE function of the node's subtree content + availW within
     // ONE layout solve (it has no external mutable input; its only side effect is writing the node's Bounds W/H). But the
@@ -471,6 +471,7 @@ public sealed partial class FlexLayout
     {
         if (root.IsNull) return;
         if (_fonts.CanPrefetchShapes) PrefetchText(root);
+        if (MeasureCensusEnabled) CensusSolve(root: true);
         // Snapshot so the per-Run print stays per-call even though the counters are now frame accumulators (host-reset).
         FluentGpu.Hosting.MountProf.RootSolves++;
         int m0 = _dMeasure, th0 = _dTextHit, tm0 = _dTextMiss, a0 = _dArrange, mh0 = _dMeasureMemoHit;
@@ -479,7 +480,9 @@ public sealed partial class FlexLayout
         ref LayoutInput li = ref _scene.Layout(root);
         float w = float.IsNaN(li.Width) ? window.Width : li.Width;
         float h = float.IsNaN(li.Height) ? window.Height : li.Height;
+        if (MeasureCensusEnabled) _mcArranging = true;
         Arrange(root, 0f, 0f, w, h);
+        _mcArranging = false;
         VerifyParity(root, window.Width, 0f, 0f, w, h, "Run(window)");
         if (s_layoutDiag) Console.Error.WriteLine($"[--fg layout] measure={_dMeasure - m0} memoHit={_dMeasureMemoHit - mh0} arrange={_dArrange - a0} textHit={_dTextHit - th0} textMiss={_dTextMiss - tm0}");
     }
@@ -492,6 +495,7 @@ public sealed partial class FlexLayout
     {
         if (node.IsNull) return;
         if (_fonts.CanPrefetchShapes) PrefetchText(node);
+        if (MeasureCensusEnabled) CensusSolve(root: false);
         FluentGpu.Hosting.MountProf.SubtreeSolves++;
         BeginMeasurePass();
         ref LayoutInput li = ref _scene.Layout(node);
@@ -528,7 +532,9 @@ public sealed partial class FlexLayout
         }
         Measure(node, w);
         float ox = b.X, oy = b.Y;
+        if (MeasureCensusEnabled) _mcArranging = true;
         Arrange(node, ox, oy, w, h);
+        _mcArranging = false;
         VerifyParity(node, w, ox, oy, w, h, "RunSubtree");
     }
 
@@ -758,6 +764,7 @@ public sealed partial class FlexLayout
         if (FluentGpu.Hosting.MountProf.On) FluentGpu.Hosting.MountProf.NoteMeasure((int)node.Raw.Index, availW, (_scene.Flags(node) & NodeFlags.LayoutDirty) != 0 || !_scene.IsLayoutClean(node));
         ref LayoutInput li = ref _scene.Layout(node);
         ref NodePaint paint = ref _scene.Paint(node);
+        if (MeasureCensusEnabled) CensusMeasure(node, availW, paint.VisualKind == VisualKind.Text, Row(li));
 
         if (_scene.HasScroll(node)) return MeasureViewport(node, in li, availW);
         if (_scene.HasGrid(node)) return MeasureGrid(node, in li, availW);
