@@ -1277,6 +1277,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
         _rtvSize = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         _memoryProbeObserver?.Invoke("allocator-ring-list-fence-created");
+        if (FluentGpu.Render.Tiles.TileMemory.HeapProbe) RunHeapProbe();
     }
 
     private void InitSwapChain(D3D12Swapchain target)
@@ -2892,6 +2893,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         {
             int n = sp.TrimIdle(nowMs, completed, GpuProfile.IsWeak);
             if (n >= 0) next = n;
+            int c = CompactTileHeapsIdle(nowMs);   // idle only: the sparsest tile heap's tiles move so it can be released next tick
+            if (c >= 0 && c < next) next = c;
         }
         _glyphs?.TrimIdlePools(nowMs);   // the shaped-run pools back to their resting depth once shaping stopped (no wake of its own)
         for (int i = 0; i < _swapchains.Count; i++)
