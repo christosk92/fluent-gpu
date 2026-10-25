@@ -60,6 +60,24 @@ public static class ElementFreezer
     public static void Freeze(List<Element>? l) { if (l is null) return; for (int i = 0; i < l.Count; i++) l[i] = l[i].Freeze(); }
     public static void Freeze(List<Element?>? l) { if (l is null) return; for (int i = 0; i < l.Count; i++) if (l[i] is { } x) l[i] = x.Freeze(); }
 
+    /// <summary>An element list typed as an interface, for a member the freezer holds by ref: an array or a List is frozen in place and
+    /// returned; any other list (a collection expression's synthesized read-only list, a boxed <see cref="ElementList"/>, a lazy
+    /// sequence) is copied into a frozen array, which the caller stores back (an array implements every list interface).</summary>
+    public static IEnumerable<Element>? FreezeList(IEnumerable<Element>? l)
+    {
+        switch (l)
+        {
+            case null: return null;
+            case Element[] a: Freeze(a); return a;
+            case List<Element> list: Freeze(list); return list;
+            default:
+                if (!Tape.RegionsEnabled) return l;
+                var copy = new List<Element>();
+                foreach (var e in l) copy.Add(e.Freeze());
+                return copy.ToArray();
+        }
+    }
+
     /// <summary>An element list typed as an interface: an array or a List is frozen in place; an ElementList (boxed) cannot be
     /// written back, so its owner must hold it as <see cref="ElementList"/> (the generator reports such a member).</summary>
     public static void Freeze(IReadOnlyList<Element>? l)

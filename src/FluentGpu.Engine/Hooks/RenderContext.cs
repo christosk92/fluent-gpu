@@ -542,6 +542,9 @@ internal static class HookValueFreeze
         {
             case Element[] a: ElementFreezer.Freeze(a); return;
             case List<Element> list: ElementFreezer.Freeze(list); return;
+            case IEnumerable<Element> seq:   // a read-only list (a collection expression's): replaced by a frozen array when T admits one
+                if (ElementFreezer.FreezeList(seq) is { } f && !ReferenceEquals(f, seq) && f is T t) value = t;
+                return;
             case object o: ElementFreezer.FreezeObject(o); return;
         }
     }

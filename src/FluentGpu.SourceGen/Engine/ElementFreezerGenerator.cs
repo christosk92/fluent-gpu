@@ -32,7 +32,7 @@ namespace FluentGpu.SourceGen.Engine
             context.RegisterSourceOutput(context.CompilationProvider.Combine(decls), static (spc, pair) => Emit(spc, pair.Left, pair.Right!));
         }
 
-        private enum Kind { None, Element, NullableElement, ElementList, ElementArray, ElementListRef, ElementKindValue, Holder, HolderEach, Obj, HolderStruct, NullableHolderStruct }
+        private enum Kind { None, Element, NullableElement, ElementList, ElementArray, ElementListRef, ElementListIface, ElementKindValue, Holder, HolderEach, Obj, HolderStruct, NullableHolderStruct }
 
         private static bool IsCandidate(INamedTypeSymbol t, Compilation comp)
         {
@@ -134,6 +134,9 @@ namespace FluentGpu.SourceGen.Engine
                     {
                         case Kind.Element: case Kind.NullableElement: case Kind.ElementList:
                             sb.Append("            ").Append(Freezer).Append(".Freeze(ref ").Append(call).Append(");\n"); break;
+                        case Kind.ElementListIface:
+                            sb.Append("            { ref var l = ref ").Append(call).Append("; l = (").Append(mem.FieldType).Append(")").Append(Freezer)
+                              .Append(".FreezeList(l); }\n"); break;
                         case Kind.ElementArray: case Kind.ElementListRef:
                             sb.Append("            ").Append(Freezer).Append(".Freeze(").Append(call).Append(");\n"); break;
                         case Kind.ElementKindValue:
@@ -252,7 +255,10 @@ namespace FluentGpu.SourceGen.Engine
                         or "System.Collections.Generic.IReadOnlyCollection<T>" or "System.Collections.Generic.ICollection<T>";
                     if (listLike)
                     {
-                        if (SymbolEqualityComparer.Default.Equals(arg, element)) return Kind.ElementListRef;
+                        // a List<Element> is frozen in place; an interface-typed list may be a read-only one (a collection expression's
+                        // synthesized list): it is replaced through the member's ref by a frozen array
+                        if (SymbolEqualityComparer.Default.Equals(arg, element))
+                            return def == "System.Collections.Generic.List<T>" ? Kind.ElementListRef : Kind.ElementListIface;
                         if (IsNullableOf(arg, element) && def == "System.Collections.Generic.List<T>") return Kind.ElementListRef;
                         if (arg is INamedTypeSymbol an && an.TypeKind == TypeKind.Class && IsHolderType(an, holders, comp)) return Kind.HolderEach;
                         return Kind.None;
