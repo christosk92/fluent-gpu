@@ -60,6 +60,7 @@ public sealed partial class FlexLayout
     // folds in the text inputs (TextStyle + the run itself), which LayoutSig deliberately omits because no ANCESTOR
     // reads them — the tripwire, unlike the ring, cares about this node's own measured size too.
     private ulong[] _verifySig = [];
+    private uint[] _verifySigGen = [];   // the generation the signature was recorded for: a recycled index carries a stale one
     // Parity-oracle scratch: the rects the real (incremental) solve produced, restored verbatim after the compare.
     private RectF[] _verifySaved = [];
     private NodeHandle[] _verifyNodes = [];
@@ -71,8 +72,119 @@ public sealed partial class FlexLayout
     private void NoteVerifySig(NodeHandle node)
     {
         uint i = node.Raw.Index;
-        if (_verifySig.Length <= (int)i) System.Array.Resize(ref _verifySig, System.Math.Max((int)i + 1, System.Math.Max(16, _verifySig.Length * 2)));
+        if (_verifySig.Length <= (int)i)
+        {
+            int n = System.Math.Max((int)i + 1, System.Math.Max(16, _verifySig.Length * 2));
+            System.Array.Resize(ref _verifySig, n); System.Array.Resize(ref _verifySigGen, n);
+        }
         _verifySig[i] = VerifySig(node);
+        _verifySigGen[i] = node.Raw.Gen;
+        if (s_layoutVerify) NoteVerifyParts(node);
+    }
+
+    // --fg layout-verify only: the signature's parts at the last real arrange, so a tripwire hit can say WHAT changed
+    // (which flag bits, the LayoutInput fields, the text inputs) instead of only that something did (PERF r3 MODEL, C1 writers).
+    private uint[] _verifyFlags = [];
+    private ulong[] _verifyLi = [], _verifyTxt = [];
+    private uint[] _verifyGen = [];
+    private int[] _verifyPass = [];
+    private LayoutInput[] _verifyLiCopy = [];
+    private (uint Kind, uint Text, NodeHandle Parent)[] _verifyPaint = [];
+    private void NoteVerifyParts(NodeHandle node)
+    {
+        int i = (int)node.Raw.Index;
+        if (_verifyFlags.Length <= i)
+        {
+            int n = System.Math.Max(i + 1, System.Math.Max(16, _verifyFlags.Length * 2));
+            System.Array.Resize(ref _verifyFlags, n); System.Array.Resize(ref _verifyLi, n); System.Array.Resize(ref _verifyTxt, n);
+            System.Array.Resize(ref _verifyGen, n); System.Array.Resize(ref _verifyPass, n);
+            System.Array.Resize(ref _verifyLiCopy, n); System.Array.Resize(ref _verifyPaint, n);
+        }
+        _verifyLiCopy[i] = _scene.Layout(node);
+        _verifyPaint[i] = ((uint)_scene.Paint(node).VisualKind, (uint)_scene.Paint(node).Text.Value, _scene.Parent(node));
+        _verifyGen[i] = node.Raw.Gen;
+        _verifyPass[i] = _pass;
+        _verifyFlags[i] = (uint)_scene.Flags(node);
+        _verifyLi[i] = LayoutSigNoFlags(node);
+        _verifyTxt[i] = VerifyTextSig(node);
+    }
+
+    private string DescribeChain(NodeHandle n)
+    {
+        var sb = new System.Text.StringBuilder(" chain:");
+        int k = 0;
+        for (var a = n; !a.IsNull && k < 8; a = _scene.Parent(a), k++)
+        {
+            sb.Append(" n#").Append(a.Raw.Index).Append("[t").Append(_scene.ElementTypeId(a));
+            if (_scene.DebugKeyOf(a) is { } key) sb.Append(" '").Append(key).Append("'");
+            if (!_scene.IsArrangedValid(a)) sb.Append(" !arr");
+            if (!_scene.IsLayoutClean(a)) sb.Append(" dirty");
+            if ((_scene.Flags(a) & NodeFlags.Parked) != 0) sb.Append(" parked");
+            if ((_scene.Flags(a) & NodeFlags.Exiting) != 0) sb.Append(" exiting");
+            if (_scene.HasScroll(a)) sb.Append(" scroll");
+            if ((_scene.Flags(a) & NodeFlags.ZStack) != 0) sb.Append(" z");
+            sb.Append(" b=").Append((int)_scene.Bounds(a).W).Append('x').Append((int)_scene.Bounds(a).H).Append(']');
+        }
+        return sb.ToString();
+    }
+
+    private string DescribeVerifyChange(NodeHandle n)
+    {
+        int i = (int)n.Raw.Index;
+        if (i >= _verifyFlags.Length) return "(no parts recorded)";
+        var sb = new System.Text.StringBuilder();
+        uint fx = (_verifyFlags[i] ^ (uint)_scene.Flags(n)) & (uint)LayoutInputFlags;
+        if (fx != 0) sb.Append(" flags^=").Append(((NodeFlags)fx).ToString());
+        if (_verifyLi[i] != LayoutSigNoFlags(n)) sb.Append(" layoutInput");
+        if (_verifyTxt[i] != VerifyTextSig(n)) sb.Append(" text");
+        {
+            bool hidden = false;
+            for (var a = _scene.Parent(n); !a.IsNull; a = _scene.Parent(a)) if ((_scene.Flags(a) & NodeFlags.Visible) == 0) { hidden = true; break; }
+            sb.Append(hidden ? " UNDER-COLLAPSED" : " inflow");
+            if ((_scene.Flags(n) & NodeFlags.Parked) != 0) sb.Append(" parked");
+        }
+        if (_verifyGen[i] != n.Raw.Gen)
+        {
+            sb.Append(" RECYCLED");
+            if (!_scene.IsArrangedValid(n)) sb.Append(" neverArranged");
+        }
+        else
+        {
+            // field-level: which LayoutInput fields and paint text inputs moved (diag only; reflection is fine here)
+            object a = _verifyLiCopy[i], b = _scene.Layout(n);
+            foreach (var f in typeof(LayoutInput).GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+                if (!Equals(f.GetValue(a), f.GetValue(b))) sb.Append(" li.").Append(f.Name).Append('=').Append(f.GetValue(a)).Append("->").Append(f.GetValue(b));
+            sb.Append(" flags=").Append(_scene.Flags(n)).Append(" type=").Append(_scene.ElementTypeId(n));
+            var p = _verifyPaint[i];
+            if (p.Kind != (uint)_scene.Paint(n).VisualKind) sb.Append(" visualKind ").Append(p.Kind).Append("->").Append((uint)_scene.Paint(n).VisualKind);
+            if (p.Text != (uint)_scene.Paint(n).Text.Value)
+            {
+                string Str(uint id) { try { return _scene.Strings?.Resolve(new StringId((int)id)) ?? "?"; } catch { return "?"; } }
+                sb.Append(" paintText '").Append(Str(p.Text)).Append("'->'").Append(Str((uint)_scene.Paint(n).Text.Value)).Append("'");
+
+            }
+            if (p.Parent != _scene.Parent(n)) sb.Append(" REPARENTED");
+        }
+        sb.Append(" passesAgo=").Append(_pass - _verifyPass[i]);
+        sb.Append(" kind=").Append(_scene.Paint(n).VisualKind);
+        return sb.ToString();
+    }
+
+    private ulong LayoutSigNoFlags(NodeHandle node)
+    {
+        ref LayoutInput li = ref _scene.Layout(node);
+        ulong h = 14695981039346656037UL;
+        MixU(ref h, _scene.IsMirrorCollapsed(node) ? 1u : 0u);
+        MixU(ref h, li.Direction);
+        MixF(ref h, li.Gap);
+        MixE(ref h, in li.Padding);
+        MixE(ref h, in li.Margin);
+        MixF(ref h, li.Width); MixF(ref h, li.Height); MixF(ref h, li.AspectRatio);
+        MixF(ref h, li.MinW); MixF(ref h, li.MinH); MixF(ref h, li.MaxW); MixF(ref h, li.MaxH);
+        MixF(ref h, li.FlexGrow); MixF(ref h, li.FlexShrink); MixF(ref h, li.FlexBasis);
+        MixU(ref h, (uint)li.AlignSelf); MixU(ref h, (uint)li.Justify); MixU(ref h, (uint)li.AlignItems);
+        MixU(ref h, li.Wrap ? 1u : 0u);
+        return h;
     }
 
     /// <summary>The Arrange early-out's tripwire: it just claimed this whole subtree is unchanged. Prove it — every
@@ -86,16 +198,24 @@ public sealed partial class FlexLayout
         {
             var n = _verifyWalk[--depth];
             uint i = n.Raw.Index;
-            if (i < (uint)_verifySig.Length && _verifySig[i] != 0)
+            // A collapsed node is flow-removed: neither it nor its subtree is measured or arranged, so their inputs are not part
+            // of the result the early-out vouches for (a reveal marks the node dirty). And a recycled index's signature belongs
+            // to the node that held it before: the new node was never arranged here (it is under a collapsed ancestor, or
+            // collapsed itself), so there is nothing to compare (PERF r3 MODEL, C1 writers).
+            if ((_scene.Flags(n) & NodeFlags.Visible) == 0) continue;
+            if (i < (uint)_verifySig.Length && _verifySig[i] != 0 && _verifySigGen[i] == n.Raw.Gen)
             {
                 ulong now = VerifySig(n);
                 if (now != _verifySig[i])
                 {
                     _dUnmarkedLayoutWrites++;
                     if (s_layoutVerify)
+                    {
                         System.Console.Error.WriteLine(
                             $"[--fg layout-verify] unmarked LayoutInput write: n#{i} changed under a clean Arrange early-out " +
-                            $"rooted at n#{node.Raw.Index} (sig {_verifySig[i]:x} -> {now:x}). A writer skipped Mark(LayoutDirty).");
+                            $"rooted at n#{node.Raw.Index} (sig {_verifySig[i]:x} -> {now:x}). A writer skipped Mark(LayoutDirty).{DescribeVerifyChange(n)}");
+                        NoteVerifyParts(n);
+                    }
                     _verifySig[i] = now;   // report each divergence ONCE — a permanent mismatch must not spam every frame
                 }
             }
@@ -107,13 +227,22 @@ public sealed partial class FlexLayout
         }
     }
 
-    /// <summary>LayoutSig plus the node's own text inputs — the tripwire's "did anything layout-affecting change".</summary>
-    private ulong VerifySig(NodeHandle node)
+    /// <summary>The node flags a layout solve READS (presence, stacking, slot placement during a size animation, the boundary
+    /// choice, a viewport). The dirty bits (LayoutDirty/PaintDirty/TransformDirty: set while a node is being re-laid or
+    /// repainted, cleared at the frame's end) and the interaction/paint state bits are not layout inputs: hashing them made the
+    /// tripwire report a node arranged while its LayoutDirty bit was still set as "changed" once the bit cleared (PERF r3 MODEL).</summary>
+    internal const NodeFlags LayoutInputFlags = NodeFlags.Visible | NodeFlags.ZStack | NodeFlags.Relayouting;
+
+    /// <summary>The node's layout INPUTS (LayoutSig's fields with only <see cref="LayoutInputFlags"/>) plus its own text inputs —
+    /// the tripwire's "did anything layout-affecting change".</summary>
+    private ulong VerifySig(NodeHandle node) => LayoutSigNoFlags(node) ^ (ulong)(uint)(_scene.Flags(node) & LayoutInputFlags) * 0x9E3779B97F4A7C15UL ^ VerifyTextSig(node);
+
+    private ulong VerifyTextSig(NodeHandle node)
     {
-        ulong h = LayoutSig(node);
+        ulong h = 14695981039346656037UL;
         ref LayoutInput li = ref _scene.Layout(node);
         ref NodePaint p = ref _scene.Paint(node);
-        MixU(ref h, (uint)p.VisualKind);
+        MixU(ref h, p.VisualKind == VisualKind.Text ? 1u : 0u);   // the solver only asks "is it a text run"
         MixU(ref h, (uint)p.Text.Value);
         MixU(ref h, (uint)li.TextStyle.FontFamily.Value);
         MixF(ref h, li.TextStyle.SizeDip);
@@ -182,7 +311,7 @@ public sealed partial class FlexLayout
             if (Near(fresh.X, had.X) && Near(fresh.Y, had.Y) && Near(fresh.W, had.W) && Near(fresh.H, had.H)) continue;
             if (log && mismatches < 16)
                 System.Console.Error.WriteLine(
-                    $"[--fg layout-verify] {site}: n#{node.Raw.Index} incremental={had} fromScratch={fresh}");
+                    $"[--fg layout-verify] {site}: n#{node.Raw.Index} incremental={had} fromScratch={fresh}{DescribeChain(node)}");
             mismatches++;
         }
         // Restore unconditionally: the oracle observes, it never decides. Even a genuine divergence leaves the frame
