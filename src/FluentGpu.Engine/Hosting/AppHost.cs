@@ -6427,7 +6427,12 @@ public sealed partial class AppHost : IDisposable
             // Also skip on a window RESIZE: the pre-resize rects are stale, so FLIPping them animates the resize delta —
             // a content slide that, when a NavigationView pane also auto-collapses at the breakpoint, leaves a stale
             // presented translation (content shifted, backdrop revealed). Resizes SNAP; state-driven changes still FLIP.
-            bool willReconcile = _runtime.HasPending || _needFullLayout;
+            // A frame-clock timer due this frame fires below (_drainTimers, inside the hot-phase window, after this capture) and its writes are
+            // THIS frame's commit: capture for it as for any pending write. Without it a UseTimeout-driven change on an otherwise quiet frame (a
+            // playlist's hold running out of its budget, which lands the rows and the facts toggle) re-laid out with nothing captured, so every
+            // FLIP and reflow under it landed at once (the list bar's right group moved 42 in one frame at Compact, audit FU2c).
+            bool timerDue = _timers.Count > 0 && _timers.TryPeekEarliest(out double timerDueMs) && timerDueMs <= _timers.NowMs;
+            bool willReconcile = _runtime.HasPending || _needFullLayout || timerDue;
             bool capturedProjections = false;
             long db = 0, dt0 = 0;
             if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt0 = Stopwatch.GetTimestamp(); }
