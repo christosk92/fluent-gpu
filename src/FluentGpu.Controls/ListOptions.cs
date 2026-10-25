@@ -198,6 +198,11 @@ public sealed record ScrollOptions
     /// <see cref="ItemClipTopInset"/>. The hard inset remains authoritative for paint and input; this only softens the
     /// visible edge immediately below pinned prefix chrome. Zero (default) disables it.</summary>
     public float ItemClipTopFadeBand { get; init; }
+    /// <summary>How far the virtualized viewport reaches past the list's LEADING cross edge (a vertical list's left, a horizontal list's top), in DIP, so
+    /// an item may draw that far outside the list's box there (a display title's optical hang over the column's edge). The viewport and its slots span
+    /// the reach, so an item sets its own content back in by as much; the list's box, its drop surface (the accent line, the gap preview, the
+    /// spotlight's window) and everything around the list keep their place. Zero (default): the viewport is the list's box, as before.</summary>
+    public float LeadingBleed { get; init; }
 }
 
 /// <summary>

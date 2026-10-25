@@ -680,6 +680,8 @@ public sealed class ItemsView : Component, IPropsHost
     public IReadSignal<float>? ItemClipTopInsetSource;
     /// <summary>Top alpha-feather for the recyclable item band. Zero disables it.</summary>
     public float ItemClipTopFadeBand;
+    /// <summary>How far the viewport reaches past the list's leading cross edge (<see cref="ScrollOptions.LeadingBleed"/>). Zero: none.</summary>
+    public float LeadingBleed;
     /// <summary>Viewport-hydration hook forwarded onto the built VirtualListEl (see <c>VirtualListEl.OnVisibleRange</c>):
     /// the realized window moved → (first, last) exclusive. Fires only on a window CHANGE (never on a steady
     /// transform-only scroll frame) and reports the realized window INCLUDING the overscan halo, not the strictly-visible
@@ -743,6 +745,7 @@ public sealed class ItemsView : Component, IPropsHost
             ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
             ItemClipTopInsetSource = o.Scroll?.ItemClipTopInsetSource,
             ItemClipTopFadeBand = o.Scroll?.ItemClipTopFadeBand ?? 0f,
+            LeadingBleed = o.Scroll?.LeadingBleed ?? 0f,
             EdgeCues = o.Scroll?.EdgeCues ?? ScrollEdgeCues.Auto,
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
             AutoEdgeFadeBand = o.Scroll?.AutoEdgeFadeBand ?? 0f,
@@ -810,6 +813,7 @@ public sealed class ItemsView : Component, IPropsHost
             ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
             ItemClipTopInsetSource = o.Scroll?.ItemClipTopInsetSource,
             ItemClipTopFadeBand = o.Scroll?.ItemClipTopFadeBand ?? 0f,
+            LeadingBleed = o.Scroll?.LeadingBleed ?? 0f,
             EdgeCues = o.Scroll?.EdgeCues ?? ScrollEdgeCues.Auto,
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
             AutoEdgeFadeBand = o.Scroll?.AutoEdgeFadeBand ?? 0f,
@@ -2238,18 +2242,39 @@ public sealed class ItemsView : Component, IPropsHost
         // Declarative insertion: the view hosts its OWN drop surface — the list body, the in-gap preview and the
         // accent line stacked over one accepting target. Every consumer that sets Insertion gets the premiere
         // destination by declaration; a view without it is byte-identical to before (no wrapper node at all).
+        // A leading bleed (ScrollOptions.LeadingBleed): the viewport reaches past the list's leading cross edge by a negative margin, so an item may
+        // draw there; the list's box (and the drop surface below) stays where it was.
+        bool bleed = false;
+        if (LeadingBleed > 0f && itemsHost.Is(out VirtualListEl reach))
+        {
+            itemsHost = reach with { Margin = horizontal ? new Edges4(0f, -LeadingBleed, 0f, 0f) : new Edges4(-LeadingBleed, 0f, 0f, 0f) };
+            bleed = true;
+        }
+
         if (insertion is { } insHost)
             itemsHost = new BoxEl
             {
                 Key = "fg-insertion-host",
-                ZStack = true, Grow = Grow, Shrink = 1f, MinHeight = 0f, ClipToBounds = true,
+                // With a bleeding viewport the host leaves the clip to the viewport (which reaches past it) and clips the line and the preview in a layer
+                // of their own: they, and the spotlight's window (the host's box), stay on the list's box.
+                ZStack = true, Grow = Grow, Shrink = 1f, MinHeight = 0f, ClipToBounds = !bleed,
                 DropTarget = insHost.Spec,
-                Children =
-                [
-                    itemsHost,
-                    Embed.Comp(() => new ItemsViewInsertionPreview(insHost)),
-                    insHost.Line(),
-                ],
+                Children = bleed
+                    ?
+                    [
+                        itemsHost,
+                        new BoxEl
+                        {
+                            ZStack = true, ClipToBounds = true, HitTestVisible = false,
+                            Children = [Embed.Comp(() => new ItemsViewInsertionPreview(insHost)), insHost.Line()],
+                        },
+                    ]
+                    :
+                    [
+                        itemsHost,
+                        Embed.Comp(() => new ItemsViewInsertionPreview(insHost)),
+                        insHost.Line(),
+                    ],
             };
 
         Element[] rootChildren = [itemsHost];
