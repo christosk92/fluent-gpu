@@ -59,21 +59,15 @@ public sealed unsafe partial class TextLayoutEngine
 
     private void CensusDump()
     {
-        long bytes = 0, chars = 0, glyphs = 0;
-        foreach (var e in _shapeCache.Values)
-        {
-            // object headers + fields (an estimate: 16 B header, the ShapeEntry's fields), the three arrays, the dictionary entry.
-            bytes += 16 + 120 + 24 + e.Text.Length * 2L + 24 + e.Glyphs.Length * (long)Unsafe.SizeOf<RunGlyph>()
-                     + 24 + e.Breaks.Length * (long)Unsafe.SizeOf<BreakOpp>() + 24;
-            chars += e.TextLen; glyphs += e.GlyphCount;
-        }
+        int entries = 0; long bytes = 0, chars = 0, glyphs = 0;
+        _store?.Stats(out entries, out chars, out glyphs, out bytes);   // the store this engine uses (the shared one: process-wide)
         double f = 1000.0 / Stopwatch.Frequency;
         Console.Error.WriteLine(
             $"[shape-census] {_censusName} layouts={_cLayouts} hits={_cHits} misses={_cMisses} fresh={_cFresh} cross={_cCross} own={_cOwn} " +
             $"empty={_cEmpty} spanned={_cSpanned} spannedMs={_cSpannedTicks * f:F1} shapeMs={_cShapeTicks * f:F1} " +
             $"usPerShape={(_cFresh + _cCross + _cOwn == 0 ? 0 : _cShapeTicks * f * 1000 / (_cFresh + _cCross + _cOwn)):F1} " +
             $"wrapMs={_cWrapTicks * f:F1} usPerLayout={(_cLayouts == 0 ? 0 : _cWrapTicks * f * 1000 / _cLayouts):F1} " +
-            $"entries={_shapeCache.Count} chars={chars} glyphs={glyphs} retainedKB={bytes / 1024}");
+            $"storeEntries={entries} chars={chars} glyphs={glyphs} storeKB={bytes / 1024}");
         _cLayouts = _cHits = _cMisses = _cFresh = _cCross = _cOwn = _cEmpty = _cSpanned = _cShapeTicks = _cSpannedTicks = _cWrapTicks = 0;
     }
 }
