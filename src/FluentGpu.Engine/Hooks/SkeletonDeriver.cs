@@ -36,6 +36,11 @@ internal static class SkeletonDeriver
 
         switch (real)
         {
+            case BoxEl { SkeletonDeriveChild: true, Children: { Length: > 0 } wrapped }:
+                // A service wrapper that draws nothing in place (a tooltip's attachment box): the region derives what it wraps,
+                // exactly as a component boundary's SkeletonProxy did, never the wrapper's own layout-transparent box.
+                return Derive(wrapped[0], s);
+
             case BoxEl b when b.Children is { Length: > 0 }:
             {
                 // A container is layout, not skeleton content. Preserve geometry and recurse into semantic leaves, but

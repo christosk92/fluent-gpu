@@ -534,6 +534,15 @@ public sealed record BoxEl : Element
     /// the un-hover re-resolve look THROUGH it to the nearest real interactive ancestor. A card's hover then still
     /// reveals a wrapped play FAB. Hit-testing and handler delivery are unchanged.</summary>
     public bool HoverScopeTransparent { get => (_cInput ?? BoxColdInput.Default).HoverScopeTransparent; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).HoverScopeTransparent, value)) CInput.HoverScopeTransparent = value; } }
+    /// <summary>A per-node behaviour WITHOUT a component (<see cref="NodeAttachment"/>): the reconciler binds the spec to this box's
+    /// node and keeps its per-node state while the node lives; the state's handlers are this box's wherever it declares none of its
+    /// own. A tooltip is one: idle on every box it wraps but the one under the pointer, so it costs a spec and a small state, not a
+    /// mounted component per box.</summary>
+    public NodeAttachment? Attachment { get => (_cInput ?? BoxColdInput.Default).Attachment; init { if (!EqualityComparer<NodeAttachment?>.Default.Equals((_cInput ?? BoxColdInput.Default).Attachment, value)) CInput.Attachment = value; } }
+    /// <summary>A derived skeleton (<see cref="FluentGpu.Hooks.SkeletonDeriver"/>) derives this box as its FIRST child: the box is a
+    /// behaviour wrapper with no shape of its own (the tooltip's), and its loading placeholder is its content's, exactly as a
+    /// component's <c>SkeletonProxy</c> makes it.</summary>
+    public bool SkeletonDeriveChild { get => (_cInput ?? BoxColdInput.Default).SkeletonDeriveChild; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).SkeletonDeriveChild, value)) CInput.SkeletonDeriveChild = value; } }
     /// <summary>This box HOSTS the keyboard-focus ring of its nearest focused ancestor: where the focused node is a wide container (a virtual list's
     /// slot root spanning the whole viewport) and only part of it is the item the user sees (a row standing between inset spacers), the ring is drawn
     /// on this box's rect instead of the focused node's, with the focused node's <see cref="FocusVisualMargin"/>. The first host found under the focused
