@@ -281,7 +281,7 @@ public sealed partial class AppHost
         float u = _fzDissolveMs <= 0f ? 1f : (float)((_timers.NowMs - _fzThawStartMs) / _fzDissolveMs);
         // With a render thread the dissolve runs on ITS clock (RenderDissolveT): it ends when the render side has presented t = 1
         // (or, if it never presents — a parked window — after RenderDissolveFallback durations on this clock). Inline, this clock is it.
-        bool done = OwningRenderThread is null
+        bool done = OwningRenderThread is null || EngineSwitches.DissolveUiClock
             ? u >= 1f
             : Volatile.Read(ref _renderDissolveDoneId) == _fzDissolveId || u >= RenderDissolveFallback;
         // A backend that cannot dissolve thaws as a cut: the new frame at once.
@@ -359,7 +359,8 @@ public sealed partial class AppHost
                 hold = true;
                 break;
             case FreezeKind.Dissolve:
-                if (_frozenSnapshot is { } s) _swapchain.DissolveNextPresent(s, renderClock && rf.DissolveId != 0 ? RenderDissolveT(in rf, hold) : rf.DissolveT);
+                if (_frozenSnapshot is { } s)
+                    _swapchain.DissolveNextPresent(s, renderClock && rf.DissolveId != 0 && !EngineSwitches.DissolveUiClock ? RenderDissolveT(in rf, hold) : rf.DissolveT);
                 break;
             case FreezeKind.Release:
                 ReleaseFrozenSnapshot();
@@ -371,7 +372,7 @@ public sealed partial class AppHost
     /// render loop re-presents the retained frame every tick (HasOwnRenderMotion) and never elides the turn, so the dissolve advances at
     /// display rate whatever the UI thread is doing.</summary>
     private bool RenderDissolveActive(in Threading.RenderFrame rf)
-        => rf.Freeze == FreezeKind.Dissolve && rf.DissolveId != 0 && _frozenSnapshot is not null
+        => rf.Freeze == FreezeKind.Dissolve && rf.DissolveId != 0 && _frozenSnapshot is not null && !EngineSwitches.DissolveUiClock
            && Volatile.Read(ref _renderDissolveDoneId) != rf.DissolveId;
 
     /// <summary>Render thread, for the present about to be made: the dissolve's t on this thread's present-time clock (the turn's
