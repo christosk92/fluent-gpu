@@ -944,9 +944,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// harness exercises the full hit-test → routing → inertia path (not the WriteScrollOffset bypass). UI-thread only.</summary>
     public void QueueInput(in InputEvent e) => _queue.Enqueue(e);
 
+    /// <summary>Show without activating (<see cref="FluentGpu.AppOptions.ShowInactive"/>): probe and bench windows.</summary>
+    internal bool ShowInactive { get; set; }
+
     public void Show()
     {
-        ShowWindow(_hwnd, SW_SHOW);
+        ShowWindow(_hwnd, ShowInactive ? SW_SHOWNOACTIVATE : SW_SHOW);
         UpdateWindow(_hwnd);
     }
 
@@ -1523,8 +1526,35 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// every vblank (scroll-v3-plan-2026-08-17.md §5.2).</summary>
     public bool ScrollProducerLive => (_dm?.Live ?? false) || _fbActive || (_syntheticScroll?.Live ?? false);
 
+    /// <summary>frame-trace: one pointer-family message (down / update / up / wheel / hwheel / DM hit-test) with the OS's own
+    /// hardware stamp (POINTER_INFO.PerformanceCount, the QPC domain), its pointer type, frame id and the raw contact position on
+    /// the device. Only while tracing (one GetPointerInfo per message).</summary>
+    private void TracePointerMessage(MSG* msg)
+    {
+        TraceMsg wm;
+        switch (msg->message)
+        {
+            case WM_POINTERDOWN: wm = TraceMsg.PointerDown; break;
+            case WM_POINTERUPDATE: wm = TraceMsg.PointerUpdate; break;
+            case WM_POINTERUP: wm = TraceMsg.PointerUp; break;
+            case WM_POINTERWHEEL: wm = TraceMsg.PointerWheel; break;
+            case WM_POINTERHWHEEL: wm = TraceMsg.PointerHWheel; break;
+            case DM_POINTERHITTEST: wm = TraceMsg.DmHitTest; break;
+            default: return;
+        }
+        uint id = (uint)((nuint)msg->wParam & 0xFFFF);   // GET_POINTERID_WPARAM
+        POINTER_INFO info = default;
+        bool got = GetPointerInfo(id, &info);
+        int raw = wm is TraceMsg.PointerWheel or TraceMsg.PointerHWheel ? (short)(((nuint)msg->wParam >> 16) & 0xFFFF) : 0;
+        FrameTrace.Msg(wm, id, got ? (byte)info.pointerType : (byte)0, got ? (long)info.PerformanceCount : 0, raw,
+            got ? info.ptHimetricLocationRaw.x : 0, got ? info.ptHimetricLocationRaw.y : 0, got ? info.frameId : 0);
+    }
+
     private void DispatchQueuedMessage(MSG* msg)
     {
+        // frame-trace `msg` rows: every pointer / wheel / DM hit-test message as the OS delivered it, BEFORE DirectManipulation
+        // can consume it (a DM-owned touchpad packet never reaches the WndProc). One bool check while the trace is off.
+        if (FrameTrace.Enabled && msg->message is >= WM_POINTERUPDATE and <= DM_POINTERHITTEST) TracePointerMessage(msg);
         // DirectManipulation (§7): feed every message to ProcessInput BEFORE dispatch. When DM owns an active touchpad
         // contact it consumes the packet so it never reaches the WndProc wheel fallback.
         if (_dm is { Enabled: true } dm && dm.ProcessInput(msg)) return;
@@ -1750,15 +1780,24 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private Win32CompositorClock? DisplayClockOrNull(bool wanted)
     {
         if (!wanted || _closed) return null;
-        _compositorClock ??= new Win32CompositorClock(refreshPeriodHintQpc: _displayRefreshPeriodQpc);
-        return _compositorClock.IsAvailable ? _compositorClock : null;
+        EnsureCompositorClock();
+        return _compositorClock!.IsAvailable ? _compositorClock : null;
     }
 
     public IRenderDisplayClock? CreateRenderDisplayClock()
     {
         if (_closed) return null;
-        _compositorClock ??= new Win32CompositorClock(refreshPeriodHintQpc: _displayRefreshPeriodQpc);
-        return _compositorClock.CreateRenderSubscription();
+        EnsureCompositorClock();
+        return _compositorClock!.CreateRenderSubscription();
+    }
+
+    /// <summary>Create the display clock on first use, seeded with the window's current monitor period AND monitor (a later
+    /// monitor hop updates both through <see cref="OnDisplayChanged"/>).</summary>
+    private void EnsureCompositorClock()
+    {
+        if (_compositorClock is not null) return;
+        _compositorClock = new Win32CompositorClock(refreshPeriodHintQpc: _displayRefreshPeriodQpc);
+        _compositorClock.SetWindowMonitor((nint)_monitor.Value);
     }
 
     /// <summary>The always-present half of the wait handle set: the general cross-thread wake, the phase-critical
@@ -1964,6 +2003,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _displayRefreshPeriodQpc = DisplayInfo.ForWindow((nint)_hwnd).RefreshPeriodQpc;
         _compositorClock?.Reprobe();
         _compositorClock?.SetWindowPeriodQpc(_displayRefreshPeriodQpc);
+        _compositorClock?.SetWindowMonitor((nint)_monitor.Value);   // a panel off the compositor's beat paces by its own vblank
     }
 
     private Action<string, bool>? _announceDelegate;   // the exact delegate this window installed on InputHooks.Default (identity-compared on Dispose)

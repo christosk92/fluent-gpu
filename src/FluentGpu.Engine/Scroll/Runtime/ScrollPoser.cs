@@ -209,6 +209,9 @@ public sealed class ScrollPoser
             // Feedback and the probe speak the PLAN's (current) frame, the one every UI-side reader works in.
             double shownPlan = shown + drift;
             if (_recordsProbePoses) ScrollProbe.Pose(row.Vp, presentQpc, shownPlan, v, clamped, trans, p + drift);
+            // The trace keeps only poses that MOVED (or clamped): a settled viewport re-posed by another's tick is no news.
+            if (_recordsProbePoses && FluentGpu.Hosting.FrameTrace.Enabled && (transChanged || clamped))
+                FluentGpu.Hosting.FrameTrace.Pose(row.Vp, EngagedCrossings.CurrentTickSeq, presentQpc, shownPlan, v, trans, p + drift, clamped);
             if (!settled) anyActive = true;
 
             PublishFeedback(r, new ScrollPoseFeedback(row.Vp, row.Gen, shownPlan, v, settled, clamped, plan.Kind, presentSec));

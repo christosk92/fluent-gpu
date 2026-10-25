@@ -102,6 +102,14 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     private bool _loggedDecimating;             // waiter-thread only: last mode we logged
     private volatile bool _decimating;          // published mirror of the filter's mode
     private volatile bool _reprobeRequested;    // set by any thread, consumed by the waiter at the top of its loop
+    // -- the window's own panel vblank (OutputVBlankPump) when its rate is not the compositor clock's --
+    private nint _windowMonitor;                // UI thread writes (Volatile): the HMONITOR the window is on
+    private long _dcompBeatQpc;                 // waiter-thread only: the DComp clock's measured beat (0 = not measured yet)
+    private OutputVBlankPump? _pump;            // waiter-thread only: the panel-vblank source while it is in use
+    private WaitHandle[]? _pumpWaits;           // waiter-thread only: { pump event, arm gate }, built once per pump
+    private nint _refusedMonitor;               // waiter-thread only: a monitor whose vblank source failed, stalled or is off its nominal rate
+    private int _pumpTicks;                     // waiter-thread only: vblank ticks since the pump started (the rate check waits for a median)
+    private volatile bool _pumpActive;          // published: ticks come from the panel's own vblank
     private volatile bool _unavailable;
     private volatile bool _disposed;
 
@@ -178,6 +186,15 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     /// starts decimating so the host produces one evenly-spaced frame per panel refresh instead of 2.4 of them.</summary>
     internal void SetWindowPeriodQpc(long qpc) => Volatile.Write(ref _windowPeriodQpc, qpc > 0 ? qpc : 0);
 
+    /// <summary>Tell the clock which monitor the WINDOW is on (HMONITOR; 0 = unknown). UI thread, store only. When that panel's
+    /// period differs from the DComp clock's measured beat by more than 2 %, the waiter takes its ticks from the panel's own
+    /// vblank (<see cref="OutputVBlankPump"/>) instead: the DComp clock beats at the fastest panel's rate whichever panel the
+    /// window is on (measured: 120 Hz ticks for a window on a 100 Hz display), and 100-on-120 cannot be decimated evenly.</summary>
+    internal void SetWindowMonitor(nint monitor) => Volatile.Write(ref _windowMonitor, monitor);
+
+    /// <summary>True while ticks come from the window's own panel vblank. Diagnostics only.</summary>
+    internal bool PanelVBlank => _pumpActive;
+
     /// <summary>Start (or keep) delivering ticks. Idempotent and allocation-free; safe to call on the per-frame wait path.
     /// A tick signalled since the last wait is deliberately kept: it is a real vblank the host has not produced for.</summary>
     internal void Arm()
@@ -249,6 +266,7 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
                 _filter.Reset();
                 PublishFilterState();
                 _blockWindowStart = 0;   // a parked stretch is not wait time
+                _pump?.Pause();       // no vblank wakes while parked either
                 _armGate.WaitOne();   // 0% CPU while the app is idle, minimized, or not display-paced
                 continue;
             }
@@ -262,6 +280,9 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
             }
 
             if (_synth) { if (!SynthesizedTurn()) break; continue; }
+
+            if (WantPanelVBlank()) { if (!PanelVBlankTurn()) break; continue; }
+            if (_pump is not null) LeavePanelVBlank("rates-match");
 
             uint r;
             long waitStart = _timestamp();
@@ -324,7 +345,73 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
             }
 
             Publish(publishQpc);
+            if (_filter.MeasuredTickPeriodQpc > 0) _dcompBeatQpc = _filter.MeasuredTickPeriodQpc;
         }
+        _pump?.Dispose();
+    }
+
+    /// <summary>Waiter thread: should the ticks come from the window's own panel vblank? Only once the DComp clock's beat is
+    /// measured, when the window's panel period differs from it by more than 2 %, for a monitor not refused since the last
+    /// reprobe, and never with an injected (test) wait or under <c>--fg no-output-vblank</c>.</summary>
+    private bool WantPanelVBlank()
+    {
+        if (_waitForClock is not null || FluentGpu.Hosting.EngineSwitches.NoOutputVBlank) return false;
+        long window = Volatile.Read(ref _windowPeriodQpc), beat = _dcompBeatQpc;
+        nint mon = Volatile.Read(ref _windowMonitor);
+        if (window <= 0 || beat <= 0 || mon == 0 || mon == _refusedMonitor) return false;
+        return Math.Abs(window - beat) * 50 > beat;
+    }
+
+    /// <summary>Waiter thread: one tick from the panel's own vblank. The pump is waited on with the clock's own liveness timeout:
+    /// a pump that goes quiet for <see cref="WaitTimeoutMs"/> (a stalled display) or fails is abandoned and its monitor refused
+    /// until the next reprobe (the DComp clock takes over at once). Its stamps go through the same filter (double ticks, lattice
+    /// snap, drift resync) as the DComp clock's. Once nine intervals are in, the measured period must match the panel's nominal
+    /// period within 3 %, else the panel is not refreshing at its mode's rate (VRR, a misreported mode) and is refused.
+    /// False = disposed.</summary>
+    private bool PanelVBlankTurn()
+    {
+        nint mon = Volatile.Read(ref _windowMonitor);
+        if (_pump is null || _pump.Monitor != mon)
+        {
+            _pump?.Dispose();
+            _pump = new OutputVBlankPump(mon);
+            _pumpWaits = [_pump.Event, _armGate];
+            _filter.Reset();
+            _pumpTicks = 0;
+            _pumpActive = true;
+            Diag.Line($"[compositor-clock] source=panel-vblank window={Ms(Volatile.Read(ref _windowPeriodQpc)):0.00} beat={Ms(_dcompBeatQpc):0.00}");
+        }
+        _pump.Resume();
+        int w = WaitHandle.WaitAny(_pumpWaits!, (int)WaitTimeoutMs);
+        if (_disposed) return false;
+        if (w == 1) return true;   // the arm gate: a reprobe, a re-arm or dispose; the loop re-evaluates
+        if (w == WaitHandle.WaitTimeout || _pump.Failed) { RefusePanelVBlank(mon, w == WaitHandle.WaitTimeout ? "stalled" : "failed"); return true; }
+        TickVerdict verdict = _filter.Observe(0, _pump.LastQpc, out long publishQpc);
+        if (verdict != TickVerdict.Tick) return true;
+        long measured = _filter.MeasuredTickPeriodQpc, window = Volatile.Read(ref _windowPeriodQpc);
+        if (++_pumpTicks >= 9 && measured > 0 && window > 0 && Math.Abs(measured - window) * 33 > window)
+        {
+            RefusePanelVBlank(mon, $"rate measured={Ms(measured):0.00} nominal={Ms(window):0.00}");
+            return true;
+        }
+        Publish(publishQpc);
+        return true;
+    }
+
+    private void RefusePanelVBlank(nint mon, string why)
+    {
+        _refusedMonitor = mon;
+        LeavePanelVBlank("refused " + why);
+    }
+
+    private void LeavePanelVBlank(string why)
+    {
+        _pump?.Dispose();   // never joined: a stalled WaitForVBlank keeps its background thread until the process ends
+        _pump = null;
+        _pumpWaits = null;
+        _pumpActive = false;
+        _filter.Reset();
+        Diag.Line($"[compositor-clock] source=dcomp reason={why}");
     }
 
     /// <summary>Stamp + seq + wake, in that order, for one published tick. In decimate mode most accepted ticks are
@@ -370,6 +457,9 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     {
         _reprobeRequested = false;
         _synth = false;   // a new display topology: try the real export again
+        _dcompBeatQpc = 0;      // re-measure the compositor's beat, then re-decide the source
+        _refusedMonitor = 0;
+        if (_pump is not null) LeavePanelVBlank("reprobe");
         _filter.Reset();
         _loggedDecimating = false;
         PublishFilterState();

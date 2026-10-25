@@ -448,6 +448,7 @@ public static class FluentApp
         var plan = WindowMaterialPolicy.Resolve(material, composited, o.CustomFrame);
         if (!plan.VideoCapable) Console.Error.WriteLine("[window] composited = false: video playback is unavailable (it needs a composited swapchain)");
         var window = (Win32Window)app.CreateWindow(DescribeWindow(o, composited));
+        window.ShowInactive = o.ShowInactive;
         // The screenshot harness's capture surface: the host lays out and rasterises at SurfaceSizeDip × SurfaceScale px
         // whatever the monitor allows (before the host exists, so the first frame and the swapchain are already that size).
         if (h.Screenshot is not null && h.SurfaceSizeDip is { Width: > 0f, Height: > 0f } surface)
@@ -1052,6 +1053,9 @@ public sealed record AppOptions
     /// the sign-in start of an app that lives in the notification area. Deciding WHEN to start hidden is the app's
     /// (only the startup activation, never a Start-menu click); the engine only honours it.</summary>
     public bool StartHidden { get; init; }
+    /// <summary>Show the window WITHOUT activating it (<c>SW_SHOWNOACTIVATE</c>): a probe / bench window must never take the
+    /// foreground or the keyboard from the person using the machine.</summary>
+    public bool ShowInactive { get; init; }
 
     /// <summary>Keep the window hidden until its first frame has PRESENTED with <see cref="FirstFrameReady"/> true, then show it
     /// (EP8): the first thing the user sees is the final frame, with the OS material and dark attribute already applied. The same

@@ -27,6 +27,19 @@ public enum TraceKind : byte
     Theme,
     /// <summary>The UI frame's mount census (<c>mount</c>) when a frame mounted components.</summary>
     Mount,
+    /// <summary>SCROLL: one OS input message before any engine interpretation (<c>msg</c>, UI thread; FrameTrace.Scroll.cs).</summary>
+    Msg,
+    /// <summary>SCROLL: one engine scroll input event at dispatch (<c>in</c>, UI thread).</summary>
+    In,
+    /// <summary>SCROLL: a plan authored for a viewport (<c>plan</c>, UI thread).</summary>
+    Plan,
+    /// <summary>SCROLL: a viewport posed by the render poser for one presented turn (<c>pose</c>, render thread).</summary>
+    Pose,
+    /// <summary>SCROLL: a viewport's identity (<c>vp</c>, UI thread): its scroll key and rect.</summary>
+    Vp,
+    /// <summary>SCROLL: DXGI's frame statistics sampled right after a Present (<c>dxgi</c>, render thread): which present this was
+    /// and which one the panel last showed, at which vblank.</summary>
+    Dxgi,
 }
 
 /// <summary><c>anim ph=</c>: the lifecycle edges of a structural (pending-start) animation row.</summary>
@@ -74,7 +87,7 @@ public struct TraceEvent
 /// (<c>drop</c>), never stalls its producer.</para>
 /// <para><b>Time.</b> Every time field is trace ms: (QPC − the trace's origin) / QPC frequency × 1000, three decimals.</para>
 /// </summary>
-public static class FrameTrace
+public static partial class FrameTrace
 {
     /// <summary>The writer's drain period (ms).</summary>
     public const int DrainMs = 100;
@@ -577,6 +590,14 @@ public static class FrameTrace
                 L.Num("measures"u8, e.I2);
                 L.Num("shapes"u8, e.I3);
                 if (e.L0 != 0) L.Num("pub"u8, e.L0);
+                break;
+            case TraceKind.Msg:
+            case TraceKind.In:
+            case TraceKind.Plan:
+            case TraceKind.Pose:
+            case TraceKind.Vp:
+            case TraceKind.Dxgi:
+                WriteScroll(ref L, in e);
                 break;
             default:
                 L.Begin(Ms(e.Qpc), "unknown"u8);

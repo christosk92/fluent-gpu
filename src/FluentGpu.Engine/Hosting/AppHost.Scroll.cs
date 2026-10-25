@@ -414,6 +414,20 @@ public sealed partial class AppHost
         WatchScrollJumps();   // always-on unrequested-jump detector (AppHost.ScrollJump.cs) — evidence only
     }
 
+    // frame-trace `vp` rows: the viewports already described (node index → generation). Allocated only while a trace runs.
+    private Dictionary<int, uint>? _tracedViewports;
+
+    /// <summary>frame-trace: describe a viewport (its scroll key, rect, extent) the first time this generation of it is covered,
+    /// so the trace's `vp=` ids resolve to keys. UI thread; only while tracing.</summary>
+    private void TraceViewport(int idx, NodeHandle node, in ScrollState sc, double extentTotal)
+    {
+        _tracedViewports ??= new Dictionary<int, uint>();
+        if (_tracedViewports.TryGetValue(idx, out uint gen) && gen == node.Raw.Gen) return;
+        _tracedViewports[idx] = node.Raw.Gen;
+        RectF r = _scene.AbsoluteRect(node);
+        FrameTrace.Vp(idx, sc.ScrollKey, r.X, r.Y, r.W, r.H, extentTotal, sc.ViewportMain);
+    }
+
     private void FillScrollCoverage(ScrollCoverageTable table)
     {
         table.Clear();
@@ -433,6 +447,7 @@ public sealed partial class AppHost
             double coverEnd = sc.ItemCount > 0 ? sc.CoverEnd : extentTotal;
             var row = new ScrollCoverageRow(idx, node.Raw.Gen, (int)content.Raw.Index, sc.WindowOrigin, sc.CoverStart, coverEnd,
                 sc.ViewportMain, extentTotal, horizontal, 0, 0, _planSlots.FrameShiftOf(new ScrollViewportId(idx, node.Raw.Gen)));
+            if (FrameTrace.Enabled) TraceViewport(idx, node, in sc, extentTotal);
 
             int n = 0;
             if (effects.Count > 0)

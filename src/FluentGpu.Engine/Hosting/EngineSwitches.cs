@@ -150,6 +150,9 @@ public static class EngineSwitches
     public static bool PreciseWait = true;
     /// <summary>Present at sync-interval 0 (+ ALLOW_TEARING) instead of 1.</summary>
     public static bool NoVsync;
+    /// <summary><c>--fg no-output-vblank</c>: keep the DComp compositor clock as the tick source even when the window's panel runs
+    /// at another rate (the A/B arm of the per-monitor vblank source, Win32CompositorClock / OutputVBlankPump).</summary>
+    public static bool NoOutputVBlank;
     /// <summary>Start the host with its pass-granular GPU timeline on.</summary>
     public static bool GpuPassTiming;
     /// <summary>Non-blocking secondary present (F085, <c>--fg present-nowait</c>): a detached pop-out's Present carries
@@ -291,6 +294,7 @@ public static class EngineSwitches
             case "opaque": OpaqueWindow = true; return true;
             case "no-precise-wait": PreciseWait = false; return true;
             case "no-vsync": NoVsync = true; return true;
+            case "no-output-vblank": NoOutputVBlank = true; return true;
             case "present-nowait": NonBlockingSecondaryPresent = true; return true;
             case "gpu-timing": GpuPassTiming = true; return true;
             case "video-nv12": Nv12VideoOutput = true; return true;

@@ -699,6 +699,13 @@ public sealed class ScrollHandle
             double durationS = plan.Count > 0 ? plan.S0.T1 - plan.S0.T0 : 0.0;
             ScrollProbe.Plan(Vp.Node, plan.Seq, (byte)plan.Kind, (long)(t * System.Diagnostics.Stopwatch.Frequency), start, plan.Dest, durationS);
         }
+        if (FluentGpu.Hosting.FrameTrace.Enabled)
+        {
+            double start = plan.Eval(t, out double v0, out _);
+            double durationS = plan.Count > 0 ? plan.S0.T1 - plan.S0.T0 : 0.0;
+            FluentGpu.Hosting.FrameTrace.Plan(Vp.Node, plan.Seq, (byte)plan.Kind, (long)(t * System.Diagnostics.Stopwatch.Frequency), start,
+                plan.Dest, double.IsFinite(durationS) ? durationS : -1.0, v0);
+        }
     }
 
     private static bool IsUserKind(MotionKind k) => k is MotionKind.Wheel or MotionKind.Drag or MotionKind.Fling or MotionKind.Thumb;

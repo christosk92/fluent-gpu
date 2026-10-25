@@ -289,6 +289,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable, IDmContactSi
     internal void HandleStatusChanged(int current, int previous)
     {
         Diag.Set("dm", "status", current);
+        if (FluentGpu.Hosting.FrameTrace.Enabled) FluentGpu.Hosting.FrameTrace.Msg(FluentGpu.Hosting.TraceMsg.DmStatus, 0, 0, 0, current, 0, 0, 0);
         if (current == DM_RUNNING) _awaitingEngage = false;
         // Begin / End (+ DM's release verdict: INERTIA = moving, READY = at rest) — DmContactStream decides.
         DmStatusEffects effects = _stream.OnStatus(current);
@@ -313,6 +314,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable, IDmContactSi
         if (content == null) return;
         float* m = stackalloc float[6];
         if (content->GetContentTransform(m, 6).FAILED) return;
+        if (FluentGpu.Hosting.FrameTrace.Enabled) FluentGpu.Hosting.FrameTrace.Msg(FluentGpu.Hosting.TraceMsg.DmContent, 0, 0, 0, 0, 0, 0, 0, m[4], m[5]);
         _stream.OnContent(m[0], m[4], m[5]);   // buffered: delivered when the Update returns, iff still RUNNING
     }
 

@@ -3882,6 +3882,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             // The id of the present that just ran, in the PresentCount domain: the ledger banks this present's idle
             // vblanks under it and credits them when a (lagging) sample finally shows it displayed.
             if ((int)f.Target.SwapChain->GetLastPresentCount(&presentId) < 0) presentId = 0;
+            // frame-trace (lane SCROLL): which present this was and which one the panel last showed, at which vblank.
+            if (primary && fsOk && FluentGpu.Hosting.FrameTrace.Enabled)
+                FluentGpu.Hosting.FrameTrace.Dxgi(presentId, fs.PresentCount, fs.PresentRefreshCount, fs.SyncRefreshCount, fs.SyncQPCTime);
         }
         // Attested displayed/dropped/repeated (plan §5.3): DXGI's paired counters only — a sample describes the last
         // DISPLAYED present and lags the submit, so it is never compared against a submitted count. Idle vblanks between

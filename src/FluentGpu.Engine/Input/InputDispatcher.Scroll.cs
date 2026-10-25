@@ -126,6 +126,9 @@ public sealed partial class InputDispatcher : IScrollerQuery
     {
         ScrollProbe.Input((ScrollSourceCode)(byte)e.Source, (byte)e.Phase, e.ArrivalQpc != 0 ? e.ArrivalQpc : e.Qpc, e.Dx, e.Dy, -1,
             e.Phase == ScrollGesture.End ? (byte)e.Release : (byte)0);
+        if (FluentGpu.Hosting.FrameTrace.Enabled)
+            FluentGpu.Hosting.FrameTrace.In((byte)e.Source, (byte)e.Phase, e.Qpc, e.ArrivalQpc != 0 ? e.ArrivalQpc : e.Qpc, e.Dx, e.Dy,
+                e.PresentTimed, e.LiftDetectedLate, e.Phase == ScrollGesture.End ? (byte)e.Release : (byte)0, e.PointerId);
         double t = SecOf(in e);
         switch (e.Source)
         {
