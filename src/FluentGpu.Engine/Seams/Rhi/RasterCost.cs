@@ -21,7 +21,8 @@ namespace FluentGpu.Rhi;
 /// decode-time cull dropped (decoded, then found to miss the tile); <see cref="FootSkipped"/>: primitives the rasters
 /// skipped unread by their footprint (they would have been culled).</item>
 /// <item><see cref="TexturesCreated"/> / <see cref="TexturesReleased"/>: render-target textures the submit created (tiles,
-/// scratch) and released (retired ones the fence passed); <see cref="Segments"/> / <see cref="Scissors"/>: batches the
+/// scratch) and released (retired ones the fence passed), <see cref="TexturesReused"/> the creates a spare served;
+/// <see cref="Segments"/> / <see cref="Scissors"/>: batches the
 /// rasters flushed and scissor rects they set.</item>
 /// </list>
 /// </summary>
@@ -29,7 +30,7 @@ public readonly record struct RasterCost(
     float GlyphPrepMs, float RasterMs, int Rasters, int Partial, int Passes, long Px,
     int Ops, int Rects, int Glyphs, int Images, int Paths, int Series, int Scopes, int SpansSkipped,
     int GlyphInstances, int Draws, int SubmitOps = 0, int Culled = 0, int FootSkipped = 0,
-    int TexturesCreated = 0, int TexturesReleased = 0, int Segments = 0, int Scissors = 0);
+    int TexturesCreated = 0, int TexturesReleased = 0, int Segments = 0, int Scissors = 0, int TexturesReused = 0);
 
 public partial interface IGpuDevice
 {
