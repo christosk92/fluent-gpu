@@ -172,13 +172,13 @@ public sealed class ToolTip : Component
         // safe direction — a rebuilt target is unequal, so it still re-renders; only a genuinely identical instance
         // (the parent handed back the same element) short-circuits.
         public bool Equals(ToolTipSlots? other)
-            => other is not null && ReferenceEquals(Target, other.Target) && Text == other.Text && Grow == other.Grow
+            => other is not null && Target.SameAs(other.Target) && Text == other.Text && Grow == other.Grow
                // float.Equals, not ==: the default is NaN ("use the service delay") and NaN == NaN is false, so a plain
                // == would report every default-delay re-push as a CHANGE and re-render every tooltip in the shell.
                && ShowDelayMs.Equals(other.ShowDelayMs);
 
         public override int GetHashCode()
-            => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text, Grow, ShowDelayMs);
+            => HashCode.Combine(Target.IdentityHash(), Text, Grow, ShowDelayMs);
     }
 
     /// <summary>DEFERRED target slots: the wrapped element as a FACTORY instead of a built tree, so a parent that
@@ -254,10 +254,10 @@ public sealed class ToolTip : Component
     public sealed record ToolTipBoundSlots(Element Target, Prop<string?> Text, float Grow = 0f, float ShowDelayMs = float.NaN)
     {
         public bool Equals(ToolTipBoundSlots? other)
-            => other is not null && ReferenceEquals(Target, other.Target) && Text.Equals(other.Text) && Grow == other.Grow
+            => other is not null && Target.SameAs(other.Target) && Text.Equals(other.Text) && Grow == other.Grow
                && ShowDelayMs.Equals(other.ShowDelayMs);
 
-        public override int GetHashCode() => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text, Grow, ShowDelayMs);
+        public override int GetHashCode() => HashCode.Combine(Target.IdentityHash(), Text, Grow, ShowDelayMs);
     }
 
     /// <summary>Wrap a target that is built LAZILY, inside the ToolTip's render — the churn-free form of
@@ -323,7 +323,7 @@ public sealed class ToolTip : Component
     /// (a bare <c>TextEl</c>/<c>ImageEl</c>) has no flex channel to set and is likewise left alone; wrap such a target
     /// in a Box if it must fill.</summary>
     static Element Fill(Element target, float grow)
-        => target is BoxEl b && !b.Width.IsBound && float.IsNaN(b.Width.Value)
+        => target.Is(out BoxEl b) && !b.Width.IsBound && float.IsNaN(b.Width.Value)
             ? b with { Grow = grow }
             : target;
 
