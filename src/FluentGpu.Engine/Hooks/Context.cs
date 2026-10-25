@@ -574,6 +574,15 @@ public sealed class InputHooks
 /// <summary>Provides a context value to its subtree (the React <c>Context.Provider</c>). One child.</summary>
 public sealed record ContextProviderEl(object Channel, object? Value, Element Child) : HeapElement
 {
+    /// <summary>This object's identity as a number (a node record keeps a copy without <see cref="Child"/>, so the reconciler's
+    /// identity skip compares serials; a <c>with</c> copy gets a new one).</summary>
+    internal readonly uint Serial = FrozenElement.NextSerial();
+    private ContextProviderEl(ContextProviderEl original) : base(original)
+    {
+        Channel = original.Channel;
+        Value = original.Value;
+        Child = original.Child;
+    }
     internal override HeapElement FreezeMembers() => (HeapElement)(base.FreezeMembers() is ContextProviderEl c ? c with { Child = c.Child.Freeze() } : this);
     public const ushort TypeId = 4;
     public override ushort ElementTypeId => 4;

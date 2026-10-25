@@ -161,7 +161,7 @@ internal abstract class FrozenElement
     /// reconciled from, so the reconciler's identity skip (the former ReferenceEquals(newEl, oldEl)) needs no reference.</summary>
     internal readonly uint Serial = NextSerial();
     internal abstract ushort Kind { get; }
-    private static uint NextSerial() { uint s = (uint)Interlocked.Increment(ref s_serial); return s == 0 ? (uint)Interlocked.Increment(ref s_serial) : s; }
+    internal static uint NextSerial() { uint s = (uint)Interlocked.Increment(ref s_serial); return s == 0 ? (uint)Interlocked.Increment(ref s_serial) : s; }
 }
 
 internal sealed class FrozenElement<T> : FrozenElement

@@ -41,6 +41,7 @@ internal sealed class NodeRecords
     {
         if (!Has(idx) || _kind[idx] != el.ElementTypeId) return false;
         if (el.Obj is FrozenElement f) return _src[idx] == f.Serial;
+        if (el.Obj is ContextProviderEl cp) return _src[idx] == cp.Serial;
         if (el.Obj is HeapElement h) return ReferenceEquals(_heap[idx], h);
         return false;
     }
@@ -58,17 +59,17 @@ internal sealed class NodeRecords
         ushort old = _kind[idx];
         if (old != 0 && old != k) ClearSlot(idx, old);
         _kind[idx] = (byte)k;
-        _src[idx] = el.Obj is FrozenElement f ? f.Serial : 0;
+        _src[idx] = el.Obj is FrozenElement f ? f.Serial : el.Obj is ContextProviderEl cps ? cps.Serial : 0;
         _key[idx] = el.Key;
         switch (k)
         {
-            case BoxEl.TypeId: StoreAs<BoxEl>(idx, k, el); break;
+            case BoxEl.TypeId: StoreAs<BoxEl>(idx, k, el).DropTree(); break;
             case TextEl.TypeId: StoreAs<TextEl>(idx, k, el); break;
             case ComponentEl.TypeId: StoreAs<ComponentEl>(idx, k, el); break;
-            case ScrollEl.TypeId: StoreAs<ScrollEl>(idx, k, el); break;
+            case ScrollEl.TypeId: StoreAs<ScrollEl>(idx, k, el).DropTree(); break;
             case ShowEl.TypeId: StoreAs<ShowEl>(idx, k, el); break;
             case ImageEl.TypeId: StoreAs<ImageEl>(idx, k, el); break;
-            case GridEl.TypeId: StoreAs<GridEl>(idx, k, el); break;
+            case GridEl.TypeId: StoreAs<GridEl>(idx, k, el).DropTree(); break;
             case PolylineStrokeEl.TypeId: StoreAs<PolylineStrokeEl>(idx, k, el); break;
             case SpanTextEl.TypeId: StoreAs<SpanTextEl>(idx, k, el); break;
             case IconLayerEl.TypeId: StoreAs<IconLayerEl>(idx, k, el); break;
@@ -76,17 +77,21 @@ internal sealed class NodeRecords
             case ListRowEl.TypeId: StoreAs<ListRowEl>(idx, k, el); break;
             case SeriesEl.TypeId: StoreAs<SeriesEl>(idx, k, el); break;
             case SpriteFieldEl.TypeId: StoreAs<SpriteFieldEl>(idx, k, el); break;
+            case ContextProviderEl.TypeId: _heap[idx] = ((ContextProviderEl)el.Obj!) with { Child = default }; break;   // no subtree
             default: _heap[idx] = el.Obj; break;   // a heap kind (boundaries): the object
         }
     }
 
-    private void StoreAs<T>(int idx, ushort k, Element el) where T : struct
+    /// <summary>Copy the element into the kind's column; returns the stored value (the caller clears its element-valued
+    /// members: a record never points at an element tree).</summary>
+    private ref T StoreAs<T>(int idx, ushort k, Element el) where T : struct
     {
         var col = (RecordColumn<T>)(_cols[k] ??= new RecordColumn<T>());
         col.Ensure(idx);
         uint stamp = col.NextStamp();
         col.Items[idx] = el.Ref<T>();
         col.Stamps[idx] = stamp;
+        return ref col.Items[idx];
     }
 
     /// <summary>Store <paramref name="el"/> as the node's record and return its PREVIOUS record (a copy on the kind's old stack,
