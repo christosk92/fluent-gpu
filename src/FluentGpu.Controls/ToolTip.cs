@@ -98,7 +98,8 @@ public sealed class ToolTip : Component
     /// <summary>The built-in Fluent default (what a theme table without a ToolTip entry resolves to). Reads the live Tok on every call.</summary>
     public static Style FluentStyle() => new();
 
-    public Element Target = new BoxEl();
+    public Element Target = s_noTarget;
+    private static readonly BoxEl s_noTarget = new();   // shared: an element is immutable, and a Wrap form never reads it
     public string Text = "";
     /// <inheritdoc cref="Wrap(Element, string, float, float)"/>
     public float Grow;
@@ -226,18 +227,22 @@ public sealed class ToolTip : Component
     /// countdown is a host one-shot timer (<see cref="HostTimerQueue"/>) armed in the reactive flush that follows the
     /// pointer-enter and drained at the top of the next frame.</summary>
     public static Element Wrap(Element target, string text, float grow = 0f, float showDelayMs = float.NaN)
-        => Wrapper(target, grow, new ToolTipSpec(text, showDelayMs));
+        => Embed.Comp(new ToolTipSlots(target, text, grow, showDelayMs), s_factory) with { SkeletonProxy = ProxyOf(target, grow) };
+
+    // Every form stays a ToolTip COMPONENT boundary (PERF r3 UI). The component is thin (no hook, no state: Render returns the
+    // attachment wrapper, and the tooltip's state lives in the attachment, created on the first hover or focus), but its element
+    // KIND is part of how a parent's slot matches across renders: a keyed slot that holds a Wrap result in one arm and another
+    // component in the other (the show toolbar's words <-> filter menu across a tier) keeps its node and swaps the component; a
+    // slot holding a Wrap result and a plain box remounts. A box-only Wrap changed both, so the component stays.
+    private static readonly Func<ToolTip> s_factory = static () => new ToolTip();   // ComponentType = typeof(ToolTip), as every form had
 
     /// <summary>BOUND text form (Operation ultra-fast GPU engine, P3 — for a virtualized row: one <see cref="Prop{T}"/>
     /// read per render instead of a rebuilt call-site string). Null/empty resolves to NO TOOLTIP: the wrapper carries no
     /// hover/focus/press/safe-zone wiring while it is, and a later non-empty value lights the tooltip up with no remount
-    /// either way. A STATIC value is decided right here (the same attachment as <see cref="Wrap(Element, string, float, float)"/>,
-    /// unwired when empty); a BOUND one is read inside the <see cref="ToolTip"/> component it then mounts, so the bind keeps
-    /// re-evaluating it (and only it) on change.</summary>
+    /// either way. The value is read inside the <see cref="ToolTip"/> component's render, so a bound Text re-evaluates it
+    /// (and only it) on change.</summary>
     public static Element Wrap(Element target, Prop<string?> text, float grow = 0f, float showDelayMs = float.NaN)
-        => text.IsBound
-            ? Embed.Comp(new ToolTipBoundSlots(target, text, grow, showDelayMs), () => new ToolTip()) with { SkeletonProxy = ProxyOf(target, grow) }
-            : Wrapper(target, grow, string.IsNullOrEmpty(text.Value) ? ToolTipSpec.Unwired : new ToolTipSpec(text.Value, showDelayMs));
+        => Embed.Comp(new ToolTipBoundSlots(target, text, grow, showDelayMs), s_factory) with { SkeletonProxy = ProxyOf(target, grow) };
 
     /// <summary>The wrapped target's shape for a derived skeleton: a tooltip draws nothing in place, so a loading region derives the TARGET (a ring,
     /// a glyph button at its real size), never the deriver's 160-wide default bar for an opaque component, which overran the row it stood in.</summary>
@@ -263,12 +268,12 @@ public sealed class ToolTip : Component
     /// props compare unequal and reintroduces exactly the churn this overload exists to remove (it stays CORRECT — just
     /// pointless). The factory runs on every ToolTip render, so it must be cheap and side-effect-free.</para></summary>
     public static Element WrapStable(Func<Element> target, string text, float grow = 0f, float showDelayMs = float.NaN)
-        => Embed.Comp(new ToolTipStableSlots(target, text, grow, showDelayMs), () => new ToolTip());
+        => Embed.Comp(new ToolTipStableSlots(target, text, grow, showDelayMs), s_factory);
 
     /// <summary>The service wrapper every form renders: the target inside a layout-transparent box that carries the tooltip as a
-    /// <see cref="NodeAttachment"/> (<see cref="ToolTipSpec"/>). No component per wrapped target (PERF r3 UI: a ToolTip was 23 % of all
-    /// mounted components): the attachment's per-node state is a few handlers until the pointer or keyboard focus first lands on the
-    /// box, and the state machine below (<see cref="ToolTipHost"/>) runs only then.
+    /// <see cref="NodeAttachment"/> (<see cref="ToolTipSpec"/>). The component that renders it holds no state (PERF r3 UI): the
+    /// attachment's per-node state is a few handlers until the pointer or keyboard focus first lands on the box, and the state
+    /// machine below (<see cref="ToolTipHost"/>) runs only then.
     /// <para>The box is layout-transparent on the parent's cross axis: pinning it to Start pulled every wrapped toolbar button to the
     /// top of a centred row and every compact-rail tile to the left edge, so AlignSelf Auto preserves the alignment the target would
     /// have inherited. The MAIN axis is the opt-in half (<c>grow:</c>, default 0 = untouched): the wrapper is a flex ROW, so the target
@@ -277,8 +282,7 @@ public sealed class ToolTip : Component
     /// because the fix cannot be global (every wrapped chip and icon button in a column would go full-bleed), and it grows the TARGET
     /// (see <see cref="Fill"/>) as well as the wrapper, so <c>grow:</c> means fill the PARENT, whichever axis the parent runs on.
     /// HoverScopeTransparent: a pointer LISTENER, not an interaction scope — the handlers give it PointerBit, which would otherwise
-    /// make it a hover-cascade boundary and hide a wrapped card FAB's reveal from the card's hover. SkeletonDeriveChild: a derived
-    /// skeleton derives the target, never the wrapper (the component form's SkeletonProxy did the same).</para></summary>
+    /// make it a hover-cascade boundary and hide a wrapped card FAB's reveal from the card's hover.</para></summary>
     internal static BoxEl Wrapper(Element target, float grow, ToolTipSpec spec)
     {
         if (grow > 0f) target = Fill(target, grow);
@@ -287,7 +291,6 @@ public sealed class ToolTip : Component
             AlignSelf = FlexAlign.Auto,
             Grow = grow,
             HoverScopeTransparent = true,
-            SkeletonDeriveChild = true,
             Attachment = spec,
             Children = [target],
         };
