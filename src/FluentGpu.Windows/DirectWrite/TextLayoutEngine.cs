@@ -148,6 +148,53 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
     /// already-shaped text does NOT bump it, so a resize that re-wraps cached text leaves this flat.</summary>
     public long ShapeCount { get; private set; }
 
+    /// <summary>A span's EFFECTIVE shaping inputs: its range and the family (resolved), weight and size its text shapes in (what the
+    /// shaping loop and the span ellipsis read; a span's colour and decoration flags do not shape). Part of a spanned run's store key.</summary>
+    internal struct SpanKey : IEquatable<SpanKey>
+    {
+        public int Start, End, Weight;
+        public float Size;
+        public string Family;
+        public readonly bool Equals(SpanKey o)
+            => Start == o.Start && End == o.End && Weight == o.Weight && Size.Equals(o.Size) && string.Equals(Family, o.Family, StringComparison.Ordinal);
+        public override readonly bool Equals(object? obj) => obj is SpanKey o && Equals(o);
+        public override readonly int GetHashCode() => HashCode.Combine(Start, End, Weight, Size, Family);
+    }
+
+    private SpanKey[] _spanKeys = new SpanKey[4];
+
+    /// <summary>The effective shaping inputs of <paramref name="spans"/>, resolved the way the shaping loop resolves them (a span with no
+    /// family / weight / size of its own takes the paragraph's), into a reused buffer.</summary>
+    private ReadOnlySpan<SpanKey> EffectiveSpans(ReadOnlySpan<SpanStyle> spans, string family, int weight, float size, StringTable? names)
+    {
+        if (spans.IsEmpty) return default;
+        if (_spanKeys.Length < spans.Length) _spanKeys = new SpanKey[Math.Max(spans.Length, _spanKeys.Length * 2)];
+        for (int i = 0; i < spans.Length; i++)
+        {
+            ref readonly var sp = ref spans[i];
+            string fam = family;
+            if (!sp.FontFamily.IsEmpty && names is not null) { var f2 = names.Resolve(sp.FontFamily); if (f2.Length > 0) fam = f2; }
+            _spanKeys[i] = new SpanKey
+            {
+                Start = sp.Start, End = sp.End, Weight = sp.Weight != 0 ? sp.Weight : weight, Size = sp.SizeDip > 0f ? sp.SizeDip : size, Family = fam,
+            };
+        }
+        return _spanKeys.AsSpan(0, spans.Length);
+    }
+
+    private static long SpanHash(long h0, ReadOnlySpan<SpanKey> spans)
+    {
+        ulong h = (ulong)h0; const ulong P = 1099511628211UL;
+        foreach (ref readonly var k in spans)
+        {
+            h ^= (uint)k.Start; h *= P; h ^= (uint)k.End; h *= P; h ^= (uint)k.Weight; h *= P;
+            h ^= (uint)BitConverter.SingleToInt32Bits(k.Size); h *= P;
+            foreach (char c in k.Family) { h ^= c; h *= P; }
+            h ^= 0xFF; h *= P;   // a separator, so ("ab","c") and ("a","bc") families hash apart
+        }
+        return (long)h;
+    }
+
     private static long ShapeHash(ReadOnlySpan<char> text, string? family, int weight, float size, float charSpacing, float lineHeight, int stacking, int lineBounds, uint features)
     {
         ulong h = 14695981039346656037UL; const ulong P = 1099511628211UL;
@@ -233,18 +280,24 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
 
         // Shape cache: a width-only change replays only WrapAndPosition (shaping is width-independent). Plain text only
         // (spanned inline runs re-shape — never the resize hot path). On a hit, restore the shaped state and re-wrap.
-        bool cacheable = spans.IsEmpty && text.Length > 0 && _store is not null;
+        bool cacheable = text.Length > 0 && _store is not null;   // spanned runs too (C4 step 3): their key adds the spans' effective inputs
+        ReadOnlySpan<SpanKey> spanKeys = default;
         long shapeKey = 0;
         if (cacheable)
         {
             shapeKey = ShapeHash(text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features);
-            if (_store!.TryRestore(shapeKey, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features, this, out float hitLineH))
+            if (!spans.IsEmpty)
+            {
+                spanKeys = EffectiveSpans(spans, family, weight, size, names);
+                shapeKey = SpanHash(shapeKey, spanKeys);
+            }
+            if (_store!.TryRestore(shapeKey, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features, spanKeys, this, out float hitLineH))
             {
                 WrapAndPosition(size, 1f, hitLineH, maxWidth, wrap, trim, maxLines, _ellFace, overflowSuffixStart);
                 if (TextDiagnostics.ShapeValidate && !_isValidator)
-                    ValidateHit(argText, argFamily, argWeight, size, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, stacking, lineBounds,
+                    ValidateHit(argText, argFamily, argWeight, size, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, stacking, lineBounds, spans, names,
                         overflowSuffixStart, typography, alignWidth);
-                if (censusT0 != 0) CensusLayout(hit: true, cacheable, shapeKey, censusT0, 0);
+                if (censusT0 != 0) CensusLayout(hit: true, cacheable, !spans.IsEmpty, shapeKey, censusT0, 0);
                 return;
             }
         }
@@ -381,10 +434,10 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
         }
 
         ShapeCount++;   // an actual itemize+shape pass (this was a cache miss); a re-wrap returns above without bumping it
-        if (cacheable) _store!.Store(shapeKey, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features, lineH, this);
+        if (cacheable) _store!.Store(shapeKey, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, features, spanKeys, lineH, this);
         long censusT1 = censusT0 != 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         WrapAndPosition(size, scale, lineH, maxWidth, wrap, trim, maxLines, (nint)face, overflowSuffixStart);
-        if (censusT0 != 0) CensusLayout(hit: false, cacheable, shapeKey, censusT0, censusT1);
+        if (censusT0 != 0) CensusLayout(hit: false, cacheable, !spans.IsEmpty, shapeKey, censusT0, censusT1);
     }
 
     // A word wraps to the next line only when it overruns the box by MORE than this sub-pixel slack. The box width
@@ -1038,15 +1091,18 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
     /// <summary>Fill the per-span ellipsis table (<c>_spanEll*</c>, indexed by span) for a spanned paragraph: each span's
     /// "…" glyph id + advance in its own resolved face at its own size. Call after the base ellipsis is known (a span
     /// whose face is missing or lacks the glyph takes the base one). Grow-only buffers — 0 alloc in steady state.</summary>
+    private void EnsureSpanEllipses(int count)
+    {
+        if (_spanEllGid.Length >= count) return;
+        int cap = Math.Max(count, _spanEllGid.Length * 2);
+        Array.Resize(ref _spanEllGid, cap); Array.Resize(ref _spanEllFace, cap);
+        Array.Resize(ref _spanEllAdv, cap); Array.Resize(ref _spanEllSize, cap);
+    }
+
     private void ResolveSpanEllipses(ReadOnlySpan<SpanStyle> spans, string family, int weight, float size, StringTable? names)
     {
         int count = spans.Length;
-        if (_spanEllGid.Length < count)
-        {
-            int cap = Math.Max(count, _spanEllGid.Length * 2);
-            Array.Resize(ref _spanEllGid, cap); Array.Resize(ref _spanEllFace, cap);
-            Array.Resize(ref _spanEllAdv, cap); Array.Resize(ref _spanEllSize, cap);
-        }
+        EnsureSpanEllipses(count);
         for (int si = 0; si < count; si++)
         {
             ref readonly var sp = ref spans[si];

@@ -1,3 +1,4 @@
+using FluentGpu.Foundation;
 using System.Diagnostics;
 
 namespace FluentGpu.Text.DirectWrite;
@@ -17,18 +18,19 @@ public sealed unsafe partial class TextLayoutEngine
     private static int s_vPrinted;
 
     private void ValidateHit(ReadOnlySpan<char> text, string family, int weight, float size, float maxWidth, int wrap, int trim, int maxLines,
-        float charSpacing, float lineHeight, int stacking, int lineBounds, int overflowSuffixStart, int typography, float alignWidth)
+        float charSpacing, float lineHeight, int stacking, int lineBounds, ReadOnlySpan<SpanStyle> spans, StringTable? names,
+        int overflowSuffixStart, int typography, float alignWidth)
     {
         var v = t_validator ??= new TextLayoutEngine(_registry, store: null) { _isValidator = true };
         v.Layout(text, family, weight, size, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, stacking, lineBounds,
-            default, null, overflowSuffixStart, typography, alignWidth);
+            spans, names, overflowSuffixStart, typography, alignWidth);
         string? why = Diff(v);
         _vChecked++;
         if (why is not null)
         {
             _vMismatches++;
             if (Interlocked.Increment(ref s_vPrinted) <= 20)
-                Console.Error.WriteLine($"[shape-validate] MISMATCH {why}: \"{text.ToString()}\" family={family} weight={weight} size={size} maxW={maxWidth} wrap={wrap} trim={trim} maxLines={maxLines}");
+                Console.Error.WriteLine($"[shape-validate] MISMATCH {why}: \"{text.ToString()}\" spans={spans.Length} family={family} weight={weight} size={size} maxW={maxWidth} wrap={wrap} trim={trim} maxLines={maxLines}");
         }
         long now = Stopwatch.GetTimestamp();
         if (_vLastDump == 0) _vLastDump = now;

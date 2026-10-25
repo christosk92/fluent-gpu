@@ -19,9 +19,9 @@ public sealed unsafe partial class TextLayoutEngine
     private string? _censusName;
     private int _censusBit;
     private long _censusLastDump;
-    private long _cLayouts, _cHits, _cMisses, _cFresh, _cCross, _cOwn, _cEmpty, _cSpanned, _cShapeTicks, _cSpannedTicks, _cWrapTicks;
+    private long _cLayouts, _cHits, _cMisses, _cFresh, _cCross, _cOwn, _cUncacheable, _cSpannedHits, _cSpannedMisses, _cShapeTicks, _cSpannedTicks, _cWrapTicks;
 
-    private void CensusLayout(bool hit, bool cacheable, long key, long t0, long t1)
+    private void CensusLayout(bool hit, bool cacheable, bool spanned, long key, long t0, long t1)
     {
         long now = Stopwatch.GetTimestamp();
         if (_censusName is null)
@@ -31,17 +31,13 @@ public sealed unsafe partial class TextLayoutEngine
             _censusLastDump = now;
         }
         _cLayouts++;
-        if (hit) { _cHits++; _cWrapTicks += now - t0; }
+        if (hit) { _cHits++; if (spanned) _cSpannedHits++; _cWrapTicks += now - t0; }
         else
         {
             _cMisses++;
             _cWrapTicks += now - t1;
-            if (!cacheable)
-            {
-                // Empty text returns before shaping (t1 == 0: no store/wrap split); spanned text re-shapes on every layout.
-                if (t1 == 0) _cEmpty++;
-                else { _cSpanned++; _cSpannedTicks += t1 - t0; }
-            }
+            if (spanned) { _cSpannedMisses++; _cSpannedTicks += t1 - t0; }
+            if (!cacheable) _cUncacheable++;   // no store (a self-test's engine): every layout shapes
             else
             {
                 _cShapeTicks += t1 - t0;
@@ -64,10 +60,10 @@ public sealed unsafe partial class TextLayoutEngine
         double f = 1000.0 / Stopwatch.Frequency;
         Console.Error.WriteLine(
             $"[shape-census] {_censusName} layouts={_cLayouts} hits={_cHits} misses={_cMisses} fresh={_cFresh} cross={_cCross} own={_cOwn} " +
-            $"empty={_cEmpty} spanned={_cSpanned} spannedMs={_cSpannedTicks * f:F1} shapeMs={_cShapeTicks * f:F1} " +
+            $"uncacheable={_cUncacheable} spannedHits={_cSpannedHits} spannedMisses={_cSpannedMisses} spannedMs={_cSpannedTicks * f:F1} shapeMs={_cShapeTicks * f:F1} " +
             $"usPerShape={(_cFresh + _cCross + _cOwn == 0 ? 0 : _cShapeTicks * f * 1000 / (_cFresh + _cCross + _cOwn)):F1} " +
             $"wrapMs={_cWrapTicks * f:F1} usPerLayout={(_cLayouts == 0 ? 0 : _cWrapTicks * f * 1000 / _cLayouts):F1} " +
             $"storeEntries={entries} chars={chars} glyphs={glyphs} storeKB={bytes / 1024}");
-        _cLayouts = _cHits = _cMisses = _cFresh = _cCross = _cOwn = _cEmpty = _cSpanned = _cShapeTicks = _cSpannedTicks = _cWrapTicks = 0;
+        _cLayouts = _cHits = _cMisses = _cFresh = _cCross = _cOwn = _cUncacheable = _cSpannedHits = _cSpannedMisses = _cShapeTicks = _cSpannedTicks = _cWrapTicks = 0;
     }
 }
