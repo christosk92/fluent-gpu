@@ -403,7 +403,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _glyphs is null || _imageTextures is null
             ? ""
             : $"glyphs={_glyphs.CachedGlyphCount} runs={_glyphs.CachedRunCount} atlasGen={_glyphs.AtlasResetCount} quadPool={_glyphs.QuadPoolRetained}" +
-              $" atlasEdge={_glyphs.AtlasEdge} atlasRows={_glyphs.AtlasOccupiedRows} atlasCpu={_glyphs.AtlasCpuBytes} quadPoolBytes={_glyphs.QuadPoolBytes}" +
+              $" atlasEdge={_glyphs.AtlasEdge} atlasRows={_glyphs.AtlasOccupiedRows} atlasCpu={_glyphs.AtlasCpuBytes} quadPoolBytes={_glyphs.QuadPoolBytes} colorPoolBytes={_glyphs.ColorPoolBytes}" +
               $" | tex: atlas={_imageTextures.AtlasImageCount} pages={_imageTextures.AtlasPageCount} pooledFree={_imageTextures.PooledTextureCount} retired={_imageTextures.RetiredCount}" +
               $" srv={_imageTextures.DescriptorSlotsUsed}/{_imageTextures.DescriptorCapacity} high={_imageTextures.DescriptorHighWater} rejected={_imageTextures.DroppedThisRun}" +
               // The shared per-frame upload arena: bytes it holds across every bank (already inside `gpu bytes`, since
