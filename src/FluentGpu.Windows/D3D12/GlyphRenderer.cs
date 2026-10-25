@@ -276,9 +276,9 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     // allocation per 10 s of nav-burst). So each bucket keeps, beyond the previous fixed depth (RestingPooledArraysPerBucket),
     // only what shaping DEMANDED from it over the last DemandSweeps sweeps (≈ 0.5–2 s: one navigation's mount and the sweep
     // that returns the page before): every sweep trims a bucket to max(8, its recent rents) — the colour pool to its recent
-    // rents alone — and with no frame running the device's between-turns housekeeping trims both to that resting depth after
-    // QuietTrimMs (TrimIdlePools). A steady state (playback's clock label, an idle page) shapes a run now and then, so the pools
-    // stand at the previous caps (8 per bucket, no colours); only a burst of shaping holds more, never past the 1 MiB byte
+    // rents alone — and with no frame running the device's between-turns housekeeping, when it runs, trims both to that resting
+    // depth once nothing was shaped for QuietTrimMs (TrimIdlePools; it schedules no wake of its own). A steady state
+    // (playback's clock label, an idle page) shapes a run now and then, so the pools stand at the previous caps (8 per bucket, no colours); only a burst of shaping holds more, never past the 1 MiB byte
     // cap the two pools share. Returns beyond a cap drop the reference (managed arrays — the GC reclaims them); the only cost
     // of dropping is that the NEXT miss at that size re-allocates one array.
     private const int MaxPooledQuadArraysPerBucket = 512;
@@ -1128,16 +1128,16 @@ float4 PSMain(VSOutG i) : SV_Target
     }
 
     /// <summary>Between-turns housekeeping (wall clock, D3D12Device.TrimIdleResources): once no run has been shaped for
-    /// QuietTrimMs, the pools trim back to their resting depth; returns the ms until that is due, or -1 when they are at
-    /// rest already.</summary>
-    internal int TrimIdlePools(long nowMs)
+    /// QuietTrimMs, the pools trim back to their resting depth. It never asks for a wake of its own: a pending wake keeps the
+    /// render thread's housekeeping from going dormant between turns, and its extra passes shift turns (measured: −0.4
+    /// presents/s in home-scroll). While frames run, the per-sweep demand trim bounds the pools; once they stop, the trim
+    /// rides the housekeeping the tiles' own stale timers schedule.</summary>
+    internal void TrimIdlePools(long nowMs)
     {
+        if (nowMs - _lastRentMs < QuietTrimMs) return;
         bool above = _pooledColorBytes > 0;
         for (int i = 0; i < _quadPool.Length && !above; i++) above = _quadPool[i] is { Count: > RestingPooledArraysPerBucket };
-        if (!above) return -1;
-        long idle = nowMs - _lastRentMs;
-        if (idle >= QuietTrimMs) { TrimPools(RestingPooledArraysPerBucket, 0); return -1; }
-        return (int)Math.Max(1, QuietTrimMs - idle);
+        if (above) TrimPools(RestingPooledArraysPerBucket, 0);
     }
 
     /// <summary>Bytes the colour pool holds (census; with <see cref="QuadPoolBytes"/> never above the 1 MiB cap).</summary>

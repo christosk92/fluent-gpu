@@ -2893,11 +2893,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             int n = sp.TrimIdle(nowMs, completed, GpuProfile.IsWeak);
             if (n >= 0) next = n;
         }
-        if (_glyphs is { } gr)
-        {
-            int g = gr.TrimIdlePools(nowMs);   // the shaped-run pools back to their resting depth once shaping stopped
-            if (g >= 0) next = Math.Min(next, g);
-        }
+        _glyphs?.TrimIdlePools(nowMs);   // the shaped-run pools back to their resting depth once shaping stopped (no wake of its own)
         for (int i = 0; i < _swapchains.Count; i++)
         {
             var sc = _swapchains[i];
