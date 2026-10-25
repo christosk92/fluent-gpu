@@ -38,6 +38,31 @@ public sealed unsafe partial class TextLayoutEngine
         }
 
         private readonly object _gate = new();
+
+        // ── Lock accounting (--fg shape-census): how long a thread waited for the store, per thread (the render thread must not stall
+        // behind a worker). Off, the enter is a plain Monitor.Enter; on, a TryEnter first, and only a contended enter is timed.
+        [ThreadStatic] internal static long t_lockWaits, t_lockWaitTicks, t_lockWaitMaxTicks;
+
+        private GateScope Gate()
+        {
+            if (!TextDiagnostics.ShapeCensus) Monitor.Enter(_gate);
+            else if (!Monitor.TryEnter(_gate))
+            {
+                long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                Monitor.Enter(_gate);
+                long w = System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+                t_lockWaits++; t_lockWaitTicks += w;
+                if (w > t_lockWaitMaxTicks) t_lockWaitMaxTicks = w;
+            }
+            return new GateScope(_gate);
+        }
+
+        private readonly ref struct GateScope
+        {
+            private readonly object _gate;
+            public GateScope(object gate) => _gate = gate;
+            public void Dispose() => Monitor.Exit(_gate);
+        }
         private readonly int _cap;
         private readonly Dictionary<long, int> _index;
         private Rec[] _recs = new Rec[256];
@@ -88,7 +113,7 @@ public sealed unsafe partial class TextLayoutEngine
         public bool TryRestore(long key, ReadOnlySpan<char> text, string family, int weight, float size, float charSpacing, float lineHeight,
                                int stacking, int lineBounds, uint features, ReadOnlySpan<SpanKey> spans, TextLayoutEngine e, out float lineH)
         {
-            lock (_gate)
+            using (Gate())
             {
                 if (!_index.TryGetValue(key, out int i)) { lineH = 0f; return false; }
                 ref Rec r = ref _recs[i];
@@ -123,7 +148,7 @@ public sealed unsafe partial class TextLayoutEngine
                           int stacking, int lineBounds, uint features, ReadOnlySpan<SpanKey> spans, float lineH, TextLayoutEngine e)
         {
             int bc = e._breaks.Count;
-            lock (_gate)
+            using (Gate())
             {
                 if (_index.TryGetValue(key, out int i)) Release(ref _recs[i]);
                 else
@@ -159,13 +184,13 @@ public sealed unsafe partial class TextLayoutEngine
         /// <summary>Hand <paramref name="key"/> to a prefetch worker: false when it is stored already or a worker has it.</summary>
         public bool BeginInFlight(long key)
         {
-            lock (_gate) return !_index.ContainsKey(key) && _inFlight.TryAdd(key, false);
+            using (Gate()) return !_index.ContainsKey(key) && _inFlight.TryAdd(key, false);
         }
 
         /// <summary>A worker takes <paramref name="key"/> off the queue: true (now running) unless a measure took it back or it is stored.</summary>
         public bool ClaimInFlight(long key)
         {
-            lock (_gate)
+            using (Gate())
             {
                 if (!_inFlight.ContainsKey(key)) return false;                                    // taken back by a measure
                 if (_index.ContainsKey(key)) { _inFlight.Remove(key); Monitor.PulseAll(_gate); return false; }
@@ -177,7 +202,7 @@ public sealed unsafe partial class TextLayoutEngine
         /// <summary>The worker is done with <paramref name="key"/> (stored, found stored, or failed): no measure waits on it any more.</summary>
         public void EndInFlight(long key)
         {
-            lock (_gate) { if (_inFlight.Remove(key)) Monitor.PulseAll(_gate); }
+            using (Gate()) { if (_inFlight.Remove(key)) Monitor.PulseAll(_gate); }
         }
 
         /// <summary>A measure missed <paramref name="key"/>: if a worker is shaping it, wait (at most <paramref name="maxMs"/>) until the
@@ -185,7 +210,7 @@ public sealed unsafe partial class TextLayoutEngine
         public bool WaitInFlight(long key, int maxMs, out long waitedTicks)
         {
             waitedTicks = 0;
-            lock (_gate)
+            using (Gate())
             {
                 if (!_inFlight.TryGetValue(key, out bool running)) return false;
                 if (!running) { _inFlight.Remove(key); return false; }   // still queued: take it back and shape it here
@@ -288,7 +313,7 @@ public sealed unsafe partial class TextLayoutEngine
         /// <summary>For the census: live records, their chars and glyphs, and the bytes the store holds (slabs + records + index).</summary>
         public void Stats(out int entries, out long chars, out long glyphs, out long bytes)
         {
-            lock (_gate)
+            using (Gate())
             {
                 entries = _index.Count;
                 chars = _charsUsed - _charsDead;

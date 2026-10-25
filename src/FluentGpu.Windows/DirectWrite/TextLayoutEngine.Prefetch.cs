@@ -38,7 +38,7 @@ public sealed unsafe partial class TextLayoutEngine
         private readonly Queue<ShapeJob> _jobs = new(256);
         private readonly SemaphoreSlim _signal = new(0);
         private int _started;
-        public long Enqueued, Shaped;
+        public long Enqueued, Shaped, Wakeups;
 
         /// <summary>Worker count: a few (the pass consumes the shapes at the rate it measures; more workers than that only contend
         /// with the render thread), at least one.</summary>
@@ -67,6 +67,7 @@ public sealed unsafe partial class TextLayoutEngine
             while (true)
             {
                 _signal.Wait();
+                Interlocked.Increment(ref Wakeups);   // the census's evidence that idle workers sleep: it moves only with work
                 ShapeJob j;
                 lock (_gate) { if (!_jobs.TryDequeue(out j)) continue; }
                 if (!ShapeStore.Shared.ClaimInFlight(j.Key)) continue;   // a measure took it back, or it is stored already

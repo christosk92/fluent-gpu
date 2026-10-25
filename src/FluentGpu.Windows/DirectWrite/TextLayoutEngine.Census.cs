@@ -65,8 +65,11 @@ public sealed unsafe partial class TextLayoutEngine
             $"usPerShape={(_cFresh + _cCross + _cOwn == 0 ? 0 : _cShapeTicks * f * 1000 / (_cFresh + _cCross + _cOwn)):F1} " +
             $"wrapMs={_cWrapTicks * f:F1} usPerLayout={(_cLayouts == 0 ? 0 : _cWrapTicks * f * 1000 / _cLayouts):F1} " +
             $"prefetched={_cPrefetched} waits={_cWaits} waitMs={_cWaitTicks * f:F2} workerShapes={ShapePrefetchPool.Shared.Shaped} " +
+            $"workerWakeups={ShapePrefetchPool.Shared.Wakeups} lockWaits={ShapeStore.t_lockWaits} lockWaitMs={ShapeStore.t_lockWaitTicks * f:F3} " +
+            $"lockWaitMaxUs={ShapeStore.t_lockWaitMaxTicks * f * 1000:F1} " +
             $"storeEntries={entries} chars={chars} glyphs={glyphs} storeKB={bytes / 1024}");
         _cLayouts = _cHits = _cMisses = _cFresh = _cCross = _cOwn = _cUncacheable = _cSpannedHits = _cSpannedMisses = _cShapeTicks = _cSpannedTicks = _cWrapTicks = 0;
         _cPrefetched = _cWaits = _cWaitTicks = 0;
+        ShapeStore.t_lockWaits = ShapeStore.t_lockWaitTicks = ShapeStore.t_lockWaitMaxTicks = 0;   // this thread's, like the counts above
     }
 }
