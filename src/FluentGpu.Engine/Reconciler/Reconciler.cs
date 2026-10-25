@@ -4925,6 +4925,7 @@ public sealed partial class TreeReconciler
         _skelForce.Remove(idx);
         ReleaseSkeletonScrollbarSuppression(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
+        if (_attachments.Count != 0) DetachAttachment(idx);   // BoxEl.Attachment: the node leaves with its per-node state
         if (_comps.Remove(node, out var e)) { e.QueuedReplay = false; e.Scope?.Dispose(); if (MountCensusEnabled) _mountFrameOf.Remove(e); }   // Scope.Dispose cascades: dispose render-effect → RunAllCleanups
         if (_virtuals.Remove(node, out var v))
         {
@@ -5896,6 +5897,15 @@ public sealed partial class TreeReconciler
                 if (b.FocusRingHost) ii.HandlerMask |= InteractionInfo.FocusRingHostBit;
                 else ii.HandlerMask &= ~InteractionInfo.FocusRingHostBit;
 
+                // BoxEl.Attachment (PERF r3 UI): bind the spec to this node (its per-node state survives every rewrite of the
+                // box) and merge the state's handlers into the box's, the box's own winning; the masks and flags below then
+                // come out exactly as for a box that declared those handlers itself.
+                NodeAttachmentState? attachment = BindAttachment(node, b.Attachment);
+                Action<Point2>? onHoverMove = b.OnHoverMove ?? attachment?.OnHoverMove;
+                Action? onPointerExit = b.OnPointerExit ?? attachment?.OnPointerExit;
+                Action<PointerEventArgs>? onPointerPressed = b.OnPointerPressed ?? attachment?.OnPointerPressed;
+                Action<bool>? onFocusChanged = b.OnFocusChanged ?? attachment?.OnFocusChanged;
+
                 if (b.OnKeyDown is not null) { ii.HandlerMask |= InteractionInfo.KeyBit; _scene.SetKeyHandler(node, b.OnKeyDown); }
                 else { ii.HandlerMask &= ~(uint)InteractionInfo.KeyBit; _scene.SetKeyHandler(node, null); }
 
@@ -5925,15 +5935,15 @@ public sealed partial class TreeReconciler
                     _scene.SetPointerWheel(node, null);
                 }
 
-                if (b.OnPointerDown is not null || b.OnDrag is not null || b.OnHoverMove is not null
-                    || b.OnPointerMoveWithin is not null || b.OnPointerExit is not null)
+                if (b.OnPointerDown is not null || b.OnDrag is not null || onHoverMove is not null
+                    || b.OnPointerMoveWithin is not null || onPointerExit is not null)
                 {
                     ii.HandlerMask |= InteractionInfo.PointerBit;   // hit-testable so it receives press/drag AND bare-hover/exit
                     _scene.SetPointerDown(node, b.OnPointerDown);
                     _scene.SetDrag(node, b.OnDrag);
-                    _scene.SetHoverMove(node, b.OnHoverMove);
+                    _scene.SetHoverMove(node, onHoverMove);
                     _scene.SetPointerMoveWithin(node, b.OnPointerMoveWithin);
-                    _scene.SetPointerExit(node, b.OnPointerExit);
+                    _scene.SetPointerExit(node, onPointerExit);
                     _scene.Mark(node, NodeFlags.WantsPointer);
                     // Cross-axis content-pan opt-in (SwipeControl/FlipView): the touch path enrolls an axis-locked Drag
                     // arena member that competes with an enclosing scroller's Pan instead of eager-capturing (§7A). Only
@@ -5952,10 +5962,10 @@ public sealed partial class TreeReconciler
                     _scene.Unmark(node, NodeFlags.DragYieldsToPan);
                 }
 
-                if (b.OnPointerPressed is not null || b.OnPointerReleased is not null)
+                if (onPointerPressed is not null || b.OnPointerReleased is not null)
                 {
                     ii.HandlerMask |= InteractionInfo.PressedBit;
-                    _scene.SetPointerPressed(node, b.OnPointerPressed);
+                    _scene.SetPointerPressed(node, onPointerPressed);
                     _scene.SetPointerReleased(node, b.OnPointerReleased);
                     _scene.Mark(node, NodeFlags.WantsPointer);
                 }
@@ -6012,10 +6022,10 @@ public sealed partial class TreeReconciler
 
                 // Focus-change notification (WinUI GotFocus/LostFocus): no hit-test participation — the dispatcher
                 // delivers it on SetFocus; the bit only lets it skip the handler-column lookup.
-                if (b.OnFocusChanged is not null)
+                if (onFocusChanged is not null)
                 {
                     ii.HandlerMask |= InteractionInfo.FocusBit;
-                    _scene.SetFocusChanged(node, b.OnFocusChanged);
+                    _scene.SetFocusChanged(node, onFocusChanged);
                 }
                 else
                 {
