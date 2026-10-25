@@ -164,7 +164,7 @@ public sealed partial class RenderContext
     private MeasuredBoundsCell MeasuredCell(string? key, bool bounds, float quantum, string? file, int line)
     {
         int idx = LookupCell(file, line, out var __k);
-        if (idx >= 0) return (MeasuredBoundsCell)_cells[idx];
+        if (idx >= 0) return (MeasuredBoundsCell)CellAt(idx);
         var cell = new MeasuredBoundsCell(this) { Quantum = MathF.Max(quantum, 0f), SiteFile = file, SiteLine = line };
         RectF seed = default;
         if (key is not null)

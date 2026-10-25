@@ -1151,7 +1151,7 @@ public sealed class NavigationView : Component
                     MaxLines = 1,
                 },
                 ItemHeight, 1f, new Edges4(4, 0, 8, 0)));
-            if (parts is not null && label is BoxEl lb)
+            if (parts is not null && label.Is(out BoxEl lb))
             {
                 var m = parts.Apply(PartItemLabel, lb);
                 label = m with { Animate = lb.Animate, Children = lb.Children };

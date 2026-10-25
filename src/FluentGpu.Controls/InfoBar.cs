@@ -268,7 +268,7 @@ public static class InfoBar
 
         // WinUI's implicit InfoBar HyperlinkButton style matches by TYPE inside the action ContentPresenter
         // (InfoBar.xaml:117-122); our HyperlinkButton roots carry Role = Hyperlink, so detect the same way.
-        bool isHyperlinkAction = actionButton is BoxEl { Role: AutomationRole.Hyperlink };
+        bool isHyperlinkAction = actionButton.Is(out BoxEl actionBox) && actionBox.Role == AutomationRole.Hyperlink;
 
         // WinUI: nItems == 1 => vertical (the margins work out better that way). Approximate (b)/(c): when an action button
         // sits next to a long message it will not fit inline on one row, so WinUI flips to vertical — mirror that here.

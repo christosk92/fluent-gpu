@@ -34,7 +34,7 @@ public sealed partial class TreeReconciler
 
     /// <summary>A bound colour channel re-fired by the armed window cross-fades instead of snapping: never its mount run (nothing
     /// on screen to fade from) and never inside a recycled-row rebind (the row shows another item's colours).</summary>
-    private bool BoundThemeFade(BindEffect fx) => fx.Started && ThemeFadeArmed && SuppressBoundTransitions == 0 && Anim is not null;
+    private bool BoundThemeFade(BindRef fx) => fx.Started && ThemeFadeArmed && SuppressBoundTransitions == 0 && Anim is not null;
 
     /// <summary>The progress a seed made now starts at: the late joiner's, inside the armed window; 0 for an element's own
     /// BrushTransition outside it.</summary>
@@ -96,7 +96,7 @@ public sealed partial class TreeReconciler
     }
 
     /// <summary>A bound colour channel is about to write <paramref name="bit"/>: inside the armed theme window it cross-fades.</summary>
-    private void BoundColorFade(BindEffect fx, NodeHandle node, byte bit)
+    private void BoundColorFade(BindRef fx, NodeHandle node, byte bit)
     {
         if (BoundThemeFade(fx)) SeedColorFade(node, bit, _themeTransitionMs, _themeFadeFromT);
     }
