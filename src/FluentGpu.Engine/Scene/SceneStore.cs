@@ -446,6 +446,7 @@ public sealed partial class SceneStore : ISceneBackend
         // there is no handle left to ask. Only the subtree ROOT is captured; its extent (and the span table's stored
         // SubtreeBounds, which the recorder prefers) already covers the descendants going with it.
         CaptureRemovalExtent(node);
+        NoteTopologyChanged();   // the freed slots' handles die (generation bump), whether or not the root was attached
         FreeSubtreeCore(node);
     }
 
@@ -686,6 +687,7 @@ public sealed partial class SceneStore : ISceneBackend
     {
         Debug.Assert(IsLive(parent) && IsLive(child));
         int p = (int)parent.Raw.Index, c = (int)child.Raw.Index;
+        NoteTopologyChanged();
         _parent[c] = p;
         _prevSib[c] = _lastChild[p];
         _nextSib[c] = 0;
@@ -713,6 +715,7 @@ public sealed partial class SceneStore : ISceneBackend
     {
         Debug.Assert(IsLive(parent) && IsLive(child));
         int p = (int)parent.Raw.Index, c = (int)child.Raw.Index;
+        NoteTopologyChanged();
         _parent[c] = p;
         _prevSib[c] = 0;
         _nextSib[c] = _firstChild[p];
@@ -734,6 +737,7 @@ public sealed partial class SceneStore : ISceneBackend
     {
         int p = _parent[c];
         if (p == 0) return;
+        NoteTopologyChanged();
         MarkRecordDirty(c, RecordDirtyLayout);
         if (_prevSib[c] != 0) NoteCaptureChanged(_prevSib[c]);   // P8: its captured NextSibling changes below
         if (_prevSib[c] != 0) _nextSib[_prevSib[c]] = _nextSib[c]; else _firstChild[p] = _nextSib[c];

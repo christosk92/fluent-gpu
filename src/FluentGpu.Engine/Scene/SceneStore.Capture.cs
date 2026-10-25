@@ -37,6 +37,10 @@ public sealed partial class SceneStore
     private int _captureWroteCount;
     private ulong _bulkMutationSeq;
     private ulong _captureLedgerFloor;
+    // The publication the store's most recent TOPOLOGY write belongs to: a parent, first-child or next-sibling column of any
+    // node (AppendChild, PrependChild, DetachFromParent, FreeSubtree). While it is at or below a snapshot's baseline, the
+    // reachability walk from the same roots visits the same nodes in the same order as the baseline's did.
+    private ulong _topologyStamp;
 
     /// <summary>Nodes with a captured-column change still in the ledger. Order is arbitrary; duplicates impossible.</summary>
     internal ReadOnlySpan<int> CaptureChangedNodes => _captureWrote.AsSpan(0, _captureWroteCount);
@@ -57,6 +61,14 @@ public sealed partial class SceneStore
     /// <summary>Ledger entries at or below this sequence have been dropped, so the ledger is only a complete history
     /// of publications ABOVE it. A capture asking for an older baseline must fall back to a full copy.</summary>
     internal ulong CaptureLedgerFloor => _captureLedgerFloor;
+
+    /// <summary>The publication the most recent topology write (a parent, first-child or next-sibling column of any node)
+    /// belongs to; 0 = none since the store was created. A snapshot whose baseline is at or above it describes the store's
+    /// current tree shape exactly (PERF r3 UI: the ledgered capture's precondition).</summary>
+    internal ulong TopologyStamp => _topologyStamp;
+
+    /// <summary>Stamp a topology write (same <c>_publishSeq + 1</c> convention as every ledger stamp).</summary>
+    private void NoteTopologyChanged() => _topologyStamp = _publishSeq + 1;
 
     /// <summary>Ledger one node's captured-column change. O(1) — deliberately NOT an ancestor walk (unlike
     /// <c>MarkRecordDirty</c>, whose up-propagation is a RENDERER semantic: an ancestor span covers its descendants).
