@@ -1453,6 +1453,7 @@ public sealed partial class AppHost : IDisposable
     private readonly Dictionary<int, int> _reflowShoveFrames = new(16);             // parent idx → the child idx on a reflowing node's ancestor path ("the reflow-carrying child under this parent")
     private readonly List<NodeHandle> _reflowOwnedRoots = new(4);                   // SuppressDescendantTransitions containers a live sibling reflow resizes this commit: they land, they suppress nothing
     private readonly List<int> _positionScratch = new(64);                          // nodes with a position transition (RunReflowLayout's wrap watch)
+    private readonly List<NodeHandle> _enterReflowsSeeded = new(8);                 // this frame's Reflow ENTERS (SeedReflowsFirst lays them out at 0)
     private readonly List<(NodeHandle Node, RectF Was)> _wrapMovers = new(16);     // children of wrapping boxes and where they stood before a reflow re-solve
     private readonly List<(NodeHandle Node, float H)> _revealHeights = new(16);    // flow-reveal boxes and their height before a reflow re-solve
     private readonly List<RenderContext> _pendingLayoutEffectContexts = new();
@@ -6715,6 +6716,7 @@ public sealed partial class AppHost : IDisposable
                     bool horiz = !par.IsNull && _scene.Layout(par).Direction == 0;
                     ref RectF pb = ref _scene.Bounds(pn);
                     _anim.SeedEnterReflow(pn, horiz, pb.W, pb.H);
+                    _enterReflowsSeeded.Add(pn);
                 }
                 pend.Clear();
             }
@@ -6752,6 +6754,7 @@ public sealed partial class AppHost : IDisposable
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             if (capturedProjections) ApplyProjections(layoutSize, keepAliveSuppressed);   // FLIP "Last+Invert+Play"
+            _enterReflowsSeeded.Clear();                       // read by ApplyProjections' SeedReflowsFirst (this frame's only)
             _anim.PendingEnterReveal.Clear();                  // seeded at 6.3, read by ApplyProjections as shove carriers
             _anim.RevealExitCarriers.Clear();
             // E21: a frame that will not be shown holds every pending-start row at t = 0; the publication carries the same verdict
@@ -8139,7 +8142,8 @@ public sealed partial class AppHost : IDisposable
     /// THAT layout puts it, not where the commit's layout did. Measured against the commit's layout, a FLIP of such a part counted the reflow's
     /// change a second time (drawn a hero-height off, closing back); measured here, each FLIP holds only the part's own move (a band that turned
     /// from a row into a column) and the reflow carries the rest through layout. Skips what the main pass snaps (a part under a projection root,
-    /// a reflow-owned root, the dragged node) and reduced motion (a reflow there snaps). Flow reveals the re-solve resizes re-aim, as on a tick.</summary>
+    /// a reflow-owned root, the dragged node) and reduced motion (a reflow there snaps). Flow reveals the re-solve resizes re-aim, as on a tick.
+    /// A node that mounted with a Reflow enter this commit starts here too (<see cref="_enterReflowsSeeded"/>).</summary>
     private bool SeedReflowsFirst(Size2 layoutSize, bool reduced, float posEps, float sizeEps)
     {
         if (reduced) return false;
@@ -8157,6 +8161,18 @@ public sealed partial class AppHost : IDisposable
             _anim.AnimateBounds(n, from, to, spec with { Channels = TransitionChannels.Size });
             started |= _anim.PresentReflowStart(n);
         }
+        // A node that MOUNTED with a Reflow enter this commit (seeded after the layout as 0 -> its natural size, so it was never captured) is a
+        // reflow this commit starts too: laid out at its target, it made every sibling's FLIP count the room it opens, which the reflow then
+        // gave back through layout (drawn the whole room off, sliding back: audit FU2c). Laid out at its start (0), each FLIP holds only the
+        // part's own move. Once: a later pass finds it laid out at its start.
+        for (int i = 0; i < _enterReflowsSeeded.Count; i++)
+        {
+            NodeHandle n = _enterReflowsSeeded[i];
+            if (!_scene.IsLive(n) || IsBelowProjectionSuppressionRoot(n)) continue;
+            if (s_motionDiag) LogMotionNode(n.Raw.Index, "enter-reflow-first", default, _scene.Bounds(n));
+            started |= _anim.PresentReflowStart(n);
+        }
+        _enterReflowsSeeded.Clear();
         if (!started || !_scene.AnyLayoutDirty) return false;
         NoteFlowRevealHeights();
         // The commit's own pass arranged these subtrees at their targets: the ring's slots for the start (the frame before) would answer without
