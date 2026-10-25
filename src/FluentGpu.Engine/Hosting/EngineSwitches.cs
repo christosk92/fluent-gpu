@@ -106,7 +106,8 @@ public enum ImageAtlasExperiment : byte
 /// distribution test compares item footprint boxes only, without the per-op refinement (the A/B arm). <c>group-fades</c> —
 /// every edge fade composites through its group surface (the reference of the distribution's equivalence check).
 /// <c>ink-validate</c> — every replayed glyph run's quads are checked against the glyph ink extent the fade distribution test
-/// read for it (<c>GlyphInk</c>; breaches are logged).</item>
+/// read for it (<c>GlyphInk</c>; breaches are logged). <c>pixel-slides</c> — a sliding transition layer re-rasters its members at
+/// their exact phase every frame instead of compositing its group surface bilinearly (the A/B arm of the slide groups).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -301,6 +302,7 @@ public static class EngineSwitches
             case "no-defer-geometry": FluentGpu.Render.Tiles.SliceTable.DeferMovingGeometry = false; return true;
             case "raw-phase": FluentGpu.Render.SliceRecorder.CanonicalPhase = false; return true;
             case "box-fade-test": FluentGpu.Render.SliceRecorder.BoxFadeTest = true; return true;
+            case "pixel-slides": FluentGpu.Render.SliceRecorder.SlideGroups = false; return true;
             case "ink-validate": FluentGpu.Render.Tiles.TileDamage.InkValidate = true; return true;
             case "group-fades": FluentGpu.Render.SliceRecorder.GroupFadesSwitch = true; return true;
             case "rewalk-validate": FluentGpu.Render.SceneRecordingContext.PartialKeepValidate = true; return true;
