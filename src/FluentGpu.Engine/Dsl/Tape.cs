@@ -23,6 +23,19 @@ public static class Tape
     [ThreadStatic] private static uint[]? t_stamps;    // per open region: the stamp of the region it interrupted
     private static int s_nextStamp;
 
+    /// <summary>The reconciler opens regions (<c>--fg tape</c>; PERF r3 MODEL M4b phase P2). Off: no region is ever opened and every
+    /// element is frozen at push, the class-world lifetime.</summary>
+    public static bool RegionsEnabled;
+
+    /// <summary><c>--fg tape-probe=PATH</c>: regions never give their slots back; a closed region's slots are marked dead and a read of
+    /// one is logged to PATH (first occurrence of each stack in full) and SERVED, so one run lists every escape (an element read
+    /// after its render's reconcile returned) instead of failing at the first. Memory grows with every element built: a short tour
+    /// only.</summary>
+    public static string? ProbePath;
+    private static StreamWriter? s_probeOut;
+    private static readonly Dictionary<string, int> s_probeSeen = new();
+    private static long s_probeReads;
+
     /// <summary>A region is open on this thread: pushes go to the tape.</summary>
     public static bool IsOpen
     {
@@ -61,7 +74,8 @@ public static class Tape
         var marks = t_marks!;
         int n = marks[t_markTop - 1];
         int start = t_markTop - 1 - n;
-        for (int i = 0; i < cols.Count; i++) cols[i].TruncateTo(i < n ? marks[start + i] : 0);
+        if (ProbePath is null) for (int i = 0; i < cols.Count; i++) cols[i].TruncateTo(i < n ? marks[start + i] : 0);
+        else for (int i = 0; i < cols.Count; i++) cols[i].MarkDead(i < n ? marks[start + i] : 0);
         t_markTop = start;
         t_depth--;
         t_stamp = t_stamps![t_depth];
@@ -75,10 +89,37 @@ public static class Tape
             $"A {column} node record was read through a handle taken before the node was reconciled again (node slot {slot}, stamp {stamp}).");
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    internal static void Stale(int slot, uint stamp, string column) =>
+    internal static void Stale(int slot, uint stamp, string column)
+    {
+        if (ProbePath is not null) { ProbeStale(slot, stamp, column); return; }
         throw new InvalidOperationException(
             $"A {column} built during a render was used after that render's reconcile returned (slot {slot}, stamp {stamp}). " +
             "An element that must outlive its render has to be frozen (el.Freeze()) or built where it is used (DESIGN 2.2, escapes).");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ProbeStale(int slot, uint stamp, string column)
+    {
+        s_probeReads++;
+        var st = new System.Diagnostics.StackTrace(2, false);
+        var sb = new System.Text.StringBuilder();
+        for (int f = 0; f < Math.Min(14, st.FrameCount); f++)
+        {
+            var m = st.GetFrame(f)?.GetMethod();
+            sb.Append(m?.DeclaringType?.Name).Append('.').Append(m?.Name).Append(" < ");
+        }
+        string sig = column + " | " + sb;
+        if (s_probeOut is null)
+        {
+            string path = ProbePath!.Replace("{pid}", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            s_probeOut = new StreamWriter(path, append: true) { AutoFlush = true };
+            s_probeOut.WriteLine($"[tape-probe] pid {Environment.ProcessId}");
+        }
+        if (s_probeSeen.TryGetValue(sig, out int id)) { s_probeSeen[sig] = id; s_probeOut.WriteLine($"#{id}"); return; }
+        id = s_probeSeen.Count + 1;
+        s_probeSeen[sig] = id;
+        s_probeOut.WriteLine($"=={id} {sig}");
+    }
 }
 
 /// <summary>One typed column of the tape.</summary>
@@ -86,6 +127,8 @@ internal abstract class TapeColumn
 {
     internal int Top;
     internal abstract void TruncateTo(int top);
+    /// <summary>Probe mode: the slots from <paramref name="top"/> up are dead (their stamps fail every check) but keep their values.</summary>
+    internal abstract void MarkDead(int top);
 }
 
 /// <summary>The tape column of <typeparamref name="T"/> (an element kind, a cold group, or <see cref="Element"/> for lists).</summary>
@@ -149,6 +192,11 @@ internal sealed class TapeColumn<T> : TapeColumn
         if (RuntimeHelpers.IsReferenceOrContainsReferences<T>()) Array.Clear(Items, top, Top - top);
         Array.Clear(Stamps, top, Top - top);
         Top = top;
+    }
+
+    internal override void MarkDead(int top)
+    {
+        for (int i = top; i < Top; i++) Stamps[i] |= 0x8000_0000u;
     }
 }
 

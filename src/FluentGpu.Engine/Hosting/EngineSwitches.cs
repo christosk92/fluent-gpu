@@ -258,6 +258,8 @@ public static class EngineSwitches
             case "layout": LayoutDiag = true; return true;
             case "layout-overflow": LayoutOverflow = true; return true;
             case "layout-verify": LayoutVerify = true; return true;
+            case "tape": FluentGpu.Dsl.Tape.RegionsEnabled = true; return true;
+            case "tape-probe": FluentGpu.Dsl.Tape.RegionsEnabled = true; FluentGpu.Dsl.Tape.ProbePath = string.IsNullOrEmpty(value) ? null : value; return FluentGpu.Dsl.Tape.ProbePath is not null;
             case "record-verify": RecordVerifyPath = string.IsNullOrEmpty(value) ? null : value; return RecordVerifyPath is not null;
             case "render":
                 RenderDiag = true;
