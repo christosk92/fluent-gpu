@@ -18,6 +18,8 @@ namespace FluentGpu.Rhi.D3D12;
 // for byte once the GPU passed the frame: pixels that differ and the largest channel delta. It checks what is ON SCREEN — a
 // tile kept across turns because its phase held (the point of the snap) as well as one rastered this turn. A bounded number
 // per turn, round-robin over the placements so a still page is covered over a few turns. Diagnostics only.
+// `--fg footprint-validate` rides the same machinery: the shadow is the tile's own phase with the footprint skip OFF
+// (D3D12Device.OpFootprints.cs — every op decoded), so a mismatch is a primitive the skip dropped that the decoder draws.
 public sealed unsafe partial class D3D12Device
 {
     private struct PhaseCheck
@@ -29,12 +31,15 @@ public sealed unsafe partial class D3D12Device
         public TileKey Key;
         public float DPhaseX, DPhaseY;   // raw − grid phase (px)
         public bool Busy;
+        public byte Kind;                // 0 = phase, 1 = footprint
     }
     private readonly PhaseCheck[] _phaseChecks = new PhaseCheck[8];
     private const int PhaseChecksPerTurn = 2;
     private int _phaseCursor;
     private long _phChecked, _phIdentical, _phDiffering, _phDiffPx, _phSkipped, _phExact;
     private int _phMaxDelta;
+    private long _fvChecked, _fvIdentical, _fvDiffering, _fvDiffPx, _fvSkipped;
+    private int _fvMaxDelta, _fvCursor;
 
     /// <summary>RasterTiles' tail (every tile surface is in PIXEL_SHADER_RESOURCE): poll the finished checks, then queue up to
     /// <see cref="PhaseChecksPerTurn"/> new ones over this turn's placements.</summary>
@@ -44,38 +49,56 @@ public sealed unsafe partial class D3D12Device
         ReadOnlySpan<TilePlacement> placements = frame.Placements;
         int n = placements.Length;
         if (n == 0) return;
-        int queued = 0;
-        for (int k = 0; k < n && queued < PhaseChecksPerTurn; k++)
+        if (TileDamage.PhaseValidate)
         {
-            int i = (_phaseCursor + k) % n;
-            ref readonly TilePlacement p = ref placements[i];
-            int r = RowOf(p.Key.SliceId);
-            if (r < 0) continue;
-            ref readonly SliceRow row = ref frame.Slices[r];
-            if (row.RefPhaseX == row.Frame.PhaseX && row.RefPhaseY == row.Frame.PhaseY) { _phExact++; continue; }
-            if (_surfaces!.TileResource(p.Surface) == null) continue;
-            if (QueuePhaseCheck(in frame, in row, in p)) queued++;
-            _phaseCursor = (i + 1) % n;
+            int queued = 0;
+            for (int k = 0; k < n && queued < PhaseChecksPerTurn; k++)
+            {
+                int i = (_phaseCursor + k) % n;
+                ref readonly TilePlacement p = ref placements[i];
+                int r = RowOf(p.Key.SliceId);
+                if (r < 0) continue;
+                ref readonly SliceRow row = ref frame.Slices[r];
+                if (row.RefPhaseX == row.Frame.PhaseX && row.RefPhaseY == row.Frame.PhaseY) { _phExact++; continue; }
+                if (_surfaces!.TileResource(p.Surface) == null) continue;
+                if (QueuePhaseCheck(in frame, in row, in p, kind: 0)) queued++;
+                _phaseCursor = (i + 1) % n;
+            }
+        }
+        if (TileDamage.FootprintValidate)
+        {
+            int queued = 0;
+            for (int k = 0; k < n && queued < PhaseChecksPerTurn; k++)
+            {
+                int i = (_fvCursor + k) % n;
+                ref readonly TilePlacement p = ref placements[i];
+                int r = RowOf(p.Key.SliceId);
+                if (r < 0 || _surfaces!.TileResource(p.Surface) == null) continue;
+                if (QueuePhaseCheck(in frame, in frame.Slices[r], in p, kind: 1)) queued++;
+                _fvCursor = (i + 1) % n;
+            }
         }
     }
 
-    private bool QueuePhaseCheck(in CompositeFrame frame, in SliceRow row, in TilePlacement p)
+    private bool QueuePhaseCheck(in CompositeFrame frame, in SliceRow row, in TilePlacement p, byte kind)
     {
+        ref long skipped = ref (kind == 0 ? ref _phSkipped : ref _fvSkipped);
         int slot = -1;
         for (int i = 0; i < _phaseChecks.Length; i++) if (!_phaseChecks[i].Busy) { slot = i; break; }
-        if (slot < 0) { _phSkipped++; return false; }
-        if (_surfaces!.TileState(p.Surface) != D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) { _phSkipped++; return false; }
+        if (slot < 0) { skipped++; return false; }
+        if (_surfaces!.TileState(p.Surface) != D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) { skipped++; return false; }
         var tr = new TileRaster(p.Key, p.Surface, InvalidationReason.None, 0, p.W, p.H);
         // An image whose pixels changed under its id since the tile drew it, or one still in flight, makes the pair
         // incomparable (the same rule as damage-validate).
-        if (!ImageDamage(in frame, in row, in tr, default).IsEmpty) { _phSkipped++; return false; }
+        if (!ImageDamage(in frame, in row, in tr, default).IsEmpty) { skipped++; return false; }
         ulong fence = _fenceValue + 1;
         int scratch = _surfaces.AcquireScratch(p.W, p.H, fence);
-        if (scratch < 0) { _phSkipped++; return false; }
+        if (scratch < 0) { skipped++; return false; }
         int dropped = DroppedInstanceCount(), glyphDropped = _glyphs!.DroppedInstances, inFlight = _frameImagesInFlight;
         int tileX = p.Key.Tx * TileGrid.W + row.Frame.OriginX, tileY = p.Key.Ty * TileGrid.H + row.Frame.OriginY;
         SliceRow raw = row;
-        raw.Frame = row.Frame with { PhaseX = row.RefPhaseX, PhaseY = row.RefPhaseY };
+        if (kind == 0) raw.Frame = row.Frame with { PhaseX = row.RefPhaseX, PhaseY = row.RefPhaseY };
+        _replayFoot = null; _replayFootN = 0;   // the shadow decodes every op (the footprint check's reference)
         EndPassIfOpen();
         ScratchBarrier(scratch, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var srtv = _surfaces.ScratchRtv(scratch);
@@ -89,7 +112,7 @@ public sealed unsafe partial class D3D12Device
         if (DroppedInstanceCount() != dropped || _glyphs.DroppedInstances != glyphDropped || _frameImagesInFlight != inFlight)
         {
             _surfaces.ReleaseScratch(scratch);
-            _phSkipped++;
+            skipped++;
             InvalidateCmdState();
             return false;
         }
@@ -121,6 +144,7 @@ public sealed unsafe partial class D3D12Device
         c.DPhaseX = row.RefPhaseX - row.Frame.PhaseX; c.DPhaseY = row.RefPhaseY - row.Frame.PhaseY;
         c.Fence = fence;
         c.Busy = true;
+        c.Kind = kind;
         InvalidateCmdState();
         return true;
     }
@@ -153,8 +177,23 @@ public sealed unsafe partial class D3D12Device
             }
             D3D12_RANGE z = default;
             c.A->Unmap(0, &z); c.B->Unmap(0, &z);
-            _phChecked++;
             var ci = CultureInfo.InvariantCulture;
+            if (c.Kind == 1)
+            {
+                _fvChecked++;
+                if (bad == 0) _fvIdentical++;
+                else
+                {
+                    _fvDiffering++;
+                    _fvDiffPx += bad;
+                    if (maxDelta > _fvMaxDelta) _fvMaxDelta = maxDelta;
+                    Console.Error.WriteLine(string.Create(ci,
+                        $"[footprint-validate] MISMATCH turn={c.Turn} slice={c.Key.SliceId} tile=({c.Key.Tx},{c.Key.Ty}) {c.W}x{c.H} px={bad} maxDelta={maxDelta}"));
+                }
+                if (_fvChecked % 50 == 1) Console.Error.WriteLine(FootprintValidateLine());
+                continue;
+            }
+            _phChecked++;
             if (bad == 0) _phIdentical++;
             else
             {
@@ -173,6 +212,10 @@ public sealed unsafe partial class D3D12Device
     internal string PhaseValidateLine() => string.Create(CultureInfo.InvariantCulture,
         $"[phase-validate] checked={_phChecked} identical={_phIdentical} differing={_phDiffering} diffPx={_phDiffPx} maxDelta={_phMaxDelta} exactPlacements={_phExact} skipped={_phSkipped}");
 
+    /// <summary>The footprint validator's running totals.</summary>
+    internal string FootprintValidateLine() => string.Create(CultureInfo.InvariantCulture,
+        $"[footprint-validate] checked={_fvChecked} identical={_fvIdentical} mismatches={_fvDiffering} diffPx={_fvDiffPx} maxDelta={_fvMaxDelta} skipped={_fvSkipped} opsSkipped={_rcFootSkippedTally}");
+
     private static void ReleasePhaseCheck(ref PhaseCheck c)
     {
         if (c.A != null) { D3D12MemoryDiagnostics.Release(c.A, "PhaseValidate.Readback"); c.A->Release(); }
@@ -184,6 +227,7 @@ public sealed unsafe partial class D3D12Device
     private void ReleasePhaseChecks()
     {
         if (_phChecked > 0) Console.Error.WriteLine(PhaseValidateLine());
+        if (_fvChecked > 0) Console.Error.WriteLine(FootprintValidateLine());
         for (int i = 0; i < _phaseChecks.Length; i++) ReleasePhaseCheck(ref _phaseChecks[i]);
     }
 }

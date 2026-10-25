@@ -87,7 +87,10 @@ public enum ImageAtlasExperiment : byte
 /// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).
 /// <c>raw-phase</c> — a slice under a composited transition layer rasters at its raw float placement even when that is a
 /// whole pixel up to float noise (<c>SliceRecorder.FractionalPx</c>; the A/B arm). <c>phase-validate</c> — every composited
-/// tile whose placement was snapped is re-rastered at the raw phase into a shadow surface and compared.</item>
+/// tile whose placement was snapped is re-rastered at the raw phase into a shadow surface and compared.
+/// <c>no-op-footprints</c> — a tile replay decodes every op of its segment instead of skipping the primitives whose
+/// footprint misses the tile (the A/B arm). <c>footprint-validate</c> — composited tiles are re-rastered without the skip
+/// into a shadow surface and compared.</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -277,6 +280,8 @@ public static class EngineSwitches
             case "no-partial-raster": FluentGpu.Render.Tiles.TileDamage.Enabled = false; return true;
             case "damage-validate": FluentGpu.Render.Tiles.TileDamage.Validate = true; return true;
             case "phase-validate": FluentGpu.Render.Tiles.TileDamage.PhaseValidate = true; return true;
+            case "footprint-validate": FluentGpu.Render.Tiles.TileDamage.FootprintValidate = true; return true;
+            case "no-op-footprints": FluentGpu.Render.Tiles.TileDamage.OpFootprints = false; return true;
             case "raw-phase": FluentGpu.Render.SliceRecorder.CanonicalPhase = false; return true;
             case "rewalk-validate": FluentGpu.Render.SceneRecordingContext.PartialKeepValidate = true; return true;
             case "no-partial-keep": FluentGpu.Render.SceneRecordingContext.PartialKeepEnabled = false; return true;

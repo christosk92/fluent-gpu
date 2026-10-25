@@ -172,7 +172,7 @@ public sealed unsafe partial class D3D12Device
         PassBoundary(GpuPassKind.TileRaster, TileGrid.W, TileGrid.H);
         int inl0 = _surfaces.ScratchLeases; long inlPx0 = _surfaces.ScratchPx;
         RasterTiles(in frame);
-        if (TileDamage.PhaseValidate) QueuePhaseChecks(in frame);
+        if (TileDamage.PhaseValidate || TileDamage.FootprintValidate) QueuePhaseChecks(in frame);
         _offInlineN += _surfaces.ScratchLeases - inl0; _offInlinePx += _surfaces.ScratchPx - inlPx0;
         // 2. offscreen
         PassBoundary(GpuPassKind.Offscreen, (int)_w, (int)_h);
@@ -396,6 +396,7 @@ public sealed unsafe partial class D3D12Device
             bool beyondPlan = tr.Partial && (!partial || !damage.Equals(tr.Damage));
             if (TileDamage.Log) LogRaster(in tr, in row, partial, fresh, in damage);
             BeginImageRecord(tr.Surface, whole: !partial);
+            _replayFoot = FootprintsOf(in frame, in row, out _replayFootN);
             if (!partial)
             {
                 BeginPass(rtv, tr.W, tr.H, PassLoad.Clear);
@@ -418,6 +419,7 @@ public sealed unsafe partial class D3D12Device
                 EndPassIfOpen();
             }
             EndImageRecord();
+            _replayFoot = null; _replayFootN = 0;
             _surfaces.NoteTileWrite(tr.Surface, partial, damage);
             NoteRasterCensus(partial, damage, tr.W, tr.H);
             RcRaster(partial, partial ? AreaOf(in damage) : (long)tr.W * tr.H);

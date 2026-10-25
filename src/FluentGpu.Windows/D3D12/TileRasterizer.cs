@@ -317,7 +317,8 @@ public sealed unsafe partial class D3D12Device
     {
         bool moved = sx != 0f || sy != 0f;
         bool cull = !spans.IsEmpty;
-        int pos = 0, e = 0;
+        bool foot = _replayFoot is not null && _replayFootN > 0;
+        int pos = 0, e = 0, f = 0;
         while (pos + sizeof(int) <= stream.Length)
         {
             if (cull)
@@ -340,6 +341,9 @@ public sealed unsafe partial class D3D12Device
             }
             var op = (DrawOp)MemoryMarshal.Read<int>(stream[pos..]);
             if (!RepaintStreamSafety.TryBodySize(op, out int body) || pos + sizeof(int) + body > stream.Length) break;
+            // A primitive whose footprint misses the tile is one the decode-time cull would drop: skip it unread
+            // (D3D12Device.OpFootprints.cs).
+            if (foot && FootprintMisses(pos, ref f, sx, sy)) { _rcFootSkippedTally++; pos += sizeof(int) + body; continue; }
             ReadOnlySpan<byte> payload = stream.Slice(pos + sizeof(int), body);
             RcOp(op);
             switch (op)

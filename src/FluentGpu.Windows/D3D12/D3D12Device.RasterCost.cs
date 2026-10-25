@@ -21,7 +21,7 @@ public sealed unsafe partial class D3D12Device
     private long _rcGlyphTicks, _rcRasterTicks;
     private int _rcRasters, _rcPartial, _rcPasses, _rcGlyphInsts, _rcDraws;
     private long _rcPx;
-    private readonly long[] _rcOps0 = new long[32];
+    private readonly long[] _rcOps0 = new long[32], _rcOpsEnd = new long[32];
     private long _rcSpans0;
     private RasterCost _lastRasterCost;
 
@@ -53,6 +53,7 @@ public sealed unsafe partial class D3D12Device
         Array.Copy(_rcOpTally, _rcOps0, _rcOpTally.Length);
         _rcSpans0 = _rcSpansSkippedTally;
         _rcCulled0 = _rcCulledTally;
+        _rcFoot0 = _rcFootSkippedTally;
         _rcPasses = _frameRenderPasses;
         _rcGlyphInsts = _frameGlyphInstanceCount;
         _rcDraws = GpuDrawCount.Frame;
@@ -76,15 +77,17 @@ public sealed unsafe partial class D3D12Device
         _rcGlyphInsts = _frameGlyphInstanceCount - _rcGlyphInsts;
         _rcDraws = GpuDrawCount.Frame - _rcDraws;
         _rcCulledEnd = _rcCulledTally;
+        Array.Copy(_rcOpTally, _rcOpsEnd, _rcOpTally.Length);   // the raster phase's ops only (not the composite's replays)
+        _rcFootEnd = _rcFootSkippedTally;
     }
-    private long _rcCulledEnd;
+    private long _rcCulledEnd, _rcFoot0, _rcFootEnd;
 
     /// <summary>SubmitComposite's tail: publish <see cref="LastRasterCost"/>.</summary>
     private void RcEndSubmit()
     {
         Span<long> d = stackalloc long[32];
         bool rastered = _rcRasters > 0;
-        for (int i = 0; i < d.Length; i++) d[i] = rastered ? _rcOpTally[i] - _rcOps0[i] : 0;
+        for (int i = 0; i < d.Length; i++) d[i] = rastered ? _rcOpsEnd[i] - _rcOps0[i] : 0;
         long ops = 0;
         for (int i = 0; i < d.Length; i++) ops += d[i];
         long rects = d[(int)DrawOp.FillRoundRect] + d[(int)DrawOp.DrawRoundRectStroke] + d[(int)DrawOp.DrawShadow]
@@ -103,6 +106,6 @@ public sealed unsafe partial class D3D12Device
             (int)ops, (int)rects, (int)glyphs, (int)d[(int)DrawOp.DrawImage], (int)paths, (int)series, (int)scopes,
             rastered ? (int)(_rcSpansSkippedTally - _rcSpans0) : 0,
             rastered ? _rcGlyphInsts : 0, rastered ? _rcDraws : 0, (int)(all - _rcSubmitOps0),
-            rastered ? (int)(_rcCulledEnd - _rcCulled0) : 0);
+            rastered ? (int)(_rcCulledEnd - _rcCulled0) : 0, rastered ? (int)(_rcFootEnd - _rcFoot0) : 0);
     }
 }
