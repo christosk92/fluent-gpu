@@ -57,8 +57,9 @@ public sealed record SkelRegionEl(
     SkelReveal Reveal,
     SkeletonStyle Style,
     object? Group,
-    bool SmoothResize = true) : Element
+    bool SmoothResize = true) : HeapElement
 {
+    public const ushort TypeId = 13;
     public override ushort ElementTypeId => 13;
 }
 

@@ -572,8 +572,10 @@ public sealed class InputHooks
 }
 
 /// <summary>Provides a context value to its subtree (the React <c>Context.Provider</c>). One child.</summary>
-public sealed record ContextProviderEl(object Channel, object? Value, Element Child) : Element
+public sealed record ContextProviderEl(object Channel, object? Value, Element Child) : HeapElement
 {
+    internal override HeapElement FreezeMembers() => (HeapElement)(base.FreezeMembers() is ContextProviderEl c ? c with { Child = c.Child.Freeze() } : this);
+    public const ushort TypeId = 4;
     public override ushort ElementTypeId => 4;
 }
 

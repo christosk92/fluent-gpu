@@ -96,53 +96,47 @@ public sealed partial class TreeReconciler
     }
 
     /// <summary>Did <paramref name="next"/> bind a LAYOUT channel <paramref name="prev"/> carried static?</summary>
-    private static bool GainsLayoutChannel(Element next, Element prev) => next switch
-    {
-        BoxEl b => prev is BoxEl p && ((b.Width.IsBound && !p.Width.IsBound) || (b.Height.IsBound && !p.Height.IsBound)),
-        TextEl t => prev is TextEl p && t.Text.IsBound && !p.Text.IsBound,
-        SpanTextEl s => prev is SpanTextEl p && s.Spans.IsBound && !p.Spans.IsBound,
-        _ => false,
-    };
+    private static bool GainsLayoutChannel(Element next, Element prev) => next.ElementTypeId switch {
+        BoxEl.TypeId when next.Is(out BoxEl b) => prev.Is(out BoxEl p) && ((b.Width.IsBound && !p.Width.IsBound) || (b.Height.IsBound && !p.Height.IsBound)),
+        TextEl.TypeId when next.Is(out TextEl t) => prev.Is(out TextEl p) && t.Text.IsBound && !p.Text.IsBound,
+        SpanTextEl.TypeId when next.Is(out SpanTextEl s) => prev.Is(out SpanTextEl p) && s.Spans.IsBound && !p.Spans.IsBound,
+        _ => false};
 
     /// <summary>Generated static→bound detector per leaf element type (<c>{T}Diff.AnyBindGained</c>); a type mismatch is a
     /// replace, never a flip. Kinds without a generated diff (Scroll/VirtualList/anchors) test their only channel,
     /// <c>Visible</c>, at their own Update branch.</summary>
-    private static bool AnyBindGained(Element next, Element prev) => next switch
-    {
-        BoxEl x => prev is BoxEl y && BoxElDiff.AnyBindGained(x, y),
-        TextEl x => prev is TextEl y && TextElDiff.AnyBindGained(x, y),
-        GridEl x => prev is GridEl y && GridElDiff.AnyBindGained(x, y),
-        ImageEl x => prev is ImageEl y && ImageElDiff.AnyBindGained(x, y),
-        IconLayerEl x => prev is IconLayerEl y && IconLayerElDiff.AnyBindGained(x, y),
-        SpanTextEl x => prev is SpanTextEl y && SpanTextElDiff.AnyBindGained(x, y),
-        ListRowEl x => prev is ListRowEl y && ListRowElDiff.AnyBindGained(x, y),
-        PolylineStrokeEl x => prev is PolylineStrokeEl y && PolylineStrokeElDiff.AnyBindGained(x, y),
-        PathEl x => prev is PathEl y && PathElDiff.AnyBindGained(x, y),
-        SeriesEl x => prev is SeriesEl y && SeriesElDiff.AnyBindGained(x, y),
-        SpriteFieldEl x => prev is SpriteFieldEl y && SpriteFieldElDiff.AnyBindGained(x, y),
-        _ => next.Visible.IsBound && !prev.Visible.IsBound,
-    };
+    private static bool AnyBindGained(Element next, Element prev) => next.ElementTypeId switch {
+        BoxEl.TypeId when next.Is(out BoxEl x) => prev.Is(out BoxEl y) && BoxElDiff.AnyBindGained(x, y),
+        TextEl.TypeId when next.Is(out TextEl x) => prev.Is(out TextEl y) && TextElDiff.AnyBindGained(x, y),
+        GridEl.TypeId when next.Is(out GridEl x) => prev.Is(out GridEl y) && GridElDiff.AnyBindGained(x, y),
+        ImageEl.TypeId when next.Is(out ImageEl x) => prev.Is(out ImageEl y) && ImageElDiff.AnyBindGained(x, y),
+        IconLayerEl.TypeId when next.Is(out IconLayerEl x) => prev.Is(out IconLayerEl y) && IconLayerElDiff.AnyBindGained(x, y),
+        SpanTextEl.TypeId when next.Is(out SpanTextEl x) => prev.Is(out SpanTextEl y) && SpanTextElDiff.AnyBindGained(x, y),
+        ListRowEl.TypeId when next.Is(out ListRowEl x) => prev.Is(out ListRowEl y) && ListRowElDiff.AnyBindGained(x, y),
+        PolylineStrokeEl.TypeId when next.Is(out PolylineStrokeEl x) => prev.Is(out PolylineStrokeEl y) && PolylineStrokeElDiff.AnyBindGained(x, y),
+        PathEl.TypeId when next.Is(out PathEl x) => prev.Is(out PathEl y) && PathElDiff.AnyBindGained(x, y),
+        SeriesEl.TypeId when next.Is(out SeriesEl x) => prev.Is(out SeriesEl y) && SeriesElDiff.AnyBindGained(x, y),
+        SpriteFieldEl.TypeId when next.Is(out SpriteFieldEl x) => prev.Is(out SpriteFieldEl y) && SpriteFieldElDiff.AnyBindGained(x, y),
+        _ => next.Visible.IsBound && !prev.Visible.IsBound};
 
     /// <summary>DEBUG (<see cref="BindContract"/>): after a flip, the node must carry exactly one BindEffect per bound
     /// <c>Prop&lt;T&gt;</c> channel of <paramref name="el"/>. A mismatch means a channel the reconciler does not wire (or
     /// wired twice) — reported, never silently lost.</summary>
     private void CheckBindingShape(NodeHandle node, Element el)
     {
-        int expected = el switch
-        {
-            BoxEl x => BoxElDiff.BoundChannelCount(x),
-            TextEl x => TextElDiff.BoundChannelCount(x),
-            GridEl x => GridElDiff.BoundChannelCount(x),
-            ImageEl x => ImageElDiff.BoundChannelCount(x),
-            IconLayerEl x => IconLayerElDiff.BoundChannelCount(x),
-            SpanTextEl x => SpanTextElDiff.BoundChannelCount(x),
-            ListRowEl x => ListRowElDiff.BoundChannelCount(x),
-            PolylineStrokeEl x => PolylineStrokeElDiff.BoundChannelCount(x),
-            PathEl x => PathElDiff.BoundChannelCount(x),
-            SeriesEl x => SeriesElDiff.BoundChannelCount(x),
-            SpriteFieldEl x => SpriteFieldElDiff.BoundChannelCount(x),
-            _ => -1,
-        };
+        int expected = el.ElementTypeId switch {
+            BoxEl.TypeId when el.Is(out BoxEl x) => BoxElDiff.BoundChannelCount(x),
+            TextEl.TypeId when el.Is(out TextEl x) => TextElDiff.BoundChannelCount(x),
+            GridEl.TypeId when el.Is(out GridEl x) => GridElDiff.BoundChannelCount(x),
+            ImageEl.TypeId when el.Is(out ImageEl x) => ImageElDiff.BoundChannelCount(x),
+            IconLayerEl.TypeId when el.Is(out IconLayerEl x) => IconLayerElDiff.BoundChannelCount(x),
+            SpanTextEl.TypeId when el.Is(out SpanTextEl x) => SpanTextElDiff.BoundChannelCount(x),
+            ListRowEl.TypeId when el.Is(out ListRowEl x) => ListRowElDiff.BoundChannelCount(x),
+            PolylineStrokeEl.TypeId when el.Is(out PolylineStrokeEl x) => PolylineStrokeElDiff.BoundChannelCount(x),
+            PathEl.TypeId when el.Is(out PathEl x) => PathElDiff.BoundChannelCount(x),
+            SeriesEl.TypeId when el.Is(out SeriesEl x) => SeriesElDiff.BoundChannelCount(x),
+            SpriteFieldEl.TypeId when el.Is(out SpriteFieldEl x) => SpriteFieldElDiff.BoundChannelCount(x),
+            _ => -1};
         if (expected < 0) return;
         int actual = BindEffectCount(node);
         if (actual != expected) BindContract.Unwired(el.GetType().Name, expected, actual);

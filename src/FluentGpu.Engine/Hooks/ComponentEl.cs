@@ -1,3 +1,5 @@
+using FluentGpu.Signals;
+using FluentGpu.Foundation;
 using FluentGpu.Dsl;
 
 namespace FluentGpu.Hooks;
@@ -8,9 +10,36 @@ namespace FluentGpu.Hooks;
 /// <see cref="ComponentType"/>, and reconciles its rendered output as this node's content. This is what lets the
 /// framework compose many stateful components rather than one root.
 /// </summary>
-public sealed record ComponentEl(Func<Component> Factory, Type ComponentType) : Element
+public partial struct ComponentEl : IElementKind<ComponentEl>
 {
-    public override ushort ElementTypeId => 3;
+    public const ushort TypeId = 3;
+    static ushort IElementKind<ComponentEl>.Kind => 3;
+    public static implicit operator Element(ComponentEl value) => Element.Push(in value);
+    public static explicit operator ComponentEl(Element element) => element.As<ComponentEl>();
+    public Func<Component> Factory { get; init; }
+    public Type ComponentType { get; init; }
+    public ComponentEl(Func<Component> Factory, Type ComponentType) { this.Factory = Factory; this.ComponentType = ComponentType; }
+    // ── base channels (the former Element record), per kind ──
+    internal ColdRef<ElementCold> _ecold;
+    public string? Key { get; init; }
+    public string? MorphId { readonly get => _ecold.Value.MorphId; init { if (!EqualityComparer<string?>.Default.Equals(_ecold.Value.MorphId, value)) { var c = _ecold.Value; c.MorphId = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public FluentGpu.Scroll.Effects.ScrollEffectSpec[] ScrollEffects { readonly get => _ecold.Value.ScrollEffects; init { if (!EqualityComparer<FluentGpu.Scroll.Effects.ScrollEffectSpec[]>.Default.Equals(_ecold.Value.ScrollEffects, value)) { var c = _ecold.Value; c.ScrollEffects = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public string? ScrollScope { readonly get => _ecold.Value.ScrollScope; init { if (!EqualityComparer<string?>.Default.Equals(_ecold.Value.ScrollScope, value)) { var c = _ecold.Value; c.ScrollScope = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public Prop<bool> Visible { get; init; } = true;
+    public SkeletonMode SkeletonMode { readonly get => _ecold.Value.SkeletonMode; init { if (!EqualityComparer<SkeletonMode>.Default.Equals(_ecold.Value.SkeletonMode, value)) { var c = _ecold.Value; c.SkeletonMode = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public Element? SkeletonOverride { readonly get => _ecold.Value.SkeletonOverride; init { if (!EqualityComparer<Element?>.Default.Equals(_ecold.Value.SkeletonOverride, value)) { var c = _ecold.Value; c.SkeletonOverride = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public FluentGpu.Animation.MotionTokenDef? Transition { readonly get => _ecold.Value.Transition; init { if (!EqualityComparer<FluentGpu.Animation.MotionTokenDef?>.Default.Equals(_ecold.Value.Transition, value)) { var c = _ecold.Value; c.Transition = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public FluentGpu.Animation.MotionTarget? WhileHover { readonly get => _ecold.Value.WhileHover; init { if (!EqualityComparer<FluentGpu.Animation.MotionTarget?>.Default.Equals(_ecold.Value.WhileHover, value)) { var c = _ecold.Value; c.WhileHover = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public FluentGpu.Animation.MotionTarget? WhilePressed { readonly get => _ecold.Value.WhilePressed; init { if (!EqualityComparer<FluentGpu.Animation.MotionTarget?>.Default.Equals(_ecold.Value.WhilePressed, value)) { var c = _ecold.Value; c.WhilePressed = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public FluentGpu.Animation.MotionTarget? WhileFocus { readonly get => _ecold.Value.WhileFocus; init { if (!EqualityComparer<FluentGpu.Animation.MotionTarget?>.Default.Equals(_ecold.Value.WhileFocus, value)) { var c = _ecold.Value; c.WhileFocus = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public EnterExit? Enter { readonly get => _ecold.Value.Enter; init { if (!EqualityComparer<EnterExit?>.Default.Equals(_ecold.Value.Enter, value)) { var c = _ecold.Value; c.Enter = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public EnterExit? Exit { readonly get => _ecold.Value.Exit; init { if (!EqualityComparer<EnterExit?>.Default.Equals(_ecold.Value.Exit, value)) { var c = _ecold.Value; c.Exit = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public float Stagger { readonly get => _ecold.Value.Stagger; init { if (!EqualityComparer<float>.Default.Equals(_ecold.Value.Stagger, value)) { var c = _ecold.Value; c.Stagger = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public LayoutTransition? Layout { readonly get => _ecold.Value.Layout; init { if (!EqualityComparer<LayoutTransition?>.Default.Equals(_ecold.Value.Layout, value)) { var c = _ecold.Value; c.Layout = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public FluentGpu.Scroll.Runtime.ScrollHandle? WheelTarget { readonly get => _ecold.Value.WheelTarget; init { if (!EqualityComparer<FluentGpu.Scroll.Runtime.ScrollHandle?>.Default.Equals(_ecold.Value.WheelTarget, value)) { var c = _ecold.Value; c.WheelTarget = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public float ScrollLineDip { readonly get => _ecold.Value.ScrollLineDip; init { if (!EqualityComparer<float>.Default.Equals(_ecold.Value.ScrollLineDip, value)) { var c = _ecold.Value; c.ScrollLineDip = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public string? RelativeTo { readonly get => _ecold.Value.RelativeTo; init { if (!EqualityComparer<string?>.Default.Equals(_ecold.Value.RelativeTo, value)) { var c = _ecold.Value; c.RelativeTo = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public readonly ushort ElementTypeId => 3;
 
     /// <summary>A representative real-content builder the <c>SkeletonDeriver</c> DERIVES in place of the single default
     /// bar it would otherwise emit for this opaque component (it cannot run the component's Render at derive time). Set
@@ -33,6 +62,10 @@ public sealed record ComponentEl(Func<Component> Factory, Type ComponentType) : 
     /// <see cref="Embed.Comp{T}(Func{T})"/> overload. Should be an immutable record so value equality coalesces
     /// unchanged re-pushes. See <c>docs/guide/reactivity.md</c> (parent→child props).</summary>
     public object? Props { get; init; }
+    static void IElementKind<ComponentEl>.FreezeMembers(ref ComponentEl v)
+    {
+        v._ecold = v._ecold.Frozen();
+    }
 }
 
 /// <summary>Fluent helper: <c>Embed.Comp(() =&gt; new MyComponent())</c> embeds a stateful child component;

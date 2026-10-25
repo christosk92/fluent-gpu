@@ -10,11 +10,12 @@ namespace FluentGpu.Dsl;
 // inline initializers exactly; Owner is excluded from equality. Owner keeps the element it was cloned for alive; that is bounded (one per with-chain link that mutated the block) and dies with the block.
 
 /// <summary>BoxEl's common rich paint (gradient, border brush, shadow, border and clip extras).</summary>
-internal sealed class BoxColdPaint : IEquatable<BoxColdPaint>
+internal struct BoxColdPaint : IEquatable<BoxColdPaint>, IColdGroup<BoxColdPaint>
 {
     public static readonly BoxColdPaint Default = new();
+    public BoxColdPaint() { }
+    static BoxColdPaint IColdGroup<BoxColdPaint>.CreateDefault() => new();
 
-    public BoxEl? Owner;
 
     public ColorF HoverBorderColor;
     public ColorF PressedBorderColor;
@@ -40,17 +41,9 @@ internal sealed class BoxColdPaint : IEquatable<BoxColdPaint>
     public bool HoverElevatePaint;
     public bool HoverElevateClipRoot;
 
-    public BoxColdPaint CloneFor(BoxEl owner)
-    {
-        var c = (BoxColdPaint)MemberwiseClone();
-        c.Owner = owner;
-        return c;
-    }
 
-    public bool Equals(BoxColdPaint? o)
+    public readonly bool Equals(BoxColdPaint o)
     {
-        if (ReferenceEquals(this, o)) return true;
-        if (o is null) return false;
         return EqualityComparer<ColorF>.Default.Equals(HoverBorderColor, o.HoverBorderColor)
             && EqualityComparer<ColorF>.Default.Equals(PressedBorderColor, o.PressedBorderColor)
             && EqualityComparer<float>.Default.Equals(BorderDashOn, o.BorderDashOn)
@@ -76,16 +69,17 @@ internal sealed class BoxColdPaint : IEquatable<BoxColdPaint>
             && EqualityComparer<bool>.Default.Equals(HoverElevateClipRoot, o.HoverElevateClipRoot);
     }
 
-    public override bool Equals(object? obj) => Equals(obj as BoxColdPaint);
-    public override int GetHashCode() => 0;
+    public override readonly bool Equals(object? obj) => obj is BoxColdPaint o && Equals(o);
+    public override readonly int GetHashCode() => 0;
 }
 
 /// <summary>BoxEl's stateful and effect paint (hover/pressed gradients and borders, acrylic, edge fade, feedback, arc).</summary>
-internal sealed class BoxColdPaintFx : IEquatable<BoxColdPaintFx>
+internal struct BoxColdPaintFx : IEquatable<BoxColdPaintFx>, IColdGroup<BoxColdPaintFx>
 {
     public static readonly BoxColdPaintFx Default = new();
+    public BoxColdPaintFx() { }
+    static BoxColdPaintFx IColdGroup<BoxColdPaintFx>.CreateDefault() => new();
 
-    public BoxEl? Owner;
 
     public ArcSpec? Arc;
     public Prop<Point2> RadialGradientCenter = new Point2(float.NaN, float.NaN);
@@ -101,17 +95,9 @@ internal sealed class BoxColdPaintFx : IEquatable<BoxColdPaintFx>
     public AcrylicSpec? Acrylic;
     public EdgeFadeSpec? EdgeFade;
 
-    public BoxColdPaintFx CloneFor(BoxEl owner)
-    {
-        var c = (BoxColdPaintFx)MemberwiseClone();
-        c.Owner = owner;
-        return c;
-    }
 
-    public bool Equals(BoxColdPaintFx? o)
+    public readonly bool Equals(BoxColdPaintFx o)
     {
-        if (ReferenceEquals(this, o)) return true;
-        if (o is null) return false;
         return EqualityComparer<ArcSpec?>.Default.Equals(Arc, o.Arc)
             && EqualityComparer<Prop<Point2>>.Default.Equals(RadialGradientCenter, o.RadialGradientCenter)
             && EqualityComparer<GradientSpec?>.Default.Equals(GradientTo, o.GradientTo)
@@ -127,16 +113,17 @@ internal sealed class BoxColdPaintFx : IEquatable<BoxColdPaintFx>
             && EqualityComparer<EdgeFadeSpec?>.Default.Equals(EdgeFade, o.EdgeFade);
     }
 
-    public override bool Equals(object? obj) => Equals(obj as BoxColdPaintFx);
-    public override int GetHashCode() => 0;
+    public override readonly bool Equals(object? obj) => obj is BoxColdPaintFx o && Equals(o);
+    public override readonly int GetHashCode() => 0;
 }
 
 /// <summary>BoxEl's common interaction handlers (key, hover, focus, press, context) and focus extras.</summary>
-internal sealed class BoxColdInput : IEquatable<BoxColdInput>
+internal struct BoxColdInput : IEquatable<BoxColdInput>, IColdGroup<BoxColdInput>
 {
     public static readonly BoxColdInput Default = new();
+    public BoxColdInput() { }
+    static BoxColdInput IColdGroup<BoxColdInput>.CreateDefault() => new();
 
-    public BoxEl? Owner;
 
     public Action<KeyEventArgs>? OnKeyDown;
     public Action<PointerEventArgs>? OnPointerPressed;
@@ -156,17 +143,9 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
     public bool FocusRingHost;
     public NodeAttachment? Attachment;
 
-    public BoxColdInput CloneFor(BoxEl owner)
-    {
-        var c = (BoxColdInput)MemberwiseClone();
-        c.Owner = owner;
-        return c;
-    }
 
-    public bool Equals(BoxColdInput? o)
+    public readonly bool Equals(BoxColdInput o)
     {
-        if (ReferenceEquals(this, o)) return true;
-        if (o is null) return false;
         return EqualityComparer<Action<KeyEventArgs>?>.Default.Equals(OnKeyDown, o.OnKeyDown)
             && EqualityComparer<Action<PointerEventArgs>?>.Default.Equals(OnPointerPressed, o.OnPointerPressed)
             && EqualityComparer<Action<PointerEventArgs>?>.Default.Equals(OnPointerReleased, o.OnPointerReleased)
@@ -186,16 +165,17 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
             && EqualityComparer<NodeAttachment?>.Default.Equals(Attachment, o.Attachment);
     }
 
-    public override bool Equals(object? obj) => Equals(obj as BoxColdInput);
-    public override int GetHashCode() => 0;
+    public override readonly bool Equals(object? obj) => obj is BoxColdInput o && Equals(o);
+    public override readonly int GetHashCode() => 0;
 }
 
 /// <summary>BoxEl's rarely-used gestures (drag and drop, repeat, accelerators, pointer-down/drag/wheel) and the layout animation.</summary>
-internal sealed class BoxColdGesture : IEquatable<BoxColdGesture>
+internal struct BoxColdGesture : IEquatable<BoxColdGesture>, IColdGroup<BoxColdGesture>
 {
     public static readonly BoxColdGesture Default = new();
+    public BoxColdGesture() { }
+    static BoxColdGesture IColdGroup<BoxColdGesture>.CreateDefault() => new();
 
-    public BoxEl? Owner;
 
     public Action<CharEventArgs>? OnCharInput;
     public Action<Point2>? OnPointerDown;
@@ -223,17 +203,9 @@ internal sealed class BoxColdGesture : IEquatable<BoxColdGesture>
     public LayoutTransition? Animate;
     public WindowDragRole WindowDrag;
 
-    public BoxColdGesture CloneFor(BoxEl owner)
-    {
-        var c = (BoxColdGesture)MemberwiseClone();
-        c.Owner = owner;
-        return c;
-    }
 
-    public bool Equals(BoxColdGesture? o)
+    public readonly bool Equals(BoxColdGesture o)
     {
-        if (ReferenceEquals(this, o)) return true;
-        if (o is null) return false;
         return EqualityComparer<Action<CharEventArgs>?>.Default.Equals(OnCharInput, o.OnCharInput)
             && EqualityComparer<Action<Point2>?>.Default.Equals(OnPointerDown, o.OnPointerDown)
             && EqualityComparer<Action<Point2>?>.Default.Equals(OnDrag, o.OnDrag)
@@ -261,46 +233,40 @@ internal sealed class BoxColdGesture : IEquatable<BoxColdGesture>
             && WindowDrag == o.WindowDrag;
     }
 
-    public override bool Equals(object? obj) => Equals(obj as BoxColdGesture);
-    public override int GetHashCode() => 0;
+    public override readonly bool Equals(object? obj) => obj is BoxColdGesture o && Equals(o);
+    public override readonly int GetHashCode() => 0;
 }
 
 /// <summary>BoxEl's hover/press motion and the composited transform.</summary>
 /// <summary>BoxEl's hover / press fills (page-mount RCA, allocations): two bindable 24-byte colour channels that only
 /// interactive surfaces set, inline on every box until they moved here.</summary>
-internal sealed class BoxColdHover : IEquatable<BoxColdHover>
+internal struct BoxColdHover : IEquatable<BoxColdHover>, IColdGroup<BoxColdHover>
 {
     public static readonly BoxColdHover Default = new();
+    public BoxColdHover() { }
+    static BoxColdHover IColdGroup<BoxColdHover>.CreateDefault() => new();
 
-    public BoxEl? Owner;
 
     public Prop<ColorF> HoverFill = ColorF.Transparent;
     public Prop<ColorF> PressedFill = ColorF.Transparent;
 
-    public BoxColdHover CloneFor(BoxEl owner)
-    {
-        var c = (BoxColdHover)MemberwiseClone();
-        c.Owner = owner;
-        return c;
-    }
 
-    public bool Equals(BoxColdHover? o)
+    public readonly bool Equals(BoxColdHover o)
     {
-        if (ReferenceEquals(this, o)) return true;
-        if (o is null) return false;
         return EqualityComparer<Prop<ColorF>>.Default.Equals(HoverFill, o.HoverFill)
             && EqualityComparer<Prop<ColorF>>.Default.Equals(PressedFill, o.PressedFill);
     }
 
-    public override bool Equals(object? obj) => Equals(obj as BoxColdHover);
-    public override int GetHashCode() => 0;
+    public override readonly bool Equals(object? obj) => obj is BoxColdHover o && Equals(o);
+    public override readonly int GetHashCode() => 0;
 }
 
-internal sealed class BoxColdMotion : IEquatable<BoxColdMotion>
+internal struct BoxColdMotion : IEquatable<BoxColdMotion>, IColdGroup<BoxColdMotion>
 {
     public static readonly BoxColdMotion Default = new();
+    public BoxColdMotion() { }
+    static BoxColdMotion IColdGroup<BoxColdMotion>.CreateDefault() => new();
 
-    public BoxEl? Owner;
 
     /// <summary>The declared affine (rare: most boxes animate the decomposed statics or nothing) — 32 bytes that were inline.</summary>
     public Prop<Affine2D> Transform = default;
@@ -325,17 +291,9 @@ internal sealed class BoxColdMotion : IEquatable<BoxColdMotion>
     public float BrushTransitionMs = float.NaN;
     public bool CounterScale;
 
-    public BoxColdMotion CloneFor(BoxEl owner)
-    {
-        var c = (BoxColdMotion)MemberwiseClone();
-        c.Owner = owner;
-        return c;
-    }
 
-    public bool Equals(BoxColdMotion? o)
+    public readonly bool Equals(BoxColdMotion o)
     {
-        if (ReferenceEquals(this, o)) return true;
-        if (o is null) return false;
         return EqualityComparer<Prop<Affine2D>>.Default.Equals(Transform, o.Transform)
             && EqualityComparer<float>.Default.Equals(OffsetX, o.OffsetX)
             && EqualityComparer<float>.Default.Equals(OffsetY, o.OffsetY)
@@ -358,39 +316,32 @@ internal sealed class BoxColdMotion : IEquatable<BoxColdMotion>
             && EqualityComparer<bool>.Default.Equals(CounterScale, o.CounterScale);
     }
 
-    public override bool Equals(object? obj) => Equals(obj as BoxColdMotion);
-    public override int GetHashCode() => 0;
+    public override readonly bool Equals(object? obj) => obj is BoxColdMotion o && Equals(o);
+    public override readonly int GetHashCode() => 0;
 }
 
 /// <summary>BoxEl's layout and other extras.</summary>
-internal sealed class BoxColdMisc : IEquatable<BoxColdMisc>
+internal struct BoxColdMisc : IEquatable<BoxColdMisc>, IColdGroup<BoxColdMisc>
 {
     public static readonly BoxColdMisc Default = new();
+    public BoxColdMisc() { }
+    static BoxColdMisc IColdGroup<BoxColdMisc>.CreateDefault() => new();
 
-    public BoxEl? Owner;
 
     public bool IsolateLayout;
     public float MaxHeight = float.NaN;
     public bool MeasureUnboundedWidth;
     public float AspectRatio = float.NaN;
 
-    public BoxColdMisc CloneFor(BoxEl owner)
-    {
-        var c = (BoxColdMisc)MemberwiseClone();
-        c.Owner = owner;
-        return c;
-    }
 
-    public bool Equals(BoxColdMisc? o)
+    public readonly bool Equals(BoxColdMisc o)
     {
-        if (ReferenceEquals(this, o)) return true;
-        if (o is null) return false;
         return EqualityComparer<bool>.Default.Equals(IsolateLayout, o.IsolateLayout)
             && EqualityComparer<float>.Default.Equals(MaxHeight, o.MaxHeight)
             && EqualityComparer<bool>.Default.Equals(MeasureUnboundedWidth, o.MeasureUnboundedWidth)
             && EqualityComparer<float>.Default.Equals(AspectRatio, o.AspectRatio);
     }
 
-    public override bool Equals(object? obj) => Equals(obj as BoxColdMisc);
-    public override int GetHashCode() => 0;
+    public override readonly bool Equals(object? obj) => obj is BoxColdMisc o && Equals(o);
+    public override readonly int GetHashCode() => 0;
 }

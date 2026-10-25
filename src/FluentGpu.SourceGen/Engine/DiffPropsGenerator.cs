@@ -37,7 +37,7 @@ namespace FluentGpu.SourceGen.Engine
                 ctx.AddSource("FluentGpu.CodeGen.NoCodegenAttribute.g.cs", SourceText.From(OptOutSource, Encoding.UTF8)));
 
             var models = context.SyntaxProvider.CreateSyntaxProvider(
-                    predicate: static (node, _) => node is RecordDeclarationSyntax r && r.BaseList is not null,
+                    predicate: static (node, _) => node is TypeDeclarationSyntax { BaseList: not null } t && (t is RecordDeclarationSyntax || t is StructDeclarationSyntax),
                     transform: static (ctx, ct) => Extract(ctx, ct))
                 .Where(static m => m is not null)
                 .Select(static (m, _) => m!.Value);
@@ -48,20 +48,23 @@ namespace FluentGpu.SourceGen.Engine
 
         private static Model? Extract(GeneratorSyntaxContext ctx, CancellationToken ct)
         {
-            var decl = (RecordDeclarationSyntax)ctx.Node;
+            var decl = (TypeDeclarationSyntax)ctx.Node;
             if (ctx.SemanticModel.GetDeclaredSymbol(decl, ct) is not INamedTypeSymbol type) return null;
             if (type.IsAbstract) return null;
             // Generic Element records (e.g. Flow's ForEl<T>) get no DiffProps: a non-generic static Diff class can't name
             // the open type parameter, and these boundary elements bypass WriteColumns (MountFor/UpdateFor own them).
             if (type.TypeParameters.Length > 0) return null;
-            if (!DerivesFromElement(type)) return null;
+            bool valueKind = IsElementKind(type);
+            if (!DerivesFromElement(type) && !valueKind) return null;
+            if (decl.Modifiers.Any(m => m.Text == "partial") && type.DeclaringSyntaxReferences.Length > 1
+                && type.DeclaringSyntaxReferences[0].GetSyntax(ct) != decl) return null;   // one model per partial type
             if (type.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == OptOutAttr)) return null; // opt-out
 
             var seen = new HashSet<string>();
             var explicitProps = ImmutableArray.CreateBuilder<PropInfo>();
             var allProps = ImmutableArray.CreateBuilder<PropInfo>();
             // Walk the WHOLE chain (the record + its bases, through Element) so inherited animation fields are diffed.
-            for (INamedTypeSymbol? t = type; t is not null && IsOrDerivesElement(t); t = t.BaseType)
+            for (INamedTypeSymbol? t = type; t is not null && (IsOrDerivesElement(t) || SymbolEqualityComparer.Default.Equals(t, type)); t = valueKind ? null : t.BaseType)
             {
                 foreach (ISymbol member in t.GetMembers())
                 {
@@ -86,15 +89,19 @@ namespace FluentGpu.SourceGen.Engine
                 type.Name,
                 type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                 Sanitize(type.ToDisplayString()),
-                chosen.ToImmutable());
+                chosen.ToImmutable(),
+                type.IsValueType);
         }
 
         private static bool DerivesFromElement(INamedTypeSymbol type)
         {
             for (INamedTypeSymbol? t = type.BaseType; t is not null; t = t.BaseType)
-                if (t.ToDisplayString() == ElementBase) return true;
+                if (t.ToDisplayString() == ElementBase || t.ToDisplayString() == "FluentGpu.Dsl.HeapElement") return true;
             return false;
         }
+
+        private static bool IsElementKind(INamedTypeSymbol type)
+            => type.IsValueType && type.AllInterfaces.Any(i => i.OriginalDefinition.ToDisplayString() == "FluentGpu.Dsl.IElementKind<TSelf>");
 
         private static bool IsOrDerivesElement(INamedTypeSymbol t) =>
             t.ToDisplayString() == ElementBase || DerivesFromElement(t);
@@ -102,6 +109,8 @@ namespace FluentGpu.SourceGen.Engine
         private static bool IsElementShaped(ITypeSymbol t)
         {
             if (t is IArrayTypeSymbol arr) t = arr.ElementType;
+            if (t is INamedTypeSymbol { Name: "Nullable", TypeArguments.Length: 1 } nul) t = nul.TypeArguments[0];
+            if (t.ToDisplayString() is "FluentGpu.Dsl.ElementList" or "FluentGpu.Dsl.Element") return true;
             for (ITypeSymbol? cur = t; cur is not null; cur = cur.BaseType)
                 if (cur.ToDisplayString() == ElementBase) return true;
             return false;
@@ -129,7 +138,8 @@ namespace FluentGpu.SourceGen.Engine
             sb.Append(pad).Append("    /// <summary>True iff any diffable prop differs (no GetType, no box for value props). The reconciler\n");
             sb.Append(pad).Append("    /// skips a redundant WriteColumns (and the bound→bound re-wire, RewireBinds) when this is false — a bound\n");
             sb.Append(pad).Append("    /// channel diffs by its thunk/signal payload. Children are reconciled separately.</summary>\n");
-            sb.Append(pad).Append("    public static bool AnyChanged(").Append(m.FqTypeName).Append(" a, ").Append(m.FqTypeName).Append(" b)\n");
+            string inm = m.IsStruct ? "in " : "";
+            sb.Append(pad).Append("    public static bool AnyChanged(").Append(inm).Append(m.FqTypeName).Append(" a, ").Append(inm).Append(m.FqTypeName).Append(" b)\n");
             for (int i = 0; i < m.Props.Length; i++)
             {
                 PropInfo p = m.Props[i];
@@ -146,7 +156,7 @@ namespace FluentGpu.SourceGen.Engine
             sb.Append("\n");
             sb.Append(pad).Append("    /// <summary>True iff <paramref name=\"next\"/> binds a <c>Prop&lt;T&gt;</c> channel that <paramref name=\"prev\"/>\n");
             sb.Append(pad).Append("    /// carried static (a static→bound flip the reconciler must wire). Two IsBound reads per channel, no allocation.</summary>\n");
-            sb.Append(pad).Append("    public static bool AnyBindGained(").Append(m.FqTypeName).Append(" next, ").Append(m.FqTypeName).Append(" prev)\n");
+            sb.Append(pad).Append("    public static bool AnyBindGained(").Append(inm).Append(m.FqTypeName).Append(" next, ").Append(inm).Append(m.FqTypeName).Append(" prev)\n");
             bool anyProp = false;
             for (int i = 0; i < m.Props.Length; i++)
             {
@@ -163,7 +173,7 @@ namespace FluentGpu.SourceGen.Engine
             // BindEffects a node reconciled against `el` must carry.
             sb.Append("\n");
             sb.Append(pad).Append("    /// <summary>The number of bound <c>Prop&lt;T&gt;</c> channels on <paramref name=\"el\"/> (BindContract cross-check).</summary>\n");
-            sb.Append(pad).Append("    public static int BoundChannelCount(").Append(m.FqTypeName).Append(" el)\n");
+            sb.Append(pad).Append("    public static int BoundChannelCount(").Append(inm).Append(m.FqTypeName).Append(" el)\n");
             sb.Append(pad).Append("    {\n");
             sb.Append(pad).Append("        int n = 0;\n");
             for (int i = 0; i < m.Props.Length; i++)
@@ -204,6 +214,6 @@ namespace FluentGpu.CodeGen
         private readonly record struct PropInfo(string Name, string TypeFqn, bool IsProp);
 
         private readonly record struct Model(
-            string? Namespace, string TypeName, string FqTypeName, string HintName, ImmutableArray<PropInfo> Props);
+            string? Namespace, string TypeName, string FqTypeName, string HintName, ImmutableArray<PropInfo> Props, bool IsStruct = false);
     }
 }

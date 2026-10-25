@@ -7,12 +7,14 @@ namespace FluentGpu.Dsl;
 /// out so an element that sets none of them costs one null reference. Copy-on-write exactly like <c>BoxCold</c>: `with`
 /// copies share the instance until a setter that changes a value runs on the copy, which clones it first (<see cref="Owner"/> marks a clone made
 /// for that element). Defaults mirror the former inline initializers. Owner keeps the element it was cloned for alive; that is bounded (one per with-chain link that mutated the block).</summary>
-internal sealed class ElementCold : IEquatable<ElementCold>
+internal struct ElementCold : IEquatable<ElementCold>, IColdGroup<ElementCold>
 {
     public static readonly ElementCold Default = new();
+    static void IColdGroup<ElementCold>.FreezeMembers(ref ElementCold v) { if (v.SkeletonOverride is { } s) v.SkeletonOverride = s.Freeze(); }
+    public ElementCold() { }
+    static ElementCold IColdGroup<ElementCold>.CreateDefault() => new();
 
     /// <summary>The element this instance was cloned for (null on <see cref="Default"/>); excluded from equality.</summary>
-    public Element? Owner;
 
     public string? MorphId;
     public FluentGpu.Scroll.Effects.ScrollEffectSpec[] ScrollEffects = [];
@@ -31,17 +33,9 @@ internal sealed class ElementCold : IEquatable<ElementCold>
     public float ScrollLineDip;
     public string? RelativeTo;
 
-    public ElementCold CloneFor(Element owner)
-    {
-        var c = (ElementCold)MemberwiseClone();
-        c.Owner = owner;
-        return c;
-    }
 
-    public bool Equals(ElementCold? o)
+    public readonly bool Equals(ElementCold o)
     {
-        if (ReferenceEquals(this, o)) return true;
-        if (o is null) return false;
         return EqualityComparer<string?>.Default.Equals(MorphId, o.MorphId)
             && EqualityComparer<FluentGpu.Scroll.Effects.ScrollEffectSpec[]>.Default.Equals(ScrollEffects, o.ScrollEffects)
             && EqualityComparer<string?>.Default.Equals(ScrollScope, o.ScrollScope)
@@ -60,6 +54,6 @@ internal sealed class ElementCold : IEquatable<ElementCold>
             && EqualityComparer<string?>.Default.Equals(RelativeTo, o.RelativeTo);
     }
 
-    public override bool Equals(object? obj) => Equals(obj as ElementCold);
-    public override int GetHashCode() => 0;
+    public override readonly bool Equals(object? obj) => obj is ElementCold o && Equals(o);
+    public override readonly int GetHashCode() => 0;
 }

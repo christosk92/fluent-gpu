@@ -14,9 +14,43 @@ namespace FluentGpu.Hooks;
 /// reschedules the boundary effect, so the latest <see cref="Then"/> / <see cref="Else"/> children and <see cref="When"/>
 /// thunk are reconciled in place (children built from live render state stay fresh — no freeze at first mount).
 /// </summary>
-public sealed record ShowEl(Func<bool> When, Element Then, Element? Else = null) : Element
+public partial struct ShowEl : IElementKind<ShowEl>
 {
-    public override ushort ElementTypeId => 7;
+    public const ushort TypeId = 7;
+    static ushort IElementKind<ShowEl>.Kind => 7;
+    public static implicit operator Element(ShowEl value) => Element.Push(in value);
+    public static explicit operator ShowEl(Element element) => element.As<ShowEl>();
+    public Func<bool> When { get; init; }
+    public Element Then { get; init; }
+    public Element? Else { get; init; }
+    public ShowEl(Func<bool> When, Element Then, Element? Else = null) { this.When = When; this.Then = Then; this.Else = Else; }
+    // ── base channels (the former Element record), per kind ──
+    internal ColdRef<ElementCold> _ecold;
+    public string? Key { get; init; }
+    public string? MorphId { readonly get => _ecold.Value.MorphId; init { if (!EqualityComparer<string?>.Default.Equals(_ecold.Value.MorphId, value)) { var c = _ecold.Value; c.MorphId = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public FluentGpu.Scroll.Effects.ScrollEffectSpec[] ScrollEffects { readonly get => _ecold.Value.ScrollEffects; init { if (!EqualityComparer<FluentGpu.Scroll.Effects.ScrollEffectSpec[]>.Default.Equals(_ecold.Value.ScrollEffects, value)) { var c = _ecold.Value; c.ScrollEffects = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public string? ScrollScope { readonly get => _ecold.Value.ScrollScope; init { if (!EqualityComparer<string?>.Default.Equals(_ecold.Value.ScrollScope, value)) { var c = _ecold.Value; c.ScrollScope = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public Prop<bool> Visible { get; init; } = true;
+    public SkeletonMode SkeletonMode { readonly get => _ecold.Value.SkeletonMode; init { if (!EqualityComparer<SkeletonMode>.Default.Equals(_ecold.Value.SkeletonMode, value)) { var c = _ecold.Value; c.SkeletonMode = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public Element? SkeletonOverride { readonly get => _ecold.Value.SkeletonOverride; init { if (!EqualityComparer<Element?>.Default.Equals(_ecold.Value.SkeletonOverride, value)) { var c = _ecold.Value; c.SkeletonOverride = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public FluentGpu.Animation.MotionTokenDef? Transition { readonly get => _ecold.Value.Transition; init { if (!EqualityComparer<FluentGpu.Animation.MotionTokenDef?>.Default.Equals(_ecold.Value.Transition, value)) { var c = _ecold.Value; c.Transition = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public FluentGpu.Animation.MotionTarget? WhileHover { readonly get => _ecold.Value.WhileHover; init { if (!EqualityComparer<FluentGpu.Animation.MotionTarget?>.Default.Equals(_ecold.Value.WhileHover, value)) { var c = _ecold.Value; c.WhileHover = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public FluentGpu.Animation.MotionTarget? WhilePressed { readonly get => _ecold.Value.WhilePressed; init { if (!EqualityComparer<FluentGpu.Animation.MotionTarget?>.Default.Equals(_ecold.Value.WhilePressed, value)) { var c = _ecold.Value; c.WhilePressed = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public FluentGpu.Animation.MotionTarget? WhileFocus { readonly get => _ecold.Value.WhileFocus; init { if (!EqualityComparer<FluentGpu.Animation.MotionTarget?>.Default.Equals(_ecold.Value.WhileFocus, value)) { var c = _ecold.Value; c.WhileFocus = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public EnterExit? Enter { readonly get => _ecold.Value.Enter; init { if (!EqualityComparer<EnterExit?>.Default.Equals(_ecold.Value.Enter, value)) { var c = _ecold.Value; c.Enter = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public EnterExit? Exit { readonly get => _ecold.Value.Exit; init { if (!EqualityComparer<EnterExit?>.Default.Equals(_ecold.Value.Exit, value)) { var c = _ecold.Value; c.Exit = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public float Stagger { readonly get => _ecold.Value.Stagger; init { if (!EqualityComparer<float>.Default.Equals(_ecold.Value.Stagger, value)) { var c = _ecold.Value; c.Stagger = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public LayoutTransition? Layout { readonly get => _ecold.Value.Layout; init { if (!EqualityComparer<LayoutTransition?>.Default.Equals(_ecold.Value.Layout, value)) { var c = _ecold.Value; c.Layout = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public FluentGpu.Scroll.Runtime.ScrollHandle? WheelTarget { readonly get => _ecold.Value.WheelTarget; init { if (!EqualityComparer<FluentGpu.Scroll.Runtime.ScrollHandle?>.Default.Equals(_ecold.Value.WheelTarget, value)) { var c = _ecold.Value; c.WheelTarget = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public float ScrollLineDip { readonly get => _ecold.Value.ScrollLineDip; init { if (!EqualityComparer<float>.Default.Equals(_ecold.Value.ScrollLineDip, value)) { var c = _ecold.Value; c.ScrollLineDip = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public string? RelativeTo { readonly get => _ecold.Value.RelativeTo; init { if (!EqualityComparer<string?>.Default.Equals(_ecold.Value.RelativeTo, value)) { var c = _ecold.Value; c.RelativeTo = value; _ecold = ColdRef<ElementCold>.Of(in c); } } }
+    public readonly ushort ElementTypeId => 7;
+    static void IElementKind<ShowEl>.FreezeMembers(ref ShowEl v)
+    {
+        v._ecold = v._ecold.Frozen();
+        v = v with { Then = v.Then.Freeze() };
+        if (v.Else is { } elseF) v = v with { Else = elseF.Freeze() };
+    }
 }
 
 /// <summary>
@@ -26,8 +60,9 @@ public sealed record ShowEl(Func<bool> When, Element Then, Element? Else = null)
 /// replaces the stored element and reschedules the boundary effect (see <c>UpdateFor</c>), so fresh closures take hold
 /// instead of freezing at first mount (the <c>Show</c>-parity fix). Build one with <see cref="Flow.For{T}(Func{IReadOnlyList{T}}, Func{T, string}, Func{T, int, Element})"/>.
 /// </summary>
-public abstract record ForElBase : Element
+public abstract record ForElBase : HeapElement
 {
+    public const ushort TypeId = 10;
     public sealed override ushort ElementTypeId => 10;
 
     /// <summary>
@@ -143,8 +178,9 @@ public sealed record KeepAliveOptions(
 /// Reactive single-child keep-alive boundary. <see cref="Active"/> reads signals; the reconciler keys the active token,
 /// parks inactive keyed subtrees, and evicts least-recently-used inactive entries beyond <see cref="Options"/>.
 /// </summary>
-public sealed record KeepAliveEl(Func<object> Active, Func<object, string> KeyOf, Func<object, Element> View, KeepAliveOptions Options) : Element
+public sealed record KeepAliveEl(Func<object> Active, Func<object, string> KeyOf, Func<object, Element> View, KeepAliveOptions Options) : HeapElement
 {
+    public const ushort TypeId = 14;
     public override ushort ElementTypeId => 14;
 }
 

@@ -18,8 +18,9 @@ namespace FluentGpu.Reconciler;
 /// The user-facing <c>Virtual.List/Grid/Custom/Measured/VariableList/…</c> factories live in FluentGpu.Controls; this
 /// record is the engine primitive the reconciler diffs directly (ElementTypeId 6). See <c>design/subsystems/virtualization.md</c>.
 /// </summary>
-public sealed record VirtualListEl : Element
+public sealed record VirtualListEl : HeapElement
 {
+    public const ushort TypeId = 6;
     public override ushort ElementTypeId => 6;
 
     public int ItemCount { get; init; }

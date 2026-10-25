@@ -34,9 +34,9 @@ internal static class SkeletonDeriver
         if (!real.Visible.IsBound && !real.Visible.Value)
             return new BoxEl { Visible = false, IsEnabled = false, HitTestVisible = false };
 
-        switch (real)
+        switch (real.ElementTypeId)
         {
-            case BoxEl b when b.Children is { Length: > 0 }:
+            case BoxEl.TypeId when real.Is(out BoxEl b) && (b.Children is { Length: > 0 }):
             {
                 // A container is layout, not skeleton content. Preserve geometry and recurse into semantic leaves, but
                 // remove authored chrome. Copying a card fill, hero scrim, gradient, or border turns the whole container
@@ -59,7 +59,7 @@ internal static class SkeletonDeriver
                     ScrollEffects = [],
                 };
             }
-            case BoxEl b:
+            case BoxEl.TypeId when real.Is(out BoxEl b):
             {
                 // A BOUND extent is declared too (a gutter that eases, a width a signal sizes): the derived box carries the same binding, never
                 // reads it, so a bound-width spacer keeps its width instead of deriving 0 wide.
@@ -107,7 +107,7 @@ internal static class SkeletonDeriver
                 };
             }
 
-            case TextEl t:
+            case TextEl.TypeId when real.Is(out TextEl t):
             {
                 // THE LINE BOX, NOT THE BAR. The bar is TextRatio of the em, but the loaded run takes its line box (the font's natural line,
                 // or LineHeight per the run's stacking): a 14 run is a 10 bar in a 19 line, a 64 title a 46 bar in an 85 line. As a bare
@@ -135,7 +135,7 @@ internal static class SkeletonDeriver
                 };
             }
 
-            case ImageEl img:
+            case ImageEl.TypeId when real.Is(out ImageEl img):
                 // Keep the media leaf itself with an empty source. This preserves fluid geometry (especially
                 // AspectRatio=1 card covers) that a BoxEl bar cannot express, while painting only the neutral placeholder.
                 return img with
@@ -145,26 +145,26 @@ internal static class SkeletonDeriver
                     BlurHash = null,
                 };
 
-            case GridEl g when g.Children is { Length: > 0 }:
+            case GridEl.TypeId when real.Is(out GridEl g) && (g.Children is { Length: > 0 }):
             {
                 var gk = new Element[g.Children.Length];
                 for (int i = 0; i < gk.Length; i++) gk[i] = Derive(g.Children[i], s);
                 return g with { Children = gk };
             }
 
-            case PolylineStrokeEl p:
+            case PolylineStrokeEl.TypeId when real.Is(out PolylineStrokeEl p):
                 return Bar(s, p.Width, p.Height, p.Grow, default, default, FlexAlign.Auto);
 
-            case PathEl pe:
+            case PathEl.TypeId when real.Is(out PathEl pe):
                 return Bar(s, pe.Width, pe.Height, pe.Grow, default, default, FlexAlign.Auto);
 
-            case SeriesEl se:
+            case SeriesEl.TypeId when real.Is(out SeriesEl se):
                 return Bar(s, se.Width, se.Height, se.Grow, default, default, FlexAlign.Auto);
 
-            case SpriteFieldEl sf:
+            case SpriteFieldEl.TypeId when real.Is(out SpriteFieldEl sf):
                 return Bar(s, sf.Width, sf.Height, sf.Grow, default, default, FlexAlign.Auto);
 
-            case ScrollEl sc:
+            case ScrollEl.TypeId when real.Is(out ScrollEl sc):
                 // The shimmer viewport is a stand-in, not the content's identity. A copied ScrollKey would restore the
                 // remembered offset into the short shimmer (clamped to ITS extent), and the shimmer's unmount on the Ready
                 // swap would save that clamped offset back over the remembered one before the real viewport restores it.
@@ -172,14 +172,14 @@ internal static class SkeletonDeriver
                 // host rebinds back and forth, and OnRealized would hand a composing control the shimmer node.
                 return sc with { Content = Derive(sc.Content, s), ScrollKey = null, Handle = null, OnRealized = null };
 
-            case SkelRegionEl region:
+            case SkelRegionEl.TypeId when real.Is(out SkelRegionEl region):
                 // A content(seed) subtree may itself contain an async region (Wavee's detail track list is the
                 // canonical case). Derive through that boundary instead of collapsing the nested region to one bar.
                 // An explicit source is still the nested region's real row/template source; otherwise Content() reads
                 // that region's pending seed, exactly as its own reconciler edge would.
                 return Derive(region.ShimmerSource?.Invoke() ?? region.Content(), s);
 
-            case VirtualListEl v when v.RowBind is null && v.ItemCount > 0:
+            case VirtualListEl.TypeId when real.Is(out VirtualListEl v) && (v.RowBind is null && v.ItemCount > 0):
             {
                 // A virtual viewport has no authored Children for the generic recursion above, but its RenderItem is
                 // still the ONE real row source. Materialize only a small pending window and derive those real rows;
@@ -202,19 +202,19 @@ internal static class SkeletonDeriver
                 };
             }
 
-            case SpanTextEl span:
+            case SpanTextEl.TypeId when real.Is(out SpanTextEl span):
             {
                 float size = span.Size <= 0f ? 14f : span.Size;
                 float width = float.IsNaN(span.Width) ? MathF.Min(size * 18f, MathF.Max(size * 8f, 160f)) : span.Width;
                 return Bar(s, width, BarHeight(size, s), span.Grow, default, span.Margin, span.AlignSelf);
             }
 
-            case ComponentEl { DeriveRenderedOutput: true } dynamicProxy:
+            case ComponentEl.TypeId when real.Is(out ComponentEl dynamicProxy) && dynamicProxy.DeriveRenderedOutput == true:
                 // Preserve this pending-only component so it can measure/re-render normally. The reconciler derives each
                 // rendered output with the current region style, which is required for live-width Responsive content.
                 return dynamicProxy with { DerivedSkeletonStyle = s };
 
-            case ComponentEl { SkeletonProxy: { } proxy }:
+            case ComponentEl.TypeId when real.Is(out ComponentEl __componentEl) && __componentEl.SkeletonProxy is { } proxy:
                 // A size-reactive boundary that exposed its real shape: derive THAT (recursing into any nested boundaries
                 // too) instead of one default bar — so a hero / shelf / band shimmers as its real layout, not a thin line.
                 return Derive(proxy(), s);
@@ -297,19 +297,17 @@ internal static class SkeletonDeriver
     // are declared, a binding included (the spacer follows the same signal), with its flex sizing (grow, shrink, basis, min / max).
     private static Element Spacer(Element real, in SkeletonStyle s)
     {
-        if (real is BoxEl box)
+        if (real.Is(out BoxEl box))
             return new BoxEl
             {
                 Width = box.Width, Height = box.Height, Grow = box.Grow, Shrink = box.Shrink, Basis = box.Basis,
                 MinWidth = box.MinWidth, MinHeight = box.MinHeight, MaxWidth = box.MaxWidth, MaxHeight = box.MaxHeight,
                 Margin = box.Margin, AlignSelf = box.AlignSelf, IsEnabled = false, HitTestVisible = false,
             };
-        (float w, float h, float grow, Edges4 m, FlexAlign a) = real switch
-        {
-            TextEl t => (t.Width, BarHeight(t.Size, s), t.Grow, t.Margin, t.AlignSelf),
-            ImageEl img => (img.Width, img.Height, 0f, img.Margin, img.AlignSelf),
-            _ => (float.NaN, float.NaN, 0f, default, FlexAlign.Auto),
-        };
+        (float w, float h, float grow, Edges4 m, FlexAlign a) = real.ElementTypeId switch {
+            TextEl.TypeId when real.Is(out TextEl t) => (t.Width, BarHeight(t.Size, s), t.Grow, t.Margin, t.AlignSelf),
+            ImageEl.TypeId when real.Is(out ImageEl img) => (img.Width, img.Height, 0f, img.Margin, img.AlignSelf),
+            _ => (float.NaN, float.NaN, 0f, default, FlexAlign.Auto)};
         return new BoxEl { Width = w, Height = h, Grow = grow, Margin = m, AlignSelf = a, IsEnabled = false, HitTestVisible = false };
     }
 }

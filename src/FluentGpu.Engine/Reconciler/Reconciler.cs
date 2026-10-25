@@ -1036,14 +1036,14 @@ public sealed partial class TreeReconciler
         var mountParent = _scene.Parent(node);
         if (!mountParent.IsNull && (_scene.Flags(mountParent) & NodeFlags.Parked) != 0)
             _scene.Mark(node, NodeFlags.Parked);
-        if (el is ComponentEl ce) { MountComponent(node, ce); return; }
-        if (el is ContextProviderEl cp) { MountProvider(node, cp); return; }
-        if (el is ScrollEl se) { MountScroll(node, se); return; }
-        if (el is VirtualListEl ve) { MountVirtual(node, ve); return; }
-        if (el is ShowEl sh) { MountShow(node, sh); return; }
-        if (el is ForElBase fe) { MountFor(node, fe); return; }
-        if (el is KeepAliveEl ka) { MountKeepAlive(node, ka); return; }
-        if (el is SkelRegionEl skr) { MountSkeletonRegion(node, skr); return; }
+        if (el.Is(out ComponentEl ce)) { MountComponent(node, ce); return; }
+        if (el.Is(out ContextProviderEl cp)) { MountProvider(node, cp); return; }
+        if (el.Is(out ScrollEl se)) { MountScroll(node, se); return; }
+        if (el.Is(out VirtualListEl ve)) { MountVirtual(node, ve); return; }
+        if (el.Is(out ShowEl sh)) { MountShow(node, sh); return; }
+        if (el.Is(out ForElBase fe)) { MountFor(node, fe); return; }
+        if (el.Is(out KeepAliveEl ka)) { MountKeepAlive(node, ka); return; }
+        if (el.Is(out SkelRegionEl skr)) { MountSkeletonRegion(node, skr); return; }
 
         FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.WriteCols);
         WriteColumns(node, el, isMount: true);
@@ -1062,12 +1062,10 @@ public sealed partial class TreeReconciler
     }
 
     /// <summary>The positional children of a container element (box or grid); empty for leaves.</summary>
-    private static Element[] ChildrenOf(Element? el) => el switch
-    {
-        BoxEl b => b.Children,
-        GridEl g => g.Children,
-        _ => [],
-    };
+    private static Element[] ChildrenOf(Element? el) => el.ElementTypeId switch {
+        BoxEl.TypeId when el.Is(out BoxEl b) => b.Children,
+        GridEl.TypeId when el.Is(out GridEl g) => g.Children,
+        _ => []};
 
     /// <summary>Mark a node <see cref="NodeFlags.LayoutDirty"/> AND raise <c>_layoutShapeMutated</c>. Every
     /// reconcile-time layout mark goes through here: the local mark alone can be firewalled below a ContentSized
@@ -1100,7 +1098,7 @@ public sealed partial class TreeReconciler
         if (ReferenceEquals(newEl, oldEl)) return;
         if (_renderCensus is not null) _censusUpdates++;
 
-        if (newEl is ComponentEl nce)
+        if (newEl.Is(out ComponentEl nce))
         {
             // Reuse → the component is AUTONOMOUS: it re-renders via its own effect on its own state/context. A parent
             // re-render does NOT re-render it (props are carried by signals/context, not the factory closure). Type
@@ -1109,7 +1107,7 @@ public sealed partial class TreeReconciler
             // Ready; e.g. Responsive's ResponsiveBox). Reusing across it strands the instance in shimmer-deriving mode
             // AND keeps its stale Pending build closure (which closed over the seed), so the section never resolves —
             // the "page only half-resolves" bug. Force a fresh mount so the real build + cleared derive flag take hold.
-            if (oldEl is ComponentEl oce && oce.ComponentType == nce.ComponentType && _comps.ContainsKey(node)
+            if (oldEl.Is(out ComponentEl oce) && oce.ComponentType == nce.ComponentType && _comps.ContainsKey(node)
                 && oce.DeriveRenderedOutput == nce.DeriveRenderedOutput
                 && !PersistKeyChanged(oce, nce))   // E7: another Flow.Persist key is another subtree (the old one parks)
             {
@@ -1161,7 +1159,7 @@ public sealed partial class TreeReconciler
             return;
         }
 
-        if (newEl is ScrollEl nse)
+        if (newEl.Is(out ScrollEl nse))
         {
             WriteColumns(node, nse, isMount: false);
             RewireBinds(node, nse);   // a re-render that binds Visible with a new thunk/signal re-points the mount bind (or unwires it)
@@ -1191,7 +1189,7 @@ public sealed partial class TreeReconciler
             return;
         }
 
-        if (newEl is VirtualListEl nve)
+        if (newEl.Is(out VirtualListEl nve))
         {
             int countBefore = _scene.TryGetScroll(node, out var scBefore) ? scBefore.ItemCount : -1;
             WriteColumns(node, nve, isMount: false);
@@ -1208,7 +1206,7 @@ public sealed partial class TreeReconciler
             return;
         }
 
-        if (newEl is ShowEl nsh)
+        if (newEl.Is(out ShowEl nsh))
         {
             // Parent re-renders replace the stored ShowEl and reschedule the boundary effect (mirrors
             // UpdateSkeletonRegion), so the new Then/Else children — and the new When thunk's deps — take hold.
@@ -1217,7 +1215,7 @@ public sealed partial class TreeReconciler
             return;
         }
 
-        if (newEl is ForElBase nfe)
+        if (newEl.Is(out ForElBase nfe))
         {
             // Parent re-renders replace the stored ForElBase and reschedule the boundary effect (mirrors UpdateShow),
             // so the fresh Items/KeyOf/Row closures take hold instead of freezing at first mount (the Show-parity fix —
@@ -1230,13 +1228,13 @@ public sealed partial class TreeReconciler
             return;
         }
 
-        if (newEl is KeepAliveEl nka)
+        if (newEl.Is(out KeepAliveEl nka))
         {
             WriteAnchorColumns(node, nka, oldEl);   // the boundary's own base-Element props; its pages stay autonomous
             return;
         }
 
-        if (newEl is SkelRegionEl nskr)
+        if (newEl.Is(out SkelRegionEl nskr))
         {
             WriteAnchorColumns(node, nskr, oldEl);
             ApplySkeletonSmoothResize(node, nskr);
@@ -1244,7 +1242,7 @@ public sealed partial class TreeReconciler
             return;
         }
 
-        if (newEl is ContextProviderEl np)
+        if (newEl.Is(out ContextProviderEl np))
         {
             WriteAnchorColumns(node, np, oldEl);
             int idx = (int)node.Raw.Index;
@@ -1286,21 +1284,19 @@ public sealed partial class TreeReconciler
     /// <summary>GEN-01 (wired): true unless <paramref name="a"/> and <paramref name="b"/> are the same leaf element
     /// type with EVERY diffable prop unchanged (the generated <c>{T}Diff.AnyChanged</c> — inherited fields included,
     /// Children excluded). A different type / unlisted kind conservatively returns true (always re-write).</summary>
-    private static bool RecordChanged(Element a, Element b) => a switch
-    {
-        BoxEl x => b is not BoxEl y || BoxElDiff.AnyChanged(x, y),
-        TextEl x => b is not TextEl y || TextElDiff.AnyChanged(x, y),
-        GridEl x => b is not GridEl y || GridElDiff.AnyChanged(x, y),
-        ImageEl x => b is not ImageEl y || ImageElDiff.AnyChanged(x, y),
-        IconLayerEl x => b is not IconLayerEl y || IconLayerElDiff.AnyChanged(x, y),
-        SpanTextEl x => b is not SpanTextEl y || SpanTextElDiff.AnyChanged(x, y),
-        ListRowEl x => b is not ListRowEl y || ListRowElDiff.AnyChanged(x, y),
-        PolylineStrokeEl x => b is not PolylineStrokeEl y || PolylineStrokeElDiff.AnyChanged(x, y),
-        PathEl x => b is not PathEl y || PathElDiff.AnyChanged(x, y),
-        SeriesEl x => b is not SeriesEl y || SeriesElDiff.AnyChanged(x, y),
-        SpriteFieldEl x => b is not SpriteFieldEl y || SpriteFieldElDiff.AnyChanged(x, y),
-        _ => true,
-    };
+    private static bool RecordChanged(Element a, Element b) => a.ElementTypeId switch {
+        BoxEl.TypeId when a.Is(out BoxEl x) => !b.Is(out BoxEl y) || BoxElDiff.AnyChanged(x, y),
+        TextEl.TypeId when a.Is(out TextEl x) => !b.Is(out TextEl y) || TextElDiff.AnyChanged(x, y),
+        GridEl.TypeId when a.Is(out GridEl x) => !b.Is(out GridEl y) || GridElDiff.AnyChanged(x, y),
+        ImageEl.TypeId when a.Is(out ImageEl x) => !b.Is(out ImageEl y) || ImageElDiff.AnyChanged(x, y),
+        IconLayerEl.TypeId when a.Is(out IconLayerEl x) => !b.Is(out IconLayerEl y) || IconLayerElDiff.AnyChanged(x, y),
+        SpanTextEl.TypeId when a.Is(out SpanTextEl x) => !b.Is(out SpanTextEl y) || SpanTextElDiff.AnyChanged(x, y),
+        ListRowEl.TypeId when a.Is(out ListRowEl x) => !b.Is(out ListRowEl y) || ListRowElDiff.AnyChanged(x, y),
+        PolylineStrokeEl.TypeId when a.Is(out PolylineStrokeEl x) => !b.Is(out PolylineStrokeEl y) || PolylineStrokeElDiff.AnyChanged(x, y),
+        PathEl.TypeId when a.Is(out PathEl x) => !b.Is(out PathEl y) || PathElDiff.AnyChanged(x, y),
+        SeriesEl.TypeId when a.Is(out SeriesEl x) => !b.Is(out SeriesEl y) || SeriesElDiff.AnyChanged(x, y),
+        SpriteFieldEl.TypeId when a.Is(out SpriteFieldEl x) => !b.Is(out SpriteFieldEl y) || SpriteFieldElDiff.AnyChanged(x, y),
+        _ => true};
 
     /// <summary>Mount/update/replace a single optional child under <paramref name="parent"/> (component output, provider, Show).
     /// <para>CONTRACT: this slot pairs old↔new by <see cref="Element.ElementTypeId"/> ONLY — <see cref="Element.Key"/> is
@@ -1355,10 +1351,10 @@ public sealed partial class TreeReconciler
     /// "ComponentEl" names nothing an author can act on, so the report carries the component type instead.</summary>
     private static void ReportKeyIgnoredInSingleChildSlot(Element newChild, Element oldChild, string oldKey, string newKey)
     {
-        if (newChild is ComponentEl nce)
+        if (newChild.Is(out ComponentEl nce))
         {
             // The same two conditions Update reuses on (type identity + the skeleton↔real DeriveRenderedOutput edge).
-            if (oldChild is not ComponentEl oce || oce.ComponentType != nce.ComponentType
+            if (!oldChild.Is(out ComponentEl oce) || oce.ComponentType != nce.ComponentType
                 || oce.DeriveRenderedOutput != nce.DeriveRenderedOutput) return;   // replaced ⇒ the key WAS honored
             ReuseGuard.KeyIgnoredInSingleChildSlot(nce.ComponentType.Name, oldKey, newKey);
             return;
@@ -1891,7 +1887,7 @@ public sealed partial class TreeReconciler
     // Only a BoxEl root can carry Animate; SkeletonDeriver returns a BoxEl for every container/leaf shape it derives,
     // and the residual non-BoxEl case (a bespoke SkeletonOverride of another element type) simply snaps as before.
     private static Element StampShimmerExit(Element shimmerRoot, float exitMs)
-        => Motion.ReducedMotion || shimmerRoot is not BoxEl b
+        => Motion.ReducedMotion || !shimmerRoot.Is(out BoxEl b)
             ? shimmerRoot
             : b with
             {
@@ -2888,14 +2884,14 @@ public sealed partial class TreeReconciler
         // The channel wiring captures `node` in closures, and C# allocates their shared display class on ENTRY of the method
         // that declares them, a bound channel or not: one object per mounted node, 1,600+ on a playlist mount for the few
         // hundred that bind anything. Route an element that binds nothing past it (page-mount RCA, allocations).
-        switch (el)
+        switch (el.ElementTypeId)
         {
-            case BoxEl box:
+            case BoxEl.TypeId when el.Is(out BoxEl box):
                 BindBoxCommon(node, box, prev as BoxEl);
                 if (BindsRareChannel(box)) BindChannels(node, el, prev);   // its box branch invokes OnRealized (mount only)
                 else if (prev is null) box.OnRealized?.Invoke(node);
                 return;
-            case TextEl text:
+            case TextEl.TypeId when el.Is(out TextEl text):
                 BindTextCommon(node, text, prev as TextEl);
                 if (prev is null) text.OnRealized?.Invoke(node);
                 return;
@@ -2915,14 +2911,14 @@ public sealed partial class TreeReconciler
     {
         if (Wire(b.Transform.IsBound, p?.Transform.IsBound == true))
         {
-            var fx = NewBind<Affine2D>(b, static e => e is BoxEl x ? x.Transform : default);
+            var fx = NewBind<Affine2D>(b, static e => e.Is(out BoxEl x) ? x.Transform : default);
             // Value-gate: an unchanged matrix must NOT set TransformDirty — that bit alone defeats skip-submit
             // (AppHost maybeUnchanged requires !transformWrote). Quantized EQ/seek land here often with equal values.
             AddBinding(node, fx.Start(node, static f => f.Rec.FireBoxTransform((Bind<Affine2D>)f)));
         }
         if (Wire(b.Opacity.IsBound, p?.Opacity.IsBound == true))
         {
-            var fx = NewBind<float>(b, static e => e is BoxEl x ? x.Opacity : default);
+            var fx = NewBind<float>(b, static e => e.Is(out BoxEl x) ? x.Opacity : default);
             AddBinding(node, fx.Start(node, static f => f.Rec.FireBoxOpacity((Bind<float>)f)));
         }
         if (Wire(b.HitTestVisible.IsBound, p?.HitTestVisible.IsBound == true))
@@ -2930,44 +2926,44 @@ public sealed partial class TreeReconciler
             // E15: a resolved false clears NodeFlags.HitTestVisible without a re-render — hit-testing reads the
             // flag straight off the live scene, so the flip needs no PaintDirty/re-record/re-publish at all
             // (gate.hit.bindable: FrameStats.Rendered stays false across the flip).
-            var fx = NewBind<bool>(b, static e => e is BoxEl x ? x.HitTestVisible : default);
+            var fx = NewBind<bool>(b, static e => e.Is(out BoxEl x) ? x.HitTestVisible : default);
             AddBinding(node, fx.Start(node, static f => f.Rec.FireBoxHitTestVisible((Bind<bool>)f)));
         }
         if (Wire(b.Fill.IsBound, p?.Fill.IsBound == true))
         {
-            var fx = NewBind<ColorF>(b, static e => e is BoxEl x ? x.Fill : default);
+            var fx = NewBind<ColorF>(b, static e => e.Is(out BoxEl x) ? x.Fill : default);
             AddBinding(node, fx.Start(node, static f => f.Rec.FireBoxFill((Bind<ColorF>)f)));
         }
         if (Wire(b.HoverFill.IsBound, p?.HoverFill.IsBound == true))
         {
             // Equality-gated (P3, same shape as Fill above): a re-fire whose resolved color did not move must not
             // mark PaintDirty, or NodeBindingWriteCount over-counts and an equal republish repaints for nothing.
-            var fx = NewBind<ColorF>(b, static e => e is BoxEl x ? x.HoverFill : default);
+            var fx = NewBind<ColorF>(b, static e => e.Is(out BoxEl x) ? x.HoverFill : default);
             AddBinding(node, fx.Start(node, static f => f.Rec.FireBoxHoverFill((Bind<ColorF>)f)));
         }
         if (Wire(b.PressedFill.IsBound, p?.PressedFill.IsBound == true))
         {
-            var fx = NewBind<ColorF>(b, static e => e is BoxEl x ? x.PressedFill : default);
+            var fx = NewBind<ColorF>(b, static e => e.Is(out BoxEl x) ? x.PressedFill : default);
             AddBinding(node, fx.Start(node, static f => f.Rec.FireBoxPressedFill((Bind<ColorF>)f)));
         }
         if (Wire(b.BorderColor.IsBound, p?.BorderColor.IsBound == true))
         {
-            var fx = NewBind<ColorF>(b, static e => e is BoxEl x ? x.BorderColor : default);
+            var fx = NewBind<ColorF>(b, static e => e.Is(out BoxEl x) ? x.BorderColor : default);
             AddBinding(node, fx.Start(node, static f => f.Rec.FireBoxBorderColor((Bind<ColorF>)f)));
         }
         if (Wire(b.Corners.IsBound, p?.Corners.IsBound == true))
         {
-            var fx = NewBind<CornerRadius4>(b, static e => e is BoxEl x ? x.Corners : default);
+            var fx = NewBind<CornerRadius4>(b, static e => e.Is(out BoxEl x) ? x.Corners : default);
             AddBinding(node, fx.Start(node, static f => f.Rec.FireBoxCorners((Bind<CornerRadius4>)f)));
         }
         if (Wire(b.Width.IsBound, p?.Width.IsBound == true))
         {
-            var fx = NewBind<float>(b, static e => e is BoxEl x ? x.Width : default, writesLayout: true);
+            var fx = NewBind<float>(b, static e => e.Is(out BoxEl x) ? x.Width : default, writesLayout: true);
             AddBinding(node, fx.Start(node, static f => f.Rec.FireBoxWidth((Bind<float>)f)));
         }
         if (Wire(b.Height.IsBound, p?.Height.IsBound == true))
         {
-            var fx = NewBind<float>(b, static e => e is BoxEl x ? x.Height : default, writesLayout: true);
+            var fx = NewBind<float>(b, static e => e.Is(out BoxEl x) ? x.Height : default, writesLayout: true);
             AddBinding(node, fx.Start(node, static f => f.Rec.FireBoxHeight((Bind<float>)f)));
         }
     }
@@ -2976,12 +2972,12 @@ public sealed partial class TreeReconciler
     {
         if (Wire(t.Text.IsBound, p?.Text.IsBound == true))
         {
-            var fx = NewBind<string>(t, static e => e is TextEl x ? x.Text : default, writesLayout: true);
+            var fx = NewBind<string>(t, static e => e.Is(out TextEl x) ? x.Text : default, writesLayout: true);
             AddBinding(node, fx.Start(node, static f => f.Rec.FireTextText((Bind<string>)f)));
         }
         if (Wire(t.Color.IsBound, p?.Color.IsBound == true))
         {
-            var fx = NewBind<ColorF>(t, static e => e is TextEl x ? x.Color : default);
+            var fx = NewBind<ColorF>(t, static e => e.Is(out TextEl x) ? x.Color : default);
             AddBinding(node, fx.Start(node, static f => f.Rec.FireTextColor((Bind<ColorF>)f)));
         }
     }
@@ -3176,12 +3172,12 @@ public sealed partial class TreeReconciler
 
     private void BindChannels(NodeHandle node, Element el, Element? prev)
     {
-        if (el is BoxEl b)
+        if (el.Is(out BoxEl b))
         {
             var bP = prev as BoxEl;
             if (Wire(b.RadialGradientCenter.IsBound, bP?.RadialGradientCenter.IsBound == true))
             {
-                var fx = NewBind<Point2>(b, static e => e is BoxEl x ? x.RadialGradientCenter : default);
+                var fx = NewBind<Point2>(b, static e => e.Is(out BoxEl x) ? x.RadialGradientCenter : default);
                 AddBinding(node, fx.Start(() =>
                 {
                     NodeBindingFireCount++;
@@ -3198,7 +3194,7 @@ public sealed partial class TreeReconciler
             }
             if (Wire(b.FeedbackTransform.IsBound, bP?.FeedbackTransform.IsBound == true))
             {
-                var fx = NewBind<Affine2D>(b, static e => e is BoxEl x ? x.FeedbackTransform : default);
+                var fx = NewBind<Affine2D>(b, static e => e.Is(out BoxEl x) ? x.FeedbackTransform : default);
                 AddBinding(node, fx.Start(() =>
                 {
                     NodeBindingFireCount++;
@@ -3211,7 +3207,7 @@ public sealed partial class TreeReconciler
             }
             if (Wire(b.FeedbackDecay.IsBound, bP?.FeedbackDecay.IsBound == true))
             {
-                var fx = NewBind<float>(b, static e => e is BoxEl x ? x.FeedbackDecay : default);
+                var fx = NewBind<float>(b, static e => e.Is(out BoxEl x) ? x.FeedbackDecay : default);
                 AddBinding(node, fx.Start(() =>
                 {
                     NodeBindingFireCount++;
@@ -3224,7 +3220,7 @@ public sealed partial class TreeReconciler
             }
             if (Wire(b.GradientMix.IsBound, bP?.GradientMix.IsBound == true))
             {
-                var fx = NewBind<float>(b, static e => e is BoxEl x ? x.GradientMix : default);
+                var fx = NewBind<float>(b, static e => e.Is(out BoxEl x) ? x.GradientMix : default);
                 AddBinding(node, fx.Start(() =>
                 {
                     NodeBindingFireCount++;
@@ -3242,7 +3238,7 @@ public sealed partial class TreeReconciler
                 // form-validation.md: resolve the semantic state → theme critical color on the UI thread (the recorder
                 // stays theme-agnostic), and write the resolved border equality-gated so an unchanged validity marks NO
                 // PaintDirty (Memo.OnStale re-runs this effect each keystroke, but a no-op validity dirties nothing).
-                var fx = NewBind<ValidationState>(b, static e => e is BoxEl x ? x.Validation : default);
+                var fx = NewBind<ValidationState>(b, static e => e.Is(out BoxEl x) ? x.Validation : default);
                 AddBinding(node, fx.Start(() =>
                 {
                     NodeBindingFireCount++;
@@ -3265,20 +3261,20 @@ public sealed partial class TreeReconciler
             // (`primed`), keeping mount behaviour byte-identical to the ungated version.
             if (prev is null) b.OnRealized?.Invoke(node);   // mount only (never on the static→bound flip pass)
         }
-        else if (el is TextEl t)
+        else if (el.Is(out TextEl t))
         {
             if (prev is null) t.OnRealized?.Invoke(node);
         }
-        else if (el is SpanTextEl st)
+        else if (el.Is(out SpanTextEl st))
         {
             BindSpanText(node, st, prev as SpanTextEl);   // Reconciler.Spans.cs — bound Spans : Prop<TextSpans> only (P2)
         }
-        else if (el is ImageEl ime)
+        else if (el.Is(out ImageEl ime))
         {
             var imeP = prev as ImageEl;
             if (Wire(ime.Source.IsBound, imeP?.Source.IsBound == true))
             {
-                var fx = NewBind<string>(ime, static e => e is ImageEl x ? x.Source : default);
+                var fx = NewBind<string>(ime, static e => e.Is(out ImageEl x) ? x.Source : default);
                 // W2-E3: the slot this ImageEl belongs to, captured at bind time (both null outside a bound realize
                 // pass). The first fire (runNow, inside the cold mount) sees the live realize context; every later fire
                 // — a RebindBoundSlot recycle draining at the host's post-realize Flush — classifies the slot's CURRENT
@@ -3327,7 +3323,7 @@ public sealed partial class TreeReconciler
             }
             if (Wire(ime.Placeholder.IsBound, imeP?.Placeholder.IsBound == true))
             {
-                var fx = NewBind<ColorF>(ime, static e => e is ImageEl x ? x.Placeholder : default);
+                var fx = NewBind<ColorF>(ime, static e => e.Is(out ImageEl x) ? x.Placeholder : default);
                 AddBinding(node, fx.Start(() =>
                 {
                     NodeBindingFireCount++;
@@ -3342,14 +3338,14 @@ public sealed partial class TreeReconciler
                 }));
             }
         }
-        else if (el is IconLayerEl ile)
+        else if (el.Is(out IconLayerEl ile))
         {
             var ileP = prev as IconLayerEl;
             // The layer TINT rides NodePaint.Fill (VisualKind.IconLayer). A bound Tint (the ThemedIcon role thunk reads
             // Tok) re-fires on RethemeAll → repaints the node with the new ColorF, NO re-raster (the mask is colorless).
             if (Wire(ile.Tint.IsBound, ileP?.Tint.IsBound == true))
             {
-                var fx = NewBind<ColorF>(ile, static e => e is IconLayerEl x ? x.Tint : default);
+                var fx = NewBind<ColorF>(ile, static e => e.Is(out IconLayerEl x) ? x.Tint : default);
                 AddBinding(node, fx.Start(() =>
                 {
                     NodeBindingFireCount++;
@@ -3364,22 +3360,22 @@ public sealed partial class TreeReconciler
                 }));
             }
         }
-        else if (el is PathEl pe)
+        else if (el.Is(out PathEl pe))
         {
             // Mirrors BoxEl.OnRealized above (:1972) — BindNode runs at mount only (Mount(), :623), so this fires
             // exactly once, handing the caller the live NodeHandle a draw-on stroke-trim/transform Keyframes loop needs
             // to target (PathEl carries no bindable channels of its own today, so this is BindNode's only PathEl work).
             if (prev is null) pe.OnRealized?.Invoke(node);
         }
-        else if (el is SeriesEl se)
+        else if (el.Is(out SeriesEl se))
         {
             BindSeriesSamples(node, se, prev as SeriesEl);   // Reconciler.Series.cs — the bound sample-source channel
         }
-        else if (el is SpriteFieldEl sf)
+        else if (el.Is(out SpriteFieldEl sf))
         {
             BindSprites(node, sf, prev as SpriteFieldEl);   // Reconciler.Sprites.cs — the bound instance-buffer channel
         }
-        else if (el is ListRowEl lr)
+        else if (el.Is(out ListRowEl lr))
         {
             BindListRowCells(node, lr, prev as ListRowEl);   // Reconciler.ListRow.cs — Cells/Fill/HoverFill/SelectedFill/Placeholder
         }
@@ -4534,38 +4530,38 @@ public sealed partial class TreeReconciler
     /// <see cref="RewireBinds"/>); the pairing's bind CLASS stability is DEBUG-asserted in <see cref="ShapeCompatible"/>.</summary>
     private static bool IsRecyclable(Element el)
     {
-        switch (el)
+        switch (el.ElementTypeId)
         {
-            case TextEl t:
+            case TextEl.TypeId when el.Is(out TextEl t):
                 return !t.Text.IsBound && (!t.Color.IsBound || Ui.IsThemeTextBrush(t.Color)) && t.OnRealized is null;
-            case SpanTextEl:
+            case SpanTextEl.TypeId:
                 return true;   // plain leaf — WriteColumns rewrites every column incl. the span run/handlers
-            case ListRowEl:
+            case ListRowEl.TypeId:
                 return true;   // plain leaf — WriteColumns/WriteRowCells rewrites every column incl. the cell array
                               // and the click handler; a recycle is exactly the ItemsView.CreateBound story (signal
                               // writes only, never a remount).
-            case ImageEl im:
+            case ImageEl.TypeId when el.Is(out ImageEl im):
                 return !im.Source.IsBound && !im.Placeholder.IsBound;
-            case IconLayerEl il:
+            case IconLayerEl.TypeId when el.Is(out IconLayerEl il):
                 return !il.Tint.IsBound;   // ThemedIcon always binds Tint (theme-live), so an icon layer mounts fresh (like a bound image)
-            case PolylineStrokeEl:
+            case PolylineStrokeEl.TypeId:
                 return true;
-            case SeriesEl se:
+            case SeriesEl.TypeId when el.Is(out SeriesEl se):
                 return !se.Samples.IsBound && !se.GradientMix.IsBound;   // a bound sample source / mix is a mount-time BindEffect (Reconciler.Series.cs): mount fresh
-            case SpriteFieldEl sf:
+            case SpriteFieldEl.TypeId when el.Is(out SpriteFieldEl sf):
                 return !sf.Instances.IsBound; // likewise the bound instance buffer (Reconciler.Sprites.cs)
-            case PathEl pe:
+            case PathEl.TypeId when el.Is(out PathEl pe):
                 // Mirrors the BoxEl rule just below: a path with an OnRealized capture (the hero-art draw-on timelines)
                 // must mount fresh every time so the callback fires and the caller's ref stays pointed at a live node.
                 return pe.OnRealized is null;
-            case BoxEl b:
+            case BoxEl.TypeId when el.Is(out BoxEl b):
                 if (b.Transform.IsBound || b.Opacity.IsBound || b.Fill.IsBound || b.BorderColor.IsBound
                     || b.RadialGradientCenter.IsBound || b.GradientMix.IsBound || b.FeedbackTransform.IsBound || b.FeedbackDecay.IsBound
                     || b.Width.IsBound || b.Height.IsBound
                     || b.OnRealized is not null || b.OnBoundsChanged is not null || b.FollowRect is not null) return false;
                 foreach (var c in b.Children) if (!IsRecyclable(c)) return false;
                 return true;
-            case GridEl g:
+            case GridEl.TypeId when el.Is(out GridEl g):
                 foreach (var c in g.Children) if (!IsRecyclable(c)) return false;
                 return true;
             default:
@@ -4610,9 +4606,9 @@ public sealed partial class TreeReconciler
         // — the recycle's Update re-wires the bound Color to the new singleton thunk (bound→bound, RewireBinds). Unbound
         // explicit colors are free to differ (WriteColumns rewrites them every recycle) so their VALUE is ignored — only
         // the bind class is checked.
-        if (a is TextEl ta && b is TextEl tb && ta.Color.IsBound != tb.Color.IsBound) return false;
-        Element[]? ac = a switch { BoxEl x => x.Children, GridEl x => x.Children, _ => null };
-        Element[]? bc = b switch { BoxEl x => x.Children, GridEl x => x.Children, _ => null };
+        if (a.Is(out TextEl ta) && b.Is(out TextEl tb) && ta.Color.IsBound != tb.Color.IsBound) return false;
+        Element[]? ac = a.ElementTypeId switch { BoxEl.TypeId when a.Is(out BoxEl x) => x.Children, GridEl.TypeId when a.Is(out GridEl x) => x.Children, _ => null };
+        Element[]? bc = b.ElementTypeId switch { BoxEl.TypeId when b.Is(out BoxEl x) => x.Children, GridEl.TypeId when b.Is(out GridEl x) => x.Children, _ => null };
         if (ac is null || bc is null) return true;   // leaf type matched (no child structure to compare)
 
         // Ordinal pass over UNKEYED children (Key == null): walk both in order skipping keyed siblings, comparing
@@ -5476,7 +5472,7 @@ public sealed partial class TreeReconciler
     /// SetInteractTargets' rest pose does. Only a box carries a static pose.</summary>
     private static EnterRest EnterRestOf(Element el)
     {
-        if (el is not BoxEl b) return EnterRest.Identity;
+        if (!el.Is(out BoxEl b)) return EnterRest.Identity;
         float op = b.Opacity.IsBound ? 1f : b.Opacity.Value;
         if (b.Transform.IsBound) return EnterRest.Identity with { Opacity = op, Blur = b.Blur };
         Affine2D m = b.Transform.Value;
@@ -5586,9 +5582,9 @@ public sealed partial class TreeReconciler
         // shape as Fill/Opacity/Width/Height/Text above.
         if (!el.Visible.IsBound) ApplyPresenceStatic(node, el.Visible.Value);
 
-        switch (el)
+        switch (el.ElementTypeId)
         {
-            case BoxEl b:
+            case BoxEl.TypeId when el.Is(out BoxEl b):
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 // The cold half (NodePaintCold) is edited as a local and committed once below (SetPaintCold): a node whose
@@ -5724,7 +5720,7 @@ public sealed partial class TreeReconciler
                 // slider tooltip hover flap). Identity-declared elements still leave ANIM-owned matrices alone:
                 // this writes only on the declared-static → declared-identity transition, never per re-render.
                 // Covers BOTH static spellings, so dropping an authored matrix clears it exactly like dropping OffsetY.
-                else if (tfUnbound && old is BoxEl ob && !ob.Transform.IsBound
+                else if (tfUnbound && old.Is(out BoxEl ob) && !ob.Transform.IsBound
                          && (ob.Transform.Value != default
                              || ob.OffsetX != 0f || ob.OffsetY != 0f || ob.ScaleX != 1f || ob.ScaleY != 1f || ob.Rotation != 0f))
                 {
@@ -5818,7 +5814,7 @@ public sealed partial class TreeReconciler
                     _scene.SetClipPath(node, new ClipPathSpec(b.ClipPath, b.ClipPathRule, b.ClipPathViewBoxW, b.ClipPathViewBoxH));
                     _scene.Mark(node, NodeFlags.ClipsToBounds);
                 }
-                else if (old is BoxEl oldBoxClipPath && oldBoxClipPath.ClipPath is not null)
+                else if (old.Is(out BoxEl oldBoxClipPath) && oldBoxClipPath.ClipPath is not null)
                     _scene.ClearClipPath(node);
                 if (b.IsolateLayout) _scene.Mark(node, NodeFlags.LayoutBoundary); else _scene.Unmark(node, NodeFlags.LayoutBoundary);
                 if (b.CounterScale) _scene.Mark(node, NodeFlags.CounterScaled); else _scene.Unmark(node, NodeFlags.CounterScaled);
@@ -6123,7 +6119,7 @@ public sealed partial class TreeReconciler
                 }
                 break;
             }
-            case ScrollEl s:
+            case ScrollEl.TypeId when el.Is(out ScrollEl s):
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = s.Fill.A > 0f ? VisualKind.Box : VisualKind.None;
@@ -6166,7 +6162,7 @@ public sealed partial class TreeReconciler
                 ProvideScrollCtx(node);                               // BEFORE the content mounts: UseScroll resolves THIS viewport
                 break;
             }
-            case VirtualListEl v:
+            case VirtualListEl.TypeId when el.Is(out VirtualListEl v):
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = v.Fill.A > 0f ? VisualKind.Box : VisualKind.None;
@@ -6207,7 +6203,7 @@ public sealed partial class TreeReconciler
                 ProvideScrollCtx(node);                               // BEFORE the rows realize: UseScroll resolves THIS viewport
                 break;
             }
-            case GridEl g:
+            case GridEl.TypeId when el.Is(out GridEl g):
             {
                 ref LayoutInput li = ref _scene.Layout(node);
                 li.Width = g.Width; li.Height = g.Height;
@@ -6216,7 +6212,7 @@ public sealed partial class TreeReconciler
                 _scene.SetGrid(node, new GridSpec { Columns = g.Columns, ColGap = g.ColGap, RowGap = g.RowGap, RowHeight = g.RowHeight, MinColWidth = g.MinColWidth, MaxColumns = g.MaxColumns });
                 break;
             }
-            case PolylineStrokeEl pl:
+            case PolylineStrokeEl.TypeId when el.Is(out PolylineStrokeEl pl):
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.PolylineStroke;
@@ -6254,7 +6250,7 @@ public sealed partial class TreeReconciler
                 li.AlignSelf = pl.AlignSelf; li.JustifySelf = pl.JustifySelf;
                 break;
             }
-            case PathEl pe:
+            case PathEl.TypeId when el.Is(out PathEl pe):
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Path;
@@ -6290,7 +6286,7 @@ public sealed partial class TreeReconciler
                 lip.AlignSelf = pe.AlignSelf; lip.JustifySelf = pe.JustifySelf;
                 break;
             }
-            case SeriesEl se:
+            case SeriesEl.TypeId when el.Is(out SeriesEl se):
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Series;
@@ -6308,7 +6304,7 @@ public sealed partial class TreeReconciler
                 li.AlignSelf = se.AlignSelf; li.JustifySelf = se.JustifySelf;
                 break;
             }
-            case SpriteFieldEl sf:
+            case SpriteFieldEl.TypeId when el.Is(out SpriteFieldEl sf):
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Sprites;
@@ -6324,7 +6320,7 @@ public sealed partial class TreeReconciler
                 li.AlignSelf = sf.AlignSelf; li.JustifySelf = sf.JustifySelf;
                 break;
             }
-            case ListRowEl lr:
+            case ListRowEl.TypeId when el.Is(out ListRowEl lr):
             {
                 // Scroll-rework Wave 0.E: ONE node, RowPaint payload ≤8 cells (scroll-rework-design.md §B.4).
                 // Fill/HoverFill/(Selected→Pressed)Fill reuse the generic paint channels every element carries —
@@ -6357,7 +6353,7 @@ public sealed partial class TreeReconciler
                 li.Margin = lr.Margin;
                 break;
             }
-            case ImageEl im:
+            case ImageEl.TypeId when el.Is(out ImageEl im):
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Image;
@@ -6392,7 +6388,7 @@ public sealed partial class TreeReconciler
                     if (isMount)
                         Diag.Event("img", $"mount node={node.Raw.Index} src={ImageCache.DiagSourceTail(im.Source.Value)} " +
                             $"decode={decodeW}x{decodeH}");
-                    else if (old is ImageEl oldIm && !oldIm.Source.IsBound)
+                    else if (old.Is(out ImageEl oldIm) && !oldIm.Source.IsBound)
                     {
                         (int oldW, int oldH) = ImageDecodeTarget(in oldIm, _scene.DeviceScale);
                         bool srcChanged = !string.Equals(oldIm.Source.Value, im.Source.Value, StringComparison.Ordinal);
@@ -6433,7 +6429,7 @@ public sealed partial class TreeReconciler
                 li.Margin = im.Margin; li.AlignSelf = im.AlignSelf; li.JustifySelf = im.JustifySelf;
                 break;
             }
-            case IconLayerEl il:
+            case IconLayerEl.TypeId when el.Is(out IconLayerEl il):
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.IconLayer;
@@ -6449,7 +6445,7 @@ public sealed partial class TreeReconciler
                 li.Margin = il.Margin; li.AlignSelf = il.AlignSelf; li.JustifySelf = il.JustifySelf;
                 break;
             }
-            case TextEl t:
+            case TextEl.TypeId when el.Is(out TextEl t):
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Text;
@@ -6502,7 +6498,7 @@ public sealed partial class TreeReconciler
                 WriteTextSelection(node, t.IsTextSelectionEnabled, t.SelectionHighlightColor);
                 break;
             }
-            case SpanTextEl st:
+            case SpanTextEl.TypeId when el.Is(out SpanTextEl st):
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Text;
@@ -6551,7 +6547,7 @@ public sealed partial class TreeReconciler
             ref LayoutInput layoutAfter = ref _scene.Layout(node);
             NodeFlags layoutFlagsAfter = _scene.Flags(node) & (NodeFlags.ClipsToBounds | NodeFlags.LayoutBoundary | NodeFlags.ZStack);
             bool gridChanged = false;
-            if (el is GridEl)
+            if (el.ElementTypeId == GridEl.TypeId)
             {
                 bool hasGrid = _scene.TryGetGrid(node, out var gridAfter);
                 gridChanged = hadGrid != hasGrid || (hasGrid && !SameGridSpec(in gridBefore, in gridAfter));
