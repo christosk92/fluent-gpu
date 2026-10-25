@@ -2089,6 +2089,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts,
                             g.SpanRunId, g.ForceColor != 0, g.InMotion * (1f / 255f), g.Typography);
                         _frameGlyphInstanceCount += _glyphInsts.Count - before;
+                        PublishGlyphInk(in g, before);
                         NoteGlyphHaloCoverage(before, ink, RepaintCull.GlyphHalo(g.FontSize));
                         if (_glyphInsts.Count > before)
                             NotePendingText(ink.X, ink.Y, ink.W, ink.H, g.Transform.M11, g.Transform.M12,

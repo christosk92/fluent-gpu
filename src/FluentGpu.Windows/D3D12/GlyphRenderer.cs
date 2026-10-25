@@ -74,7 +74,12 @@ internal readonly record struct ColorLayer(ushort Gid, float DxEm, float DyEm, C
 /// <see cref="Colors"/> (span runs and colour-emoji runs, parallel to <see cref="Glyphs"/>): the per-quad color
 /// override — A==0 entries inherit the replayed command color; null = a plain uniform run (the overwhelming case).
 /// A colour emoji contributes one quad PER PALETTE LAYER, each carrying its CPAL colour here.</summary>
-internal struct ShapedRun { public ShapedGlyph[] Glyphs; public ColorF[]? Colors; public int Count; public int LastUsedFrame; }
+internal struct ShapedRun
+{
+    public ShapedGlyph[] Glyphs; public ColorF[]? Colors; public int Count; public int LastUsedFrame;
+    // the quads' extent (local DIP, the origin baked in, as the quads): GlyphInk, computed on first use; Ink empty = no quad
+    public bool HasInk; public RectF Ink;
+}
 
 /// <summary>Content key for the shaped-run cache. Keyed on the interned <see cref="StringId"/> handles (stable across frames,
 /// no per-frame string hashing) + quantized layout inputs — including EVERY shaping input of the glyph op (numeric Weight,
@@ -768,9 +773,12 @@ float4 PSMain(VSOutG i) : SV_Target
         var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId, typography);
 
         ref var hit = ref CollectionsMarshal.GetValueRefOrNullRef(_runCache, key);
+        LastRunInkValid = false;
         if (!Unsafe.IsNullRef(ref hit))
         {
             hit.LastUsedFrame = _frame;
+            if (!hit.HasInk) { hit.Ink = InkOf(hit.Glyphs.AsSpan(0, hit.Count)); hit.HasInk = true; }
+            LastRunInk = Relative(in hit.Ink, originX, topY); LastRunInkValid = true;
             if (_preparing) return;
             _runsCached++;
 #if DEBUG
@@ -808,7 +816,9 @@ float4 PSMain(VSOutG i) : SV_Target
         // correctness backstop (Diag canary — should read 0 in production).
         if (consistent)
         {
-            _runCache[key] = new ShapedRun { Glyphs = arr, Colors = colors, Count = n, LastUsedFrame = _frame };
+            RectF inkOf = InkOf(arr.AsSpan(0, n));
+            _runCache[key] = new ShapedRun { Glyphs = arr, Colors = colors, Count = n, LastUsedFrame = _frame, HasInk = true, Ink = inkOf };
+            LastRunInk = Relative(in inkOf, originX, topY); LastRunInkValid = true;
             _runsShaped++;
         }
         else
@@ -820,6 +830,28 @@ float4 PSMain(VSOutG i) : SV_Target
         Replay(baked, colors, forceColor, color, world, opacity, dpiScale, motionSoft, outList);
         if (!consistent) { ReturnQuads(arr); ReturnColors(colors); }   // Replay already copied into outList; the rented arrays are not retained
     }
+
+    /// <summary>The extent of the run the last <see cref="LayoutRun"/> replayed or shaped, relative to its layout origin
+    /// (GlyphInk) — valid only when that run is a cached, complete shape (a mixed-generation shape publishes nothing).</summary>
+    internal RectF LastRunInk;
+    internal bool LastRunInkValid;
+
+    /// <summary>The union of the quads' destination rects (local DIP); empty when no quad has area.</summary>
+    private static RectF InkOf(ReadOnlySpan<ShapedGlyph> quads)
+    {
+        float x0 = float.MaxValue, y0 = float.MaxValue, x1 = float.MinValue, y1 = float.MinValue;
+        for (int i = 0; i < quads.Length; i++)
+        {
+            ref readonly ShapedGlyph q = ref quads[i];
+            if (!(q.DstW > 0f) || !(q.DstH > 0f)) continue;
+            x0 = MathF.Min(x0, q.DstX); y0 = MathF.Min(y0, q.DstY);
+            x1 = MathF.Max(x1, q.DstX + q.DstW); y1 = MathF.Max(y1, q.DstY + q.DstH);
+        }
+        return x1 > x0 && y1 > y0 ? new RectF(x0, y0, x1 - x0, y1 - y0) : default;
+    }
+
+    private static RectF Relative(in RectF ink, float originX, float topY)
+        => ink.IsEmpty ? default : new RectF(ink.X - originX, ink.Y - topY, ink.W, ink.H);
 
     private float[] _gradDy = Array.Empty<float>();
     private float[] _gradRo0 = Array.Empty<float>();     // per-glyph reading-order LEFT  (continuous across wrapped visual lines)
