@@ -109,6 +109,17 @@ public sealed partial class FlexLayout
         _verifyTxt[i] = VerifyTextSig(node);
     }
 
+    // --fg layout-verify: the last ring answer each node took from an interval (an offer other than its slot's), by pass, so a
+    // divergence names the interval answers above it in the pass that diverged.
+    private (int Pass, float Offer, float W, float H, float Lo, float Hi)[] _ringIv = new (int, float, float, float, float, float)[256];
+
+    private void NoteRingInterval(NodeHandle n, float offer, Size2 size, float lo, float hi)
+    {
+        int i = (int)n.Raw.Index;
+        if (i >= _ringIv.Length) System.Array.Resize(ref _ringIv, System.Math.Max(_ringIv.Length * 2, i + 1));
+        _ringIv[i] = (_pass, offer, size.Width, size.Height, lo, hi);
+    }
+
     private string DescribeChain(NodeHandle n)
     {
         var sb = new System.Text.StringBuilder(" chain:");
@@ -123,7 +134,11 @@ public sealed partial class FlexLayout
             if ((_scene.Flags(a) & NodeFlags.Exiting) != 0) sb.Append(" exiting");
             if (_scene.HasScroll(a)) sb.Append(" scroll");
             if ((_scene.Flags(a) & NodeFlags.ZStack) != 0) sb.Append(" z");
-            sb.Append(" b=").Append((int)_scene.Bounds(a).W).Append('x').Append((int)_scene.Bounds(a).H).Append(']');
+            sb.Append(" b=").Append((int)_scene.Bounds(a).W).Append('x').Append((int)_scene.Bounds(a).H);
+            int ai = (int)a.Raw.Index;
+            if (ai < _ringIv.Length && _ringIv[ai].Pass != 0)
+                sb.Append(System.FormattableString.Invariant($" RINGIV {_pass - _ringIv[ai].Pass} passes ago offer={_ringIv[ai].Offer} size={_ringIv[ai].W}x{_ringIv[ai].H} iv=[{_ringIv[ai].Lo},{_ringIv[ai].Hi}]"));
+            sb.Append(']');
         }
         return sb.ToString();
     }

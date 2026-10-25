@@ -126,6 +126,14 @@ public interface IFontSystem
     /// frame boundary (<c>FrameStats.TextShapes</c>). Default 0 for a backend that has not wired a counter.</summary>
     long ShapeCount => 0;
 
+    /// <summary>Whether <see cref="PrefetchShape"/> does anything (the layout pass skips its prefetch walk when not). Default false.</summary>
+    bool CanPrefetchShapes => false;
+
+    /// <summary>A hint (PERF r3 UI, C4): <paramref name="text"/> under <paramref name="style"/> is about to be measured for the first
+    /// time, so a backend may shape it AHEAD, off the calling thread. The measure that follows returns exactly what it would have
+    /// without the hint. Called by the layout pass on the UI thread. Default: nothing.</summary>
+    void PrefetchShape(StringId text, in TextStyle style) { }
+
     /// <summary>Measure a string under a style (intrinsic content size). Feeds the layout engine. When
     /// <paramref name="maxWidth"/> is finite and the style wraps, the result is the word-wrapped multi-line box.</summary>
     TextMetrics Measure(StringId text, in TextStyle style, float maxWidth = float.PositiveInfinity);
