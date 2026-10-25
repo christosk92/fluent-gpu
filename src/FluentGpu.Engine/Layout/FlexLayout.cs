@@ -767,18 +767,20 @@ public sealed partial class FlexLayout
                 WriteMeasuredBounds(node, hit.W, hit.H);
                 return new Size2(hit.W, hit.H);
             }
-            // C1: an offer inside this pass's validity interval measures to the recorded size, descendants unchanged.
-            if (hit.FlatGen == _measureGen && availW >= hit.FlatLo && availW <= hit.FlatHi && MeasureFlatEnabled && !Verifying && !_naturalProbe
-                && hit.FlatVer == _scene.SubtreeVersion(node) && hit.NodeGen == node.Raw.Gen)
+            // C1: an offer inside this pass's validity interval measures to the recorded size, descendants unchanged - while nothing
+            // below was marked layout-dirty since it was recorded and the slot still holds the same node.
+            if (hit.FlatGen == _measureGen && availW >= hit.FlatLo && availW <= hit.FlatHi && MeasureFlatEnabled && !Verifying && !_naturalProbe)
             {
-                _dMeasureFlatHit++;
-                if (MeasureCensusEnabled) _mcFlatHits++;
-                WriteMeasuredBounds(node, hit.FlatW, hit.FlatH);
-                return StoreMemo(node, availW, new Size2(hit.FlatW, hit.FlatH));
-            }
-            if (MeasureCensusEnabled && hit.FlatGen == _measureGen && availW >= hit.FlatLo && availW <= hit.FlatHi && MeasureFlatEnabled && !Verifying && !_naturalProbe)
-            {
-                if (hit.NodeGen != node.Raw.Gen) _mcFlatVoidGen++; else _mcFlatVoidVer++;   // an interval the guards above refused
+                bool guardOk = hit.FlatVer == _scene.SubtreeVersion(node) && hit.NodeGen == node.Raw.Gen;
+                if (MeasureFlatValidate) return FlatValidate(node, availW, guardOk);
+                if (guardOk)
+                {
+                    _dMeasureFlatHit++;
+                    if (MeasureCensusEnabled) _mcFlatHits++;
+                    WriteMeasuredBounds(node, hit.FlatW, hit.FlatH);
+                    return StoreMemo(node, availW, new Size2(hit.FlatW, hit.FlatH));
+                }
+                if (MeasureCensusEnabled) { if (hit.NodeGen != node.Raw.Gen) _mcFlatVoidGen++; else _mcFlatVoidVer++; }
             }
         }
         // A scroll/virtual viewport is a layout boundary: its size is its own box (explicit/flex), independent of

@@ -47,6 +47,41 @@ public sealed partial class FlexLayout
     /// from the current state in the same pass) and stay on.</summary>
     public static bool MeasureFlatRingEnabled;
 
+    /// <summary><c>--fg measure-flat-validate</c>: every offer an interval would answer is measured for real instead (descending, with
+    /// that interval withheld; the run then lays out as with intervals off) and the real size compared with the recorded one, both
+    /// for the intervals the guards accept and for the ones they refuse (a mark below since, a recycled slot). One summary line on
+    /// stderr every 5 s, plus the first 32 mismatches (diagnostic).</summary>
+    public static bool MeasureFlatValidate;
+    private long _fvOk, _fvBad, _fvVoidOk, _fvVoidBad, _fvLastDump;
+    private int _fvLogged;
+
+    private Size2 FlatValidate(NodeHandle node, float availW, bool guardOk)
+    {
+        ref MeasureMemo m = ref _memo[node.Raw.Index];
+        float lo = m.FlatLo, hi = m.FlatHi, ew = m.FlatW, eh = m.FlatH;
+        uint ver = m.FlatVer;
+        m.FlatGen = 0;   // the real measure below must not answer from the interval it checks (it records a fresh one)
+        Size2 real = MeasureCore(node, availW);
+        bool same = real.Width == ew && real.Height == eh;
+        if (guardOk) { if (same) _fvOk++; else _fvBad++; }
+        else { if (same) _fvVoidOk++; else _fvVoidBad++; }
+        if (!same && _fvLogged < 32)
+        {
+            _fvLogged++;
+            System.Console.Error.WriteLine(System.FormattableString.Invariant(
+                $"[measure-flat-validate] {(guardOk ? "ACCEPTED" : "refused")} n#{node.Raw.Index} offer={availW} interval=[{lo}, {hi}] recorded={ew}x{eh} real={real.Width}x{real.Height} ver {ver}->{_scene.SubtreeVersion(node)}"));
+        }
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (_fvLastDump == 0) _fvLastDump = now;
+        if (now - _fvLastDump >= System.Diagnostics.Stopwatch.Frequency * 5)
+        {
+            _fvLastDump = now;
+            System.Console.Error.WriteLine(
+                $"[measure-flat-validate] accepted: same={_fvOk} DIFFERENT={_fvBad}; refused by the guards: same={_fvVoidOk} different={_fvVoidBad}");
+        }
+        return real;
+    }
+
     /// <summary>Per-frame: re-measures answered by a within-pass interval (no descent). Reset with the other frame counters.</summary>
     public int DiagMeasureFlatHits => _dMeasureFlatHit;
     private int _dMeasureFlatHit;
