@@ -621,7 +621,7 @@ public sealed partial class AnimEngine
     }
 
     // Where a presented-extent change stops climbing (the shift lives INSIDE these, their own size does not change): the
-    // root, a scroll viewport, a box with a DECLARED height, a Grow-filled child of a column whose height is DEFINITE, and
+    // root, a scroll viewport, a box with a DECLARED height, a Grow-filled child of a column or a filling layer of a z-stack whose height is DEFINITE, and
     // a node whose height another size row owns (SizeMode.Reveal / Relayout = SizeH, Reflow = LayoutH). A Grow child of a
     // content-sized column (a scroll content, an auto column) is NOT a boundary: there the free space is 0 and the child's
     // height follows its content, so a reveal inside it must reach the scroll content (presented extent, scrollbar,
@@ -631,11 +631,8 @@ public sealed partial class AnimEngine
         if (n == _scene.Root || (_scene.Flags(n) & NodeFlags.Scrollable) != 0) return true;
         ref readonly LayoutInput li = ref _scene.Layout(n);
         if (!float.IsNaN(li.Height)) return true;
-        if (li.FlexGrow > 0f)
-        {
-            NodeHandle p = _scene.Parent(n);
-            if (!p.IsNull && _scene.Layout(p).Direction == 1 && IsDefiniteHeight(p)) return true;
-        }
+        NodeHandle p = _scene.Parent(n);
+        if (!p.IsNull && FillsParentHeight(p, in li) && IsDefiniteHeight(p)) return true;
         if (!_slab.NodeHasRows((int)n.Raw.Index)) return false;
         return Find(n, AnimChannel.SizeH) >= 0 || Find(n, AnimChannel.LayoutH) >= 0;
     }
@@ -651,10 +648,23 @@ public sealed partial class AnimEngine
             ref readonly LayoutInput li = ref _scene.Layout(n);
             if (!float.IsNaN(li.Height)) return true;
             NodeHandle p = _scene.Parent(n);
-            if (li.FlexGrow <= 0f || p.IsNull || _scene.Layout(p).Direction != 1) return false;
+            if (p.IsNull || !FillsParentHeight(p, in li)) return false;
             n = p;
         }
         return false;
+    }
+
+    // Does a child's height come from its parent's slot? A Grow child of a column; or a z-stack layer, which fills the stack's slot
+    // vertically unless it is Center/End aligned (FlexLayout.ArrangeZStack). Without the z-stack arm a window body that is a ZStack broke
+    // the walk, and a page's reveal climbed to the window column and shoved the docked player bar off the bottom (owner video 2026-10-26).
+    private bool FillsParentHeight(NodeHandle p, in LayoutInput li)
+    {
+        if ((_scene.Flags(p) & NodeFlags.ZStack) != 0)
+        {
+            FlexAlign a = li.AlignSelf == FlexAlign.Auto ? _scene.Layout(p).AlignItems : li.AlignSelf;
+            return a != FlexAlign.Center && a != FlexAlign.End;
+        }
+        return li.FlexGrow > 0f && _scene.Layout(p).Direction == 1;
     }
 
     private ref NodePaint TouchFlow(NodeHandle n)
