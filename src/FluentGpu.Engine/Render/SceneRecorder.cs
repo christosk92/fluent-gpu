@@ -2472,13 +2472,23 @@ internal sealed partial class SceneRecordingContext
                 // layer's own base still paints. Where the layer does NOT run the spec is absent (Materials policy off,
                 // a video hole, an OS-backed popup — all clear it) or the backend supplies the Fallback itself
                 // (SubmitStreaming's PushLayer, the non-primary-swapchain route), so the solid plate survives.
-                // FeatherTop is the one exception: a feathered layer deliberately fades the frost in from the top, so
-                // the band above it is MEANT to show what is behind the surface — the plate fill there is content, not
-                // an occluder, and it stays.
                 // Only where the layer was actually RECORDED (acrylicLayer: an acrylic slice's own walk, whose Backdrop
                 // item frosts the plate, or a standalone stream): an acrylic that could not be cut keeps this fill — it
                 // is the whole surface there.
-                if (acrylicLayer && ac.FeatherTop <= 0f && fill.Equals(ac.Fallback)) fill = ColorF.Transparent;
+                // A FEATHERED acrylic (FeatherTop) fades its frost in from the top. Where the frost runs its plate is
+                // dropped like any other; where it does not (policy off, not cut) the plate is the surface, and it
+                // feathers in exactly as the frost would (featherPlate below): a solid slab would put back the hard top
+                // edge the feather exists to remove, and no fill at all left the surface's text on the bare backdrop.
+                float featherPlate = 0f;
+                if (fill.A > 0f)
+                {
+                    if (acrylicLayer)
+                    {
+                        if (fill.Equals(ac.Fallback)) fill = ColorF.Transparent;
+                    }
+                    else if (scene.TryGetAcrylic(node, out var plate) && plate.FeatherTop > 0f && fill.Equals(plate.Fallback))
+                        featherPlate = MathF.Min(plate.FeatherTop, 1f);
+                }
                 bool hasGradFill = hasNodeGradient;
                 GradientSpec g = nodeGradient;
                 GradientSpec bb = default;
@@ -2518,6 +2528,15 @@ internal sealed partial class SceneRecordingContext
                     bool hasTo = gMix > 0f && scene.TryGetGradientTo(node, out gto) && gto.Stops is { Length: > 0 };
                     EmitGradient(dl, local, p.Corners, in g, in hg, hasHG, in pg, hasPG, gHoverT, gPressT,
                         hasRadialCenter, radialCenter, world, opacity, key, in gto, hasTo ? gMix : 0f, in gFadeFrom, gFadeBack);
+                }
+                else if (featherPlate > 0f)
+                {
+                    // The composite's frost feather is smoothstep(0, frac, t): four stops trace it (0, 0.26, 0.74, 1 at
+                    // thirds of the band), no array, no allocation.
+                    ColorF clear = fill with { A = 0f };
+                    dl.GradientRect(new DrawGradientRectCmd(local, p.Corners, new Point2(0.5f, 0f), new Point2(0.5f, 1f), (int)GradientShape.Linear, 4,
+                        clear, fill with { A = fill.A * 0.26f }, fill with { A = fill.A * 0.74f }, fill,
+                        0f, featherPlate / 3f, featherPlate * 2f / 3f, featherPlate, world, opacity), key);
                 }
                 else if (fill.A > 0f)
                     dl.FillRoundRect(local, p.Corners, fill, world, opacity, key);
