@@ -24,7 +24,7 @@ namespace FluentGpu.Media;
 public sealed class DecodeScheduler : IImageDecoder, IDisposable
 {
     private readonly record struct Req(int Id, string Src, int W, int H, ImagePriority Priority);
-    private struct Done { public int Id; public bool Ok; public int W, H; public ImageFailureKind Failure; public int Attempts; public byte[]? Buffer; public int ByteLen; public long Sequence; }
+    private struct Done { public int Id; public bool Ok; public int W, H; public ImageFailureKind Failure; public int Attempts; public PixelBlock? Buffer; public int ByteLen; public long Sequence; }
 
     private readonly IImageCodec _codec;
     private readonly IImageFetcher _fetcher;
@@ -44,6 +44,13 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // for a whole homepage scroll and then popped it in afterwards.
     private readonly ConcurrentQueue<Done> _pixelOut = new();
     private readonly ConcurrentQueue<Done> _largePixelOut = new();
+    // Each lane's head, taken out of its queue by the pump (the one consumer, UI thread) and held here until it is applied
+    // or the byte budget stops the frame. NEVER ConcurrentQueue.TryPeek: a peek marks the queue's segment "preserved for
+    // observation", and from then on TryDequeue no longer clears the slots it leaves, so the segment kept the last Done of
+    // every slot (32 per lane) and with it that decode's pixel buffer — 1-4 MiB covers the pool had long returned or
+    // trimmed, rooted for the life of the process (2026-10-21, real-profile heap dump: ~12 MB of byte[] pinned this way).
+    private Done _smallHead, _largeHead;
+    private bool _hasSmallHead, _hasLargeHead;
     // Claimed ids remain active until their terminal completion is consumed by Pump. This lets a late recycle cancel a
     // decode that has already published pixels but has not uploaded yet, without creating unbounded unknown tombstones.
     private readonly ConcurrentDictionary<int, byte> _activeIds = new();
@@ -86,7 +93,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // ImageReadyHandler → ImageCache → ImageUploadAttemptHandler chain, and a span cannot name its array. The slots
     // are written immediately before and cleared immediately after the synchronous callback (finally-guarded), so a
     // loan never outlives one apply, never crosses threads, and a stale loan can never be taken by a later frame.
-    [ThreadStatic] private static byte[]? t_loanBuffer;
+    [ThreadStatic] private static PixelBlock? t_loanBuffer;
     [ThreadStatic] private static int t_loanByteLen;
     [ThreadStatic] private static bool t_loanTaken;
 
@@ -98,11 +105,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     /// only the first <c>pixels.Length</c> bytes are pixels) and MUST return it exactly once to the scheduler's
     /// <see cref="PixelBufferPool"/> (<see cref="DecodeOptions.PixelPool"/>) — the pool drops foreign sizes, never
     /// throws. Zero-alloc; a second call for the same apply returns false.</summary>
-    public static bool TryTakeDecodeBuffer(ReadOnlySpan<byte> pixels, [NotNullWhen(true)] out byte[]? buffer)
+    public static bool TryTakeDecodeBuffer(ReadOnlySpan<byte> pixels, [NotNullWhen(true)] out PixelBlock? buffer)
     {
-        byte[]? loan = t_loanBuffer;
-        if (loan is not null && !t_loanTaken && pixels.Length == t_loanByteLen && pixels.Length > 0
-            && Unsafe.AreSame(ref MemoryMarshal.GetReference(pixels), ref MemoryMarshal.GetArrayDataReference(loan)))
+        PixelBlock? loan = t_loanBuffer;
+        if (loan is not null && !t_loanTaken && pixels.Length == t_loanByteLen && pixels.Length > 0 && loan.StartsAt(pixels))
         {
             t_loanTaken = true;
             buffer = loan;
@@ -134,42 +140,20 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // IImageDecoder census passthroughs (MemCensus reads these through ImageCache).
     int IImageDecoder.DiagInflight => Volatile.Read(ref _inflight);
     int IImageDecoder.DiagCanceledPending => _canceled.Count;
-    public bool HasReadyCompletions => !_controlOut.IsEmpty || !_pixelOut.IsEmpty || !_largePixelOut.IsEmpty;
+    public bool HasReadyCompletions => !_controlOut.IsEmpty || _hasSmallHead || _hasLargeHead || !_pixelOut.IsEmpty || !_largePixelOut.IsEmpty;
 
     /// <inheritdoc/>
     public void SetCompletionWake(Action? wake) => Volatile.Write(ref _completionWake, wake);
 
     public DecodeScheduler(IImageCodec codec, IImageFetcher fetcher, DecodeOptions? options = null)
-        : this(codec, fetcher, options, startWorkers: true) { }
-
-    /// <summary>Test-only seam: <paramref name="startWorkers"/> false constructs the scheduler with NO worker tasks, so
-    /// a test can drive the claim/cancel interleaving by hand (<see cref="TryClaimForTest"/>) with no sleeps and no
-    /// timing dependence. Production always uses the public constructor.</summary>
-    internal DecodeScheduler(IImageCodec codec, IImageFetcher fetcher, DecodeOptions? options, bool startWorkers)
     {
         _codec = codec;
         _fetcher = fetcher;
         _opt = options ?? new DecodeOptions();
         _pixels = _opt.PixelPool ?? new PixelBufferPool();
         int workers = _opt.MaxConcurrency > 0 ? _opt.MaxConcurrency : Math.Clamp(Environment.ProcessorCount - 2, 2, 6);
-        _workers = new Task[startWorkers ? workers : 0];
+        _workers = new Task[workers];
         for (int i = 0; i < _workers.Length; i++) _workers[i] = Task.Run(WorkerLoop);
-    }
-
-    /// <summary>Test-only hook invoked ONCE on the worker thread between a successful claim and TryClaim's return —
-    /// i.e. exactly inside the window a racing <see cref="Cancel"/> must survive. Null (and free) in production.</summary>
-    internal Action? ClaimBarrier;
-
-    /// <summary>Test-only hook invoked on the calling thread between <see cref="Prioritize"/>'s read of the queued
-    /// request and its write — the window a racing worker claim must not be able to undo. Null (and free) in production.</summary>
-    internal Action? PrioritizeBarrier;
-
-    /// <summary>Test-only: run one <c>TryClaim</c> on the calling thread and report the claimed id.</summary>
-    internal bool TryClaimForTest(out int id)
-    {
-        bool claimed = TryClaim(out var req);
-        id = req.Id;
-        return claimed;
     }
 
     // UI thread: non-blocking enqueue into the priority lane. Visible is never dropped; off-screen lanes drop under load.
@@ -211,7 +195,6 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     {
         if (_reqs.TryGetValue(id, out var r) && priority < r.Priority)   // raise urgency only (lower enum = higher)
         {
-            PrioritizeBarrier?.Invoke();   // test-only: the read/write race window, made deterministic
             // TryUpdate against the value read, never the indexer: a worker may claim the id (TryClaim's TryRemove)
             // between the read and the write, and the indexer would put the claimed request BACK — the promoted lane
             // copy then lets a second worker claim it too, so the image decodes twice and lands two ok completions.
@@ -268,7 +251,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             if (!meter.TryAdmit(next.ByteLen)) break;
             if (!TryDequeuePixels(large, out var d)) continue;
             // UI-thread callers normally serialize Cancel and Pump, but retain the final check for another-thread
-            // cancellation between TryPeek and TryDequeue.
+            // cancellation between the peek and the take.
             if (_canceled.ContainsKey(d.Id))
             {
                 Finish(d.Id);
@@ -312,27 +295,40 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // hide work from the pump.
     private bool TryPeekPixels(out Done done, out bool large)
     {
-        bool hasSmall = _pixelOut.TryPeek(out var small);
-        bool hasLarge = _largePixelOut.TryPeek(out var big);
-        if (!hasSmall)
+        if (!_hasSmallHead) _hasSmallHead = _pixelOut.TryDequeue(out _smallHead);
+        if (!_hasLargeHead) _hasLargeHead = _largePixelOut.TryDequeue(out _largeHead);
+        if (!_hasSmallHead)
         {
-            large = hasLarge;
-            done = big;
-            return hasLarge;
+            large = _hasLargeHead;
+            done = _largeHead;
+            return _hasLargeHead;
         }
-        if (!hasLarge || small.Sequence <= big.Sequence)
+        if (!_hasLargeHead || _smallHead.Sequence <= _largeHead.Sequence)
         {
             large = false;
-            done = small;
+            done = _smallHead;
             return true;
         }
         large = true;
-        done = big;
+        done = _largeHead;
         return true;
     }
 
+    /// <summary>Take the lane's held head (filled by <see cref="TryPeekPixels"/>); the field lets go of its buffer.</summary>
     private bool TryDequeuePixels(bool large, out Done done)
-        => (large ? _largePixelOut : _pixelOut).TryDequeue(out done);
+    {
+        if (large)
+        {
+            done = _largeHead;
+            bool had = _hasLargeHead;
+            _largeHead = default; _hasLargeHead = false;
+            return had;
+        }
+        done = _smallHead;
+        bool hadSmall = _hasSmallHead;
+        _smallHead = default; _hasSmallHead = false;
+        return hadSmall;
+    }
 
     private async Task WorkerLoop()
     {
@@ -382,7 +378,6 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
                 if (_reqs.TryRemove(id, out req))
                 {
                     Interlocked.Decrement(ref _queued);
-                    ClaimBarrier?.Invoke();   // test-only: the claim/cancel race window, made deterministic
                     return true;
                 }
                 if (added && _activeIds.TryRemove(id, out _)) _canceled.TryRemove(id, out _);
@@ -414,7 +409,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, attempts, null, 0); return; }
 
             int cap = req.W * req.H * 4;
-            byte[] dst = _pixels.Rent(cap);                          // bounded pixel pool decode buffer (returned in Pump after upload, or by the sink that took it — TryTakeDecodeBuffer)
+            PixelBlock dst = _pixels.Rent(cap);                          // bounded pixel pool decode buffer (returned in Pump after upload, or by the sink that took it — TryTakeDecodeBuffer)
             bool ok; int dw = req.W, dh = req.H;
             try { ok = _codec.DecodeConstrained(fetch.Span, req.W, req.H, dst.AsSpan(0, cap), out dw, out dh); }
             catch { ok = false; }
@@ -429,7 +424,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         }
     }
 
-    private void Complete(int id, bool ok, int w, int h, ImageFailureKind failure, int attempts, byte[]? buffer, int byteLen)
+    private void Complete(int id, bool ok, int w, int h, ImageFailureKind failure, int attempts, PixelBlock? buffer, int byteLen)
     {
         var done = new Done
         {

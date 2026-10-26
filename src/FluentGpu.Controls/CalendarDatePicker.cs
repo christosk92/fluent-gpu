@@ -129,7 +129,7 @@ public sealed class CalendarDatePicker : Component
                 },
                 // CalendarGlyph E787, FontSize 12, foreground TextFillColorSecondary
                 // (CalendarDatePicker_themeresources.xaml:219, :8).
-                new TextEl("") { Size = 12f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont },
+                new TextEl("") { Size = 12f, Color = Tok.TextSecondary, FontFamily = Tok.Definition.Fonts.Icon },
             ],
         };
 

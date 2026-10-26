@@ -11,7 +11,7 @@ The short version:
 - **Link to a canonical value — never copy it.**
 - **A control page cites both the control source and the gallery snippet that runs it.**
 - **Every code sample mirrors the real surface in `src/FluentGpu.*` — open the file and copy the names.**
-- **Two checks before you commit: the harness if you touched samples, `check-canon.ps1` if you touched `design/`.**
+- **Two checks before you commit: a clean build if you touched samples, `check-canon.ps1` if you touched `design/`.**
 
 The rest of this page is the *why* behind each.
 
@@ -144,8 +144,7 @@ The **API reference** under `api/` is a fifth source, but it is *generated*, not
 By audience: **app-author pages** ([App Authors](./app-authors/index.md)) lean on the guides and the gallery — they show
 *how to build*, with runnable examples and the gotchas from [pitfalls](../guide/pitfalls.md). **Engine-contributor
 pages** ([Engine Contributors](./engine-contributors/index.md)) lean on the engine source and the design corpus — they
-explain *how internals work*, cite the exact file from the where-to-change map, and end with *how to verify* against the
-harness. Keep each page on its side of that line.
+explain *how internals work*, cite the exact file from the where-to-change map, and end with *how to verify* (the build, a screenshot). Keep each page on its side of that line.
 
 ---
 
@@ -168,8 +167,8 @@ Two consequences worth knowing, both stated on the [API reference page](./api/in
 
 - **The `api/` pages are generated — do not hand-edit them.** If an API description is wrong, fix the XML doc comment on
   the type or member in `src/FluentGpu.*` and regenerate. Editing the YAML is editing build output.
-- **The harness and gallery apps are excluded from API metadata** (`FluentGpu.VerticalSlice` and `FluentGpu.WindowsApp`
-  are applications, not library surface), as are the source generators and the headless test seams. Their *source* is
+- **The gallery app is excluded from API metadata** (`FluentGpu.WindowsApp`
+  is an application, not library surface), as are the source generators and the headless seams. Their *source* is
   still cited heavily from conceptual pages — that's where verified samples come from — but they produce no API YAML.
 
 When you add a new conceptual page, add it to the relevant `toc.yml` (the section TOCs are
@@ -184,20 +183,17 @@ Two gates, each conditional on what you touched. Run the one(s) that apply.
 
 ### 1. If you touched or added code samples — prove the surface is real and green
 
-The point of the anti-invention rule is that samples reflect a *working* surface. The fastest way to prove the API you
-documented actually exists and behaves is the headless verification harness — ~60 cross-seam golden checks, no GPU and no
-window:
+The point of the anti-invention rule is that samples reflect a *working* surface. A clean build is the cheapest
+anti-invention check: if a name in your sample doesn't exist, the surface it lives on won't compile.
 
 ```text
-dotnet build src/FluentGpu.VerticalSlice                 # clean build first
-dotnet run   --project src/FluentGpu.VerticalSlice       # must print: ALL CHECKS PASSED
+dotnet build src/FluentGpu.slnx                          # clean
 ```
 
-A clean build is itself the cheapest anti-invention check: if a name in your sample doesn't exist, the surface it lives
-on won't compile. If your page documents reactive/layout/render behavior, the harness is also where you'd confirm the
-claim — checks assert on `FrameStats` (`Rendered`, `ComponentsRendered`, and `HotPhaseAllocBytes`, which must be `0` on
-steady frames). GPU pixels are *not* asserted by the harness; that is a separate manual "needs-pixels" pass on the real
-D3D12 path, and a doc should describe it as such rather than claiming pixel-level verification it didn't do.
+If your page documents reactive/layout/render behavior, read `FrameStats` (`Rendered`, `ComponentsRendered`, and
+`HotPhaseAllocBytes`, which must be `0` on steady frames) to confirm the claim. GPU pixels are a separate manual
+"needs-pixels" pass on the real D3D12 path, and a doc should describe it as such rather than claiming pixel-level
+verification it didn't do.
 
 ### 2. If you touched anything under `design/` — run the canon drift gate
 

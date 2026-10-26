@@ -19,38 +19,44 @@ public static class Reactive
     /// <summary>Run <paramref name="fn"/> without subscribing the current computation to any signal it reads.</summary>
     public static T Untrack<T>(Func<T> fn)
     {
-        var prev = Tracking.Current;
-        Tracking.Current = null;
+        var prev = Tracking.Current; var prevT = Tracking.Table;
+        Tracking.Current = null; Tracking.Table = null;
         try { return fn(); }
-        finally { Tracking.Current = prev; }
+        finally { Tracking.Current = prev; Tracking.Table = prevT; }
     }
 
     /// <summary>Read a signal-backed value without subscribing (peek).</summary>
     public static void Untrack(Action fn)
     {
-        var prev = Tracking.Current;
-        Tracking.Current = null;
+        var prev = Tracking.Current; var prevT = Tracking.Table;
+        Tracking.Current = null; Tracking.Table = null;
         try { fn(); }
-        finally { Tracking.Current = prev; }
+        finally { Tracking.Current = prev; Tracking.Table = prevT; }
     }
 
     /// <summary>Register a cleanup to run when the enclosing computation re-runs or is disposed (the Solid <c>onCleanup</c>).</summary>
     public static void OnCleanup(Action cleanup)
     {
-        Tracking.Current?.AddCleanup(cleanup);
+        if (Tracking.Current is { } c) c.AddCleanup(cleanup);
+        else Tracking.Table?.AddCleanup(Tracking.Row, cleanup);   // a row's run (PERF r3 MODEL M3): the same lifetime
     }
 }
 
-/// <summary>Per-thread reactive tracking state (the "currently running computation").</summary>
+/// <summary>Per-thread reactive tracking state: the currently running object computation, or (when that is null) the running row
+/// of a <see cref="RxTable"/>. An object computation that runs inside a row's run takes precedence (it sets <see cref="Current"/>);
+/// <see cref="Reactive.Untrack{T}"/> clears both.</summary>
 internal static class Tracking
 {
     [ThreadStatic] internal static Computation? Current;
+    [ThreadStatic] internal static RxTable? Table;
+    [ThreadStatic] internal static int Row;
 }
 
 /// <summary>A source of reactive change (a <see cref="Signal{T}"/> or a <see cref="Memo{T}"/>): tracks its subscribers.</summary>
 internal interface ISignalSource
 {
-    void Unsubscribe(Computation c);
+    /// <summary>Drop a subscriber (an object computation or a table row) that is re-running or being disposed.</summary>
+    void Unsubscribe(in Sub s);
 
     /// <summary>Bring this source up to date so a subscriber resolving a <see cref="Computation.Check"/> can decide
     /// whether it REALLY has to re-run (the pull half of the push-pull cut-off). A <see cref="Signal{T}"/> is always
@@ -245,6 +251,23 @@ public abstract class Computation : IDisposable
         return true;   // Dirty
     }
 
+    /// <summary><see cref="RunComputation"/> without a delegate: tracks and runs <see cref="RunSelfBody"/> (a subclass that
+    /// carries its own state, so it needs no closure per instance).</summary>
+    internal void RunComputationSelf()
+    {
+        if (Disposed) return;
+        DisposeChildrenAndCleanups();
+        UnlinkSources();
+
+        var prevC = Tracking.Current;
+        Tracking.Current = this;
+        try { RunSelfBody(); }
+        finally { Tracking.Current = prevC; State = Clean; }
+    }
+
+    /// <summary>The body <see cref="RunComputationSelf"/> runs.</summary>
+    private protected virtual void RunSelfBody() { }
+
     /// <summary>Re-run the body (clearing nested owned computations + cleanups + old source links first).</summary>
     internal void RunComputation(Action body)
     {
@@ -269,7 +292,8 @@ public abstract class Computation : IDisposable
 
     private void UnlinkSources()
     {
-        for (int i = 0; i < _sources.Count; i++) _sources[i].Unsubscribe(this);
+        var self = new Sub(this);
+        for (int i = 0; i < _sources.Count; i++) _sources[i].Unsubscribe(self);
         _sources.Clear();
     }
 
@@ -315,7 +339,8 @@ public sealed class ReactiveScope : Computation
 /// longer than a frame in its always-on diagnostics, so a slow render is fixed where it is, never time-sliced away).
 /// <paramref name="HasPending"/> is true only when a unit threw (its siblings stay queued) or the runaway guard fired.
 /// </summary>
-public readonly record struct ReactiveFlushResult(bool HasPending, int UnitsRun, long LongestUnitTicks, Computation? LongestUnit = null);
+public readonly record struct ReactiveFlushResult(bool HasPending, int UnitsRun, long LongestUnitTicks, Computation? LongestUnit = null,
+    object? LongestOwner = null);
 
 /// <summary>
 /// The UI-thread scheduler: owns pending-effect queues, batch depth, and the host frame-request callback.
@@ -329,10 +354,10 @@ public sealed class ReactiveRuntime
     // TWO queues, one priority order. Everything scheduled lands in exactly one of them (Computation.Structural picks),
     // and a flush iteration always empties the structural one first — see Flush. Both are allocated once and reused
     // (swap + Clear, never re-new), so the second queue costs no per-frame managed allocation.
-    private List<Computation> _pendingStructural = new(16);
-    private List<Computation> _drainingStructural = new(16);
-    private List<Computation> _pending = new(64);
-    private List<Computation> _draining = new(64);
+    private List<Sub> _pendingStructural = new(16);
+    private List<Sub> _drainingStructural = new(16);
+    private List<Sub> _pending = new(64);
+    private List<Sub> _draining = new(64);
     private int _structuralCursor;
     private int _normalCursor;
     private int _batchDepth;
@@ -349,10 +374,13 @@ public sealed class ReactiveRuntime
     /// <summary>Runaway reports so far (always-on counter; each also wrote one <c>[signals.runaway]</c> line).</summary>
     public int RunawayCount { get; private set; }
 
-    public ReactiveRuntime() { }
+    public ReactiveRuntime() => Rows = new RxTable(this);
 
     // Deterministic unit-timing tests exercise the real scheduler without sleeps or wall-clock races.
-    internal ReactiveRuntime(Func<long> timestamp) => _timestamp = timestamp;
+    internal ReactiveRuntime(Func<long> timestamp) { _timestamp = timestamp; Rows = new RxTable(this); }
+
+    /// <summary>The engine's computations as table rows (binds, component renders, boundaries): see <see cref="RxTable"/>.</summary>
+    public RxTable Rows { get; }
 
     private long Timestamp() => _timestamp is null ? Stopwatch.GetTimestamp() : _timestamp();
 
@@ -367,7 +395,14 @@ public sealed class ReactiveRuntime
     {
         if (c.Queued || c.Disposed) return;
         c.Queued = true;
-        (c.Structural ? _pendingStructural : _pending).Add(c);
+        (c.Structural ? _pendingStructural : _pending).Add(new Sub(c));
+        if (_batchDepth == 0 && !_flushing) FrameRequested();
+    }
+
+    /// <summary>Queue a table row (its own queue flag already dedups it), in the same queues and order as objects.</summary>
+    internal void ScheduleRow(RxTable table, int row, bool structural)
+    {
+        (structural ? _pendingStructural : _pending).Add(new Sub(table, row));
         if (_batchDepth == 0 && !_flushing) FrameRequested();
     }
 
@@ -404,6 +439,7 @@ public sealed class ReactiveRuntime
         int units = 0;
         long longest = 0;
         Computation? longestUnit = null;
+        object? longestOwner = null;
         long now = Timestamp();
         try
         {
@@ -422,17 +458,39 @@ public sealed class ReactiveRuntime
                 }
 
                 // Consume before invoking user code: a throw must not replay the failing unit or discard its siblings.
-                var computation = draining[cursor++];
-                computation.Queued = false;
-                if (!computation.Disposed)
+                var unit = draining[cursor++];
+                if (unit.Row == 0)
                 {
-                    units++;
-                    try { computation.RunIfNecessary(); }
-                    finally
+                    var computation = unit.Computation!;
+                    computation.Queued = false;
+                    if (!computation.Disposed)
                     {
-                        long after = Timestamp();
-                        if (after - now > longest) { longest = after - now; longestUnit = computation; }
-                        now = after;   // this unit's end is the next unit's start — one Stopwatch read per unit
+                        units++;
+                        if (FluentGpu.Hosting.MountProf.On) FluentGpu.Hosting.MountProf.NoteUnit(computation, computation.StaleCause);
+                        try { computation.RunIfNecessary(); }
+                        finally
+                        {
+                            long after = Timestamp();
+                            if (after - now > longest) { longest = after - now; longestUnit = computation; longestOwner = computation.DiagOwner; }
+                            now = after;   // this unit's end is the next unit's start — one Stopwatch read per unit
+                        }
+                    }
+                }
+                else
+                {
+                    var table = unit.Table!;
+                    int row = unit.Row;
+                    if (table.Dequeue(row))
+                    {
+                        units++;
+                        if (FluentGpu.Hosting.MountProf.On) FluentGpu.Hosting.MountProf.NoteUnit(table.DiagOwnerOf(row), table.DiagKindOf(row), table.PeekStaleCause(row));
+                        try { table.RunIfNecessary(row); }
+                        finally
+                        {
+                            long after = Timestamp();
+                            if (after - now > longest) { longest = after - now; longestUnit = null; longestOwner = table.DiagOwnerOf(row); }
+                            now = after;
+                        }
                     }
                 }
             }
@@ -448,12 +506,12 @@ public sealed class ReactiveRuntime
                 _normalCursor = _structuralCursor = 0;
             }
         }
-        return new(HasPending, units, longest, longestUnit);
+        return new(HasPending, units, longest, longestUnit, longestOwner);
     }
 
     /// <summary>The runaway guard fired: report the cycle ALWAYS-ON — the owners (component types) of the batch that
     /// tripped it, which is the cycle itself — then break it. Rare by construction, so the one line may allocate.</summary>
-    private void BailOut(List<Computation> cycle, int from)
+    private void BailOut(List<Sub> cycle, int from)
     {
         RunawayCount++;
         var names = new System.Text.StringBuilder(128);
@@ -461,7 +519,7 @@ public sealed class ReactiveRuntime
         for (int i = from; i < cycle.Count && named < 6; i++)
         {
             object? owner = cycle[i].DiagOwner;
-            string n = owner is null ? cycle[i].GetType().Name : owner.GetType().Name;
+            string n = owner is null ? cycle[i].DiagTypeName : owner.GetType().Name;
             if (names.ToString().Contains(n, StringComparison.Ordinal)) continue;
             if (named++ > 0) names.Append(", ");
             names.Append(n);
@@ -475,12 +533,12 @@ public sealed class ReactiveRuntime
         Drop(_draining, _normalCursor);
         _structuralCursor = _normalCursor = 0;
 
-        static void Drop(List<Computation> q, int start = 0)
+        static void Drop(List<Sub> q, int start = 0)
         {
             for (int i = start; i < q.Count; i++)
             {
-                q[i].Queued = false;
-                q[i].State = Computation.Clean;
+                if (q[i].Computation is { } c) { c.Queued = false; c.State = Computation.Clean; }
+                else q[i].Table!.Drop(q[i].Row);
             }
             q.Clear();
         }

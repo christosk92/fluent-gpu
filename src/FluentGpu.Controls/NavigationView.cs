@@ -264,8 +264,8 @@ public sealed class NavigationView : Component
     const float IndicatorH = 16f;         // NavigationViewSelectionIndicatorHeight (:221)
     const float OverflowButtonSize = 40f; // TopNavigationViewOverflowButtonWidth/Height (:213-214)
 
-    static readonly CornerRadius4 PaneOverlayCorners = new(0f, Radii.Overlay, Radii.Overlay, 0f);
-    static readonly CornerRadius4 ContentLeftTopCorner = new(Radii.Overlay, 0f, 0f, 0f);
+    static CornerRadius4 PaneOverlayCorners => new(0f, Radii.Overlay, Radii.Overlay, 0f);
+    static CornerRadius4 ContentLeftTopCorner => new(Radii.Overlay, 0f, 0f, 0f);
     static readonly ColorF LightDismissOverlay = ColorF.FromRgba(0, 0, 0, 0x1A);
 
     public override Element Render()
@@ -663,7 +663,7 @@ public sealed class NavigationView : Component
             {
                 Padding = new Edges4(ItemMarginX + 12f, 0, ItemMarginX + 12f, 4f),
                 Animate = LabelTransition,
-                Children = [AutoSuggest],
+                Children = [AutoSuggest.Value],
             });
         }
 
@@ -860,7 +860,7 @@ public sealed class NavigationView : Component
         }
         bar.Add(new BoxEl { Grow = 1f });
         if (AutoSuggest is not null)
-            bar.Add(new BoxEl { Width = 216f, AlignSelf = FlexAlign.Center, Children = [AutoSuggest] });
+            bar.Add(new BoxEl { Width = 216f, AlignSelf = FlexAlign.Center, Children = [AutoSuggest.Value] });
         foreach (var f in footerItems)
         {
             if (f.IsHeader || f.IsSeparator) continue;
@@ -896,7 +896,7 @@ public sealed class NavigationView : Component
     {
         var rowChildren = new List<Element>(3);
         if (it.IconContent is { } iconContent) rowChildren.Add(iconContent);
-        else if (it.Glyph.Length > 0) rowChildren.Add(AnimatedIcon.Glyph(it.Glyph, IconSize, Tok.TextPrimary, Theme.IconFont));
+        else if (it.Glyph.Length > 0) rowChildren.Add(AnimatedIcon.Glyph(it.Glyph, IconSize, Tok.TextPrimary, Tok.Definition.Fonts.Icon));
         if (it.Label.Length > 0)
         {
             if (rowChildren.Count > 0) rowChildren.Add(new BoxEl { Width = 8 });
@@ -1000,7 +1000,7 @@ public sealed class NavigationView : Component
         PressedFill = Tok.FillSubtleTertiary,
         OnClick = onClick,
         PressScale = 0.985f,
-        Children = [AnimatedIcon.Glyph(glyph, IconSize, Tok.TextPrimary, Theme.IconFont)],
+        Children = [AnimatedIcon.Glyph(glyph, IconSize, Tok.TextPrimary, Tok.Definition.Fonts.Icon)],
     };
 
     const float IndentStep = 31f;   // per-depth left indent for nested group children (expanded layout only) —
@@ -1085,7 +1085,7 @@ public sealed class NavigationView : Component
         float contentIndent = expandedLayout ? depth * IndentStep : 0f;
 
         Element iconVisual = it.IconContent ?? (it.Glyph.Length > 0
-            ? AnimatedIcon.Glyph(it.Glyph, IconSize, foreground, Theme.IconFont)
+            ? AnimatedIcon.Glyph(it.Glyph, IconSize, foreground, Tok.Definition.Fonts.Icon)
             : new BoxEl { Width = IconSize, Height = IconSize });
 
         var iconCell = new BoxEl
@@ -1108,7 +1108,7 @@ public sealed class NavigationView : Component
                             new BoxEl
                             {
                                 AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.End,
-                                Margin = new Edges4(0f, 2f, 2f, 0f), HitTestVisible = false, Children = [it.InfoBadge],
+                                Margin = new Edges4(0f, 2f, 2f, 0f), HitTestVisible = false, Children = [it.InfoBadge.Value],
                             },
                         ],
                     },
@@ -1151,7 +1151,7 @@ public sealed class NavigationView : Component
                     MaxLines = 1,
                 },
                 ItemHeight, 1f, new Edges4(4, 0, 8, 0)));
-            if (parts is not null && label is BoxEl lb)
+            if (parts is not null && label.Is(out BoxEl lb))
             {
                 var m = parts.Apply(PartItemLabel, lb);
                 label = m with { Animate = lb.Animate, Children = lb.Children };
@@ -1163,7 +1163,7 @@ public sealed class NavigationView : Component
                     AlignSelf = FlexAlign.Center,
                     Margin = new Edges4(0, 0, it.IsExpandable ? 0 : 12f, 0),
                     HitTestVisible = false,
-                    Children = [it.InfoBadge],
+                    Children = [it.InfoBadge.Value],
                 });
             if (it.IsExpandable)
                 children.Add(ChevronCell(isExpanded));
@@ -1203,7 +1203,7 @@ public sealed class NavigationView : Component
         Height = ItemHeight,
         AlignItems = FlexAlign.Center,
         Justify = FlexJustify.Center,
-        Children = [new TextEl(expanded ? Icons.ChevronDown : Icons.ChevronRight) { Size = 8f, Color = Tok.TextSecondary, PressedColor = Tok.TextSecondary, FontFamily = Theme.IconFont }],
+        Children = [new TextEl(expanded ? Icons.ChevronDown : Icons.ChevronRight) { Size = 8f, Color = Tok.TextSecondary, PressedColor = Tok.TextSecondary, FontFamily = Tok.Definition.Fonts.Icon }],
     };
 
     static Element HeaderItem(NavItem it, bool expandedLayout, bool labelsVisible, int depth = 0)

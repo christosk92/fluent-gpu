@@ -22,7 +22,8 @@ public readonly struct RepeatLayout
 {
     public readonly RepeatKind Kind;
     public readonly float Extent;          // Stack: item extent; Grid: item height (≤0 ⇒ measure rows); Wrap/Inline: gap
-    public readonly float Gap;             // Grid: cell gap
+    public readonly float Gap;             // Grid: cell gap (between the cells of a row; also between rows unless <see cref="RowGap"/> is set)
+    public readonly float RowGap;          // Grid: the gap between rows when it differs from <see cref="Gap"/> (NaN ⇒ the same: every single-gap grid)
     public readonly int Columns;           // Grid: fixed columns (0 when <see cref="MinCellWidth"/> drives responsive cols)
     public readonly float MinCellWidth;    // Grid auto/fit: min cell width → column count from cross size
     public readonly float Estimate;        // Grid auto/fit: initial row-height estimate before cells measure
@@ -30,9 +31,18 @@ public readonly struct RepeatLayout
     public readonly IVirtualLayout? CustomLayout;
 
     private RepeatLayout(RepeatKind kind, float extent, float gap, int columns, bool horizontal, IVirtualLayout? custom,
-                         float minCellWidth = 0f, float estimate = 0f)
-        => (Kind, Extent, Gap, Columns, Horizontal, CustomLayout, MinCellWidth, Estimate) =
-            (kind, extent, gap, columns, horizontal, custom, minCellWidth, estimate);
+                         float minCellWidth = 0f, float estimate = 0f, float rowGap = float.NaN)
+        => (Kind, Extent, Gap, Columns, Horizontal, CustomLayout, MinCellWidth, Estimate, RowGap) =
+            (kind, extent, gap, columns, horizontal, custom, minCellWidth, estimate, rowGap);
+
+    /// <summary>The gap between two rows of a grid: <see cref="RowGap"/>, or <see cref="Gap"/> where none was given.</summary>
+    public float EffectiveRowGap => float.IsNaN(RowGap) ? Gap : RowGap;
+
+    /// <summary>This grid with its own gap between rows (<see cref="Gap"/> stays the gap between the cells of a row): <c>GridFit(min, columnGap).WithRowGap(rowGap)</c>. A grid
+    /// kind only; any other layout is returned unchanged. The single-gap factories (<see cref="Grid"/>, <see cref="GridAuto"/>, <see cref="GridFit"/>) are the same grid with the
+    /// row gap equal to the column gap.</summary>
+    public RepeatLayout WithRowGap(float rowGap)
+        => Kind == RepeatKind.Grid ? new(Kind, Extent, Gap, Columns, Horizontal, CustomLayout, MinCellWidth, Estimate, rowGap) : this;
 
     /// <summary>Virtualized uniform stack (1-D).</summary>
     public static RepeatLayout Stack(float itemExtent, bool horizontal = false) => new(RepeatKind.Stack, itemExtent, 0, 0, horizontal, null);
@@ -93,6 +103,22 @@ public readonly struct RepeatLayout
     public static RepeatLayout Wrap(float gap = 8f) => new(RepeatKind.Wrap, 0, gap, 0, false, null);
     /// <summary>Non-virtual stack (column/row) — for small collections (nav panes, toolbars).</summary>
     public static RepeatLayout Inline(bool horizontal = false, float gap = 0f) => new(RepeatKind.Inline, 0, gap, 0, horizontal, null);
+
+    /// <summary>True when the two specs describe the same layout: every field by value, a custom layout by reference.</summary>
+    public static bool SameGeometry(in RepeatLayout a, in RepeatLayout b)
+        => a.Kind == b.Kind && a.Extent == b.Extent && a.Gap == b.Gap && a.EffectiveRowGap == b.EffectiveRowGap && a.Columns == b.Columns && a.MinCellWidth == b.MinCellWidth
+        && a.Estimate == b.Estimate && a.Horizontal == b.Horizontal && ReferenceEquals(a.CustomLayout, b.CustomLayout);
+
+    /// <summary><see cref="SameGeometry(in RepeatLayout, in RepeatLayout)"/> over two optional specs (both null is the same).</summary>
+    public static bool SameGeometry(RepeatLayout? a, RepeatLayout? b)
+        => a is { } x ? b is { } y && SameGeometry(in x, in y) : b is null;
+
+    /// <summary>True when <paramref name="next"/> differs from <paramref name="current"/> only in a responsive grid's cell floor, its gaps (between the cells of a row and between rows)
+    /// and its row estimate (a seed) — the changes a mounted <see cref="FluentGpu.Scene.GridVirtualLayout"/> re-fits in place.</summary>
+    public static bool IsCellFloorRefit(in RepeatLayout current, in RepeatLayout next)
+        => current.Kind == RepeatKind.Grid && next.Kind == RepeatKind.Grid && current.MinCellWidth > 0f && next.MinCellWidth > 0f
+        && current.Extent == next.Extent && current.Columns == next.Columns
+        && current.Horizontal == next.Horizontal && ReferenceEquals(current.CustomLayout, next.CustomLayout);
 }
 
 /// <summary>
@@ -164,6 +190,10 @@ public sealed record ScrollOptions
     /// <see cref="ListOptions.PersistentPrefixCount"/>. Persistent prefix items (for example a hero + sticky chrome)
     /// remain unclipped. The recorder applies one shared band clip without per-row paint writes; NaN disables it.</summary>
     public float ItemClipTopInset { get; init; } = float.NaN;
+    /// <summary>A LIVE <see cref="ItemClipTopInset"/>: where set, the view reads it on every render (a change re-renders the view, which re-writes the
+    /// band), so an inset that changes after mount (a pinned head that measures later, a chrome row that arrives) stays authoritative instead of being
+    /// overwritten by the frozen <see cref="ItemClipTopInset"/> on the view's next reconcile. NaN disables the band, as the static value does.</summary>
+    public IReadSignal<float>? ItemClipTopInsetSource { get; init; }
     /// <summary>Optional top alpha-feather, in DIP, applied to the same recyclable suffix as
     /// <see cref="ItemClipTopInset"/>. The hard inset remains authoritative for paint and input; this only softens the
     /// visible edge immediately below pinned prefix chrome. Zero (default) disables it.</summary>
@@ -329,6 +359,10 @@ public record ListOptions
     public bool IsItemInvokedEnabled { get; init; }
     /// <summary>The invoke callback (WinUI <c>ItemInvoked</c>): the item index, gated by the invoke matrix.</summary>
     public Action<int>? OnInvoked { get; init; }
+    /// <summary>With a selection mode active, a pointer Tap ALSO raises <see cref="OnInvoked"/> (the WinUI ListView's <c>IsItemClickEnabled</c> shape: a
+    /// click selects and acts, so clicking the item already selected still acts; Enter acts; arrows, Space and a Ctrl/Shift click only move and
+    /// select; a DoubleTap's second press does not act twice). Needs <see cref="IsItemInvokedEnabled"/>. Default false: the ItemsView matrix (a Tap only selects).</summary>
+    public bool InvokeOnTap { get; init; }
     /// <summary>Selection-changed callback (WinUI <c>SelectionChanged</c>).</summary>
     public Action? OnChange { get; init; }
     /// <summary>Typeahead text per item (defaults to the string items when they back the view).</summary>

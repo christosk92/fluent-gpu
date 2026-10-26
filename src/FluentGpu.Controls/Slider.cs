@@ -88,7 +88,10 @@ public static partial class Slider
     }
 
     public static Style? StyleOverride;
-    public static Style DefaultStyle => StyleOverride ?? new Style
+    public static Style DefaultStyle => StyleOverride ?? ControlStyles.Resolve(ControlStyles.SliderStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a Slider entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style
     {
         RailFill = Tok.FillControlStrong,
         RailFillDisabled = Tok.FillControlStrongDisabled,
@@ -668,7 +671,7 @@ internal sealed partial class SliderCore : Component
         return new BoxEl
         {
             Direction = 1,
-            Children = clock is null ? [withHeader] : [withHeader, clock],
+            Children = clock is null ? [withHeader] : [withHeader, clock.Value],
         };
     }
 }

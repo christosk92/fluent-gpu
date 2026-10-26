@@ -463,6 +463,20 @@ split. `FlowState` is the **one exception** — it is a 4-byte *hot-spine* colum
 RTL resolution is per-node and read by *both* layout and the record-time overlay-placement path; 4 bytes on the
 spine costs less than the indirection, and it packs into the same cache-line group as `NodeFlags`.
 
+**`NodePaint` hot/cold (AS-BUILT 2026-10-21).** `NodePaint` had grown to 356 B, stored densely in the `SceneStore` column
+and in each `SceneRecordingSnapshot` copy (Wavee: 8192 slots × 4 copies ≈ 11.7 MB of LOH arrays). It is now 180 B hot plus
+`NodePaintCold` (172 B): `HoverOpacity`/`PressedOpacity`, `HoverFill`/`PressedFill`, `HoverBorderColor`/`PressedBorderColor`,
+`ValidationBorder`, `BorderDashOn`/`BorderDashOff`, `TabFlareRadius`, the four `Text*Color` state ramps and
+`ImageFocusX`/`ImageFocusY`. The rule that picked the split: a field stays hot when a per-frame writer touches it (animation
+channels: transform, opacity, blur, presented size, stroke trim, clip; the scroll pose and the flow/reflow pass: origin,
+child shift, flow fields) or the record walk reads it on every node (fill, border, corners, text colour, kind); it goes
+cold when only the reconciler, a bind effect or a control writes it and the recorder reads it behind a kind or state
+gate. `NodePaint.ColdRef` indexes the owning container's `PaintColdRows` (row 0 = the shared default, so readers take a ref
+with no branch); `SceneStore.SetPaintCold` is the only writer (equal values no-op, a value equal to the default frees the
+row, a change notes the capture ledger). A capture remaps the row into the snapshot's own rows (a slot owns its row while
+reachable; an unreachable slot releases it), the parity check compares hot halves without `ColdRef` and cold rows by
+value, and no animation channel targets a cold field, so the compositor overlay never poses one.
+
 #### 2.6a Node-indexed dense arrays are for the SPINE only — the slot-pool rule (AS-BUILT 2026-09)
 
 The hot/cold split above is a rule about the **store**. The same rule binds every subsystem that keeps per-node

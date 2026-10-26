@@ -34,12 +34,44 @@ public static class FluentApp
     // held here rather than read off the captured options record because DwmSetWindowAttribute is re-callable: both the
     // startup apply and the host's re-theme hook must see the CURRENT variant, or a live change would be reverted by the
     // next theme flip.
-    private static bool s_mica, s_customFrame, s_micaAlt, s_acrylic, s_topmost;
+    private static WindowMaterial s_material = WindowMaterial.Mica;
+    private static bool s_composited = true, s_customFrame, s_topmost;
+    // The Mica variant SetWindowMaterialAcrylic(false) returns to (seeded from AppOptions.MicaAlt, moved by SetWindowMaterialAlt).
+    private static bool s_micaAlt;
+
+    /// <summary>The window's CURRENT system backdrop (<see cref="WindowMaterial"/>): seeded from <see cref="AppOptions.Material"/>
+    /// (or the legacy <see cref="AppOptions.Mica"/>), changed by <see cref="SetWindowMaterial"/>.</summary>
+    public static WindowMaterial Material => s_host?.WindowMaterial ?? s_material;
+
+    /// <summary>True when the swapchain is composited (a DirectComposition surface bound to the window). Independent of
+    /// <see cref="Material"/>; video needs it.</summary>
+    public static bool Composited => s_composited;
+
+    /// <summary>Change the LIVE window material (EP9): <see cref="WindowMaterial.None"/> removes the DWM backdrop and the glass and
+    /// the frame clears to the theme's opaque ground; the others switch the backdrop. The ground and the DWM write are published
+    /// together: the DWM attribute is queued to the presenting thread (after a <c>DwmFlush</c>) and lands immediately before the
+    /// present that first shows the new ground, so the backdrop never changes a frame before or after the pixels. The new material
+    /// sticks across theme flips. UI-thread only; before the window exists it records the value for the next run. A non-composited
+    /// window keeps an opaque ground whatever the material (only its title bar can show a backdrop).</summary>
+    public static void SetWindowMaterial(WindowMaterial material)
+    {
+        s_material = material;
+        if (WindowHandle == 0 || s_host is not { } host) return;
+        host.SetWindowMaterial(material, Theme.Dark, ordered: true);
+    }
+
+    // The sink the host calls (on the UI thread for an immediate apply, on the presenting thread for an ordered one): align to DWM's
+    // cycle, then write the dark attribute, backdrop and frame extension together.
+    private static void WriteWindowMaterial(nint hwnd, WindowMaterial material, bool dark, bool ordered)
+    {
+        if (ordered) Win32Theme.AlignToDwm();
+        Win32Theme.ApplyWindowMaterial(hwnd, dark, material, s_composited, s_customFrame);
+    }
 
     /// <summary>True when the window is using Mica <b>BaseAlt</b> (a stronger tint of the desktop wallpaper than base
     /// Mica) rather than base Mica. Seeded from <see cref="AppOptions.MicaAlt"/>; changed by
-    /// <see cref="SetWindowMaterialAlt"/>.</summary>
-    public static bool WindowMaterialAlt => s_micaAlt;
+    /// <see cref="SetWindowMaterialAlt"/> / <see cref="SetWindowMaterial"/>.</summary>
+    public static bool WindowMaterialAlt => Material == WindowMaterial.MicaAlt;
 
     /// <summary>Switch the LIVE window between Mica BaseAlt (<paramref name="micaAlt"/> true) and base Mica — the
     /// re-callable half of the startup <c>ApplyWindowMaterial</c>, for an app that exposes the material as a user setting.
@@ -49,22 +81,22 @@ public static class FluentApp
     public static void SetWindowMaterialAlt(bool micaAlt)
     {
         s_micaAlt = micaAlt;
-        if (WindowHandle != 0 && s_mica)
-            Win32Theme.ApplyWindowMaterial(WindowHandle, Theme.Dark, s_mica, s_customFrame, micaAlt, s_acrylic);
+        if (Material is WindowMaterial.Mica or WindowMaterial.MicaAlt)
+            SetWindowMaterial(micaAlt ? WindowMaterial.MicaAlt : WindowMaterial.Mica);
     }
 
     /// <summary>True when the window shows the desktop-acrylic backdrop instead of Mica. Seeded from
-    /// <see cref="AppOptions.Acrylic"/>; changed by <see cref="SetWindowMaterialAcrylic"/>.</summary>
-    public static bool WindowMaterialAcrylic => s_acrylic;
+    /// <see cref="AppOptions.Acrylic"/>; changed by <see cref="SetWindowMaterialAcrylic"/> / <see cref="SetWindowMaterial"/>.</summary>
+    public static bool WindowMaterialAcrylic => Material == WindowMaterial.Acrylic;
 
-    /// <summary>Switch the LIVE window between desktop acrylic (<paramref name="acrylic"/> true) and Mica — the acrylic
-    /// sibling of <see cref="SetWindowMaterialAlt"/>, with the same stickiness across theme flips. UI-thread only; no-op
-    /// when the window is not Mica-backed (<see cref="AppOptions.Mica"/> false).</summary>
+    /// <summary>Switch the LIVE window between desktop acrylic (<paramref name="acrylic"/> true) and Mica (Base or BaseAlt, the
+    /// last <see cref="SetWindowMaterialAlt"/> choice) — the acrylic sibling of <see cref="SetWindowMaterialAlt"/>, routed through
+    /// <see cref="SetWindowMaterial"/> with the same stickiness across theme flips. UI-thread only; no-op when the window has no
+    /// backdrop (<see cref="WindowMaterial.None"/>).</summary>
     public static void SetWindowMaterialAcrylic(bool acrylic)
     {
-        s_acrylic = acrylic;
-        if (WindowHandle != 0 && s_mica)
-            Win32Theme.ApplyWindowMaterial(WindowHandle, Theme.Dark, s_mica, s_customFrame, s_micaAlt, acrylic);
+        if (Material is WindowMaterial.Mica or WindowMaterial.MicaAlt or WindowMaterial.Acrylic)
+            SetWindowMaterial(acrylic ? WindowMaterial.Acrylic : s_micaAlt ? WindowMaterial.MicaAlt : WindowMaterial.Mica);
     }
 
     /// <summary>True while the main window stays above every non-topmost window. Seeded from
@@ -234,10 +266,18 @@ public static class FluentApp
     /// (a window the app hid during mount stays hidden).</summary>
     public static void SetWindowVisible(bool visible)
     {
-        // Before the no-op early-out: hiding a window that is still hidden waiting for its first fit must cancel that show.
+        // Before the no-op early-out: hiding a window that is still hidden waiting for its first fit (or its reveal) must cancel
+        // that show.
         s_host?.CancelShowWhenFitted();
+        if (!visible) s_host?.CancelRevealGate();
         if (s_window is not { IsClosed: false } w || w.IsVisible == visible) return;
-        if (visible) w.Show();
+        if (visible)
+        {
+            // A show-from-hidden under RevealOnFirstPresent repaints the frame into the hidden window and shows it on its present
+            // (re-armed reveal exemption), instead of showing whatever the swapchain last held. Idempotent while one is pending.
+            if (s_reveal is { } gate && s_host is { } host) { if (!host.IsRevealPending) host.BeginRevealGate(gate); }
+            else w.Show();
+        }
         else w.Hide();
     }
 
@@ -303,13 +343,14 @@ public static class FluentApp
     internal const int UiThreadStackBytes = 32 * 1024 * 1024;
 
     /// <summary>The main window's <see cref="WindowDesc"/> for <paramref name="o"/> — the one AppOptions → platform mapping
-    /// (title, size, Mica composition, custom frame, min size, zoom and the overlay shape Topmost / ToolWindow / Resizable).
-    /// Factored out of <see cref="RunCore"/> so a test can assert the mapping without creating a window.</summary>
-    internal static WindowDesc DescribeWindow(AppOptions o) => new(
+    /// (title, size, composition (EP9: <see cref="AppOptions.Composited"/>, else the legacy Mica rule), custom frame, min size,
+    /// zoom and the overlay shape Topmost / ToolWindow / Resizable).
+    /// Factored out of <see cref="RunCore"/> so the mapping lives in one place.</summary>
+    internal static WindowDesc DescribeWindow(AppOptions o, bool composited) => new(
         o.Title,
         new Size2(o.Width, o.Height),
         1f,
-        o.Mica,
+        composited,
         CustomFrame: o.CustomFrame,
         MinClientSizeDip: new Size2(o.MinWidth, o.MinHeight),
         Zoom: ZoomLadder.Clamp(o.Zoom),
@@ -351,6 +392,7 @@ public static class FluentApp
         s_zoomWindow = null; s_zoom = 1f;
         s_window = null;
         s_host = null;
+        s_reveal = null;
         s_gpuDevice = null;
     }
 
@@ -365,7 +407,7 @@ public static class FluentApp
         // the cadence bottleneck on the current build. It is not a product backdrop decision.
         if (EngineSwitches.OpaqueWindow)
         {
-            o = o with { Mica = false };
+            o = o with { Mica = false, Material = WindowMaterial.None, Composited = false };
             Console.Error.WriteLine("[window] --fg opaque — DWM Mica disabled; using opaque HWND swapchain");
         }
 
@@ -398,13 +440,28 @@ public static class FluentApp
         var app = lifetime.Own(new Win32App());
         // customFrame: the app draws its own WinUI TitleBar (caption stripped, engine caption buttons, snap layouts) —
         // an explicit opt-in (the gallery): apps without a TitleBar keep the standard OS frame.
-        var window = (Win32Window)app.CreateWindow(DescribeWindow(o));
+        // EP9: material and composition are two decisions. The material is the explicit Material or the legacy Mica/MicaAlt/Acrylic flags;
+        // composited defaults to the legacy rule (on with Mica) unless the app says otherwise - a composited window with no
+        // backdrop (WindowMaterial.None + an opaque ground) is the supported way to keep video without Mica.
+        WindowMaterial material = o.Material ?? WindowMaterialPolicy.FromLegacy(o.Mica, o.MicaAlt, o.Acrylic);
+        bool composited = o.Composited ?? o.Mica;
+        var plan = WindowMaterialPolicy.Resolve(material, composited, o.CustomFrame);
+        if (!plan.VideoCapable) Console.Error.WriteLine("[window] composited = false: video playback is unavailable (it needs a composited swapchain)");
+        var window = (Win32Window)app.CreateWindow(DescribeWindow(o, composited));
+        // The screenshot harness's capture surface: the host lays out and rasterises at SurfaceSizeDip × SurfaceScale px
+        // whatever the monitor allows (before the host exists, so the first frame and the swapchain are already that size).
+        if (h.Screenshot is not null && h.SurfaceSizeDip is { Width: > 0f, Height: > 0f } surface)
+        {
+            float s = h.SurfaceScale > 0f ? h.SurfaceScale : 1f;
+            window.PinSurface(new Size2(surface.Width * s, surface.Height * s), s);
+            Console.Error.WriteLine($"[window] capture surface pinned at {surface.Width}x{surface.Height} DIP, scale {s}");
+        }
         BootStamp("create-window");
         // Publish the real top-level HWND so app-layer callers (the Windows-APIs page: SMTC / pickers / taskbar) can pass
         // it as their explicit nint hwnd — the host accessor, not an Engine-seam invention. Cleared when the run ends.
         WindowHandle = window.Handle.Value;
         // Seed the live material state (see SetWindowMaterialAlt) — every later apply reads these, not the options record.
-        s_mica = o.Mica; s_customFrame = o.CustomFrame; s_micaAlt = o.MicaAlt; s_acrylic = o.Acrylic; s_topmost = o.Topmost;
+        s_material = material; s_composited = composited; s_customFrame = o.CustomFrame; s_micaAlt = o.MicaAlt; s_topmost = o.Topmost;
         // Seed the live app-zoom state (see SetZoom): the window was CREATED at the clamped factor above, so the first
         // frame already lays out at the user's persisted level — keep the statics in agreement with it.
         s_zoom = ZoomLadder.Clamp(o.Zoom);
@@ -417,16 +474,16 @@ public static class FluentApp
         if (Win32Theme.ReadAccentRamp() is { } ramp) Tok.SetAccent(in ramp);
         else if (Win32Theme.AccentLight2() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
         else if (Win32Theme.Accent() is { } b) Theme.Accent = ColorF.FromRgba(b.R, b.G, b.B);
-        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, s_mica, s_customFrame, s_micaAlt, s_acrylic);
+        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, s_material, s_composited, s_customFrame);
         if (o.ToolWindow) Win32Theme.ApplyRoundCorners(window.Handle.Value);
-        if (o.Mica) Theme.WindowBackground = ColorF.Transparent;
+        if (plan.TransparentGround) Theme.WindowBackground = ColorF.Transparent;
         BootStamp("accent+material");
 
         // Text measurement runs through DirectWrite (the same design advances + line-break math the D3D12 GlyphRenderer
         // uses to render), so measured wrap/height matches rendered wrap/height exactly. (GDI measure is retired here.)
         var fonts = new DirectWriteFontSystem(strings);
         BootStamp("directwrite-fonts");
-        IGpuDevice device = new D3D12Device(strings, composited: o.Mica, debugLayer: o.D3D12DebugLayer, dred: o.D3D12Dred);
+        IGpuDevice device = new D3D12Device(strings, composited: composited, debugLayer: o.D3D12DebugLayer, dred: o.D3D12Dred);
         BootStamp("d3d12device-ctor");
         // Bring the ADAPTER up here, not at the first CreateSwapchain inside the AppHost constructor below. The three
         // budgets on the next few lines are captured once and read GpuProfile.Tier, which only InitDevice publishes —
@@ -487,9 +544,12 @@ public static class FluentApp
 
         // Live re-theme: on every theme change the host re-applies the OS window material so DWM's immersive-dark titlebar
         // and the Mica system backdrop flip to the new theme's variant (instant — the OS can't cross-fade its backdrop;
-        // the in-app content cross-fades). Mirrors the one-shot startup ApplyWindowMaterial above. Reads the LIVE material
-        // statics so a SetWindowMaterialAlt change survives every subsequent theme flip.
-        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, s_mica, s_customFrame, s_micaAlt, s_acrylic);
+        // the in-app content cross-fades). Mirrors the one-shot startup ApplyWindowMaterial above. Reads the host's LIVE material
+        // (SetWindowMaterial, SetWindowMaterialAlt and a theme transaction all move it) so a change survives every later theme flip.
+        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, host.WindowMaterial, s_composited, s_customFrame);
+        // EP9: the ordered writer SetWindowMaterial uses (queued to the presenting thread, DWM-aligned).
+        host.SeedWindowMaterial(material);
+        host.WindowMaterialSink = (m, dark) => WriteWindowMaterial(window.Handle.Value, m, dark, ordered: true);
         // Relay the host's UI-thread OS color-settings-change to the app-layer static event (the app subscribes to follow
         // the OS dark-mode/accent live while its theme mode is "System").
         Action forwardSystemColors = () => SystemColorsChanged?.Invoke();
@@ -517,13 +577,36 @@ public static class FluentApp
         // it records; `--fg ledger[=PATH]` turns it on from the first frame (FrameLedger.cs).
         Win32LedgerSampler.Install(gpuDev);
         if (EngineSwitches.Ledger) FrameLedger.Enable();
+        // `--fg frame-trace[=PATH]`: the frame/animation timeline (FrameTrace.cs) from the first frame on; it runs the ledger itself.
+        if (FrameTrace.RequestedPath is { } tracePath)
+        {
+            var szpx = window.ClientSizePx;
+            FrameTrace.Start(tracePath,
+            [
+                new("dpi", window.Scale.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)),
+                new("client_px", szpx.Width.ToString(System.Globalization.CultureInfo.InvariantCulture) + "x" + szpx.Height.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new("engine", typeof(FrameTrace).Assembly.GetName().Version?.ToString() ?? "-"),
+            ]);
+        }
 
         // StartHidden: the window exists (HWND, swapchain, host, the mounted tree) but is never shown, so the first frame
         // is already parked — the loop blocks on messages until SetWindowVisible(true), and that show edge paints.
-        // SizeToContent: the window stays hidden until the first fit landed (AppHost.ShowWhenFitted), so it never flashes
-        // at the AppOptions size; Manual shows at once.
-        if (!o.StartHidden) host.ShowWhenFitted();
-        BootStamp(o.StartHidden ? "window-start-hidden" : "window-show");
+        // RevealOnFirstPresent (EP8): the window stays hidden until its first frame has presented with the app's fonts ready (or the
+        // watchdog fires) - no white/black flash, no fallback-glyph first frame. It needs a composited swapchain (a non-composited
+        // target stands a hidden window's presents down), so a non-Mica window keeps today's show-first behaviour.
+        s_reveal = null;
+        if (o.RevealOnFirstPresent && composited)
+            s_reveal = new RevealGateOptions { FirstFrameReady = o.FirstFrameReady, TimeoutMs = o.RevealTimeoutMs };
+        else if (o.RevealOnFirstPresent)
+            Console.Error.WriteLine("[reveal] RevealOnFirstPresent ignored: the window is not composited (a hidden window's presents are stood down)");
+        // SizeToContent (not Manual) under the reveal gate: the gate waits for the fit too (AppHost.BeginRevealGate) - measure,
+        // resize the hidden window, present the first frame at that size, then show - so the window neither flashes at the
+        // AppOptions size nor shows an empty or half-themed frame. Without the gate, ShowWhenFitted shows it after the first
+        // fit (at once with Manual).
+        if (o.StartHidden) { }
+        else if (s_reveal is { } gate) host.BeginRevealGate(gate);
+        else host.ShowWhenFitted();
+        BootStamp(o.StartHidden ? "window-start-hidden" : s_reveal is not null ? "window-reveal-gate" : "window-show");
 
         // Optional diagnostic-harness takeover (the gallery's SoakProbe longevity / leak-hunt + targeted-stress modes,
         // selected by the gallery's command line). Installed via FluentApp.DiagnosticRun; when it handles the run it
@@ -775,6 +858,7 @@ public static class FluentApp
 
         if (allocTypes) AllocTypeProfiler.Stop();   // tear down the EventListener (no leak past the run)
         if (EngineSwitches.Ledger) FrameLedger.DumpIfRequested();   // `--fg ledger=PATH`: the binary + one CSV per stream
+        FrameTrace.Stop();   // `--fg frame-trace`: the last drain and the summary row (no-op when off)
         Win32LedgerSampler.Uninstall(gpuDev);
 
         // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.
@@ -782,13 +866,17 @@ public static class FluentApp
         {
             host.QuiesceRenderThread();   // async (the default): stop the render thread so CaptureBgra (a UI-thread GPU op) is the sole GPU owner
             var px = d3d.CaptureBgra(out int cw, out int ch);
-            PngWriter.WriteBgra(shotPath, px, cw, ch);
+            // The back buffer is PREMULTIPLIED and a Mica window's chrome and layer fills are see-through: dropping the alpha
+            // byte composited them over black (the grey "dim" every capture showed). Flatten over the theme's solid base, the
+            // material's own fallback, which is what the window shows wherever DWM's backdrop does not reach.
+            PngWriter.WriteBgra(shotPath, px, cw, ch, backdrop: Tok.T.WindowBackground);
             Console.Error.WriteLine($"screenshot: wrote {shotPath} ({cw}x{ch})");
         }
 
     }
 
     private static AppHost? s_host;
+    private static RevealGateOptions? s_reveal;   // non-null while RevealOnFirstPresent gates every show-from-hidden
     private static D3D12Device? s_gpuDevice;
 
     /// <summary>The engine's live-object census (scene nodes, strings, decoded-image bytes, components, bindings,
@@ -806,11 +894,40 @@ public static class FluentApp
     /// give back under pressure. Null before the window is up or after it closed.</summary>
     public static ImageCache? EngineImages => s_host?.Images;
 
+    /// <summary>The running host's <see cref="AppHost.IsInteractionQuiet"/> (true when no host runs). UI thread.</summary>
+    public static bool IsInteractionQuiet => s_host?.IsInteractionQuiet ?? true;
+
+    /// <summary>The running host's <see cref="AppHost.IsSettledForPause"/> (true when no host runs). UI thread.</summary>
+    public static bool IsSettledForPause(long interactionQuietMs) => s_host?.IsSettledForPause(interactionQuietMs) ?? true;
+
     /// <summary>Compact per-class GPU residency fragment (top tracked-resource classes, render-target pool
     /// occupancy, upload-arena counters) — see <see cref="D3D12Device.DiagGpuCensusLine"/>. Pairs with <see
     /// cref="GpuResidency"/> in an app's memory sampler: `gpu bytes=… resources=…` plus this fragment appended
     /// verbatim. Null headless or before the window is up.</summary>
     public static string? GpuCensusLine() => s_gpuDevice?.DiagGpuCensusLine;
+
+    /// <summary>The byte-exact live-object census (<see cref="D3D12Device.LiveObjectCensus"/>): every resource and heap the
+    /// D3D12 runtime still holds, split into tracked / leaked / untracked with exact sizes. Runs on the presenting thread
+    /// before the next present and hands the report to <paramref name="done"/> there. Needs <see cref="AppOptions.D3D12DebugLayer"/>;
+    /// without it the report says so. False when no window or no D3D12 device is up. Diagnostics only.</summary>
+    /// <summary>The retained-tile memory census (<see cref="AppHost.TileMemoryCensus"/>: every resident tile by slice, the
+    /// empty ones, how much of each one is painted) and the surface pool's (<see cref="D3D12Device.SurfaceCensus"/>: tile
+    /// textures by size, scratch leased / retained / idle). Runs on the presenting thread, hands the report to
+    /// <paramref name="done"/> there. Works without the debug layer. Diagnostics only.</summary>
+    public static bool RequestTileCensus(Action<string> done)
+    {
+        if (s_host is not { } host) return false;
+        var gpu = s_gpuDevice;
+        host.QueueBeforePresent(() => done(host.TileMemoryCensus() + (gpu?.SurfaceCensus() ?? "")));
+        return true;
+    }
+
+    public static bool RequestGpuLiveCensus(Action<string> done)
+    {
+        if (s_host is not { } host || s_gpuDevice is not { } gpu) return false;
+        host.QueueBeforePresent(() => done(gpu.LiveObjectCensus()));
+        return true;
+    }
 
 
     /// <summary>One best-effort delete of the engine's legacy default image cache (<c>%TEMP%\fluent-gpu\imgcache</c>),
@@ -864,8 +981,21 @@ public sealed record AppOptions
     public bool Mica { get; init; } = true;
     /// <summary>Use Mica BaseAlt (the flatter File-Explorer tint) instead of the default Mica Base.</summary>
     public bool MicaAlt { get; init; }
-    /// <summary>Show the desktop-acrylic backdrop (a blur of whatever is behind the window) instead of Mica. Needs
-    /// <see cref="Mica"/> (the composited backdrop path); changed live by <see cref="FluentApp.SetWindowMaterialAcrylic"/>.</summary>
+
+    /// <summary>The window's system backdrop (EP9). Null (the default) keeps the legacy flags: <see cref="Mica"/> /
+    /// <see cref="MicaAlt"/> / <see cref="Acrylic"/> on = Mica / Mica Alt / Acrylic, <see cref="Mica"/> off = <see cref="WindowMaterial.None"/>. Set it for
+    /// <see cref="WindowMaterial.Acrylic"/> or to say <see cref="WindowMaterial.None"/> while keeping a composited swapchain
+    /// (an opaque ground, no DWM backdrop, video still works). Change it live with <see cref="FluentApp.SetWindowMaterial"/>.</summary>
+    public WindowMaterial? Material { get; init; }
+
+    /// <summary>Whether the swapchain is composited (a DirectComposition surface bound to the window). Null (the default) keeps
+    /// the legacy rule: composited iff <see cref="Mica"/>. Independent of the material: <c>Composited = true</c> with
+    /// <see cref="WindowMaterial.None"/> is allowed; video playback needs a composited window (logged when it is off); a
+    /// non-composited window has an opaque ground whatever the material and no <see cref="RevealOnFirstPresent"/>.</summary>
+    public bool? Composited { get; init; }
+    /// <summary>Show the desktop-acrylic backdrop (a blur of whatever is behind the window) instead of Mica (the legacy-flag
+    /// form of <c>Material = WindowMaterial.Acrylic</c>; ignored when <see cref="Material"/> is set). Needs <see cref="Mica"/>
+    /// (the composited backdrop path); changed live by <see cref="FluentApp.SetWindowMaterialAcrylic"/>.</summary>
     public bool Acrylic { get; init; }
     /// <summary>The app draws its own title bar (OS caption stripped; engine caption buttons + snap layouts).</summary>
     public bool CustomFrame { get; init; }
@@ -882,7 +1012,8 @@ public sealed record AppOptions
     /// ran, the client area follows the content's natural size (DPI and app zoom included), clamped to
     /// <see cref="MinWidth"/>/<see cref="MinHeight"/> and the monitor work area. <see cref="Width"/>/<see cref="Height"/>
     /// are then only the size the first layout happens at; the window is shown after its first fit (unless
-    /// <see cref="StartHidden"/>), so it never flashes at that size. The user resizing the frame switches it to
+    /// <see cref="StartHidden"/>), so it never flashes at that size. With <see cref="RevealOnFirstPresent"/> the reveal waits for
+    /// the fit: the first frame presented is the one at the fitted size, and the window is shown once it has presented. The user resizing the frame switches it to
     /// <see cref="FluentGpu.Hosting.SizeToContent.Manual"/>; changed live by <see cref="FluentApp.SetSizeToContent"/>.
     /// Default Manual.</summary>
     public SizeToContent SizeToContent { get; init; }
@@ -922,6 +1053,22 @@ public sealed record AppOptions
     /// (only the startup activation, never a Start-menu click); the engine only honours it.</summary>
     public bool StartHidden { get; init; }
 
+    /// <summary>Keep the window hidden until its first frame has PRESENTED with <see cref="FirstFrameReady"/> true, then show it
+    /// (EP8): the first thing the user sees is the final frame, with the OS material and dark attribute already applied. The same
+    /// gate re-arms for every later <see cref="FluentApp.SetWindowVisible"/>(true) (tray restore): the frame is repainted into
+    /// the hidden window and shown on its present. Requires a composited window (<see cref="Mica"/>); ignored (and logged)
+    /// otherwise. A watchdog (<see cref="RevealTimeoutMs"/>) shows the window anyway. Default false (show first, as before).</summary>
+    public bool RevealOnFirstPresent { get; init; }
+
+    /// <summary>The fonts-ready predicate of <see cref="RevealOnFirstPresent"/>: true once the first screen's fonts are loaded
+    /// (pass the font registry's readiness). Evaluated on the UI thread every frame while the reveal is pending. Null = ready
+    /// at once.</summary>
+    public Func<bool>? FirstFrameReady { get; init; }
+
+    /// <summary>The watchdog of <see cref="RevealOnFirstPresent"/> (ms, default 750): the window is shown anyway when a ready
+    /// frame has not presented by then.</summary>
+    public int RevealTimeoutMs { get; init; } = 750;
+
     /// <summary>Item E: the scene store's (and the render seam's snapshot slots') starting node capacity, and the
     /// floor cold maintenance will never trim it back below. 0 (the default) keeps the engine's own small default (64,
     /// no floor) — fine for a sample, but an app whose first REAL scene is known to be large should size this up
@@ -955,6 +1102,13 @@ public sealed record HarnessOptions
     public string? Screenshot { get; init; }
     /// <summary>Per-frame wait (ms) used while a <see cref="Screenshot"/> is pending — deterministic settle pacing.</summary>
     public int FrameWaitMs { get; init; } = 8;
+    /// <summary>With <see cref="Screenshot"/>: the capture surface's size in DIP. Set, the host lays out and renders at this
+    /// size (× <see cref="SurfaceScale"/> px) whatever the window and the monitor allow, so a review capture can show a
+    /// 2560- or 3840-DIP layout on a smaller screen. The window on screen shows the surface's top-left corner; input is not
+    /// mapped to it. Empty (the default) keeps the window's own size.</summary>
+    public Size2 SurfaceSizeDip { get; init; }
+    /// <summary>The capture surface's DPI scale (px per DIP before app zoom); default 1. Read only with <see cref="SurfaceSizeDip"/>.</summary>
+    public float SurfaceScale { get; init; } = 1f;
 }
 
 /// <summary>

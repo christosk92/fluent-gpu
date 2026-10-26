@@ -18,7 +18,7 @@ UTF-8 and built with `/utf-8`. Run it from a shell whose `vcvarsall` target is t
 box an x64-emulated shell still builds either one, because the script calls `vcvarsall` with the argument.
 
 `FluentGpu.WindowsApp` builds the DLL for its own architecture whenever any source here is newer than the output (never
-in an IDE's design-time build), and `FluentGpu.Windows.Tests` copies it beside the test assembly for the demuxer gate.
+in an IDE's design-time build).
 Both pick the architecture from `PlayReadyNative.props`: the explicit `RuntimeIdentifier`, else the running SDK's RID —
 the architecture the managed process actually runs as, not `PROCESSOR_ARCHITECTURE`.
 

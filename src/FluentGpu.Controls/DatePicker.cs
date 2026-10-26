@@ -454,7 +454,7 @@ internal static class PickerFlyout
             Margin = margin, Padding = Edges4.All(4f), Corners = Radii.ControlAll,
             Fill = Tok.FillSubtleTransparent, HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             Role = AutomationRole.Button, OnClick = onClick,
-            Children = [new TextEl(glyph) { Size = 16f, FontFamily = Theme.IconFont, Color = Tok.TextPrimary }],
+            Children = [new TextEl(glyph) { Size = 16f, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextPrimary }],
         };
 
         return new BoxEl
@@ -587,7 +587,7 @@ internal sealed class DateTimeLoopColumn : Component
             [
                 new TextEl(glyph)
                 {
-                    Size = 8f, FontFamily = Theme.IconFont,
+                    Size = 8f, FontFamily = Tok.Definition.Fonts.Icon,
                     Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary, PressedColor = Tok.TextPrimary,
                 },
             ],

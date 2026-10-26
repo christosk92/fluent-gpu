@@ -9,7 +9,7 @@ namespace FluentGpu.Scroll.Runtime;
 
 /// <summary>Per-viewport scrollbar CHROME state (fade/expand/hover/idle) — the WinUI "conscious scrollbar" FSM's
 /// row. Presentation only: it never carries a motion value (design §9 "chrome never touches motion").</summary>
-public struct ScrollBarChromeRow
+public record struct ScrollBarChromeRow
 {
     public float FadeT;                   // scrollbar indicator opacity 0..1 (eased in on scroll/hover, auto-hides after idle)
     public float ExpandT;                 // WinUI conscious scrollbar expansion 0=thin indicator, 1=full gutter + buttons

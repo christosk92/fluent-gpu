@@ -66,6 +66,8 @@ public sealed unsafe partial class D3D12Device
     /// <summary>Self-blurs / acrylic backdrops the last composite re-drew from a retained result instead of recomputing.</summary>
     public int LastBlurCacheHits => _frameBlurCacheHits;
     public long TileSurfaceBytes => _surfaces?.TileBytes ?? 0L;
+    /// <summary>The surface pool's census (diagnostics, render thread): see <c>SurfacePool.SurfaceCensus</c>.</summary>
+    public string SurfaceCensus() => _surfaces?.SurfaceCensus() ?? "surface-census: no surface pool";
 
     // ── always-on per-kind offscreen split (plain fields; the scroll bench's diagnosis line) ──
     private int _offGroupN, _offGroupHits, _offBlurN, _offBlurHits, _offBackdropN, _offBackdropHits, _offDirectN, _offInlineN, _groupRenders;
@@ -147,10 +149,13 @@ public sealed unsafe partial class D3D12Device
         EnsureCompositeResources(maxSurface);
         if (_compositeOwner == 0) _compositeOwner = frame.OwnerToken;
         MapRows(in frame);
+        RcBeginSubmit();
+        long rcGlyph0 = Stopwatch.GetTimestamp();
         PrepareCompositeGlyphs(in frame);
+        _rcGlyphTicks += Stopwatch.GetTimestamp() - rcGlyph0;
         BeginRecording(sc, f, slot, isPrimaryTarget: true);
         ResetFrameCounters();
-        _frameFeatherItems = 0; _frameFeatherPx = 0; _frameBlurCacheHits = 0; _frameTilesRastered = 0; _frameRenderPasses = 0; _frameInlineGroups = 0; _frameDirectRegions = 0;
+        _frameFeatherItems = 0; _frameFeatherPx = 0; _frameBlurCacheHits = 0; _frameTilesRastered = 0; _frameRenderPasses = 0; _frameInlineGroups = 0; _frameDirectRegions = 0; _frameInlineItems = 0; _frameInlineReopens = 0; _frameResumes = 0; _passSites = 0; _framePassDrawsMax = 0; _framePassesOverBinning = 0; Array.Clear(_frameInlineByKind); _frameInlineBlurred = 0;
         _frameLostPlacements = 0;
         ResetOffscreenSplit();
         BeginPipesFrame(slot);
@@ -165,11 +170,14 @@ public sealed unsafe partial class D3D12Device
 
         // 1. tiles (any scratch leased here is an inline folded layer inside a tile)
         PassBoundary(GpuPassKind.TileRaster, TileGrid.W, TileGrid.H);
+        WorkPhase(0);
         int inl0 = _surfaces.ScratchLeases; long inlPx0 = _surfaces.ScratchPx;
         RasterTiles(in frame);
+        if (TileDamage.PhaseValidate || TileDamage.FootprintValidate) QueuePhaseChecks(in frame);
         _offInlineN += _surfaces.ScratchLeases - inl0; _offInlinePx += _surfaces.ScratchPx - inlPx0;
         // 2. offscreen
         PassBoundary(GpuPassKind.Offscreen, (int)_w, (int)_h);
+        WorkPhase(1);
         PrepareTop(in frame);   // PrepareRange per top-level item + occlusion (D3D12Device.Occlusion.cs)
         // 3. the composite pass
         PassBoundary(GpuPassKind.Composite, (int)sc.W, (int)sc.H);
@@ -180,6 +188,9 @@ public sealed unsafe partial class D3D12Device
         // Partial present (D3D12Device.PartialPresent.cs): what changed since this back buffer last received a frame.
         PpComputeDirty(in frame, sc);
         PpPlanRepaint(sc, f);
+        // the work census (D3D12Device.WorkCensus.cs): the composite phase's query, or on a census frame one query per item
+        if (ItemCensusDecide()) WorkPhaseEnd(); else WorkPhase(2);
+        _compositeCensusOn = _passOn;
         if (_ppPartial)
         {
             // PRESERVE: the buffer already holds every pixel outside the repaint rects; each rect is cleared and recomposited.
@@ -191,11 +202,16 @@ public sealed unsafe partial class D3D12Device
         {
             // The pass's CLEAR load op writes the clear colour: like DISCARD it never reads the previous contents, and on
             // a tiler it is a per-bin fast clear instead of a full-window quad.
-            BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, frame.Info.Clear);
+            // A window-covering opaque ground fill becomes the clear colour and is not drawn (D3D12Device.ClearFold.cs).
+            BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, ClearFoldDecide(in frame));
             BindCompositor((int)_w, (int)_h);
             if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, 0, frame.Items.Length, 0, 0, (int)_w, (int)_h, -1);
+            _foldItem = -1; _foldPending = false;
         }
         EndPassIfOpen();
+        _compositeCensusOn = false;
+        WorkPhaseEnd();
+        ItemCensusResolve();
         PpEndFrame(sc, f);
         if (TileDamage.PresentValidate) QueuePresentCheck(in frame, backBuffer);
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
@@ -211,6 +227,7 @@ public sealed unsafe partial class D3D12Device
         Diag.Set("d3d12", "inlineGroups", _frameInlineGroups);
         Diag.Set("d3d12", "directRegions", _frameDirectRegions);
         Diag.Set("d3d12", "blurCacheHits", _frameBlurCacheHits);
+        RcEndSubmit();
         EndRecording(sc, f, slot, RepaintRoute.Composite, _frameBackBufferTransitions);
     }
 
@@ -275,18 +292,38 @@ public sealed unsafe partial class D3D12Device
     }
 
     /// <summary>Every stream this frame DECODES (a rastered tile's segment, a degraded segment) is glyph-prepared before
-    /// the list opens — the atlas band then uploads once, outside every render pass.</summary>
+    /// the list opens — the atlas band then uploads once, outside every render pass.
+    /// <para>A stream whose bytes are unchanged (<see cref="SliceRow.ContentKey"/>) since it was last prepared, while the glyph
+    /// cache dropped no run (<see cref="GlyphRenderer.RunCacheEpoch"/>), still has every run it shapes cached: preparing it again
+    /// would only look each one up. An inline segment is decoded by every composite that reaches it, and the shell's static band
+    /// is one window-sized inline segment, so that lookup pass ran over all of the shell's text on every turn (audit PERF r2).
+    /// Such a stream is skipped, and re-prepared every <see cref="GlyphPrepRefreshFrames"/> frames so its runs never age out of
+    /// the cache. A run evicted or a cache cleared while this pass shapes (an atlas growth) re-prepares everything.</para></summary>
     private void PrepareCompositeGlyphs(in CompositeFrame frame)
     {
         int stamp = _compositeTurn + 1;
         bool allDirect = ((GpuKnockouts)_knockouts & GpuKnockouts.ForceFullDirect) != 0;
+        _glyphs!.SyncBodyFontNow();   // a body-font change evicts every run: the skip below must already see it
+        int epoch = _glyphs.RunCacheEpoch;
+        PrepareCompositeRows(in frame, stamp, allDirect, epoch, skipPrepared: true);
+        if (_glyphs.RunCacheEpoch != epoch)
+            PrepareCompositeRows(in frame, -stamp, allDirect, _glyphs.RunCacheEpoch, skipPrepared: false);   // runs left mid-pass
+    }
+
+    /// <summary>A prepared stream is re-prepared at least this often (in glyph frames), so the runs it holds stay young: the run
+    /// sweep evicts after 60 idle frames at the earliest.</summary>
+    private const int GlyphPrepRefreshFrames = 32;
+    private ulong[] _glyphPrepKey = new ulong[256];
+    private int[] _glyphPrepEpoch = new int[256], _glyphPrepFrame = new int[256];
+
+    private void PrepareCompositeRows(in CompositeFrame frame, int stamp, bool allDirect, int epoch, bool skipPrepared)
+    {
         for (int i = 0; i < frame.Rasters.Length; i++)
         {
             int r = RowOf(frame.Rasters[i].Key.SliceId);
             if (r < 0 || _rowPrepared[r] == stamp) continue;
             _rowPrepared[r] = stamp;
-            SliceRow row = frame.Slices[r];
-            PrepareGlyphs(frame.StreamOf(in row));
+            PrepareRowGlyphs(in frame, in frame.Slices[r], epoch, skipPrepared);
         }
         for (int i = 0; i < frame.Items.Length; i++)
         {
@@ -296,9 +333,25 @@ public sealed unsafe partial class D3D12Device
             int r = RowOf(it.SliceId);
             if (r < 0 || _rowPrepared[r] == stamp) continue;
             _rowPrepared[r] = stamp;
-            SliceRow row = frame.Slices[r];
-            PrepareGlyphs(frame.StreamOf(in row));
+            PrepareRowGlyphs(in frame, in frame.Slices[r], epoch, skipPrepared);
         }
+    }
+
+    private void PrepareRowGlyphs(in CompositeFrame frame, in SliceRow row, int epoch, bool skipPrepared)
+    {
+        int id = row.Id;
+        if (id < 0) return;
+        if (_glyphPrepKey.Length <= id)
+        {
+            int n = Math.Max(id + 1, _glyphPrepKey.Length * 2);
+            Array.Resize(ref _glyphPrepKey, n); Array.Resize(ref _glyphPrepEpoch, n); Array.Resize(ref _glyphPrepFrame, n);
+        }
+        if (skipPrepared && row.ContentKey != 0 && _glyphPrepKey[id] == row.ContentKey && _glyphPrepEpoch[id] == epoch
+            && _glyphs!.Frame - _glyphPrepFrame[id] < GlyphPrepRefreshFrames) return;
+        PrepareGlyphs(frame.StreamOf(in row));
+        _glyphPrepKey[id] = row.ContentKey;
+        _glyphPrepEpoch[id] = epoch;
+        _glyphPrepFrame[id] = _glyphs!.Frame;
     }
 
     // ── 1. tile raster ────────────────────────────────────────────────────────────────────────────────────────────
@@ -309,6 +362,11 @@ public sealed unsafe partial class D3D12Device
         if (rasters.Length == 0) return;
         // ForceFullDirect (knockout): nothing is retained — every segment is drawn direct, every tile stays invalid.
         if ((_frameKnockouts & GpuKnockouts.ForceFullDirect) != 0) return;
+        long rc0 = RcRasterBegin();
+        // rasters per row this turn (the footprint table pays back only from the second replay of new bytes)
+        if (_rastersOfRow.Length < frame.Slices.Length) _rastersOfRow = new int[Math.Max(frame.Slices.Length, 2 * _rastersOfRow.Length)];
+        Array.Clear(_rastersOfRow, 0, frame.Slices.Length);
+        for (int i = 0; i < rasters.Length; i++) { int rr = RowOf(rasters[i].Key.SliceId); if (rr >= 0) _rastersOfRow[rr]++; }
         ulong fence = _fenceValue + 1;
         if (_tileBarriers.Length < rasters.Length) _tileBarriers = new D3D12_RESOURCE_BARRIER[rasters.Length * 2];
         int nb = 0;
@@ -352,6 +410,7 @@ public sealed unsafe partial class D3D12Device
             bool beyondPlan = tr.Partial && (!partial || !damage.Equals(tr.Damage));
             if (TileDamage.Log) LogRaster(in tr, in row, partial, fresh, in damage);
             BeginImageRecord(tr.Surface, whole: !partial);
+            _replayFoot = FootprintsOf(in frame, in row, _rastersOfRow[r], out _replayFootN);
             if (!partial)
             {
                 BeginPass(rtv, tr.W, tr.H, PassLoad.Clear);
@@ -374,8 +433,10 @@ public sealed unsafe partial class D3D12Device
                 EndPassIfOpen();
             }
             EndImageRecord();
+            _replayFoot = null; _replayFootN = 0;
             _surfaces.NoteTileWrite(tr.Surface, partial, damage);
             NoteRasterCensus(partial, damage, tr.W, tr.H);
+            RcRaster(partial, partial ? AreaOf(in damage) : (long)tr.W * tr.H);
             if (beyondPlan && i < frame.RasterFlags.Length) frame.RasterFlags[i] |= CompositeFrameFlags.RasterBeyondPlan;
             _frameTilesRastered++;
             // Faithful only when nothing was dropped, every image it drew was resident and the glyph atlas owes no deferred
@@ -406,6 +467,7 @@ public sealed unsafe partial class D3D12Device
         }
         FlushBarriers(nb);
         InvalidateCmdState();
+        RcRasterEnd(rc0);
     }
 
     /// <summary>Whether one tile raster painted exactly what its segment says: no instance or glyph-bank drop while it
@@ -856,6 +918,7 @@ public sealed unsafe partial class D3D12Device
         int r = RowOf(it.SliceId);
         if (r < 0) return;
         ref readonly SliceRow row = ref frame.Slices[r];
+        if (InlineDirect(in it) && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) return;   // drawn inline: nothing to prepare
         bool blur = it.BlurSigma > 0f;
         if (it.IsFeedback && !blur && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0) { PrepareFeedback(in frame, i, in row); return; }
         if (it.LowResDown > 1 && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0)
@@ -1308,6 +1371,7 @@ public sealed unsafe partial class D3D12Device
             if (it.Kind == CompositeKind.Group) unscopedEnd = Math.Max(unscopedEnd, k + 1 + it.GroupCount);
             Mix(ref h, (ulong)(uint)it.Kind << 32 | (uint)it.SliceId);
             Mix(ref h, (ulong)(uint)(int)it.Transform.Dx << 32 | (uint)(int)it.Transform.Dy);
+            Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.SubPxX) << 32 | BitConverter.SingleToUInt32Bits(it.SubPxY));   // a posed blur between pixels
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Alpha) << 32 | BitConverter.SingleToUInt32Bits(it.BlurSigma));
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Clip.X) << 32 | BitConverter.SingleToUInt32Bits(it.Clip.Y));
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Clip.W) << 32 | BitConverter.SingleToUInt32Bits(it.Clip.H));
@@ -1343,6 +1407,11 @@ public sealed unsafe partial class D3D12Device
         {
             case CompositeKind.Direct:
             {
+                if (InlineDirect(in it) && (_frameKnockouts & GpuKnockouts.ForceFullDirect) == 0)
+                {
+                    PixelRect f = InlineFoot(in frame, in it);
+                    return !f.IsEmpty && Overlaps(in f, in region);
+                }
                 if (_itemSurface[k] >= 0) return Overlaps(in _itemRegion[k], in region);
                 int end = _itemChunkStart[k] + _itemChunkCount[k];
                 for (int c = _itemChunkStart[k]; c < end; c++)
@@ -1352,7 +1421,13 @@ public sealed unsafe partial class D3D12Device
             case CompositeKind.Tiles:
             case CompositeKind.Region:
             {
-                if (it.BlurSigma > 0f) return _itemSurface[k] < 0 || Overlaps(in _itemRegion[k], in region);
+                if (it.BlurSigma > 0f)
+                {
+                    if (_itemSurface[k] < 0) return true;
+                    PixelRect rg = _itemRegion[k];
+                    if (it.SubPxX != 0f || it.SubPxY != 0f) rg = new PixelRect(rg.Left - 1, rg.Top - 1, rg.Right + 1, rg.Bottom + 1);   // drawn between pixels
+                    return Overlaps(in rg, in region);
+                }
                 ReadOnlySpan<TilePlacement> placed = frame.PlacementsOf(it.SliceId);
                 for (int p = 0; p < placed.Length; p++)
                     if (Overlaps(PlacementRect(in it, in placed[p]), in region)) return true;
@@ -1413,6 +1488,10 @@ public sealed unsafe partial class D3D12Device
         bool feathers = (_frameKnockouts & GpuKnockouts.EdgeFadesOff) == 0;
         bool allDirect = (_frameKnockouts & GpuKnockouts.ForceFullDirect) != 0;
         ulong fence = _fenceValue + 1;
+        // An inline replay leaves its own pipelines' root signature, heaps and viewport bound: the compositor is rebound before
+        // the next item it draws, and at the end — not after every inline item (a run of inline items binds once). Exact: the
+        // skipped binds are state-only, and the device's binding cache describes what the replay left (audit PERF r3 COMP).
+        bool rebind = false;
         for (int i = a; i < b && i < items.Length; i++)
         {
             ref readonly CompositeItem it = ref items[i];
@@ -1428,6 +1507,9 @@ public sealed unsafe partial class D3D12Device
                 if (it.Kind == CompositeKind.Group) i = Math.Min(items.Length, i + 1 + it.GroupCount) - 1;
                 continue;
             }
+            bool inline = it.Kind == CompositeKind.Direct && InlineDirect(in it) && !allDirect;
+            if (rebind && !inline) { BindCompositor(tw, th); rebind = false; }
+            int census = ItemCensusBegin(), item = i;   // diagnostics: this item's fragments (D3D12Device.WorkCensus.cs)
             switch (it.Kind)
             {
                 case CompositeKind.Group:
@@ -1459,6 +1541,14 @@ public sealed unsafe partial class D3D12Device
                     break;
                 }
                 case CompositeKind.Direct:
+                    if (inline)
+                    {
+                        _foldPending = i == _foldItem;   // its first fill was folded into the clear (ClearFold)
+                        DrawInline(in frame, in it, ox, oy, tw, th, rebind: false);
+                        _foldPending = false;
+                        rebind = true;
+                        break;
+                    }
                     DrawSurfaceItem(in it, i, ox, oy, feathers);
                     break;
                 case CompositeKind.Image:
@@ -1489,7 +1579,9 @@ public sealed unsafe partial class D3D12Device
                     break;
                 }
             }
+            ItemCensusEnd(census, in frame, item);
         }
+        if (rebind) BindCompositor(tw, th);
     }
 
     /// <summary>The texel-load PSO an item composites with: copy, SCREEN (BoxEl.LayerBlend.Screen) or source-over.</summary>
@@ -1524,7 +1616,18 @@ public sealed unsafe partial class D3D12Device
         PixelRect region = _itemRegion[i];
         ItemScissor(in it, ox, oy);
         int down = _itemDown[i];
-        if (down <= 1)
+        if (it.SubPxX != 0f || it.SubPxY != 0f)
+        {
+            // A posed self-blur between whole pixels (CompositeItem.SubPxX): its surface drawn that much further, bilinearly,
+            // clamped to the region it holds (a pooled scratch past it is not this blur's).
+            float fx = it.SubPxX, fy = it.SubPxY;
+            float clampU = ((region.Right - region.Left) / (float)down - 0.5f) / _surfaces!.ScratchW(s);
+            float clampV = ((region.Bottom - region.Top) / (float)down - 0.5f) / _surfaces.ScratchH(s);
+            DrawItemQuad(in it, region.Left - ox + fx, region.Top - oy + fy, region.Right - ox + fx, region.Bottom - oy + fy, ox, oy, feathers,
+                it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.SampleScreen : SliceCompositor.Pso.Sample, _surfaces.ScratchSrv(s),
+                sample: true, 1f / (down * _surfaces.ScratchW(s)), 1f / (down * _surfaces.ScratchH(s)), clampU, clampV);
+        }
+        else if (down <= 1)
             DrawItemQuad(in it, region.Left - ox, region.Top - oy, region.Right - ox, region.Bottom - oy, ox, oy, feathers,
                 it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.LoadScreen : SliceCompositor.Pso.Load, _surfaces!.ScratchSrv(s));
         else
@@ -1587,6 +1690,7 @@ public sealed unsafe partial class D3D12Device
             if (hasFill) _compositor.Color(in fill);
             ItemParams(in it, ox, oy, feathers && p.Feathered);
             _compositor.Draw(_cmdList, pso, srv);
+            CompositeDrawCensus(p.X0, p.Y0, p.X1, p.Y1, in _itemScissor, p.Feathered);
             if (p.Feathered)
             {
                 float w = MathF.Min(p.X1, _itemScissor.Right) - MathF.Max(p.X0, _itemScissor.Left);

@@ -1,7 +1,7 @@
 # Scroll recipes
 
-Each recipe ends with a checklist. Every one of them starts the same way: **reproduce first** — a failing gate, a failing
-unit test, or a recorded lab session whose metric is red — then change code. Canon for every type named here:
+Each recipe ends with a checklist. Every one of them starts the same way: **reproduce first** — a recorded lab session
+whose metric is red, or a headless render — then change code. Canon for every type named here:
 `docs/design/subsystems/scroll.md`.
 
 ---
@@ -38,8 +38,7 @@ Decide the channel's class first:
 - A new FORMULA (not just a channel) is a new `EffectKind` + one case in `ScrollEffectEval.Evaluate` in plain double
   arithmetic (no `Math.FusedMultiplyAdd`, nothing hardware-contingent — both threads must agree bit for bit).
 
-Checklist: failing `ScrollEffectsSuite` gate (`gate.scroll-effects.<name>`) that drives offsets and reads the node's
-paint; a `ScrollLinkedEffectTests` case for the formula; a steady frame allocates 0; `scroll.md` §7 table updated;
+Checklist: the effect drives offsets and the node's paint reads right in the lab; a steady frame allocates 0; `scroll.md` §7 table updated;
 `scene-memory.md` if a new `NodePaint` column was needed; `check-canon.ps1`.
 
 ---
@@ -77,7 +76,7 @@ WinUI control: 64 DIP per notch, a 0.15 s front-loaded cubic, C1 re-plans, and a
 travel what the old 32 DIP model did. Its justification is a replay, not taste
 (`C:\WAVEE\wheel-curve-probe\reports\wheel-snappier-2026-09-25`: `work\wheelsim.py` mirrors `PlanAuthor`). To change it:
 
-1. Replay the recorded notch stamps (`WheelFeelTraceTests` embeds them; new Wavee `scroll-*.csv` exports carry `notch`
+1. Replay the recorded notch stamps (Wavee `scroll-*.csv` exports carry `notch`
    and `state_changed` rows) through the candidate in the simulator: single-notch t50/t90/settle, per-burst totals vs
    the recording, velocity continuity, the cadence sweep.
 2. Data first: `WheelNotchDip`, `WheelDurationS`, `WheelRiseS`, `AccelRefGapS`/`AccelUnityGapS`/`AccelMax` in
@@ -86,11 +85,9 @@ travel what the old 32 DIP model did. Its justification is a replay, not taste
 3. Keep the load-bearing rules: a live same-direction glide ACCUMULATES onto `prev.Dest`, everything else re-bases on the
    displayed position; the anchor is `max(tNotch, shownFloorSec)`; a same-direction re-plan starts at the SHOWN
    velocity (`WheelSeg` — C1; a carried velocity above the kick shortens the cubic rather than stepping down).
-4. Hi-res wheels ride the same curve in fractional notches — re-run `gate.scroll.hires-burst`.
+4. Hi-res wheels ride the same curve in fractional notches — check a hi-res burst in the lab.
 
-Checklist: `WheelFeelTraceTests.*`, `ScrollMotionTests.WheelNotch_*`,
-`ScrollMetricsTests.ReferenceCurveIsTheDefaultFeelsIsolatedNotch`, `gate.scroll.notch-to-present`,
-`gate.scroll.hires-burst`, `gate.scroll.probe-export-chain`; a lab session with isolated notches scores green on
+Checklist: a lab session with isolated notches scores green on
 "Per-notch curve shape" and "DIP per notch" against the new reference.
 
 ---
@@ -133,7 +130,7 @@ Rules:
 - If the producer must pump per frame, report `ScrollProducerLive` so the host produces a frame per refresh, and make
   sure its frames carry `WakeReasons.ScrollProducer` (the governor never paces those).
 
-Checklist: a `HeadlessScrollProducer`-style scripted stream gate (VerticalSlice) for begin/sample/end + fling; the
+Checklist: a lab session shows begin/sample/end + fling from the new source; the
 `ScrollSource` ↔ `ScrollSourceCode` byte mirror kept in sync; the lab's device kind detection (`SessionWriter.DeviceKind`)
 and `SessionSeries` ingestion updated if it is a new source.
 
@@ -164,41 +161,10 @@ Never guess from the symptom. Record it.
 | first pose long after the notch | latency | is the notch urgent (`OnUrgentScrollInput`)? the pose floor far ahead (`depth=2` in `[render.pace]`)? |
 | a Turn row with `fresh=0` everywhere, `race>0` | UI frames lose the tick to motion re-presents | UI frame cost (`frames.csv`, the render census) |
 
-4. **Write the failing gate** from what the rows showed (the deterministic headless version of the defect), then fix
-   the mechanism.
+4. **Fix the mechanism** from what the rows showed.
 5. **Re-record** the same scenario and compare the metric (and for touchpad, the same physical gesture — it cannot be
    synthesized).
 
 Also useful: Wavee's `scroll.burst` log line (a `BurstSummary` per burst at Summary level), `[render.pace]` once a
 second while motion is live, `--fg gpu-timing` / the lab's GPU passes toggle for per-pass GPU cost, `--scroll-soak` for
 sustained touchpad pacing/thermal drift.
-
----
-
-## 6. Add a gate
-
-Headless, deterministic, failing first. Pick the suite by subject: motion/coverage/routing → `ScrollMotionSuite`;
-effects → `ScrollEffectsSuite`; controls/virtualization/scrollbars → `ScrollSuite`; tiles/slices → `TileSuite`/`SliceSuite`;
-touch/arena → `TouchSuite`. A pure decision (a formula, a classifier, a policy) is an xUnit test in
-`FluentGpu.Engine.Tests` instead — never a source-text test.
-
-```csharp
-// the shape of gate.scroll.notch-to-present (ScrollMotionSuite.cs)
-var window = new HeadlessWindow(new WindowDesc("scroll-motion-mygate", new Size2(640, 480), 1f)); window.Show();
-using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new FlatListProbe(100_000));
-host.RunFrame();
-var vp = host.Scene.Root;
-var handle = host.TryGetScrollHandle(vp)!;
-window.SendWheelNotch(new Point2(150, 200), 1f);          // urgent sink: the plan exists before any frame runs
-host.RunFrame();
-host.Scene.TryGetScroll(vp, out var s);                    // ScrollState: Offset / Velocity / Motion / WindowOrigin / Cover*
-Check("gate.scroll.my-gate <one sentence of what it proves>", cond, $"detail={...}");
-```
-
-Contact streams: `HeadlessScrollProducer` (`Probes/Probes.cs`) scripts touchpad Begin/Sample/End, notches and
-pointer-downs with synthetic stamps and steps frames (`Step(dtMs)`). Assert on `ScrollState`, `handle.Plan`,
-`host.Scene.Paint(content).LocalTransform`, `host.LastTileCensus`, or the probe rows (`ScrollProbe.ReadRender`).
-
-Checklist: the gate name is `gate.<area>.<name>` as the first token of the `Check` text; it FAILS on the unfixed code;
-a zero-alloc arm if the path is per-frame; registered in the suite's `Run` (a new suite also in
-`Harness/SuiteRegistry.cs` with its tag); `scroll.md` §11/§12 names it.

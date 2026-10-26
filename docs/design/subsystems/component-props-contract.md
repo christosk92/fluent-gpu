@@ -259,7 +259,11 @@ not visibly glide back into view from offset 0. Gate: `gate.shelf.controller.reb
 its data channel (freezing it at mount is the stale-content bug class the box used to have), so it rebuilds whenever its
 parent does. `Of(state, (state, width) => …, …)` gates on `state` by value and ignores the builder; hand it every value
 the subtree paints as one immutable record or a tuple of scalars/records. `ResponsiveBox.Props.Gate` carries that state;
-a null gate selects the ungated comparison.
+a null gate selects the ungated comparison. Each has a **keyed** twin (E17c): `Of(key, build, …)` and
+`Of(key, state, (state, width) => …, …)` gate exactly the same way, and additionally start the box at the width
+`MeasureMemory` remembers for `key` under the ambient `MeasureMemory.Scope` (instead of `fallback`), remembering every
+measured width, so a remounted region builds once, at its final width (`ResponsiveBox.Props.MemoryKey`; the key is also the
+element `Key`). Gates: `gate.settle.keyed-responsive-*` in the `settle` suite.
 
 Gates: `gate.shelf.props.*` (a new list instance of equal items rebuilds no cards; chrome refreshes without rebuilding
 cards; a changed item and a changed `MaxItems` both pass the gate; the gate is hot-phase-allocation-free) and

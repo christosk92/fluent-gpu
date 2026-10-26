@@ -76,7 +76,7 @@ public sealed class LedgerSnapshot
 /// little-endian as they sit in memory. Compact (no text) and lossless; <see cref="LedgerSnapshot.WriteCsv"/> is the readable form.</summary>
 public static class FrameLedgerFile
 {
-    public const int Version = 2;
+    public const int Version = 4;   // v3 (UI: the UI frame's work drivers) + v3 (COMP: the GPU frame's work census) merged
     private static ReadOnlySpan<byte> Magic => "FGLEDGER"u8;
 
     public static void Write(Stream s, LedgerSnapshot snap)
@@ -154,7 +154,7 @@ public static class FrameLedgerCsv
     public static string Ui(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Ui.Length * 220);
-        sb.AppendLine("seq,startMs,pumpMs,paintMs,flushMs,layoutMs,animMs,recordMs,submitMs,endMs,frameMs,waitStartMs,waitMs,waitRequestedMs,waitKind,exit,flags,publishSeq,uiCpuMs,processCpuMs,allocBytes,gc0,gc1,gc2,gcPauseMs,nodes,drawNodes,slices,components,damageCoverage,damageRects,fullReason,presentedTotal,missedVsyncsTotal,wakeMask,uiCpuTimeMs");
+        sb.AppendLine("seq,startMs,pumpMs,paintMs,flushMs,layoutMs,animMs,recordMs,submitMs,endMs,frameMs,waitStartMs,waitMs,waitRequestedMs,waitKind,exit,flags,publishSeq,uiCpuMs,processCpuMs,allocBytes,gc0,gc1,gc2,gcPauseMs,nodes,drawNodes,slices,components,damageCoverage,damageRects,fullReason,presentedTotal,missedVsyncsTotal,wakeMask,uiCpuTimeMs,allocFlush,allocLayout,allocAnim,allocRecord,allocSubmit,nodesCreated,nodesFreed,compsMounted,measures,arranges,textShapes,textMisses,rxUnits,bindFires,bindWrites,scopedRelayouts,rootEscapes,capReachable,capCopied,captureMs,captureFull,captureParity");
         LedgerUiFrame prev = default;
         for (int i = 0; i < s.Ui.Length; i++)
         {
@@ -176,7 +176,14 @@ public static class FrameLedgerCsv
             T(sb, r.DamageCoverage);
             sb.Append(r.DamageRects).Append(',').Append(((Rhi.RepaintFullReason)r.FullReason).ToString()).Append(',')
               .Append(r.PresentedTotal).Append(',').Append(r.MissedVsyncsTotal).Append(',').Append("0x").Append(r.WakeMask.ToString("X", Inv)).Append(',');
-            T(sb, r.UiCpuTimeTotal / 10_000.0, last: true);
+            T(sb, r.UiCpuTimeTotal / 10_000.0);
+            sb.Append(r.AllocFlush).Append(',').Append(r.AllocLayout).Append(',').Append(r.AllocAnim).Append(',').Append(r.AllocRecord).Append(',')
+              .Append(r.AllocSubmit).Append(',').Append(r.NodesCreated).Append(',').Append(r.NodesFreed).Append(',').Append(r.ComponentsMounted).Append(',')
+              .Append(r.Measures).Append(',').Append(r.Arranges).Append(',').Append(r.TextShapes).Append(',').Append(r.TextShapeMisses).Append(',')
+              .Append(r.ReactiveUnits).Append(',').Append(r.BindFires).Append(',').Append(r.BindWrites).Append(',').Append(r.ScopedRelayouts).Append(',')
+              .Append(r.RootEscapes).Append(',').Append(r.CaptureReachable).Append(',').Append(r.CaptureCopied).Append(',');
+            T(sb, r.CaptureMs);
+            sb.Append(((FluentGpu.Scene.CaptureFullReason)r.CaptureFull).ToString()).Append(',').Append(r.CaptureParity);
             sb.AppendLine();
             prev = r;
         }
@@ -186,7 +193,7 @@ public static class FrameLedgerCsv
     public static string Render(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Render.Length * 200);
-        sb.AppendLine("seq,waitStartMs,startMs,slotOpenMs,doneMs,endMs,turnMs,slotWaitMs,workMs,tickSeq,tickMs,kind,outcome,flags,publishSeq,submitSeq,cpuMs,allocBytes,stageMs,recMs,subMs,fenceMs,latMs,presMs,videoMs,damageCoverage,fullReason,tilesRastered,missedTicks,cpuTimeMs");
+        sb.AppendLine("seq,waitStartMs,startMs,slotOpenMs,doneMs,endMs,turnMs,slotWaitMs,workMs,tickSeq,tickMs,kind,outcome,flags,publishSeq,submitSeq,cpuMs,allocBytes,stageMs,recMs,subMs,fenceMs,latMs,presMs,videoMs,damageCoverage,fullReason,tilesRastered,missedTicks,cpuTimeMs,buildMs,glyphPrepMs,rasterMs,rasters,partialRasters,rasterPasses,rasterPx,rasterOps,opsRect,opsGlyph,opsImage,opsPath,opsSeries,opsScope,spansSkipped,glyphInsts,rasterDraws,submitOps,rasterCulled,rasterFootSkipped,texCreates,texReleases,rasterSegments,rasterScissors");
         foreach (ref readonly var r in s.Render.AsSpan())
         {
             sb.Append(r.Seq).Append(',');
@@ -200,7 +207,14 @@ public static class FrameLedgerCsv
             T(sb, r.StageMs); T(sb, r.RecordMs); T(sb, r.SubmitMs); T(sb, r.FenceMs); T(sb, r.LatencyMs); T(sb, r.PresentMs); T(sb, r.VideoMs);
             T(sb, r.DamageCoverage);
             sb.Append(((Rhi.RepaintFullReason)r.FullReason).ToString()).Append(',').Append(r.TilesRastered).Append(',').Append(r.MissedTicks).Append(',');
-            T(sb, r.CpuTimeTotal / 10_000.0, last: true);
+            T(sb, r.CpuTimeTotal / 10_000.0);
+            var rc = r.Raster;
+            T(sb, r.BuildMs); T(sb, rc.GlyphPrepMs); T(sb, rc.RasterMs);
+            sb.Append(rc.Rasters).Append(',').Append(rc.Partial).Append(',').Append(rc.Passes).Append(',').Append(rc.Px).Append(',')
+              .Append(rc.Ops).Append(',').Append(rc.Rects).Append(',').Append(rc.Glyphs).Append(',').Append(rc.Images).Append(',')
+              .Append(rc.Paths).Append(',').Append(rc.Series).Append(',').Append(rc.Scopes).Append(',').Append(rc.SpansSkipped).Append(',')
+              .Append(rc.GlyphInstances).Append(',').Append(rc.Draws).Append(',').Append(rc.SubmitOps).Append(',').Append(rc.Culled).Append(',').Append(rc.FootSkipped)
+              .Append(',').Append(rc.TexturesCreated).Append(',').Append(rc.TexturesReleased).Append(',').Append(rc.Segments).Append(',').Append(rc.Scissors);
             sb.AppendLine();
         }
         return sb.ToString();
@@ -209,7 +223,7 @@ public static class FrameLedgerCsv
     public static string Gpu(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Gpu.Length * 160);
-        sb.AppendLine("seq,observedMs,publishedMs,gpuStartMs,gpuEndMs,sampleSeq,submitSeq,missedSamples,gpuMs,passWholeMs,passCount,passesDropped,uploadsMs,bakedBlurMs,clearMs,sceneMs,glyphBandMs,tileRasterMs,offscreenMs,compositeMs");
+        sb.AppendLine("seq,observedMs,publishedMs,gpuStartMs,gpuEndMs,sampleSeq,submitSeq,missedSamples,gpuMs,passWholeMs,passCount,passesDropped,uploadsMs,bakedBlurMs,clearMs,sceneMs,glyphBandMs,tileRasterMs,offscreenMs,compositeMs,psTile,psOffscreen,psComposite,renderPasses,draws,compositeDraws,compositeQuadPx,compositeFeatherPx,repaintPx");
         foreach (ref readonly var r in s.Gpu.AsSpan())
         {
             sb.Append(r.Seq).Append(',');
@@ -218,7 +232,10 @@ public static class FrameLedgerCsv
             T(sb, r.GpuMs); T(sb, r.PassWholeMs);
             sb.Append(r.PassCount).Append(',').Append(r.PassesDropped).Append(',');
             T(sb, r.UploadsMs); T(sb, r.BakedBlurMs); T(sb, r.ClearMs); T(sb, r.SceneMs); T(sb, r.GlyphBandMs); T(sb, r.TileRasterMs);
-            T(sb, r.OffscreenMs); T(sb, r.CompositeMs, last: true);
+            T(sb, r.OffscreenMs); T(sb, r.CompositeMs);
+            sb.Append(r.PsTileRaster).Append(',').Append(r.PsOffscreen).Append(',').Append(r.PsComposite).Append(',')
+              .Append(r.RenderPasses).Append(',').Append(r.Draws).Append(',').Append(r.CompositeDraws).Append(',')
+              .Append(r.CompositeQuadPx).Append(',').Append(r.CompositeFeatherPx).Append(',').Append(r.RepaintPx);
             sb.AppendLine();
         }
         return sb.ToString();

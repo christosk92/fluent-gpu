@@ -66,12 +66,16 @@ public readonly record struct AcrylicRecipe(ColorF Tint, ColorF Fallback, float 
 /// (BoxEl.RasterScale): a <see cref="CompositeKind.Direct"/> item the backend replays once per change into one surface at
 /// 1/LowResDown of the window scale and upsamples bilinearly — it holds no tiles. <see cref="Opaque"/> = a window-px rect
 /// (whole pixels) this item paints FULLY OPAQUE once composited (empty = none known): every item composited before it whose
-/// footprint lies inside is hidden, and the backend skips it. A Screen-blended or feedback item never carries one.</summary>
+/// footprint lies inside is hidden, and the backend skips it. A Screen-blended or feedback item never carries one.
+/// <see cref="SubPxX"/>/<see cref="SubPxY"/> = the part of a POSED self-blur's placement below a whole device pixel
+/// (−0.5..0.5): <see cref="Transform"/> stays whole (its tiles, its blur source and its retained blur are placed by it), and
+/// the backend draws the blurred surface that much further, bilinearly — so a blurred row moved by its pose glides at the
+/// sub-pixel precision its re-raster used to give it, without re-rastering or re-blurring.</summary>
 public readonly record struct CompositeItem(int SliceId, CompositeKind Kind, Affine2D Transform, float Alpha, RectF Clip,
     CornerRadius4 ClipRadii, EdgeFeather Feather, float BlurSigma, AcrylicRecipe Acrylic, byte BlendCopy,
     RectF RoundClip = default, int GroupCount = 0, byte HasLayer = 0, RectF SourceClip = default,
     EdgeFeather Feather2 = default, RectF Footprint = default, byte Inherited = 0, byte LowResDown = 0, RectF Opaque = default,
-    FeedbackSpec Feedback = default, Affine2D FeedbackWarp = default, float FeedbackDecay = 0f)
+    FeedbackSpec Feedback = default, Affine2D FeedbackWarp = default, float FeedbackDecay = 0f, float SubPxX = 0f, float SubPxY = 0f)
 {
     /// <summary>A FEEDBACK item (BoxEl.Feedback, visualizer F6): a <see cref="CompositeKind.Direct"/> low-res item whose backend
     /// surface persists and is advanced through <see cref="FeedbackWarp"/> / <see cref="FeedbackDecay"/> each change.</summary>
@@ -166,6 +170,11 @@ public readonly ref struct CompositeFrame
     /// 0 = unstamped, e.g. a hand-built test frame). A backend's tile pool is indexed by those numbers alone, so it records the
     /// first owner after a (re)build and flags any other owner compositing into the same pool.</summary>
     public readonly int OwnerToken;
+    /// <summary>The op records of every INLINE row's whole segment (<see cref="InlineOpsOf"/>; SliceRecorder.Content.cs): what a
+    /// backend's partial present diffs to dirty only the ops of an inline item that changed.</summary>
+    public readonly ReadOnlySpan<TileOpRec> InlineOps;
+    /// <summary>Two per row of <see cref="Slices"/>: the start and count of its range in <see cref="InlineOps"/> (count −1 = none).</summary>
+    public readonly ReadOnlySpan<int> InlineOpRanges;
 
     public CompositeFrame(in FrameInfo info, ReadOnlySpan<SliceRow> slices, ReadOnlySpan<byte> sliceStreams,
         ReadOnlySpan<TileRaster> rasters, ReadOnlySpan<TilePlacement> placements, ReadOnlySpan<CompositeItem> items,
@@ -177,12 +186,26 @@ public readonly ref struct CompositeFrame
         PresentParams present, ReadOnlySpan<SliceSpan> sliceSpans,
         ReadOnlySpan<PushLayerCmd> itemLayers, Span<byte> rasterDone, ReadOnlySpan<PushLayerCmd> itemInherited = default,
         Span<byte> rasterFlags = default, Span<byte> itemFlags = default, ReadOnlySpan<int> trimSurfaces = default,
-        int ownerToken = 0)
+        int ownerToken = 0, ReadOnlySpan<TileOpRec> inlineOps = default, ReadOnlySpan<int> inlineOpRanges = default)
     {
         Info = info; Slices = slices; SliceStreams = sliceStreams; Rasters = rasters; Placements = placements;
         Items = items; Present = present; SliceSpans = sliceSpans;
         ItemLayers = itemLayers; RasterDone = rasterDone; ItemInherited = itemInherited;
         RasterFlags = rasterFlags; ItemFlags = itemFlags; TrimSurfaces = trimSurfaces; OwnerToken = ownerToken;
+        InlineOps = inlineOps; InlineOpRanges = inlineOpRanges;
+    }
+
+    /// <summary>Row <paramref name="row"/>'s inline op records (slice px relative to its grid, offset by
+    /// <c>SliceRecorder.InlineOpsOrigin</c>); false when the recorder listed none for it.</summary>
+    public bool InlineOpsOf(int row, out ReadOnlySpan<TileOpRec> ops)
+    {
+        ops = default;
+        int at = 2 * row;
+        if (row < 0 || at + 1 >= InlineOpRanges.Length) return false;
+        int start = InlineOpRanges[at], count = InlineOpRanges[at + 1];
+        if (count < 0 || start < 0 || start + count > InlineOps.Length) return false;
+        ops = InlineOps.Slice(start, count);
+        return true;
     }
 
     /// <summary>The <paramref name="k"/>-th (0 or 1) distributed ancestor fade of item <paramref name="i"/> (default when

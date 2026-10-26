@@ -866,7 +866,27 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     }
 
     public NativeHandle Handle => new(_hwnd, NativeHandleKind.Hwnd);
-    public Size2 ClientSizePx => new(_w, _h);
+    public Size2 ClientSizePx => _pinnedSurfacePx.Width > 0f ? _pinnedSurfacePx : new(_w, _h);
+
+    // The capture surface (HarnessOptions.SurfaceSizeDip): when set, the host sees THIS client size and DPI scale instead of
+    // the HWND's, so a review capture lays out and rasterises at a size the monitor cannot hold (2560 or 3840 DIP at scale 1
+    // on a 1664-DIP screen). The composition swapchain is sized from it; the window on screen shows its top-left corner.
+    private Size2 _pinnedSurfacePx;
+    private bool _pinnedSurface;
+
+    /// <summary>Pin the client size the host reads to <paramref name="sizePx"/> and the OS DPI scale to
+    /// <paramref name="dpiScale"/>, whatever the HWND's real size and monitor (the screenshot harness's capture surface).
+    /// Call before the host is created. A pinned window ignores WM_SIZE / WM_DPICHANGED for its reported size and scale,
+    /// and its pointer input is not mapped to the pinned surface: a capture run is hands-off.</summary>
+    internal void PinSurface(Size2 sizePx, float dpiScale)
+    {
+        _pinnedSurfacePx = new Size2(MathF.Max(1f, MathF.Round(sizePx.Width)), MathF.Max(1f, MathF.Round(sizePx.Height)));
+        _pinnedSurface = true;
+        _rawDpiScale = dpiScale > 0f ? dpiScale : 1f;
+        _scale = _rawDpiScale * _zoom;
+        PaintRequested?.Invoke();
+    }
+
     /// <summary>The EFFECTIVE scale (px per engine DIP): OS per-monitor DPI scale × app <see cref="Zoom"/>.</summary>
     public float Scale => _scale;
 
@@ -948,15 +968,27 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     // F118: per-window occlusion. The process-wide win-event hooks (Win32WindowOcclusion) are installed on the first read of
     // OcclusionEpoch (the host reads it every frame, on the UI thread, which pumps the messages the hooks are delivered through)
-    // and released with the last window. 0 = not asked yet, 1 = installed, 2 = unavailable (the host then never parks for a cover).
+    // and released with the last window. 0 = not asked yet (or released while minimized / hidden), 1 = installed, 2 = unavailable
+    // (the host then never parks for a cover).
     private Action? _occlusionWake;
     private int _occlusionHooks;
 
     /// <inheritdoc cref="IPlatformWindow.OcclusionEpoch"/>
+    /// <remarks>A MINIMIZED or HIDDEN window holds no hooks (0, untracked): it is parked by its own state, can never be
+    /// cover-parked, presents nothing, and its restore or show arrives as a message of its own. Holding them, every top-level
+    /// window event on the desktop (a window moving, reordering, showing, taking the foreground) was delivered to this thread
+    /// and woke its parked loop, which then re-armed the wake by reading the epoch: ~20-50 empty loop iterations a second
+    /// for as long as the window stayed minimized while the user worked elsewhere (audit PERF r2). The first read on screen
+    /// re-acquires them and returns a fresh epoch, so the cover test runs again on the un-park frame.</remarks>
     public long OcclusionEpoch
     {
         get
         {
+            if (IsIconic(_hwnd) || IsWindowVisible(_hwnd) == 0)
+            {
+                if (_occlusionHooks == 1) { Win32WindowOcclusion.Release(_occlusionWake!); _occlusionHooks = 0; }
+                return 0;
+            }
             if (_occlusionHooks == 0)
             {
                 _occlusionWake ??= Wake;
@@ -1495,9 +1527,20 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         // DirectManipulation (§7): feed every message to ProcessInput BEFORE dispatch. When DM owns an active touchpad
         // contact it consumes the packet so it never reaches the WndProc wheel fallback.
         if (_dm is { Enabled: true } dm && dm.ProcessInput(msg)) return;
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp(), loopBefore = _moveLoopStartMs;
         TranslateMessage(msg);
         DispatchMessageW(msg);
+        long ticks = System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+        // Always-on, one line per SLOW dispatch (never per message): the frame ledger's `pumpMs` only says the UI thread sat in
+        // message dispatch (a 1.18 s pump stall in a real-data bench, 2026-10-21), not WHICH message. A modal move/size or menu
+        // loop runs inside its own dispatch by design; `modal` marks a dispatch that entered one, so a reader can set those aside.
+        if (ticks > SlowDispatchTicks)
+            Diag.Line($"[window.msg.slow] msg=0x{msg->message:X4} wParam=0x{(nuint)msg->wParam:X} ms={ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency:0.0} " +
+                      $"modal={(_moveLoopStartMs != loopBefore ? 1 : 0)} own={(msg->hwnd == _hwnd ? 1 : 0)}");
     }
+
+    /// <summary>A message dispatch longer than this (25 ms: three 120 Hz frames) is logged as <c>[window.msg.slow]</c>.</summary>
+    private static readonly long SlowDispatchTicks = System.Diagnostics.Stopwatch.Frequency / 40;
 
     /// <summary>The device stamp for a wheel packet, and the ONE place that records how good it is.
     ///
@@ -2087,8 +2130,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // on the target monitor and expects us to adopt both. Update the scale FIRST (the SetWindowPos below
                 // raises WM_SIZE → the host's resize path re-lays-out in DIPs / re-rasterizes glyphs at the new
                 // scale), then take the suggested rect so the window keeps its apparent (DIP) size across monitors.
-                _rawDpiScale = ((uint)wParam & 0xFFFF) / 96f;   // LOWORD = X DPI (X and Y are always equal)
-                _scale = _rawDpiScale * _zoom;                  // app zoom survives the monitor hop
+                if (!_pinnedSurface)
+                {
+                    _rawDpiScale = ((uint)wParam & 0xFFFF) / 96f;   // LOWORD = X DPI (X and Y are always equal)
+                    _scale = _rawDpiScale * _zoom;                  // app zoom survives the monitor hop
+                }
                 RECT* suggested = (RECT*)(nint)lParam;
                 // No explicit OnDisplayChanged() call here: this SetWindowPos moves the window (no SWP_NOMOVE), and
                 // USER32 dispatches WM_MOVE synchronously (SendMessage, not PostMessage) before SetWindowPos returns
@@ -2301,6 +2347,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             }
             case WM_KEYDOWN:
             case WM_SYSKEYDOWN:
+                // `--fg frame-trace`: F8 drops a "felt wrong" mark in the trace at the moment it is pressed (the owner's recording sessions).
+                if ((int)(nuint)wParam == 0x77 /* VK_F8 */ && (lp & (1L << 30)) == 0 && FluentGpu.Hosting.FrameTrace.Enabled)
+                    FluentGpu.Hosting.FrameTrace.Mark("f8", "felt-wrong");
                 // lParam bit 30 = the key was already down (keyboard auto-repeat).
                 _queue.Enqueue(new InputEvent(InputKind.Key, default, 0, (int)(nuint)wParam,
                     Mods: Mods(), IsRepeat: (lp & (1L << 30)) != 0, TimestampMs: Now()));

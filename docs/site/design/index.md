@@ -29,7 +29,7 @@ Two trees, two jobs, one direction of authority.
 |---|---|---|
 | **What it is** | The architecture **canon** — binding contracts, struct/opcode shapes, seam definitions, scene columns, the threading model, the 18 subsystem designs-of-record. | The **working view** — task-oriented, source-grounded usage and contributor docs. |
 | **Authoritative for** | Cross-cutting contracts and every shared artifact's *single owner*. | Nothing canonical. It *cites* the canon (and the source) rather than re-litigating it. |
-| **Form** | Markdown specs + the [`check-canon.ps1`](../../../design/check-canon.ps1) drift gate. Canon-gated. | DocFX site pages + the developer guide. Verified by the headless harness, not the canon gate. |
+| **Form** | Markdown specs + the [`check-canon.ps1`](../../../design/check-canon.ps1) drift gate. Canon-gated. | DocFX site pages + the developer guide. Verified by the build, not the canon gate. |
 | **When they disagree** | **Wins.** A usage doc that contradicts it is wrong. | Loses to `design/`; loses to the source. The as-built reactive model in particular is owned by [`reconciler-hooks.md` §0bis](../../../design/subsystems/reconciler-hooks.md). |
 | **Edit discipline** | Single-owner: define an artifact in its owner; everywhere else *reference* it. Adding a contract means registering it in `SPEC-INDEX.md` §2 **and** the ownership map first. | Same single-owner spirit: link into the canon, do not duplicate a struct shape or an enum. |
 
@@ -146,7 +146,7 @@ The authoritative listing, one line per doc, is the table in
 one-line charter (the corpus's own digest gives a slightly different round number in a couple of places, so trust the
 table, not a count). Grouped by role:
 
-**Core engine** — the pipeline the harness exercises end to end:
+**Core engine** — the pipeline end to end:
 
 - [`pal-rhi.md`](../../../design/subsystems/pal-rhi.md) — the PAL/RHI seams, the `Rhi.D3D12` and `Pal.Windows` leaves,
   the DXGI flip-model + multi-visual DComp present tree, and the staging/bucket-pool mechanism.
@@ -173,8 +173,7 @@ in [`window-backdrop-mica.md`](../../../design/subsystems/window-backdrop-mica.m
 
 **Hardening**: [`threading-render-seam.md`](../../../design/subsystems/threading-render-seam.md) (the canonical 3-thread
 topology), [`com-interop.md`](../../../design/subsystems/com-interop.md) (generated/confined/gated COM), and
-[`validation.md`](../../../design/subsystems/validation.md) (the spikes + per-PR gates + the public `FluentGpu.Testing`
-harness).
+[`validation.md`](../../../design/subsystems/validation.md) (the spikes + gates; its test-based parts are not built).
 
 **Control kit + devtools**: [`controls.md`](../../../design/subsystems/controls.md) (the accessible-by-default control
 kit — pure composition, adds no opcode/column/seam/hook) and
@@ -253,11 +252,10 @@ have open. The sequence (from [`SPEC-INDEX.md` §4](../../../design/SPEC-INDEX.m
    (`design/archive/` is excluded). It is design-time only — it does not touch `src/`.
 
 Two scopes, two gates, kept distinct. The canon gate above runs only for **`design/`** edits. A **source** change is
-verified by the headless harness, not the canon gate:
+verified by a clean Debug build, not the canon gate:
 
 ```bash
-dotnet build src/FluentGpu.VerticalSlice                 # clean build first
-dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
+dotnet build src/FluentGpu.slnx                          # clean
 ```
 
 Most contributions touch one or the other; a change that edits both runs both. The docs-side half of the single-owner

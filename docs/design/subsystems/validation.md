@@ -1,5 +1,9 @@
 # FluentGpu — Validation & Maturity Program (spikes + CI gates)
 
+> **Tests are banned (owner decision 2026-10-20).** Every test project and the VerticalSlice harness were deleted, and the
+> build and pre-commit hook reject new ones. The test-based machinery below (golden-image, alloc tripwire, `seam.race`,
+> the `FluentGpu.Testing` harness, …) is design history; verification is the Debug and Release build plus renders.
+
 > **Subsystem design-of-record for `FluentGpu.Validation` and the CI configuration.**
 > This is the deep design behind [hardened-v1-plan.md](../hardened-v1-plan.md) §4.5 ("Validation — the
 > spine that keeps it true").

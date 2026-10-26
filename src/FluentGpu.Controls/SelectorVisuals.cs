@@ -97,7 +97,7 @@ public static class SelectorVisuals
     {
         bool enabled = state.IsEnabled;
         // No plate: only Opacity / Foreground / Padding are honored (Fill/Corners/Border/Glyph have no surface here).
-        Element laneContent = content is TextEl ct && delta.Foreground is { } fg ? ct with { Color = fg } : content;
+        Element laneContent = content.Is(out TextEl ct) && delta.Foreground is { } fg ? ct with { Color = fg } : content;
         return new BoxEl
         {
             ZStack = true,
@@ -153,7 +153,7 @@ public static class SelectorVisuals
 
         // Content lane: ListViewItem Padding 16,0,12,0 (+28 content offset in multi-select). The lane carries a
         // position FLIP so the ±28 shift slides over the MultiSelect storyboard timing (333ms FluentDecelerate).
-        Element laneContent = content is TextEl ct && delta.Foreground is { } fg ? ct with { Color = fg } : content;
+        Element laneContent = content.Is(out TextEl ct) && delta.Foreground is { } fg ? ct with { Color = fg } : content;
         children[w++] = new BoxEl
         {
             Key = "lv-content",
@@ -293,7 +293,7 @@ public static class SelectorVisuals
         var children = new Element[n];
         int w = 0;
 
-        Element laneContent = content is TextEl ct && delta.Foreground is { } fg ? ct with { Color = fg } : content;
+        Element laneContent = content.Is(out TextEl ct) && delta.Foreground is { } fg ? ct with { Color = fg } : content;
         children[w++] = new BoxEl { Key = "gv-content", Padding = delta.Padding ?? default, Children = [laneContent] };
 
         if (selected && enabled)

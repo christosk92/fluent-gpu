@@ -102,7 +102,10 @@ public static partial class ToggleSwitch
     }
 
     public static Style? StyleOverride;
-    public static Style DefaultStyle => StyleOverride ?? new Style
+    public static Style DefaultStyle => StyleOverride ?? ControlStyles.Resolve(ControlStyles.ToggleSwitchStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a ToggleSwitch entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style
     {
         OffFill = Tok.FillControlAltSecondary, OffHover = Tok.FillControlAltTertiary, OffPressed = Tok.FillControlAltQuaternary,
         OffBorder = Tok.StrokeControlStrongDefault, OffKnob = Tok.TextSecondary,

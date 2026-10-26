@@ -51,8 +51,12 @@ public readonly record struct TileKey(int SliceId, short Tx, short Ty);
 /// <summary>Where a slice's space sits on the device grid (§A.7): <see cref="OriginX"/>/<see cref="OriginY"/> = the slice
 /// origin FLOORED to whole device px; <see cref="ResidualX"/>/<see cref="ResidualY"/> = the dropped fraction, baked into
 /// the raster so text keeps the same subpixel phase at rest and in motion; <see cref="Scale"/> = the raster scale (DPI).
-/// The composite then samples 1:1 (point) because the poser's translate is already whole-device-pixel.</summary>
-public readonly record struct SliceFrame(int OriginX, int OriginY, float ResidualX, float ResidualY, float Scale);
+/// The composite then samples 1:1 (point) because the poser's translate is already whole-device-pixel.
+/// <see cref="PhaseX"/>/<see cref="PhaseY"/> = a SUB-PIXEL placement phase (0..1 device px) the raster adds to every op: a
+/// slice under a composited transition layer (NodePaint.CompositeLayer) places at a fractional offset; the composite keeps
+/// its whole-pixel part and the tiles are rastered at the fraction, so the slice lands exactly where the inline route drew it
+/// (no snapping, no resampling). A phase change re-rasters the tiles (SliceGeometry), never re-records.</summary>
+public readonly record struct SliceFrame(int OriginX, int OriginY, float ResidualX, float ResidualY, float Scale, float PhaseX = 0f, float PhaseY = 0f);
 
 /// <summary>One tile's retained state. <see cref="Surface"/> = the surface slot holding its pixels (−1 = none);
 /// <see cref="Invalid"/> = why it must be re-rastered (<see cref="InvalidationReason.None"/> = valid);
@@ -104,6 +108,16 @@ public struct SliceRow
     /// whole cells on that axis (<c>SliceTable.SurfaceExtent</c>). False for every other segment — cut at its painted
     /// bounds on both axes.</summary>
     public bool MainAxisGrows;
+    /// <summary>What the segment's bytes ARE (<c>SliceRecorder.ContentKey</c>: the content generation of its arena, which moves
+    /// only when the arena's bytes change, its segment index, its grid origin and the raster scale); 0 = unknown. Equal keys ⇒
+    /// identical bytes under identical framing, so anything derived from the stream alone (its glyph preparation, its op
+    /// records, their diff) can be reused instead of recomputed every turn.</summary>
+    public ulong ContentKey;
+    /// <summary>Diagnostics (<c>--fg phase-validate</c>): the sub-pixel phase the segment would raster at with its RAW placement
+    /// (<c>AccDx·scale</c> before <c>SliceRecorder.FractionalPx</c>), relative to the same whole-pixel part as
+    /// <see cref="SliceFrame.PhaseX"/> (so it may be slightly below 0 or above 1). Equal to the frame's phase when nothing
+    /// was snapped.</summary>
+    public float RefPhaseX, RefPhaseY;
 }
 
 /// <summary>One entry of a slice's span index (§A.4): a clean subtree's slice-space bounds (device px, halos included) and

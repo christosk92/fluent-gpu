@@ -41,6 +41,26 @@ public static class ProgressRing
     // themeresource is NOT used by the Lottie player. We scale proportionally so larger rings keep the visual weight.
     const float StrokeAtDefault = 3.0f;   // == DefaultSize · 0.09375f
 
+    /// <summary>The ring's look, read at RENDER through the control style table (<see cref="ControlStyles.ProgressRingStyle"/>).
+    /// A per-instance <c>foreground</c> / <c>track</c> still wins. Every default is the WinUI ring.</summary>
+    public sealed record Style
+    {
+        /// <summary>The arc colour (AccentFillColorDefault).</summary>
+        public ColorF Foreground { get; init; } = Tok.AccentDefault;
+        /// <summary>The determinate track ring (ControlFillColorTransparent: invisible).</summary>
+        public ColorF Track { get; init; } = ColorF.Transparent;
+        /// <summary>A multiplier on the Lottie stroke weight (3 DIP at the 32 default, proportional to the size).</summary>
+        public float StrokeScale { get; init; } = 1f;
+        /// <summary>Round arc caps (the Lottie look); false = square caps.</summary>
+        public bool RoundCaps { get; init; } = true;
+    }
+
+    /// <summary>The ring style now: the active theme's (<see cref="ControlStyles.ProgressRingStyle"/>), else <see cref="FluentStyle"/>.</summary>
+    public static Style DefaultStyle => ControlStyles.Resolve(ControlStyles.ProgressRingStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a ProgressRing entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new();
+
     /// <summary>
     /// Computed geometry for one ProgressRing (the audit's P3 TemplateSettings convention — mirrors WinUI's
     /// <c>ProgressRingTemplateSettings</c>, recomputed once from the control's size, never inside a per-frame bind).
@@ -97,17 +117,19 @@ public static class ProgressRing
                                     ColorF? foreground = null, ColorF? track = null, TemplateParts? parts = null)
     {
         var ts = ProgressRingTemplateSettings.ForDeterminate(size, value);
-        ColorF fg = foreground ?? Tok.AccentDefault;
-        ColorF tk = track ?? ColorF.Transparent;   // WinUI default Background = ControlFillColorTransparentBrush
+        var st = DefaultStyle;                     // read now (the factory runs in its caller's render)
+        ColorF fg = foreground ?? st.Foreground;
+        ColorF tk = track ?? st.Track;             // WinUI default Background = ControlFillColorTransparentBrush
+        float stroke = ts.Stroke * st.StrokeScale;
         return new BoxEl
         {
             ZStack = true, Width = ts.Size, Height = ts.Size,
             Opacity = isActive ? 1f : 0f,           // Inactive visual state: LayoutRoot.Opacity = 0
             Children = new Element[]
             {
-                new BoxEl { Width = ts.Size, Height = ts.Size, Arc = new ArcSpec(tk, ts.Stroke, 0f, 360f, RoundCaps: false) },             // track ring
+                new BoxEl { Width = ts.Size, Height = ts.Size, Arc = new ArcSpec(tk, stroke, 0f, 360f, RoundCaps: false) },                // track ring
                 parts.Apply(PartRing,                                                                                                      // accent sweep (round caps, like the Lottie)
-                    new BoxEl { Width = ts.Size, Height = ts.Size, Arc = new ArcSpec(fg, ts.Stroke, ts.StartDeg, ts.Sweep, RoundCaps: true) }),
+                    new BoxEl { Width = ts.Size, Height = ts.Size, Arc = new ArcSpec(fg, stroke, ts.StartDeg, ts.Sweep, RoundCaps: st.RoundCaps) }),
             },
         };
     }
@@ -152,7 +174,8 @@ public static class ProgressRing
             var Parts = props.Parts;
             bool IsActive = props.IsActive;
             var ts = ProgressRingTemplateSettings.ForIndeterminate(props.Size);
-            ColorF fg = props.Foreground ?? Tok.AccentDefault;
+            var st = DefaultStyle;   // read now: a theme swap re-renders the spinner in the new look
+            ColorF fg = props.Foreground ?? st.Foreground;
 
             // WinUI ProgressRingIndeterminate: 2.0s loop. RotationAngleInDegrees 0 → 450 (0.5) → 900 (1.0), each half on
             // the Lottie spline — this loop track spins the whole host (and the arc child with it).
@@ -212,8 +235,9 @@ public static class ProgressRing
             var arc = new BoxEl
             {
                 Width = ts.Size, Height = ts.Size,
-                Arc = new ArcSpec(fg, ts.Stroke, ts.StartDeg, ts.Sweep, RoundCaps: true),
+                Arc = new ArcSpec(fg, ts.Stroke * st.StrokeScale, ts.StartDeg, ts.Sweep, RoundCaps: st.RoundCaps),
                 OnRealized = arcCapture,
+
             };
             if (Parts is { } p)   // restyle the arc (the ArcSpec is stock — override-able); the trim-loop ref always wins (chained)
             {

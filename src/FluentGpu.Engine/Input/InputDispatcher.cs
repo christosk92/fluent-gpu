@@ -1277,6 +1277,10 @@ public sealed partial class InputDispatcher
         return handled;
     }
 
+    /// <summary>Drop every in-flight pointer interaction (hover, press, capture, an item drag): the frame freeze calls it so no
+    /// interaction state survives behind a tree nobody can see (E2).</summary>
+    internal void CancelInteractions() => CancelPointer();
+
     /// <summary>Clear ALL in-flight pointer interaction across every contact (window deactivated — the WindowBlur path,
     /// no single PointerId). Each live slot's capture side-effects fire (RepeatReleased / OnPointerExit / hover clear)
     /// then its slot is recycled.</summary>
@@ -3049,6 +3053,10 @@ public sealed partial class InputDispatcher
         return NodeHandle.Null;
     }
 
+    /// <summary>Is <paramref name="p"/> (window DIP) over a scroll bar's lane that can show? A press there goes to the bar before any node's hit
+    /// (or hit slop) is consulted. Diagnostics: the inspector's target rule cuts a slop at a lane with it.</summary>
+    public bool IsOverScrollbarLane(Point2 p) => !ScrollbarLaneUnder(p, out _, out _).IsNull;
+
     private void UpdateScrollHover(Point2 p)
     {
         if (Chrome is null) return;
@@ -3497,6 +3505,18 @@ public sealed partial class InputDispatcher
             ? MathF.Max(1f, _scene.Bounds(node).W) : float.PositiveInfinity;
     }
 
+    /// <summary>The style a text leaf's queries shape under: its laid style at the auto-fit size the measure pass chose
+    /// (TextEl.MinSize), the size the recorder draws the run at, so a press and a selection land on the glyphs drawn.</summary>
+    private TextStyle QueryStyle(NodeHandle node)
+    {
+        TextStyle style = _scene.Layout(node).TextStyle;
+        if (style.MinSizeDip > 0f && _scene.TryGetMeasureCache(node, out TextMeasureCache cache))
+        {
+            TextMeasureEntry fit = cache.ResolveForWidth(_scene.Bounds(node).W);
+            if (fit.Valid && fit.FitSize > 0f) style = style.AtFitSize(fit.FitSize);
+        }
+        return style;
+    }
     /// <summary>The seam align width for a text leaf's queries — the node's laid width, the same box the recorder hands
     /// the glyph op as Bounds.W, so a Center/End/Justify line hit-tests where it is drawn (TextStyle.Align).</summary>
     private float QueryAlignWidth(NodeHandle node) => _scene.Bounds(node).W;
@@ -3511,7 +3531,7 @@ public sealed partial class InputDispatcher
         string text = SelectableTextOf(node);
         if (text.Length == 0) return;
         if (clickCount == 1 && HitLinkSpan(node, local) >= 0) return;   // a link press never starts a selection
-        int idx = fonts.HitTestText(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), local, out _, QueryAlignWidth(node));
+        int idx = fonts.HitTestText(text, QueryStyle(node), QueryMaxWidth(node), local, out _, QueryAlignWidth(node));
         _selText = node;
         switch (clickCount)
         {
@@ -3544,7 +3564,7 @@ public sealed partial class InputDispatcher
         var node = _selText;
         string text = SelectableTextOf(node);
         if (text.Length == 0) return;
-        int idx = fonts.HitTestText(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), local, out _, QueryAlignWidth(node));
+        int idx = fonts.HitTestText(text, QueryStyle(node), QueryMaxWidth(node), local, out _, QueryAlignWidth(node));
         ApplyTextSelection(node, Math.Min(_selAnchor, idx), Math.Max(_selAnchor, idx));
     }
 
@@ -3563,7 +3583,7 @@ public sealed partial class InputDispatcher
         if (end > start && ResolveFonts() is { } fonts)
         {
             string text = SelectableTextOf(node);
-            n = fonts.GetRangeRects(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), start, end, rects, QueryAlignWidth(node));
+            n = fonts.GetRangeRects(text, QueryStyle(node), QueryMaxWidth(node), start, end, rects, QueryAlignWidth(node));
         }
         _scene.SetTextEditRects(node, rects[..n], default);
         _scene.Mark(node, NodeFlags.PaintDirty);
@@ -4169,12 +4189,32 @@ public sealed partial class InputDispatcher
     }
 
     private Point2 _hitAbs;   // the window-space point of the in-flight hit walk (pass-through rect checks)
+    private bool _hitViaSlop;  // the last Hit() result was taken in a slop (outside the target's own box), not inside it
+
+    /// <summary>The host's hit floor (DIP): a click target smaller than this on an axis takes hits that far out, centred on its box (an
+    /// implicit hit slop, added to the box's own <see cref="Dsl.BoxEl.HitSlop"/>). The app sets it from its touch tier (40 at a Compact
+    /// window); 0 = none. Never moves layout or paint; a clipping ancestor cuts it; a real hit always beats a slop hit.</summary>
+    public float MinHitSize { get; set; }
 
     public NodeHandle HitTest(Point2 p)
     {
         if (_scene.Root.IsNull) return NodeHandle.Null;
         _hitAbs = p;
+        _hitViaSlop = false;
         return Hit(_scene.Root, p, 1f, 1f, _scene.HasActiveRevealBands);
+    }
+
+    /// <summary>How far a target's hit rect reaches past its <paramref name="w"/> x <paramref name="h"/> box: its own slop plus what the host's
+    /// floor (<see cref="MinHitSize"/>) adds on an axis it falls short on, split evenly. Zero for a node that set none under a zero floor.</summary>
+    public Edges4 EffectiveHitSlop(NodeHandle node, float w, float h) => SlopOf(node, w, h);
+
+    private Edges4 SlopOf(NodeHandle node, float w, float h)
+    {
+        _scene.TryGetHitSlop(node, out Edges4 own);
+        float floor = MinHitSize;
+        if (floor <= 0f) return own;
+        float sx = w < floor ? (floor - w) * 0.5f : 0f, sy = h < floor ? (floor - h) * 0.5f : 0f;
+        return new Edges4(MathF.Max(own.Left, sx), MathF.Max(own.Top, sy), MathF.Max(own.Right, sx), MathF.Max(own.Bottom, sy));
     }
 
     /// <summary>Deepest visible node containing the point, regardless of click handler (used to find a scroll target).</summary>
@@ -4352,6 +4392,7 @@ public sealed partial class InputDispatcher
         var flags = _scene.Flags(node);
         if ((flags & (NodeFlags.Visible | NodeFlags.HitTestVisible)) != (NodeFlags.Visible | NodeFlags.HitTestVisible))
             return NodeHandle.Null;
+        bool slopSelf = false;
 
         ref RectF b = ref _scene.Bounds(node);
         ref NodePaint np = ref _scene.Paint(node);
@@ -4362,12 +4403,28 @@ public sealed partial class InputDispatcher
         float hitW = float.IsNaN(np.PresentedW) ? b.W : np.PresentedW;
         float hitH = float.IsNaN(np.PresentedH) ? b.H : np.PresentedH;
         bool inside = local.X >= 0f && local.X < hitW && local.Y >= 0f && local.Y < hitH;
+        // A point outside the box but inside its hit slop (Element.HitSlop + the host floor) can take only the node itself, never its
+        // children, and only as a SLOP hit: a real hit anywhere (a sibling, a descendant) wins over it.
+        ref InteractionInfo ii0 = ref _scene.Interaction(node);
+        if (!inside && (ii0.HandlerMask & SlopHandlers) != 0 && (flags & NodeFlags.Disabled) == 0)
+        {
+            Edges4 slop = SlopOf(node, hitW, hitH);
+            bool inSlop = local.X >= -slop.Left && local.X < hitW + slop.Right && local.Y >= -slop.Top && local.Y < hitH + slop.Bottom;
+            if (inSlop && (flags & NodeFlags.ClipsToBounds) != 0)
+            {
+                if (YieldsToPassThrough(node)) return NodeHandle.Null;
+                _hitViaSlop = true;
+                return node;
+            }
+            if (inSlop) slopSelf = true;
+        }
         if ((flags & NodeFlags.ClipsToBounds) != 0
             && (!inside || !ClipPathAdmits(node, flags, local, hitW, hitH))) return NodeHandle.Null;
         if (!ClipRectAdmits(in np, local, hitH)) return NodeHandle.Null;
 
         var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);
         NodeHandle result = NodeHandle.Null;
+        bool resultSlop = false;
         int childOrdinal = 0;
         var flow = FlowCursor.For(in np);   // SizeMode.FlowReveal: children are hit where the recorder paints them
         if (anyBands && _scene.TryGetRevealBands(node, out RevealBands bands, out byte bandMask, out int bandPrefix, out int bandFirst))
@@ -4380,10 +4437,22 @@ public sealed partial class InputDispatcher
             if (hasItemBand && childOrdinal >= itemBandPrefix && !itemBandAllowsPoint) continue;
             if (!float.IsNaN(flowClipTop) && (childLocal.Y < flowClipTop || childLocal.Y >= flowClipBottom)) continue;
             Point2 presentedPoint = flowShift != 0f ? new Point2(childLocal.X, childLocal.Y - flowShift) : childLocal;
+            _hitViaSlop = false;
             var r = Hit(c, presentedPoint, netSx, netSy, anyBands);
-            if (!r.IsNull) result = r;
+            if (r.IsNull) continue;
+            // The last real hit wins, as always; a slop hit only fills in where no child took the point for real.
+            if (!_hitViaSlop) { result = r; resultSlop = false; }
+            else if (result.IsNull || resultSlop) { result = r; resultSlop = true; }
         }
+        _hitViaSlop = false;
+        if (!result.IsNull && !resultSlop) return result;
 
+        if (!result.IsNull)
+        {
+            // A child's slop hit: the node's OWN box holds the point, but a small target beside it reaches for it on purpose.
+            _hitViaSlop = true;
+            return result;
+        }
         if (result.IsNull)
         {
             ref InteractionInfo ii = ref _scene.Interaction(node);
@@ -4412,7 +4481,17 @@ public sealed partial class InputDispatcher
                 else if ((ii.HandlerMask & InteractionInfo.RowCellsBit) != 0 && HitRowCell(node, local) >= 0)
                     result = node;
             }
+            else if (slopSelf && !YieldsToPassThrough(node))
+            {
+                _hitViaSlop = true;
+                return node;
+            }
         }
         return result;
     }
+
+    /// <summary>The handlers that make a box a whole-box target (the hit walk's hitAnywhere set, less the cursor and text selection): only such a
+    /// box takes hits in its slop.</summary>
+    private const int SlopHandlers = InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit
+        | InteractionInfo.DragBit | InteractionInfo.GestureBit | InteractionInfo.ContextBit;
 }

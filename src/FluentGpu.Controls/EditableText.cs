@@ -111,6 +111,14 @@ public sealed class EditableText : Component
     /// so a field whose width must track runtime layout (the titlebar search box giving way as the window narrows)
     /// subscribes here; the Render read re-renders this component when the value moves.</summary>
     public IReadSignal<float>? WidthSignal;
+
+    /// <summary>The width a composer RE-PUSHES on every render (<c>Embed.Comp(new LiveWidth(w), () => new EditableText { ... })</c>), so the
+    /// field follows its prop instead of the value it mounted with (<see cref="TextBox.Create"/>: a field whose width a tier or a page changes).</summary>
+    public sealed record LiveWidth(float Width);
+
+    /// <summary>How the field's box eases when its width changes (a size <see cref="LayoutTransition"/>, <c>SizeMode.Reflow</c> for a field whose row
+    /// rides it); null: the new width lands at once. The content row, the underline and the focus bar fill the root, so they follow its eased width.</summary>
+    public LayoutTransition? WidthTransition;
     public float Height = 32f;
     public float FontSize = 14f;
     private ColorF? _foreground;
@@ -152,7 +160,7 @@ public sealed class EditableText : Component
     /// <summary>Replace the left-affix element on the live instance.</summary>
     internal void SetLeftAffix(Element? affix)
     {
-        if (ReferenceEquals(LeftAffix, affix)) return;
+        if (LeftAffix.SameAs(affix)) return;
         LeftAffix = affix;
         if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
     }
@@ -162,13 +170,22 @@ public sealed class EditableText : Component
     /// so this bumps a render-subscribed epoch to re-render the field with the new affix lane.</summary>
     internal void SetRightAffix(Element? affix)
     {
-        if (ReferenceEquals(RightAffix, affix)) return;
+        if (RightAffix.SameAs(affix)) return;
         RightAffix = affix;
         if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
     }
 
+    /// <summary>Re-size the field on the LIVE instance (a composer whose style is live — NumberBox's field height across a window-tier
+    /// crossing — forwards it here): the render epoch re-renders the field at the new height. A no-op for an unchanged height.</summary>
+    internal void SetHeight(float height)
+    {
+        if (Height == height) return;
+        Height = height;
+        if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
+    }
+
     /// <summary>Flip the enabled state on the LIVE instance. Props freeze at mount, so a composer whose enabled flag is
-    /// live (NumberBox/ComboBox re-push theirs through <c>EnabledProps</c>) forwards it here: the render epoch re-renders the
+    /// live (NumberBox/ComboBox re-push theirs through their live props) forwards it here: the render epoch re-renders the
     /// root (input gate, Focusable, Disabled chrome) and the display epoch re-evaluates BindColor's disabled foreground.</summary>
     internal void SetEnabled(bool enabled)
     {
@@ -201,6 +218,11 @@ public sealed class EditableText : Component
     /// TextControlBackgroundFocused = ControlFillColorInputActive (:25/:132). Default false — TextBox/PasswordBox/
     /// NumberBox/AutoSuggestBox keep their full chrome.</summary>
     public bool Chromeless;
+    /// <summary>Where a composer's field surface (<see cref="TextFieldStyle"/>) comes from, asked at EVERY render (a mounted editor's
+    /// plain fields freeze, the theme does not); null = the active theme's TextBox field (<see cref="TextBox.DefaultFieldStyle"/>).
+    /// A Chromeless editor takes only its hover / focused fills from it. INTERNAL (the composer seam): apps restyle fields through
+    /// the control style table.</summary>
+    internal Func<TextFieldStyle>? FieldStyle;
     /// <summary>Content-lane padding override (WinUI TextBox <c>Padding</c>). Null = the TextBox default 10,5,6,6. The
     /// editable ComboBox passes ComboBoxEditableTextPadding 11,5,38,6 (ComboBox_themeresources.xaml:342) so the text
     /// clears the 38px chevron column while the part spans the field's FULL width (:580 <c>Grid.ColumnSpan="2"</c>).
@@ -338,8 +360,9 @@ public sealed class EditableText : Component
         _core.IsReadOnly = IsReadOnly;
         _core.AcceptsReturn = AcceptsReturn;
 
-        // Effective width: the live signal (subscribed — a write re-renders this field) over the frozen mount value.
-        float width = WidthSignal?.Value ?? Width;
+        // Effective width: the live signal (subscribed — a write re-renders this field), else the composer's re-pushed width, over the frozen mount value.
+        var pushed = UsePropsOrDefault<LiveWidth>();
+        float width = WidthSignal?.Value ?? pushed?.Width ?? Width;
 
         // The visible text node. TextBind/ColorBind read the SIGNAL + the display epoch, so a keystroke (signal write)
         // or a doc-only change (epoch bump) updates exactly this node — no component re-render. The bind evaluation is
@@ -409,36 +432,45 @@ public sealed class EditableText : Component
         }
 
         var rowChildren = new List<Element>(3);
-        if (LeftAffix is not null) rowChildren.Add(LeftAffix);
+        if (LeftAffix is not null) rowChildren.Add(LeftAffix.Value);
         rowChildren.Add(lane);
         if (RightAffix is not null)
         {
-            rowChildren.Add(RightAffix);
+            rowChildren.Add(RightAffix.Value);
         }
         else if (ShowDeleteButton && !AcceptsReturn && !Mask && IsEnabled && !IsReadOnly && focused && !emptySig.Value)
         {
             rowChildren.Add(DeleteButton());
         }
 
+        // The content row, the underline and the focus bar FILL the root (a ZStack child fills it unless sized): they follow its eased width.
         var content = new BoxEl
         {
             Direction = 0,
-            Width = width,
             Height = Height,
             AlignItems = FlexAlign.Stretch,
             Children = rowChildren.ToArray(),
         };
 
+        // The field surface, read now (a composer's, else the theme's TextBox field; the stock one is the WinUI field).
+        var fs = FieldStyle?.Invoke() ?? TextBox.DefaultFieldStyle;
         var children = new List<Element> { content };
+        // A themed resting underline (none on the WinUI field) sits on the bottom edge under the focus bar.
+        if (!Chromeless && fs.UnderlineThickness > 0f && !(focused && IsEnabled && fs.FocusBarThickness > 0f))
+            children.Add(new BoxEl
+            {
+                Height = fs.UnderlineThickness, AlignSelf = FlexAlign.End,   // laid out on the bottom edge
+                Fill = fs.Underline, Corners = CornerRadius4.All(0f), HitTestVisible = false,
+            });
         // WinUI focus affordance is BorderThickness 1,1,1,2 — the 1px stroke stays all around (below) and a 2px accent
         // bar is pinned to the BOTTOM edge only (not a full 2px ring). See the class doc for the
         // TextControlElevationBorderFocusedBrush equivalence (TextBox_themeresources.xaml ~48–66 / ~295–304).
         // Chromeless suppresses it — the composer's outer box owns the focused underline (editable ComboBox).
-        if (focused && IsEnabled && !Chromeless)
+        if (focused && IsEnabled && !Chromeless && fs.FocusBarThickness > 0f)
             children.Add(new BoxEl
             {
-                Width = width, Height = 2f, OffsetY = Height - 2f,
-                Fill = Tok.AccentDefault, Corners = CornerRadius4.All(0f),
+                Height = fs.FocusBarThickness, OffsetY = Height - fs.FocusBarThickness,
+                Fill = fs.FocusBar, Corners = CornerRadius4.All(0f),
             });
 
         Action<NodeHandle> rootCapture = h => { _rootNode = h; if (Field is { } vf) vf.Node.Value = h; };
@@ -447,10 +479,11 @@ public sealed class EditableText : Component
         {
             ZStack = true,
             Width = width,
+            Animate = WidthTransition,
             Height = Height,
             // Chromeless (editable-ComboBox part): square — the composer's outer box rounds + clips (ClipToBounds
             // follows the rounded corners, so the interaction fills below stay inside the shared shape).
-            Corners = Chromeless ? default : Radii.ControlAll,   // WinUI ControlCornerRadius = 4px
+            Corners = Chromeless ? default : CornerRadius4.All(fs.Radius),   // WinUI ControlCornerRadius = 4px
             // WinUI TextBox state fills: rest=ControlFillColorDefault, PointerOver=ControlFillColorSecondary,
             // focused=ControlFillColorInputActive, disabled=ControlFillColorDisabled. Chromeless keeps ONLY the
             // hover/focused fills, painted OVER the composer's shared background — the exact WinUI layering: the
@@ -458,18 +491,20 @@ public sealed class EditableText : Component
             // TextControlBackgroundPointerOver/Focused on top of it (ComboBox_themeresources.xaml:786–803); rest and
             // disabled are transparent there (the outer box paints those once).
             Fill = Chromeless
-                ? (IsEnabled && focused ? Tok.FillControlInputActive : ColorF.Transparent)
-                : (!IsEnabled ? Tok.FillControlDisabled : (focused ? Tok.FillControlInputActive : Tok.FillControlDefault)),
+                ? (IsEnabled && focused ? fs.FocusedFill : ColorF.Transparent)
+                : (!IsEnabled ? fs.DisabledFill : (focused ? fs.FocusedFill : fs.Fill)),
             // A FOCUSED field must NOT lighten on hover (that dark→light flip read as a flicker).
             HoverFill = Chromeless
-                ? (!IsEnabled ? ColorF.Transparent : (focused ? Tok.FillControlInputActive : Tok.FillControlSecondary))
-                : (!IsEnabled ? Tok.FillControlDisabled : (focused ? Tok.FillControlInputActive : Tok.FillControlSecondary)),
+                ? (!IsEnabled ? ColorF.Transparent : (focused ? fs.FocusedFill : fs.HoverFill))
+                : (!IsEnabled ? fs.DisabledFill : (focused ? fs.FocusedFill : fs.HoverFill)),
             // WinUI keeps the field border NEUTRAL (the subtle elevation gradient) in every state — focus emphasis is
             // the 2px accent bar on the BOTTOM edge (above), per the focused-border note in the class doc. Chromeless:
             // NO border at all — the editable-ComboBox part mounts with BorderBrush="Transparent"
             // (ComboBox_themeresources.xaml:580); the one border is the composer's.
-            BorderBrush = Chromeless ? null : (!IsEnabled ? GradientSpec.Solid(Tok.StrokeControlDefault) : Tok.ControlElevationBorder),
-            BorderWidth = Chromeless ? 0f : 1f,
+            BorderBrush = Chromeless ? null : (!IsEnabled ? fs.DisabledBorderBrush : fs.BorderBrush),
+            BorderColor = Chromeless ? ColorF.Transparent : fs.BorderColor,
+            BorderWidth = Chromeless ? 0f : fs.BorderWidth,
+
             // form-validation.md: a bound channel — while the field is invalid the recorder forces a solid critical-color
             // ring over the resting gradient border. Bound (no re-render per keystroke); the write is equality-gated.
             Validation = Field is { } vfield ? Prop.Of(() => vfield.Error.Value.IsValid ? ValidationState.None : ValidationState.Error) : default,
@@ -543,7 +578,7 @@ public sealed class EditableText : Component
         [
             new TextEl(glyph)
             {
-                Size = glyphSize, FontFamily = Theme.IconFont,
+                Size = glyphSize, FontFamily = Tok.Definition.Fonts.Icon,
                 Color = Tok.TextSecondary, PressedColor = Tok.TextTertiary,
             },
         ],

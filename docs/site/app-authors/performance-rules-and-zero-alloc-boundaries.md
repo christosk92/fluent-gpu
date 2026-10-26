@@ -34,7 +34,7 @@ The optimization loop, then, is: **find which axis your change hits, and ask whe
 
 The middle tier (`LayoutDirty`) is the familiar React path, but *granular*: a `setState`/signal write schedules **only the owning component's render-effect** — not the app, not its parent, not its siblings. On the next flush that one component re-renders, its single subtree reconciles, and it is marked `LayoutDirty`. There is no prop-diffing cascade to walk, because a parent re-render never re-renders its embedded children (they re-render only for *their own* state/context — see [props don't flow through constructors](./signals-components-and-bindings.md)).
 
-The headless harness proves it (check #59): after a leaf `setState`, `ComponentsRendered == 1` and the sibling/parent counts are unchanged. The cost is **O(that component's subtree)**, not O(app).
+You can see it in `FrameStats`: after a leaf `setState`, `ComponentsRendered == 1` and the sibling/parent counts are unchanged. The cost is **O(that component's subtree)**, not O(app).
 
 Two corollaries you can act on:
 
@@ -71,7 +71,7 @@ new BoxEl
 // elsewhere x.Value = pointerX → both thunks re-run → node transform/fill update → recomposite. NO re-render.
 ```
 
-`Slider.Create(FloatSignal value, Action<float>? onChange = null, SliderOptions? options = null, …)` (`src/FluentGpu.Controls/Slider.cs`) bound to a `FloatSignal` IS the built-in compositor-path slider: the thumb offset and the fill scale are bound `Transform`s, so dragging is a `TransformDirty` frame (no render/reconcile/layout). The gallery's `StatePage_BindHost` runs exactly this with a live render counter that stays put while the slider moves. Proof is harness check #60: a bound slider drag moves the thumb (`thumbDx 51→131`) with **`renders+0 rendered=False`**.
+`Slider.Create(FloatSignal value, Action<float>? onChange = null, SliderOptions? options = null, …)` (`src/FluentGpu.Controls/Slider.cs`) bound to a `FloatSignal` IS the built-in compositor-path slider: the thumb offset and the fill scale are bound `Transform`s, so dragging is a `TransformDirty` frame (no render/reconcile/layout). The gallery's `StatePage_BindHost` runs exactly this with a live render counter that stays put while the slider moves. The bound slider drag moves the thumb with **`renders+0 rendered=False`**.
 
 Two rules make or break the bypass (both enforced by `Prop<T>`):
 
@@ -112,7 +112,7 @@ A self-invalidating **text measure cache** (per node, keyed by text + style + av
 
 ## The zero-alloc contract — phases 6–13, `HotPhaseAllocBytes == 0`
 
-The paint half of the frame (phases 6–13: layout → record → submit → present → passive effects) must allocate **zero managed bytes**. `AppHost.Paint` measures it directly — it snapshots `GC.GetAllocatedBytesForCurrentThread()` before the flush and again after present, and reports the delta as `FrameStats.HotPhaseAllocBytes`. The headless harness asserts it is `0` on steady frames.
+The paint half of the frame (phases 6–13: layout → record → submit → present → passive effects) must allocate **zero managed bytes**. `AppHost.Paint` measures it directly — it snapshots `GC.GetAllocatedBytesForCurrentThread()` before the flush and again after present, and reports the delta as `FrameStats.HotPhaseAllocBytes`. It reads `0` on steady frames.
 
 This is a *contract you can break* from app code, and the way you break it is allocating inside a hot path:
 
@@ -200,16 +200,9 @@ All gated through `Diag.EnvFlag` (`src/FluentGpu.Engine/Foundation/Diag.cs`); se
 | `FG_ALLOC_DIAG=1` | **once-per-second per-phase allocation + CPU attribution** to stderr — `pump / dispatch / flush / layout / anim / record / submit / effects` KB/s and ms. This is the tool for pinning a `HotPhaseAllocBytes > 0` to the exact phase (or a worker thread) without a profiler. |
 | `FG_SCROLLLOG=1` | trace the scrollbar / scroll offsets (the `[scroll]` lines). |
 
-### The harness (CI, headless, seconds)
+### Verifying
 
-After any reactivity/layout/render change, run the cross-seam golden harness — ~60 checks, no GPU or window:
-
-```text
-dotnet build src/FluentGpu.VerticalSlice    # clean
-dotnet run   --project src/FluentGpu.VerticalSlice    # must print "ALL CHECKS PASSED"
-```
-
-If you touched a binding/render path, add a `Check` that asserts the `FrameStats` you expect on the relevant interaction — that is how you *prove* a binding stayed compositor-only rather than quietly re-rendering (checks #59 and #60 are exactly these assertions). Evidence before assertions.
+After any reactivity/layout/render change, build Debug clean (`dotnet build src/FluentGpu.slnx`). There are no tests. If you touched a binding/render path, read the `FrameStats` you expect on the relevant interaction — that is how you *see* a binding stayed compositor-only rather than quietly re-rendering. Evidence before assertions.
 
 ## Pitfalls — symptom → cause → fix (quick scan)
 
@@ -221,7 +214,7 @@ Scan the **Symptom** column for what you're seeing. The full performance + layou
 | A small change relayouts the whole page | no layout boundary above the change → the up-walk reaches the root → full layout | give the enclosing container explicit `Width`+`Height`+`ClipToBounds = true` so it's a boundary. |
 | Whole app re-renders on one interaction | state lives too high (at the root), so the root's render-effect runs | move state **down** into the component that owns it; or bind the hot value instead of `setState`. |
 | `ComponentsRendered` is much larger than 1 after a leaf change | state is too high, or a value passed by constructor forces a wider re-render | keep state local; pass parent→child data via a signal/context, not a constructor arg. |
-| `HotPhaseAllocBytes > 0` (zero-alloc check fails) | allocation inside a bind thunk or hot effect body (`new`, LINQ, boxing, per-call closure) | capture everything once at mount; the thunk must only read + write existing state. Pin the phase with `FG_ALLOC_DIAG=1`. |
+| `HotPhaseAllocBytes > 0` (zero-alloc contract broken) | allocation inside a bind thunk or hot effect body (`new`, LINQ, boxing, per-call closure) | capture everything once at mount; the thunk must only read + write existing state. Pin the phase with `FG_ALLOC_DIAG=1`. |
 | A virtualized list allocates on every scroll frame | a per-item closure or per-item modifier rebuilt on each realize; a per-item lambda calls `new`/LINQ | vary per-item chrome through **values only** (pure-value `Prop.Of` thunks); keep the recycled-row structure stable (no per-item add/remove). |
 | List with thousands of items is slow / leaks nodes | not virtualized, or no stable key | `Virtual.List`/`Virtual.ListBound`/`Repeater.ItemsRepeater` with a stable key — only the window is realized, rows recycle. |
 | Scroll re-realizes/relayouts every frame | (rare) something marks the viewport dirty each frame — usually the list *component* re-rendering | move the list's state out / bind it; in-window scroll is transform-only by design. |

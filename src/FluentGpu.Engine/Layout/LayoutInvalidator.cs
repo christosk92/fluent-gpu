@@ -15,6 +15,7 @@ public sealed class LayoutInvalidator
     private readonly SceneStore _scene;
     private readonly FlexLayout _layout;
     private readonly List<NodeHandle> _roots = new();
+    private readonly HashSet<uint> _rootSet = new(64);   // PruneNestedRoots' ancestor lookup (live roots: an index names one node)
     private readonly List<NodeHandle> _escaped = new();   // this frame's boundary-less marks, pending the size-stable probe
 
     /// <summary>Relayout escapes counted since the last <see cref="BeginFrame"/> — surfaced as
@@ -71,8 +72,11 @@ public sealed class LayoutInvalidator
     private bool IsHardScrollBoundary(NodeHandle node, in LayoutInput s)
     {
         if (!_scene.TryGetScroll(node, out var sc)) return false;
-        if (sc.ContentSized) return true;                                  // popup presenters own their clamped extent
         bool explicitMain = sc.Orientation == 1 ? !float.IsNaN(s.Width) : !float.IsNaN(s.Height);
+        // A CONTENT-SIZED viewport measures to its content, so a change inside it can change its own size: it firewalls only where its main-axis extent
+        // is owned elsewhere (explicit or growing) or clamped (a finite max: the popup presenters own their clamped extent). An auto, unclamped one
+        // passes the walk to its parent, which re-measures it (a scroller that only scrolls once its parent bounds it: the detail hero's identity column).
+        if (sc.ContentSized) return s.FlexGrow != 0f || explicitMain || float.IsFinite(sc.Orientation == 1 ? s.MaxW : s.MaxH);
         return s.FlexGrow != 0f || explicitMain;
     }
 
@@ -107,6 +111,30 @@ public sealed class LayoutInvalidator
         ushort typeId = _scene.ElementTypeId(n);
         string key = DebugKeyResolver?.Invoke(n) ?? "(none)";
         Diag.Event("layout", $"relayout escaped to root from node #{idx} (type {typeId}, key {key}) — add a fixed-size ClipToBounds boundary or .Boundary()");
+    }
+
+    /// <summary>Drop every scheduled root that lies under another scheduled root (the scene root subsumes all of them).</summary>
+    private void PruneNestedRoots()
+    {
+        if (_roots.Count < 2) return;
+        if (_roots.Contains(_scene.Root))
+        {
+            _roots.Clear();
+            _roots.Add(_scene.Root);
+            return;
+        }
+        _rootSet.Clear();
+        for (int i = 0; i < _roots.Count; i++) _rootSet.Add(_roots[i].Raw.Index);
+        int w = 0;
+        for (int i = 0; i < _roots.Count; i++)
+        {
+            var r = _roots[i];
+            bool nested = false;
+            for (var a = _scene.Parent(r); !a.IsNull; a = _scene.Parent(a))
+                if (_rootSet.Contains(a.Raw.Index)) { nested = true; break; }
+            if (!nested) _roots[w++] = r;
+        }
+        _roots.RemoveRange(w, _roots.Count - w);
     }
 
     /// <summary>Re-solve only the subtrees affected by this frame's LayoutDirty marks. O(dirty), firewalled at boundaries.</summary>
@@ -145,21 +173,33 @@ public sealed class LayoutInvalidator
             {
                 var n = _escaped[i];
                 if (!_scene.IsLive(n)) continue;
-                if (_layout.TryResolveSizeStable(n)) LocalResolvesThisFrame++;
+                int mp0 = _layout.DiagMeasure;
+                bool stable = _layout.TryResolveSizeStable(n);
+                FluentGpu.Hosting.MountProf.MeasProbe += _layout.DiagMeasure - mp0;
+                if (stable) LocalResolvesThisFrame++;
                 else rootScheduled = true;
             }
             if (rootScheduled && !_roots.Contains(_scene.Root)) _roots.Add(_scene.Root);
             _escaped.Clear();
         }
 
-        // Running an ancestor root and a descendant root is harmless (layout is idempotent); we keep it simple and
-        // just dedupe exact roots. The root case re-solves against the window; others reflow against their own bounds.
+        // A root nested under another root is subsumed by it: the outer solve descends through every dirty node (neither
+        // the within-pass memo, the cross-pass ring nor Arrange's early-out serves a node whose subtree is still dirty) and
+        // its result is the one that stands. Running the inner solve FIRST anyway is not harmless, it is the page-mount
+        // hitch's second cost: a freshly mounted page is all dirty, so each boundary inside it (the track list, the rail,
+        // the hero) re-solved its whole subtree and the window solve then measured it all again — 2-3x the measures of
+        // one pass (6,788 for 2,530 distinct node×width pairs on a Zune playlist mount). Keep the outermost roots only.
+        // The root case re-solves against the window; others reflow against their own bounds.
+        PruneNestedRoots();
+        if (FluentGpu.Hosting.MountProf.On) FluentGpu.Hosting.MountProf.Events.Append(" [rd dirty=").Append(dirty.Count).Append(" roots=").Append(_roots.Count).Append(" hasRoot=").Append(_roots.Contains(_scene.Root) ? 1 : 0).Append(']');
         for (int i = 0; i < _roots.Count; i++)
         {
             var r = _roots[i];
             if (!_scene.IsLive(r)) continue;
-            if (r == _scene.Root) _layout.Run(r, window);
-            else _layout.RunSubtree(r);
+            int m0 = _layout.DiagMeasure;
+            if (r == _scene.Root) { _layout.Run(r, window); FluentGpu.Hosting.MountProf.MeasRoot += _layout.DiagMeasure - m0; }
+            else { _layout.RunSubtree(r); FluentGpu.Hosting.MountProf.MeasSub += _layout.DiagMeasure - m0; }
+            if (FluentGpu.Hosting.MountProf.On) FluentGpu.Hosting.MountProf.Events.Append(r == _scene.Root ? "R" : "s").Append(_layout.DiagMeasure - m0).Append(',');
         }
     }
 }

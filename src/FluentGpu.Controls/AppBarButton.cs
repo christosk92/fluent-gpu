@@ -46,7 +46,10 @@ public static class AppBarButton
 
     public static Style? StyleOverride;
 
-    public static Style DefaultStyle => StyleOverride ?? new Style
+    public static Style DefaultStyle => StyleOverride ?? ControlStyles.Resolve(ControlStyles.AppBarButtonStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a AppBarButton entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new Style
     {
         RestFill = Tok.FillSubtleTransparent,                        // AppBarButtonBackground = SubtleFillColorTransparent
         RestForeground = Tok.TextPrimary,                           // AppBarButtonForeground = TextFillColorPrimary
@@ -77,7 +80,7 @@ public static class AppBarButton
                 HoverColor = s.HoverForeground,
                 PressedColor = s.PressedForeground,
                 DisabledColor = s.DisabledForeground,
-                FontFamily = Theme.IconFont,
+                FontFamily = Tok.Definition.Fonts.Icon,
             },
         };
         if (labeled)
@@ -139,7 +142,7 @@ public static class AppBarButton
         if (hasToggles)
         {
             Element check = isChecked
-                ? new TextEl(Icons.Accept) { Size = 12f, Color = fg, PressedColor = enabled ? s.PressedForeground : fg, FontFamily = Theme.IconFont }
+                ? new TextEl(Icons.Accept) { Size = 12f, Color = fg, PressedColor = enabled ? s.PressedForeground : fg, FontFamily = Tok.Definition.Fonts.Icon }
                 : new BoxEl();
             children.Add(new BoxEl
             {

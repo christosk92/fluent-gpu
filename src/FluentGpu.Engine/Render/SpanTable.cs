@@ -245,6 +245,26 @@ public sealed class SpanTable
         return true;
     }
 
+    // The scroll state a viewport's own bytes were last recorded under (SceneRecordingContext.ViewportStateSig): it moves
+    // without a dirty bit, so a partial keep keeps a viewport's bytes only while it reads the same (audit PERF r2).
+    private ulong[] _vpSig = [];
+    private uint[] _vpSigGen = [];
+
+    public void StoreViewportSig(int nodeIndex, uint gen, ulong sig)
+    {
+        if ((uint)nodeIndex >= (uint)_vpSig.Length)
+        {
+            int n = Math.Max(nodeIndex + 1, Math.Max(64, _vpSig.Length * 2));
+            Array.Resize(ref _vpSig, n);
+            Array.Resize(ref _vpSigGen, n);
+        }
+        _vpSig[nodeIndex] = sig;
+        _vpSigGen[nodeIndex] = gen == 0 ? 1u : gen;
+    }
+
+    public bool ViewportSigMatches(int nodeIndex, uint gen, ulong sig)
+        => (uint)nodeIndex < (uint)_vpSig.Length && _vpSigGen[nodeIndex] == (gen == 0 ? 1u : gen) && _vpSig[nodeIndex] == sig;
+
     /// <summary>Record the node's OWN visual extent (its box + self-blur halo, in its slice's space) alongside the span a
     /// re-record just stored — the geometry-damage baseline (<see cref="TryGetPriorGeometry"/>).</summary>
     public void StoreSelf(int nodeIndex, in RectF selfBounds)

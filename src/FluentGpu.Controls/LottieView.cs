@@ -164,7 +164,7 @@ internal sealed class LottieViewComponent : Component
     private Element BuildRoot()
     {
         Element inner = BuildElement(0);
-        if (inner is BoxEl box)
+        if (inner.Is(out BoxEl box))
         {
             float leftoverX = _size - _plan.Width * _fit;
             float leftoverY = _size - _plan.Height * _fit;

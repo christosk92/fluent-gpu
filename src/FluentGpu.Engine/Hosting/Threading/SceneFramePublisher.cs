@@ -117,7 +117,8 @@ public sealed class SceneFramePublisher
     /// <summary>Copy a completed frame into a claimed write slot and publish. Zero steady allocation.</summary>
     public ulong Publish(ReadOnlySpan<byte> cmds, ReadOnlySpan<ulong> sort, in FrameInfo submit,
                          bool suppressVsync = false, bool settlePresent = false, FluentGpu.Media.VideoSurfaceRegistry? video = null,
-                         bool presentHeld = false)
+                         bool presentHeld = false, FreezeKind freeze = FreezeKind.None, float dissolveT = 0f, float dissolveMs = 0f,
+                         uint dissolveId = 0)
     {
         if (_reverse) ThreadGuard.AssertRender(); else ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
@@ -153,6 +154,10 @@ public sealed class SceneFramePublisher
             SuppressVsync = suppressVsync,
             SettlePresent = settlePresent,
             PresentHeld = presentHeld,
+            Freeze = freeze,
+            DissolveT = dissolveT,
+            DissolveMs = dissolveMs,
+            DissolveId = dissolveId,
             VideoIntentCount = videoCount,
         };
         Volatile.Write(ref _slotStates[free], ((long)seq << 2) | Published);
@@ -252,7 +257,8 @@ public sealed class SceneFramePublisher
     internal ulong PublishScene(SceneStore scene, ImageCache images, StringTable strings, in SceneRecordOptions options,
         ReadOnlySpan<NodeHandle> skip, ReadOnlySpan<NodeHandle> reuseBlock, ReadOnlySpan<RectF> damage,
         DetachedAnimSlab detached, IReadOnlyList<PopupWindowSlot> popups, AnimEngine animation, in FrameInfo submit,
-        bool suppressVsync, bool settlePresent = false, FluentGpu.Media.VideoSurfaceRegistry? video = null, bool presentHeld = false)
+        bool suppressVsync, bool settlePresent = false, FluentGpu.Media.VideoSurfaceRegistry? video = null, bool presentHeld = false,
+        FreezeKind freeze = FreezeKind.None, float dissolveT = 0f, bool entranceHeld = false, float dissolveMs = 0f, uint dissolveId = 0)
     {
         ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
@@ -276,12 +282,15 @@ public sealed class SceneFramePublisher
         bool previousSkipped = _pendingRepaintSeq != 0 && Volatile.Read(ref _lastConsumedSeq) < _pendingRepaintSeq;
         if (!previousSkipped) _carriedSceneDamageCount = 0;
         CarrySceneDamage(damage);
+        int parityBefore = frame.Scene.ParityVerifications;
         frame.Capture(scene, images, strings, options, skip, reuseBlock,
             _carriedSceneDamage.AsSpan(0, _carriedSceneDamageCount), detached, popups, animation, seq,
             _sceneCaptureSeq[slot]);
         _sceneCaptureSeq[slot] = seq;
         _capacityPolicy[slot].Observe(frame.Scene.Capacity, frame.Scene.RequiredNodeCapacity, Environment.TickCount64);
         LastCapturedNodeCount = frame.Scene.CopiedNodeCount;
+        LastCaptureReachableCount = frame.Scene.CapturedNodeCount;
+        LastCaptureParityVerified = frame.Scene.ParityVerifications != parityBefore;
         LastCaptureWasIncremental = frame.Scene.LastCaptureWasIncremental;
         LastCaptureFullReason = frame.Scene.LastCaptureWasIncremental ? CaptureFullReason.None : frame.Scene.LastCaptureFullReason;
         LastCaptureSplit = (frame.DiagSceneMs, frame.DiagConfigMs, frame.DiagImagesMs, frame.DiagAnimMs);
@@ -311,6 +320,11 @@ public sealed class SceneFramePublisher
             SuppressVsync = suppressVsync,
             SettlePresent = settlePresent,
             PresentHeld = presentHeld,
+            EntranceHeld = entranceHeld,
+            Freeze = freeze,
+            DissolveT = dissolveT,
+            DissolveMs = dissolveMs,
+            DissolveId = dissolveId,
             VideoIntentCount = videoCount,
         };
         _publishSeq = seq;
@@ -323,6 +337,12 @@ public sealed class SceneFramePublisher
     /// (<c>SceneRecordingSnapshot.CopiedNodeCount</c>) - every reachable node on a full capture, only the changed ones
     /// on an incremental one. Surfaced into <c>FrameStats.CapturedNodes</c>.</summary>
     internal int LastCapturedNodeCount { get; private set; }
+
+    /// <summary>Nodes the most recent capture reached (its reachability walk: every captured node, copied or kept).</summary>
+    internal int LastCaptureReachableCount { get; private set; }
+
+    /// <summary>Whether the DEBUG parity self-check re-derived the most recent capture (always false in Release).</summary>
+    internal bool LastCaptureParityVerified { get; private set; }
 
     /// <summary>Whether the most recent <see cref="PublishScene"/> took the P8 incremental path (diagnostics).</summary>
     internal bool LastCaptureWasIncremental { get; private set; }

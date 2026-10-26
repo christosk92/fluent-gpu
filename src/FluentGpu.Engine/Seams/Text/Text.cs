@@ -20,20 +20,34 @@ public readonly record struct TextStyle(StringId FontFamily, float SizeDip, usho
     float CharSpacing = 0f, float LineHeight = float.NaN,
     LineStacking Stacking = LineStacking.MaxHeight, TextLineBounds LineBounds = TextLineBounds.Full,
     int SpanRunId = 0, float MinSizeDip = 0f,   // MinSizeDip > 0 ⇒ auto-fit floor (TextEl.MinSize; shrink-to-fit MaxLines)
-    TextAlign Align = TextAlign.Start, FontFeatures Features = FontFeatures.None);   // TextEl.TextAlign / TextEl.FontFeatures
+    TextCase Case = TextCase.AsWritten,         // E19: invariant case transform applied at shaping; part of the key because it can change the glyph run
+    TextAlign Align = TextAlign.Start, FontFeatures Features = FontFeatures.None,   // TextEl.TextAlign / TextEl.FontFeatures
+    TextFitMode Fit = TextFitMode.Lines)                                             // TextEl.FitMode: how the MinSizeDip auto-fit picks its size
+{
+    /// <summary>This style at the auto-fit size <paramref name="size"/> the measure pass chose: the em, and under
+    /// <see cref="TextFitMode.OneLineFirst"/> an authored <see cref="LineHeight"/> scaled with it (the line keeps its ratio to the
+    /// em). ONE definition for the measure, the recorder, the input queries and the overflow probe, so all four agree.</summary>
+    public TextStyle AtFitSize(float size) => this with
+    {
+        SizeDip = size,
+        LineHeight = Fit == TextFitMode.OneLineFirst && LineHeight > 0f && SizeDip > 0f ? LineHeight * size / SizeDip : LineHeight,
+    };
+}
 
 /// <summary>Shared alignment/typography math — ONE definition the DirectWrite engine, the headless font system, the
 /// recorder (decoration bars) and the input dispatcher (hyperlink rects) all use, so every consumer places a line at the
-/// same offset. <see cref="Pack"/> folds <see cref="TextAlign"/> + <see cref="FontFeatures"/> into the single int the glyph
-/// op carries (features in the low 28 bits, align in bits 28..29).</summary>
+/// same offset. <see cref="Pack"/> folds <see cref="TextAlign"/> + <see cref="FontFeatures"/> + <see cref="TextCase"/> into the
+/// single int the glyph op carries (features in the low 28 bits, align in bits 28..29, case in bits 30..31).</summary>
 public static class TextTypography
 {
     public const uint FeatureMask = 0x0FFF_FFFFu;
 
-    public static int Pack(TextAlign align, FontFeatures features)
-        => (int)(((uint)features & FeatureMask) | ((uint)align & 3u) << 28);
-    public static int Pack(in TextStyle style) => Pack(style.Align, style.Features);
+    public static int Pack(TextAlign align, FontFeatures features, TextCase textCase = TextCase.AsWritten)
+        => (int)(((uint)features & FeatureMask) | ((uint)align & 3u) << 28 | ((uint)textCase & 3u) << 30);
+    public static int Pack(in TextStyle style) => Pack(style.Align, style.Features, style.Case);
     public static TextAlign AlignOf(int packed) => (TextAlign)(((uint)packed >> 28) & 3u);
+    /// <summary>The E19 case transform the replay's shaping applies (<see cref="TextStyle.Case"/>).</summary>
+    public static TextCase CaseOf(int packed) => (TextCase)(((uint)packed >> 30) & 3u);
     public static FontFeatures FeaturesOf(int packed) => (FontFeatures)((uint)packed & FeatureMask);
 
     /// <summary>The x offset of a Start/Center/End line of visible width <paramref name="lineWidth"/> (trailing hanging
@@ -112,6 +126,14 @@ public interface IFontSystem
     /// frame boundary (<c>FrameStats.TextShapes</c>). Default 0 for a backend that has not wired a counter.</summary>
     long ShapeCount => 0;
 
+    /// <summary>Whether <see cref="PrefetchShape"/> does anything (the layout pass skips its prefetch walk when not). Default false.</summary>
+    bool CanPrefetchShapes => false;
+
+    /// <summary>A hint (PERF r3 UI, C4): <paramref name="text"/> under <paramref name="style"/> is about to be measured for the first
+    /// time, so a backend may shape it AHEAD, off the calling thread. The measure that follows returns exactly what it would have
+    /// without the hint. Called by the layout pass on the UI thread. Default: nothing.</summary>
+    void PrefetchShape(StringId text, in TextStyle style) { }
+
     /// <summary>Measure a string under a style (intrinsic content size). Feeds the layout engine. When
     /// <paramref name="maxWidth"/> is finite and the style wraps, the result is the word-wrapped multi-line box.</summary>
     TextMetrics Measure(StringId text, in TextStyle style, float maxWidth = float.PositiveInfinity);
@@ -150,4 +172,16 @@ public interface IFontSystem
     int GetRangeRects(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, int start, int end, Span<RectF> rects,
         float alignWidth = float.PositiveInfinity)
         => throw new NotSupportedException($"{GetType().Name} does not implement selection geometry.");
+
+    /// <summary>The INK of the run laid out as <see cref="Measure(StringId, in TextStyle, float)"/> lays it: the union of its
+    /// glyphs' black boxes (the font's own glyph outlines' extents, not the line box), in DIP, relative to the top-left of
+    /// the measured box (Start-aligned; a trimmed or line-capped run counts only the glyphs it shows). The line box has
+    /// leading above the caps and descent under the baseline that no glyph may fill, so a clip that cuts only those cuts
+    /// nothing. False when the backend has no glyph metrics (the headless model) or the run draws no ink (spaces).
+    /// Cold path: inspection and lint only, never per frame (it lays the run out again).</summary>
+    bool TryMeasureInk(StringId text, in TextStyle style, float maxWidth, out RectF ink)
+    {
+        ink = default;
+        return false;
+    }
 }

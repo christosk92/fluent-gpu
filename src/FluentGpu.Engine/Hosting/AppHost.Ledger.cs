@@ -24,6 +24,9 @@ public sealed partial class AppHost
     private uint _ledgerWake;
     private long _ledgerPumpQpc;
     private LedgerPaintStamps _ledgerPaint;
+    /// <summary>Paint's UI-thread allocation counter at the same six points as <see cref="_ledgerPaint"/> (ledger on only).</summary>
+    private struct LedgerPaintAlloc { public long Start, Flush, Layout, Anim, Record, Submit; }
+    private LedgerPaintAlloc _ledgerAlloc;
     private long _ledgerWaitStart, _ledgerWaitEnd;
     private int _ledgerWaitMs;
     private HostWaitKind _ledgerWaitKind;
@@ -33,12 +36,25 @@ public sealed partial class AppHost
     private float _ledgerTurnCoverage;
     private RepaintFullReason _ledgerTurnFull;
     private int _ledgerTurnTiles;
+    private long _ledgerTurnBuildTicks;
+    private Rhi.RasterCost _ledgerTurnRaster;
     private bool _ledgerTurnPresented;
     private ulong _ledgerGpuSampleSeq, _ledgerPassSeq;
 
     /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint). With the
     /// <see cref="FrameLedger"/> on, the frame is recorded (early-outs included) when this host owns the ledger.</summary>
     public FrameStats RunFrame()
+    {
+        if (Volatile.Read(ref _presentWorkCount) != 0) DrainStalePresentWork();   // EP9: a queued DWM write no present claimed
+        // EP8: a main window waiting on its reveal gate notes fonts-ready before the frame and gets its chance to show after it.
+        if (!_revealPending || _isDetachedChild) return RunFrameLedgerGate();
+        NoteRevealReadiness();
+        var stats = RunFrameLedgerGate();
+        TryRevealMain();
+        return stats;
+    }
+
+    private FrameStats RunFrameLedgerGate()
     {
         if (!FrameLedger.Enabled) return RunFrameCore();
         if (_isDetachedChild || !FrameLedger.TryOwn(this)) return RunFrameCore();
@@ -47,11 +63,14 @@ public sealed partial class AppHost
 
     private FrameStats RunFrameLedgered()
     {
+        if (FrameTrace.Enabled) FrameTrace.ClaimHotThread();
         long allocStart = GC.GetAllocatedBytesForCurrentThread();
+        long createdStart = _scene.NodesCreatedTotal, freedStart = _scene.NodesFreedTotal, mountedStart = _reconciler.ComponentsMountedTotal;
         ulong cyclesStart = ThreadCycles.Read();
         long start = Stopwatch.GetTimestamp();
         _ledgerPumpQpc = 0;
         _ledgerPaint = default;
+        _ledgerAlloc = default;
         FrameStats s = RunFrameCore();
         long end = Stopwatch.GetTimestamp();
         ulong cycles = ThreadCycles.Read();
@@ -87,7 +106,26 @@ public sealed partial class AppHost
             PresentedTotal = (long)PresentedSequence, MissedVsyncsTotal = Interlocked.Read(ref _missedVsyncsTotal),
             WakeMask = _ledgerWake, UiCpuTimeTotal = cpuTime,
         };
+        if (painted)
+        {
+            ref readonly var a = ref _ledgerAlloc;
+            r.AllocFlush = a.Flush - a.Start; r.AllocLayout = a.Layout - a.Flush; r.AllocAnim = a.Anim - a.Layout;
+            r.AllocRecord = a.Record - a.Anim; r.AllocSubmit = a.Submit - a.Record;
+            r.Measures = s.MeasureCount; r.Arranges = s.ArrangeCount; r.TextShapes = s.TextShapes; r.TextShapeMisses = s.TextShapeMisses;
+            r.ReactiveUnits = s.ReactiveUnits; r.BindFires = s.BindingFires; r.BindWrites = s.BindingWrites;
+            r.ScopedRelayouts = s.ScopedRelayoutMarks; r.RootEscapes = s.RootRelayoutEscapes;
+            if (s.Presented && OwningRenderThread is not null)
+            {
+                r.CaptureReachable = _renderSeam.LastCaptureReachableCount; r.CaptureCopied = _renderSeam.LastCapturedNodeCount;
+                r.CaptureMs = (float)s.SubmitCaptureMs; r.CaptureFull = (byte)_renderSeam.LastCaptureFullReason;
+                r.CaptureParity = _renderSeam.LastCaptureParityVerified ? (byte)1 : (byte)0;
+            }
+        }
+        r.NodesCreated = (int)(_scene.NodesCreatedTotal - createdStart);
+        r.NodesFreed = (int)(_scene.NodesFreedTotal - freedStart);
+        r.ComponentsMounted = (int)(_reconciler.ComponentsMountedTotal - mountedStart);
         FrameLedger.RecordUi(ref r);
+        if (FrameTrace.Enabled && r.ComponentsMounted > 0) FrameTrace.Mount(r.ComponentsMounted, r.NodesCreated, r.Measures, r.TextShapes, r.PublishSeq);
         _ledgerWaitStart = _ledgerWaitEnd = 0;
         _ledgerWaitMs = 0;
         return s;
@@ -135,6 +173,10 @@ public sealed partial class AppHost
         _ledgerTurnCoverage = 0f;
         _ledgerTurnFull = RepaintFullReason.None;
         _ledgerTurnTiles = 0;
+        long buildTicks = _ledgerTurnBuildTicks;
+        var raster = _ledgerTurnRaster;
+        _ledgerTurnBuildTicks = 0;
+        _ledgerTurnRaster = default;
         _ledgerTurnPresented = false;
         if (!FrameLedger.IsOwner(this)) return;
         bool hasSample = _swapchain.TryGetGpuRenderSample(out GpuRenderSample g);
@@ -157,8 +199,10 @@ public sealed partial class AppHost
             LatencyMs = (float)split.LatencyMs, PresentMs = (float)split.PresentMs, VideoMs = (float)split.VideoMs,
             DamageCoverage = coverage, TilesRastered = tiles, MissedTicks = f.MissedTicks,
             Kind = (byte)f.Kind, Outcome = (byte)outcome, Flags = (byte)flags, FullReason = (byte)full,
+            BuildMs = (float)(buildTicks * 1000.0 / Stopwatch.Frequency), Raster = raster,
         };
         FrameLedger.RecordRender(ref r);
+        if (FrameTrace.Enabled) TraceRenderTurn(in f, turnPresented && presented);
 
         if (!hasSample || g.Sequence == _ledgerGpuSampleSeq) return;
         ulong prevSeq = _ledgerGpuSampleSeq;
@@ -181,8 +225,31 @@ public sealed partial class AppHost
                 gr.PassCount = ps.PassCount;
                 gr.PassesDropped = ps.PassesDropped;
                 for (int i = 0; i < n; i++) gr.AddPassMs(passes[i].Kind, passes[i].Ms);
+                GpuFrameWork wk = ps.Work;
+                gr.PsTileRaster = (long)wk.PsTileRaster; gr.PsOffscreen = (long)wk.PsOffscreen; gr.PsComposite = (long)wk.PsComposite;
+                gr.RenderPasses = wk.RenderPasses; gr.Draws = wk.Draws; gr.CompositeDraws = wk.CompositeDraws;
+                gr.CompositeQuadPx = wk.CompositeQuadPx; gr.CompositeFeatherPx = wk.CompositeFeatherPx; gr.RepaintPx = wk.RepaintPx;
             }
         }
         FrameLedger.RecordGpu(ref gr);
+    }
+
+    private long _traceRefreshTicks;
+
+    /// <summary>RENDER THREAD, frame trace on: the turn's present row (the predicted photon time and DXGI's paired counters) and a
+    /// <c>meta refresh_ms</c> row whenever the display period changes. Zero allocation.</summary>
+    private void TraceRenderTurn(in Threading.LedgerTurnFacts f, bool presented)
+    {
+        FrameTrace.ClaimHotThread();
+        long period = RenderPeriodTicks();
+        if (period != _traceRefreshTicks)
+        {
+            _traceRefreshTicks = period;
+            FrameTrace.Meta("refresh_ms", (period * 1000.0 / Stopwatch.Frequency).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture));
+        }
+        if (!presented) return;
+        long photon = f.TickQpc != 0 ? f.TickQpc + (1 + Volatile.Read(ref _maxFrameLatency)) * period : 0;
+        FrameTrace.Present(f.TickSeq, f.TickQpc, f.DoneQpc, photon, f.PublishSeq,
+            _swapchain.PresentsDisplayed, _swapchain.PresentsDropped, _swapchain.VblanksRepeated, f.MissedTicks);
     }
 }

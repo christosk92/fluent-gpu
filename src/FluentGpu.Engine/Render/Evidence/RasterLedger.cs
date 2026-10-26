@@ -37,6 +37,8 @@ public static class RasterEntryFlags
     /// <summary>An inline scratch lease was refused while the tile rastered (<c>CompositeFrameFlags.RasterScratchRefused</c>) —
     /// an inline folded group inside it drew nothing.</summary>
     public const byte ScratchRefused = 2;
+    /// <summary>Bits 4..7: a SliceGeometry raster's geometry cause (<c>SliceTable.GeoKind</c>..<c>GeoExtent</c>; 0 = none).</summary>
+    public const int GeoShift = 4;
 }
 
 /// <summary>The raster ledger: every tile raster a recorder pair scheduled, newest last. <see cref="Capacity"/> = 4096

@@ -42,7 +42,7 @@ public sealed class SplitButton : Component
     public const float FontSize              = 14f;    // ControlContentThemeFontSize
     public const float ChevronSize           = 12f;    // AnimatedChevronDownSmall is 12x12
     public const float ChevronGlyphSize      = 8f;     // fallback FontIconSource FontSize
-    public const float CornerRadius          = Radii.Control;   // ControlCornerRadius = 4
+    public static float CornerRadius => Radii.Control;   // ControlCornerRadius = 4 (a property: resolves against the active theme definition)
     static readonly Edges4 PrimaryPadding    = new(11, 6, 11, 7);   // SplitButtonPadding
     static readonly Edges4 SecondaryPadding  = new(0, 0, 12, 0);    // SecondaryButton Padding="0,0,12,0"
 
@@ -155,7 +155,7 @@ public sealed class SplitButton : Component
                     {
                         Size = FontSize, Color = menuOpen ? Tok.TextSecondary : Tok.TextPrimary,
                         PressedColor = Tok.TextSecondary, DisabledColor = Tok.TextDisabled,
-                        FontFamily = Theme.IconFont,
+                        FontFamily = Tok.Definition.Fonts.Icon,
                     }, label]
                 : [label];
         }
@@ -212,7 +212,7 @@ public sealed class SplitButton : Component
                         {
                             Size = ChevronGlyphSize, Color = menuOpen ? Tok.TextTertiary : Tok.TextSecondary,
                             HoverColor = Tok.TextPrimary, PressedColor = Tok.TextTertiary, DisabledColor = Tok.TextDisabled,
-                            FontFamily = Theme.IconFont,
+                            FontFamily = Tok.Definition.Fonts.Icon,
                         },
                     ],
                 }),

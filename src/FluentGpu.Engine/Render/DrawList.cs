@@ -317,8 +317,8 @@ public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, 
 // Ink = the run's PAINTED extent in the same local space (the node box grown by what the measured text overflows it: a
 // run with no wrap / trim wider than its box, more lines than its height) — the footprint every cull, slice bound and
 // sub-tile damage reads (SliceOpBounds, InkRect). Bounds stays the LAYOUT box the replay shapes into. Empty = the box.
-// Typography = FluentGpu.Text.TextTypography.Pack(TextAlign, FontFeatures): the features are a shaping input and the
-// align positions each line inside Bounds.W (the alignWidth every editor query passes too); both key the shaped run.
+// Typography = FluentGpu.Text.TextTypography.Pack(TextAlign, FontFeatures, TextCase): the features and the case transform
+// (E19, applied by the replay's shaping) are shaping inputs and the align positions each line inside Bounds.W (the alignWidth every editor query passes too); both key the shaped run.
 public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
     int SpanRunId = 0, int ForceColor = 0, int InMotion = 0, RectF Ink = default, int Typography = 0)
@@ -533,7 +533,7 @@ public sealed class DrawList
     public int PriorByteLength => _priorLen;
     public int PriorSortLength => _priorSortLen;
 
-    public void Reset() { _len = 0; _sortLen = 0; CommandCount = 0; _opcodeStats = default; }
+    public void Reset() { if (_retiredBufN + _retiredSortN != 0) ReturnRetired(); _len = 0; _sortLen = 0; CommandCount = 0; _opcodeStats = default; }
 
     /// <summary>Start a record pass while preserving the previous command/sort arenas for clean-span copies.</summary>
     public void SwapAndReset()
@@ -543,6 +543,49 @@ public sealed class DrawList
         _priorLen = _len;
         _priorSortLen = _sortLen;
         Reset();
+    }
+
+    /// <summary>Does the current buffer hold exactly the bytes the prior one did? (A re-walk whose only change was inside a
+    /// nested slice writes its own arena byte for byte again: the recorder then keeps that arena's scan.)</summary>
+    public bool BytesEqualPrior() => _len == _priorLen && _buf.AsSpan(0, _len).SequenceEqual(_priorBuf.AsSpan(0, _priorLen));
+
+    /// <summary>Diagnostics (<c>--fg rewalk-validate</c>): the first op whose bytes differ between the current buffer and the
+    /// prior one — its offset and opcode in each (−1 when past that buffer's end).</summary>
+    /// <summary>Diagnostics (<c>--fg rewalk-validate</c>): do the current and prior buffers differ ONLY by float drift — the same
+    /// length, and every differing 4-byte word a finite, normal float (never a small integer, which reads as a denormal) within
+    /// <paramref name="eps"/> of the prior one? (A world recomputed through another float path: the same pixels.)</summary>
+    internal bool DiffersOnlyByFloatDrift(float eps)
+    {
+        if (_len != _priorLen || (_len & 3) != 0) return false;
+        var a = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(_priorBuf.AsSpan(0, _len));
+        var b = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(_buf.AsSpan(0, _len));
+        var ai = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, int>(_priorBuf.AsSpan(0, _len));
+        var bi = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, int>(_buf.AsSpan(0, _len));
+        for (int i = 0; i < a.Length; i++)
+        {
+            if (ai[i] == bi[i]) continue;
+            if (!float.IsNormal(a[i]) || !float.IsNormal(b[i]) || MathF.Abs(a[i] - b[i]) > eps) return false;
+        }
+        return true;
+    }
+
+    internal void FirstOpDifferingFromPrior(out int offset, out int curOp, out int priorOp)
+    {
+        int n = Math.Min(_len, _priorLen), d = _buf.AsSpan(0, n).CommonPrefixLength(_priorBuf.AsSpan(0, n));
+        offset = d; curOp = OpAt(_buf, _len, d); priorOp = OpAt(_priorBuf, _priorLen, d);
+
+        static int OpAt(byte[] b, int len, int at)
+        {
+            int pos = 0;
+            while (pos + sizeof(int) <= len)
+            {
+                var op = (DrawOp)System.Runtime.InteropServices.MemoryMarshal.Read<int>(b.AsSpan(pos));
+                if (!FluentGpu.Rhi.RepaintStreamSafety.TryBodySize(op, out int body)) return -2;
+                if (at < pos + sizeof(int) + body) return (int)op;
+                pos += sizeof(int) + body;
+            }
+            return -1;
+        }
     }
 
     public bool CanCopyPriorSpan(int byteStart, int byteLength, int sortStart, int sortCount)
@@ -1023,7 +1066,10 @@ public sealed class DrawList
         if (_sortLen + extra <= _sort.Length) return;
         int n = _sort.Length * 2;
         while (n < _sortLen + extra) n *= 2;
-        Array.Resize(ref _sort, n);
+        var ns = System.Buffers.ArrayPool<ulong>.Shared.Rent(n);
+        Array.Copy(_sort, ns, _sortLen);
+        RetireSort(_sort);
+        _sort = ns;
     }
 
     private void Ensure(int extra)
@@ -1031,9 +1077,40 @@ public sealed class DrawList
         if (_len + extra <= _buf.Length) return;
         int n = _buf.Length * 2;
         while (n < _len + extra) n *= 2;
-        var nb = GC.AllocateUninitializedArray<byte>(n, pinned: false);
+        var nb = System.Buffers.ArrayPool<byte>.Shared.Rent(n);
         Array.Copy(_buf, nb, _len);
+        RetireBuf(_buf);
         _buf = nb;
+    }
+
+    // GROWTH THROUGH THE SHARED POOL (audit PERF r3 RASTER: DrawList.Ensure was the render thread's largest allocator during
+    // navigation — every arena of a new page doubled its way up, twice: the current and the prior buffer). A grown-out buffer
+    // returns to the pool only at the next SwapAndReset / Reset, never mid-pass: a span of it taken before the growth may still
+    // be read until the pass that wrote it is over. Sizes are powers of two from the constructor's (the pool's buckets).
+    private byte[]?[] _retiredBufs = new byte[]?[4];
+    private ulong[]?[] _retiredSorts = new ulong[]?[4];
+    private int _retiredBufN, _retiredSortN;
+
+    private void RetireBuf(byte[] b)
+    {
+        if (b.Length < 16 || !System.Numerics.BitOperations.IsPow2(b.Length)) return;   // not a pool bucket size: the GC takes it
+        if (_retiredBufN == _retiredBufs.Length) Array.Resize(ref _retiredBufs, _retiredBufN * 2);
+        _retiredBufs[_retiredBufN++] = b;
+    }
+
+    private void RetireSort(ulong[] b)
+    {
+        if (b.Length < 16 || !System.Numerics.BitOperations.IsPow2(b.Length)) return;
+        if (_retiredSortN == _retiredSorts.Length) Array.Resize(ref _retiredSorts, _retiredSortN * 2);
+        _retiredSorts[_retiredSortN++] = b;
+    }
+
+    /// <summary>Hand the buffers this list grew out of back to the pool (between passes: nothing reads them any more).</summary>
+    private void ReturnRetired()
+    {
+        for (int i = 0; i < _retiredBufN; i++) { System.Buffers.ArrayPool<byte>.Shared.Return(_retiredBufs[i]!); _retiredBufs[i] = null; }
+        for (int i = 0; i < _retiredSortN; i++) { System.Buffers.ArrayPool<ulong>.Shared.Return(_retiredSorts[i]!); _retiredSorts[i] = null; }
+        _retiredBufN = _retiredSortN = 0;
     }
 
     // ── raw access for the slice recorder (Render/SliceRecorder) and the headless composite model ───────────────────

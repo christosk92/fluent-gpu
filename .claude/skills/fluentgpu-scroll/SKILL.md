@@ -60,8 +60,8 @@ Five facts carry everything:
 1. **No band-aids.** No throttle, ramp, hold, cap, cooldown, "skip this frame while scrolling", noise gate or tuned
    constant that hides a symptom. Find the mechanism and fix it; if the cost is real, make the work cheaper (cheaper rows,
    retained tiles, off-frame uploads). `scroll.md` §14 lists what was deleted for being exactly this — never bring any back.
-2. **Test first.** Reproduce the defect as a failing gate (`ScrollMotionSuite`/`ScrollEffectsSuite`/Engine.Tests) or a
-   lab session metric BEFORE the fix. A fix without a failing-first gate is not done.
+2. **Reproduce first.** Reproduce the defect as a lab session metric BEFORE the fix. A fix without a before/after
+   lab recording is not done.
 3. **No environment variables.** Diagnostics are runtime data (`ScrollProbe.Level`, `ScrollTunables`,
    `AppHost.GpuPassTimingEnabled`, `AppHost.RenderCensus`) or `--fg` switches (`Hosting/EngineSwitches.cs`). The engine
    reads no env var; don't add one, not even "temporarily".
@@ -82,23 +82,17 @@ Five facts carry everything:
 |---|---|---|
 | Add a scroll effect channel | `Scroll/Effects/*`, `AppHost.ApplyEffectChannel` | enum + formula + factory + DSL; transform-class ⇒ `IsTransformChannel` + `EffectTransform.Add`; gate both posers |
 | Add a feel knob | `Scroll/Motion/MotionFeel.cs`, `FeelProfiles`, `Scroll/Diag/ScrollTunables.cs` | field + every preset + `TunableF` + JSON; read at AUTHOR time only |
-| Change the wheel curve | `PlanAuthor.WheelSeg`/`WheelNotch`/`AccelFor`, `SegKind.Cubic`, `ScrollMetrics.ReferenceCurve` | replay the owner's notch traces (`WheelFeelTraceTests`) first; keep accumulate/re-base, pose-floor anchor, C1 re-plans |
+| Change the wheel curve | `PlanAuthor.WheelSeg`/`WheelNotch`/`AccelFor`, `SegKind.Cubic`, `ScrollMetrics.ReferenceCurve` | replay the owner's notch traces in the simulator first; keep accumulate/re-base, pose-floor anchor, C1 re-plans |
 | Add an input source | PAL producer → `ScrollInputEvent` → `InputDispatcher.DispatchScroll` | real device stamps; producers never write plans/offsets |
 | Debug jump / jitter / blank / lag | Scroll Lab + `ScrollProbe` Trace | record, read the verdict tile, find the probe rows at the worst sample |
-| Add a gate | `src/FluentGpu.VerticalSlice/Suites/Scroll*Suite.cs` or `FluentGpu.Engine.Tests/Scroll*Tests.cs` | failing first; `Check("gate.scroll.<name> <prose>", cond, detail)` |
 
 ---
 
 ## Run things (exact commands)
 
 ```powershell
-# Gates (build first; subagents: the orchestrator builds, not you)
-dotnet build src/FluentGpu.slnx ; dotnet build src/FluentGpu.slnx -c Release
-dotnet run --project src/FluentGpu.VerticalSlice -- --suite scroll          # ScrollSuite + ScrollMotionSuite + ScrollEffectsSuite
-dotnet run --project src/FluentGpu.VerticalSlice -- --suite tiles           # TileSuite + SliceSuite
-dotnet run --project src/FluentGpu.VerticalSlice -- --suite touch,listrow
-dotnet test src/FluentGpu.Engine.Tests --filter "FullyQualifiedName~Scroll|FullyQualifiedName~PresentStatisticsLedger|FullyQualifiedName~PresentQueueDepth|FullyQualifiedName~RefreshLattice|FullyQualifiedName~RenderThreadLifecycle|FullyQualifiedName~RenderThreadPacing|FullyQualifiedName~SlotCatchUp|FullyQualifiedName~ContactStamp|FullyQualifiedName~TouchpadStampRace|FullyQualifiedName~GpuGovernorWake|FullyQualifiedName~ExtentSource"
-dotnet test src/FluentGpu.Windows.Tests --filter "FullyQualifiedName~CompositorTickFilter|FullyQualifiedName~RenderDisplayClock|FullyQualifiedName~DmContactStream"
+# Build (subagents: the orchestrator builds, not you)
+dotnet build src/FluentGpu.slnx
 
 # The Scroll Lab (interactive; F8 felt-wrong, F10 record, Ctrl+T tuning pane, Ctrl+Shift+T tuning window)
 dotnet run --project src/FluentGpu.ScrollLab -c Release
@@ -127,5 +121,4 @@ is retired with ScrollTrace.
 - [where-to-change-what.md](where-to-change-what.md) — task → file map (Engine / Windows / Controls / Lab / app surface).
 - [recipes.md](recipes.md) — the six recipes with code and the checklist each ends with.
 - [pitfalls.md](pitfalls.md) — the mistakes that already cost a fix round, with the mechanism and the rule.
-- [gates.md](gates.md) — every scroll gate/test and what it pins; which suite tag runs it.
 - Canon: `docs/design/subsystems/scroll.md`; tiles `gpu-renderer.md` §13.1; guide `docs/guide/scroll-lab.md`.

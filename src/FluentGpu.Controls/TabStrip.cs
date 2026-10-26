@@ -34,6 +34,79 @@ public readonly record struct TabStripScrollMetrics(
 /// </list></summary>
 public enum TabStripAddButtonVisibility : byte { Never, Always, OnStripPointerOver }
 
+/// <summary>The two tier forms of a <see cref="TabStrip"/> (see <see cref="TabStripForm"/>).</summary>
+public enum TabStripFormKind : byte
+{
+    /// <summary>Every tab is <see cref="TabStripForm.TabWidth"/> wide and narrows toward <see cref="TabStripForm.MinTabWidth"/>
+    /// as the lane runs out; past that the strip scrolls (when <see cref="TabStripForm.ScrollOnOverflow"/>).</summary>
+    Ladder,
+    /// <summary>The selected tab keeps its label at <see cref="TabStripForm.SelectedWidth"/>; every other tab is an
+    /// <see cref="TabStripForm.IconTabWidth"/> icon-only cell. Scrolls when even that does not fit.</summary>
+    Compact,
+}
+
+/// <summary>
+/// A <see cref="TabStrip"/>'s width form, picked by the APP per window tier (the engine knows no tiers): bind
+/// <see cref="TabStrip.Form"/> to a thunk over the app's tier record and the strip re-forms live. Chrome appearance only.
+/// <para>WinUI's TabView ladder: <c>Ladder(240)</c> at Huge, <c>Ladder(200)</c> at Standard, <c>Ladder(160, 110)</c> at
+/// Small (160 narrowing to 110, then scroll), and <c>Compact(140, 36)</c> at Compact.</para>
+/// <para>The widths resolve against the strip's LANE, the width its host offers it (<see cref="TabStripHost.LaneWidth"/>;
+/// a two-row <see cref="TitleBar"/> provides it). Without a lane a Ladder strip keeps <see cref="TabWidth"/> and only
+/// flex-compresses toward <see cref="MinTabWidth"/>; it never scrolls.</para>
+/// </summary>
+/// <param name="Kind">Ladder or Compact.</param>
+/// <param name="TabWidth">Ladder: the preferred (widest) tab width. Compact: the icon-only cell width.</param>
+/// <param name="MinTabWidth">Ladder: the floor tabs narrow to before the strip scrolls. Compact: the icon cell width.</param>
+/// <param name="SelectedWidth">Compact: the labelled selected tab's width. Ladder: equals <paramref name="TabWidth"/>.</param>
+/// <param name="ScrollOnOverflow">Scroll (instead of clipping) once the floor no longer fits the lane.</param>
+public readonly record struct TabStripForm(TabStripFormKind Kind, float TabWidth, float MinTabWidth, float SelectedWidth,
+                                           bool ScrollOnOverflow = true)
+{
+    /// <summary>Every tab <paramref name="width"/> wide, narrowing to <paramref name="minWidth"/> (default: no narrowing),
+    /// then scrolling.</summary>
+    public static TabStripForm Ladder(float width, float minWidth = float.NaN, bool scrollOnOverflow = true)
+        => new(TabStripFormKind.Ladder, width, float.IsNaN(minWidth) ? width : MathF.Min(minWidth, width), width, scrollOnOverflow);
+
+    /// <summary>The selected tab labelled at <paramref name="selectedWidth"/>, the others <paramref name="iconTabWidth"/>
+    /// icon-only cells.</summary>
+    public static TabStripForm Compact(float selectedWidth = 140f, float iconTabWidth = 36f, bool scrollOnOverflow = true)
+        => new(TabStripFormKind.Compact, iconTabWidth, iconTabWidth, selectedWidth, scrollOnOverflow);
+
+    /// <summary>Compact: the icon-only cell width (an alias of <see cref="TabWidth"/>).</summary>
+    public float IconTabWidth => TabWidth;
+
+    /// <summary>Resolve the form for <paramref name="count"/> tabs in a lane of <paramref name="laneWidth"/> DIP, of which
+    /// <paramref name="chromeWidth"/> is the strip's own fixed chrome (lead inset, "+" button, trailing flare room). An
+    /// unknown lane (NaN / infinity) resolves to the preferred widths without scrolling.</summary>
+    public TabStripFormLayout Resolve(int count, float laneWidth, float chromeWidth)
+    {
+        bool known = float.IsFinite(laneWidth) && count > 0;
+        float avail = known ? MathF.Max(0f, laneWidth - chromeWidth) : float.PositiveInfinity;
+        if (Kind == TabStripFormKind.Compact)
+        {
+            float need = SelectedWidth + (count - 1) * TabWidth;
+            return new(TabWidth, SelectedWidth, IconOnlyUnselected: true,
+                       Scrolls: ScrollOnOverflow && known && need > avail + 0.5f);
+        }
+        float min = MathF.Min(MinTabWidth, TabWidth);
+        if (!known) return new(TabWidth, TabWidth, IconOnlyUnselected: false, Scrolls: false);
+        bool scrolls = ScrollOnOverflow && count * min > avail + 0.5f;
+        float w = scrolls ? min : Math.Clamp(avail / count, min, TabWidth);
+        return new(w, w, IconOnlyUnselected: false, Scrolls: scrolls);
+    }
+}
+
+/// <summary>A resolved <see cref="TabStripForm"/>: the unselected and selected tab widths, whether unselected tabs are
+/// icon-only, and whether the strip scrolls.</summary>
+public readonly record struct TabStripFormLayout(float TabWidth, float SelectedWidth, bool IconOnlyUnselected, bool Scrolls);
+
+/// <summary>What a host row offers a <see cref="TabStrip"/>: the lane width the tabs may use (a LIVE signal: the host
+/// measures it after layout) and the row height the strip fills. A two-row <see cref="TitleBar"/> provides one to its tab
+/// strip through <see cref="TabStrip.HostContext"/>; set <see cref="TabStrip.Host"/> to supply one yourself.</summary>
+/// <param name="LaneWidth">The width the strip may take (its own width plus the free space after it).</param>
+/// <param name="RowHeight">The row height the strip fills (the tabs sit on its bottom edge).</param>
+public sealed record TabStripHost(IReadSignal<float> LaneWidth, Prop<float> RowHeight);
+
 /// <summary>
 /// Header-only WinUI-style tab strip for custom title bars. It shares the <see cref="TabViewItem"/> model and the
 /// important TabView header metrics, but intentionally renders no selected-content presenter.
@@ -67,6 +140,12 @@ public sealed class TabStrip : Component
     public float TabWidth = 320f;
     public float MinTabWidth = 100f;
     public float MaxTabWidth = 360f;
+    /// <summary>The motion a tab's width change takes (a title that lands or changes length, the host's cap moving, a form re-resolving):
+    /// it must ease the width through real layout (<see cref="SizeMode.Reflow"/>, width) so the tabs after it, the "+" and the underline
+    /// follow. Null keeps the strip's own (<see cref="FormWidthMotion"/>: a <see cref="Motion.ControlFast"/> decelerate tween, whose
+    /// first frame carries over half the change). A host whose lane eases on a spring passes the same spring, so the tab inside
+    /// the lane's clip grows with it instead of stepping. Read at every render.</summary>
+    public LayoutTransition? TabWidthMotion;
     // Prop (not a raw ColorF) so a theme-dependent fill can be passed as a thunk (Prop.Of(() => Tok.X)) and follow a live
     // theme switch — a raw ColorF here freezes at mount (TabStrip is a long-lived component; its constructor args don't
     // re-read). The default is itself a live semantic thunk so callers that do not style the strip also follow retheme.
@@ -80,6 +159,19 @@ public sealed class TabStrip : Component
     /// uses (<c>Tok.AccentDefault</c>).</summary>
     public Prop<ColorF> IndicatorFill = Prop.Of(static () => Tok.AccentDefault);
     public TemplateParts? Parts;
+    /// <summary>The tier form (Chrome appearance), read at EVERY render so a thunk over the app's tier record re-forms the
+    /// strip live. Null keeps the historical sizing (<see cref="TabWidth"/>/<see cref="MinTabWidth"/>/<see cref="MaxTabWidth"/>).</summary>
+    public Func<TabStripForm>? Form;
+    /// <summary>The lane and row height this strip lives in; null reads <see cref="HostContext"/> (a two-row
+    /// <see cref="TitleBar"/> provides it), else a free-standing strip (48 row, no lane).</summary>
+    public TabStripHost? Host;
+    /// <summary>Chrome appearance: the tab plate height (WinUI 32; the two-row title bar's tabs are 36). Read at EVERY render, so a thunk over
+    /// the app's tier record re-sizes the plates in place (a touch tier's 40 row) and the tabs keep their nodes across that crossing; the plate,
+    /// its selected silhouette and the close button ease to the new height (<see cref="PlateHeightMotion"/>).</summary>
+    public Prop<float> TabHeight = 32f;
+
+    /// <summary>The host row a <see cref="TabStrip"/> reads when <see cref="Host"/> is unset (see <see cref="TabStripHost"/>).</summary>
+    public static readonly Context<TabStripHost?> HostContext = new(null);
 
     /// <summary>Text appearance: the selected tab's strip-local x (X) and width (Y), handed to the underline through
     /// context — the NavigationView <c>IndicatorTarget</c> idiom, so the indicator retargets its springs without the
@@ -171,6 +263,8 @@ public sealed class TabStrip : Component
         _ = ItemsVersion?.Invoke();
         var items = ItemsSource?.Invoke() ?? Items;
         var menuOverlay = UseContext(Overlay.Service);
+        var hostedBy = UseContext(HostContext);
+        var host = Host ?? hostedBy;
         int count = items.Count;
 
         var internalSelected = UseSignal(0);
@@ -226,9 +320,21 @@ public sealed class TabStrip : Component
             _addFadeArmed = true;
         }, DepKey.From(addRevealed ? 1 : 0));
 
+        // Chrome + Form: resolve the tier form against the host lane (subscribes: a lane or tier change re-forms the strip).
+        TabStripFormLayout formLayout = default;
+        TabStripForm formSpec = default;
+        bool formed = Appearance == TabStripAppearance.Chrome && Form is not null;
+        if (formed)
+        {
+            float lane = host?.LaneWidth.Value ?? float.PositiveInfinity;
+            formSpec = Form!();
+            formLayout = formSpec.Resolve(count, lane, ChromeFixedWidth(IsAddTabButtonVisible));
+        }
+        bool chromeScrolls = formed && formLayout.Scrolls;
+
         UseLayoutEffect(() =>
         {
-            if (Appearance != TabStripAppearance.Text || OverflowMode != TabStripOverflowMode.Scroll
+            if (!((Appearance == TabStripAppearance.Text && OverflowMode == TabStripOverflowMode.Scroll) || chromeScrolls)
                 || (uint)selected >= (uint)_tabNodes.Length || _scrollViewport.IsNull) return;
             var node = _tabNodes[selected];
             var scene = Context.Scene;
@@ -239,11 +345,15 @@ public sealed class TabStrip : Component
             _tabScroll.BringIntoView(x, scene.Bounds(node).W, float.NaN,
                 _scrollSelectionSeeded && !Motion.ReducedMotion ? ScrollMove.Glide : ScrollMove.Immediate, Spacing.S);
             _scrollSelectionSeeded = true;
-        }, DepKey.From(HashCode.Combine(selected, count, OverflowMode)));
+        }, DepKey.From(HashCode.Combine(selected, count, OverflowMode, chromeScrolls)));
 
         if (Appearance == TabStripAppearance.Text)
             return RenderText(items, count, selected, hovered, hoveredSig, geomVer, menuOverlay, Select, Close, Add,
                               addMounted, addRevealed);
+
+        if (formed)
+            return RenderChromeForm(items, count, selected, hovered, hoveredSig, geomVer, menuOverlay, Select, Close, Add,
+                                    formSpec, formLayout, host);
 
         int tail = IsAddTabButtonVisible ? 1 : 0;
         var children = new Element[count + tail + 2];
@@ -293,39 +403,67 @@ public sealed class TabStrip : Component
     }
 
     Element Tab(int index, int selectedIndex, TabViewItem item, bool selected, bool closeVisible,
-                Action select, Action close, Signal<int> hoveredSig, IOverlayService menuOverlay)
+                Action select, Action close, Signal<int> hoveredSig, IOverlayService menuOverlay,
+                float cellW = float.NaN, bool fixedCell = false, bool iconOnly = false)
     {
-        float tabW = Math.Clamp(TabWidth, MinTabWidth, MaxTabWidth);
+        bool formed = !float.IsNaN(cellW);
+        float tabW = formed ? cellW : Math.Clamp(TabWidth, MinTabWidth, MaxTabWidth);
+        float tabH = TabHeight.Current();   // live: a tier that changes it re-sizes the plates in place
+        if (iconOnly) closeVisible = false;
         var main = new List<Element>(2);
-        if (item.Icon is { Length: > 0 } icon)
+        if (formed && item.IconContent is { } iconContent)
+        {
+            // A leading visual (a 16x16 cover) in place of the glyph, with the glyph's 10-DIP gap before the label.
+            main.Add(new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Shrink = 0f,
+                Margin = iconOnly ? default : new Edges4(0f, 0f, 10f, 0f),
+                Children = [iconContent()],
+            });
+        }
+        else if (iconOnly && item.Icon is not { Length: > 0 })
+        {
+            // An icon-only cell with no glyph shows the header's first letter, so it never reads as an empty tab.
+            main.Add(new TextEl(item.Header.Length > 0 ? item.Header[..1] : "?")
+            {
+                Size = 12f,
+                Weight = selected ? (ushort)600 : (ushort)0,
+                Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
+                PressedColor = selected ? Tok.TextPrimary : Tok.TextTertiary,
+            });
+        }
+        else if (item.Icon is { Length: > 0 } icon)
         {
             main.Add(new TextEl(icon)
             {
                 Size = 16f,
-                FontFamily = Theme.IconFont,
-                Margin = new Edges4(0f, 0f, 10f, 0f),
+                FontFamily = Tok.Definition.Fonts.Icon,
+                Margin = iconOnly ? default : new Edges4(0f, 0f, 10f, 0f),
                 Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
                 PressedColor = selected ? Tok.TextPrimary : Tok.TextTertiary,
             });
         }
 
-        var label = new TextEl(item.Header)
+        if (!iconOnly)
         {
-            Size = 12f,
-            Weight = selected ? (ushort)600 : (ushort)0,
-            Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
-            PressedColor = selected ? Tok.TextPrimary : Tok.TextTertiary,
-            Grow = 1f,
-            Shrink = 1f,
-            Trim = TextTrim.CharacterEllipsis,
-        };
-        main.Add(Parts.Apply(PartTabLabel, label));
+            var label = new TextEl(item.Header)
+            {
+                Size = 12f,
+                Weight = selected ? (ushort)600 : (ushort)0,
+                Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
+                PressedColor = selected ? Tok.TextPrimary : Tok.TextTertiary,
+                Grow = 1f,
+                Shrink = 1f,
+                Trim = TextTrim.CharacterEllipsis,
+            };
+            main.Add(Parts.Apply(PartTabLabel, label));
+        }
 
         var content = new List<Element>(2)
         {
             new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.Center, Justify = item.IsPinned ? FlexJustify.Center : FlexJustify.Start,
+                Direction = 0, AlignItems = FlexAlign.Center, Justify = item.IsPinned || iconOnly ? FlexJustify.Center : FlexJustify.Start,
                 Grow = 1f, Shrink = 1f, MinWidth = 0f,
                 Draggable = item.Drag,
                 Children = main.ToArray(),
@@ -354,7 +492,7 @@ public sealed class TabStrip : Component
                     new TextEl(Icons.Cancel)
                     {
                         Size = 12f,
-                        FontFamily = Theme.IconFont,
+                        FontFamily = Tok.Definition.Fonts.Icon,
                         Color = Tok.TextPrimary,
                         PressedColor = Tok.TextSecondary,
                     },
@@ -366,9 +504,10 @@ public sealed class TabStrip : Component
         var plate = new BoxEl
         {
             Direction = 0,
-            Height = 32f,
+            Height = tabH,
+            Animate = PlateHeightMotion,
             AlignItems = FlexAlign.Center,
-            Padding = closeVisible ? new Edges4(8f, 3f, 4f, 3f) : new Edges4(8f, 3f, 8f, 3f),
+            Padding = iconOnly ? new Edges4(0f, 3f, 0f, 3f) : closeVisible ? new Edges4(8f, 3f, 4f, 3f) : new Edges4(8f, 3f, 8f, 3f),
             Corners = Radii.OverlayTop,
             Fill = ColorF.Transparent,
             HoverFill = selected ? ColorF.Transparent : Tok.FillSubtleSecondary,
@@ -425,9 +564,16 @@ public sealed class TabStrip : Component
                     new BoxEl
                     {
                         Key = "selected-edge",
-                        Width = tabW + 10f,
-                        Height = 33f,
-                        OffsetX = -5f,
+                        // A formed cell's width eases (FormWidthMotion): the silhouette FILLS the cell with a 5-DIP overhang
+                        // either side (basis 0, so the share is the cell's width, never a cached measure), so it follows
+                        // every frame, the reflow's seed frame included. A plain cell keeps its explicit width.
+                        Width = formed ? float.NaN : tabW + 10f,
+                        Grow = formed ? 1f : 0f,
+                        Basis = formed ? 0f : float.NaN,
+                        Margin = formed ? new Edges4(-5f, 0f, -5f, 0f) : default,
+                        Height = tabH + 1f,
+                        Animate = PlateHeightMotion,
+                        OffsetX = formed ? 0f : -5f,
                         AlignSelf = FlexAlign.End,
                         TabShape = true,
                         TabFlareRadius = 4f,
@@ -449,9 +595,13 @@ public sealed class TabStrip : Component
                     new BoxEl
                     {
                         Key = "selected-bg",
-                        Width = tabW + 8f,
-                        Height = 32f,
-                        OffsetX = -4f,
+                        Width = formed ? float.NaN : tabW + 8f,
+                        Grow = formed ? 1f : 0f,
+                        Basis = formed ? 0f : float.NaN,
+                        Margin = formed ? new Edges4(-4f, 0f, -4f, 0f) : default,
+                        Height = tabH,
+                        Animate = PlateHeightMotion,
+                        OffsetX = formed ? 0f : -4f,
                         AlignSelf = FlexAlign.End,
                         TabShape = true,
                         TabFlareRadius = 4f,
@@ -489,6 +639,23 @@ public sealed class TabStrip : Component
         });
         layers.Add(plate);
 
+        if (formed)
+            return new BoxEl
+            {
+                Key = item.Key ?? "tab#" + index,
+                ZStack = true,
+                // The cell's width EASES when the form re-resolves (FormWidthMotion). No MinWidth/MaxWidth clamp: one would
+                // pin the in-flight width to the new rung (a 160 -> 200 growth clamped at the 200 floor). A fixed cell is
+                // exact by Shrink = 0; a fitting ladder's floor is Resolve's (it scrolls rather than go under it), so only a
+                // lane not yet re-measured (the one frame of a live resize) may squeeze a cell below it.
+                Width = tabW,
+                Shrink = fixedCell ? 0f : 1f,
+                Animate = TabWidthMotion ?? FormWidthMotion,
+                DropTarget = item.DropTarget,
+                OnRealized = h => { if ((uint)index < (uint)_tabNodes.Length) _tabNodes[index] = h; },
+                Children = layers.ToArray(),
+            };
+
         return new BoxEl
         {
             Key = item.Key ?? "tab#" + index,
@@ -502,6 +669,106 @@ public sealed class TabStrip : Component
             DropTarget = item.DropTarget,
             Children = layers.ToArray(),
         };
+    }
+
+    // ── Chrome appearance, tier forms ─────────────────────────────────────────────────────────────────────────────
+    //  The MUX rail grammar sized by a TabStripForm: a Ladder (every tab one width, narrowing to a floor, then scrolling)
+    //  or Compact (the selected tab labelled, the rest icon-only cells). Widths resolve against the host's measured lane.
+
+    /// <summary>A formed tab's width change (a ladder rung at a tier crossing, the lane's share as tabs come and go, the
+    /// Compact selection moving): the cell's width eases over <see cref="Motion.ControlFast"/> THROUGH REAL LAYOUT, so the
+    /// tabs after it, the "+" and the drag band glide with it; a new target mid-flight bends it (the reflow row retargets
+    /// from where it is). Unclipped: the selected plate overhangs the cell by its flares. A live (modal) resize and reduced
+    /// motion snap it, as every projection.</summary>
+    internal static readonly LayoutTransition FormWidthMotion = new(TransitionChannels.Size,
+        TransitionDynamics.Tween(Motion.ControlFast, Easing.FluentDecelerate), Size: SizeMode.Reflow, Axes: SizeAxes.Width,
+        ReflowUnclipped: true);
+
+    /// <summary>A tab plate's height change (<see cref="TabHeight"/> re-read on a tier crossing: a touch tier's taller row): the plate, the selected
+    /// tab's silhouette and its plate ease their height through real layout over <see cref="Motion.ControlFast"/>, so the cell and the rail under
+    /// them follow frame by frame. Unclipped (the selected plate overhangs the cell by its flares). A live resize and reduced motion snap it.</summary>
+    internal static readonly LayoutTransition PlateHeightMotion = new(TransitionChannels.Size,
+        TransitionDynamics.Tween(Motion.ControlFast, Easing.FluentDecelerate), Size: SizeMode.Reflow, Axes: SizeAxes.Height,
+        ReflowUnclipped: true);
+
+    /// <summary>The Chrome strip's fixed, non-tab chrome: the 8-DIP lead padding, the 6-DIP seamed lead, the optional
+    /// "+" (32 plus its 3-DIP lead margin) and the 5-DIP trailing flare room.</summary>
+    internal static float ChromeFixedWidth(bool addButton) => 8f + 6f + 5f + (addButton ? 35f : 0f);
+
+    Element RenderChromeForm(IReadOnlyList<TabViewItem> items, int count, int selected, int hovered, Signal<int> hoveredSig,
+                             Signal<int> geomVer, IOverlayService menuOverlay, Action<int> select, Action<int> close,
+                             Action add, TabStripForm spec, TabStripFormLayout form, TabStripHost? host)
+    {
+        EnsureTabGeometry(count, geomVer);   // sizes _tabNodes (the scroll-into-view target)
+        float rowH = host is { } h ? MathF.Max(1f, h.RowHeight.Current()) : TitleBar.ExpandedHeight;
+
+        var tabs = new Element[count + 1];
+        tabs[0] = RailBaselineHost(6f, lineMargin: selected == 0 ? new Edges4(0f, 0f, 4f, 0f) : default);
+        for (int i = 0; i < count; i++)
+        {
+            int index = i;
+            bool isSelected = index == selected;
+            bool iconOnly = form.IconOnlyUnselected && !isSelected;
+            bool closeVisible = items[index].IsClosable &&
+                                (CloseButtonOverlayMode != TabViewCloseButtonOverlayMode.OnPointerOver ||
+                                 isSelected || hovered == index);
+            float w = isSelected ? form.SelectedWidth : form.TabWidth;
+            // Compact cells and a scrolling ladder are exact; a fitting ladder may still flex (the frame before a narrowed
+            // lane is measured).
+            bool fixedCell = form.IconOnlyUnselected || form.Scrolls;
+            tabs[i + 1] = Tab(index, selected, items[index], isSelected, closeVisible,
+                () => select(index), () => close(index), hoveredSig, menuOverlay,
+                cellW: w, fixedCell: fixedCell, iconOnly: iconOnly);
+        }
+
+        Element tabsPart;
+        if (form.Scrolls)
+        {
+            var row = new BoxEl
+            {
+                Direction = 0, Height = rowH, AlignItems = FlexAlign.End, Shrink = 0f, Children = tabs,
+            };
+            tabsPart = new ScrollEl
+            {
+                // ContentSized + Shrink: measures to the tabs' extent and the host lane shrinks it to what fits (the Text
+                // scroll idiom), so overflow clips and scrolls instead of pushing the caption cluster.
+                Horizontal = true,
+                ContentSized = true,
+                Shrink = 1f,
+                MinWidth = 0f,
+                Height = rowH,
+                SuppressScrollBar = true,
+                AutoEdgeFade = true,
+                Content = row,
+                Handle = _tabScroll,
+                OnRealized = n => _scrollViewport = n,
+            };
+        }
+        else
+        {
+            tabsPart = new BoxEl
+            {
+                Direction = 0, Height = rowH, AlignItems = FlexAlign.End, Shrink = 1f, MinWidth = 0f, Children = tabs,
+            };
+        }
+
+        var kids = new List<Element>(3) { tabsPart };
+        if (IsAddTabButtonVisible) kids.Add(AddButton(add, count > 0 && selected == count - 1));
+        kids.Add(RailBaselineHost(5f,
+            lineMargin: !IsAddTabButtonVisible && count > 0 && selected == count - 1 ? new Edges4(4f, 0f, 0f, 0f) : default));
+
+        // Hugs, like every strip shape: a title bar reports it wholesale as one Client island.
+        var root = new BoxEl
+        {
+            Direction = 0,
+            Height = rowH,
+            AlignItems = FlexAlign.End,
+            Shrink = 1f,
+            MinWidth = 0f,
+            Padding = new Edges4(8f, 0f, 0f, 0f),
+            Children = kids.ToArray(),
+        };
+        return Parts.Apply(PartRoot, root) with { Children = root.Children };
     }
 
     // ── Text appearance ───────────────────────────────────────────────────────────────────────────────────────────
@@ -683,7 +950,7 @@ public sealed class TabStrip : Component
                 [
                     new TextEl(back ? Icons.ChevronLeft : Icons.ChevronRight)
                     {
-                        Size = 10f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary,
+                        Size = 10f, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextSecondary,
                     },
                 ],
             };
@@ -729,7 +996,7 @@ public sealed class TabStrip : Component
             main.Add(new TextEl(icon)
             {
                 Size = 16f,
-                FontFamily = Theme.IconFont,
+                FontFamily = Tok.Definition.Fonts.Icon,
                 Margin = item.IsPinned ? default : new Edges4(0f, 0f, 8f, 0f),
                 Color = selected ? (item.IsPinned ? Tok.AccentTextPrimary : Tok.TextPrimary) : Tok.TextSecondary,
                 // A==0 on the selected tab ⇒ "no state color" (the recorder leaves Color alone), so a selected glyph
@@ -795,7 +1062,7 @@ public sealed class TabStrip : Component
                     new TextEl(Icons.Cancel)
                     {
                         Size = 10f,
-                        FontFamily = Theme.IconFont,
+                        FontFamily = Tok.Definition.Fonts.Icon,
                         Color = Tok.TextPrimary,
                         PressedColor = Tok.TextSecondary,
                     },
@@ -856,11 +1123,14 @@ public sealed class TabStrip : Component
         Element plateContent = item.IsPinned ? ToolTip.Wrap(plate, item.Header) : plate;
 
         // Content-hug between the MinTabWidth floor and the MaxTabWidth cap (no fixed Width — that is the Chrome
-        // grammar). OnBoundsChanged on the WRAPPER is what feeds the underline.
+        // grammar). OnBoundsChanged on the WRAPPER is what feeds the underline. Its width EASES when the hug changes (a
+        // host's cap moving at a tier crossing, a title that changes length) through real layout, as a formed cell does, so the
+        // tabs after it and the underline glide instead of stepping.
         return new BoxEl
         {
             Key = item.Key ?? "tab#" + index,
             ZStack = true,
+            Animate = TabWidthMotion ?? FormWidthMotion,
             Width = item.IsPinned ? PinnedTabWidth : float.NaN,
             MinWidth = item.IsPinned ? PinnedTabWidth : MinTabWidth,
             MaxWidth = item.IsPinned ? PinnedTabWidth : MaxTabWidth,
@@ -895,7 +1165,7 @@ public sealed class TabStrip : Component
             new TextEl(Icons.Add)
             {
                 Size = 12f,
-                FontFamily = Theme.IconFont,
+                FontFamily = Tok.Definition.Fonts.Icon,
                 Color = glyphInk,
                 PressedColor = Tok.TextSecondary,
             },

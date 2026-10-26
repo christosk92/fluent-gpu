@@ -14,8 +14,7 @@ every pixel of a drag; a fixed ladder keeps each step one clean re-raster. Use `
 `Snap` to re-enter the ladder from a persisted value, `Clamp` to sanitize arbitrary input, `Percent` for display.
 
 Nothing is wired by default — an app opts in with three small pieces: **seed** a persisted level, **register the
-chords**, and (optionally) the **Ctrl+wheel** hook. The engine-side contract is gated headlessly by VerticalSlice
-check `54d`.
+chords**, and (optionally) the **Ctrl+wheel** hook.
 
 ## Seed a persisted level (`AppOptions.Zoom`)
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
 
@@ -55,7 +56,7 @@ public sealed partial class AnimEngine
         if (e.Sx != 1f) SeedChannel(node, AnimChannel.ScaleX, rest.ScaleX * e.Sx, in m, null, delayMs);
         if (e.Sy != 1f) SeedChannel(node, AnimChannel.ScaleY, rest.ScaleY * e.Sy, in m, null, delayMs);
         if (e.Blur != 0f) SeedChannel(node, AnimChannel.BlurSigma, rest.Blur + e.Blur, in m, null, delayMs);
-        MarkStartPending(node);
+        MarkStartPending(node, FluentGpu.Hosting.TraceAnimKind.Exit);
     }
 
     /// <summary>Enter/exit transitions are seeded during a COMMIT, and the frame that commits them is often the slowest
@@ -66,13 +67,60 @@ public sealed partial class AnimEngine
     /// (<see cref="AnimFlags.JustSeeded"/>) already shows t=0 on that frame; this marks the rows so the NEXT advance
     /// measures from its presentation (<see cref="PendingStartStep"/>, and RenderCompositorAnimations for render-owned
     /// rows). O(rows on the node), allocation-free; only this call's fresh rows carry JustSeeded.</summary>
-    private void MarkStartPending(NodeHandle node)
+    private void MarkStartPending(NodeHandle node, FluentGpu.Hosting.TraceAnimKind kind = FluentGpu.Hosting.TraceAnimKind.Enter)
     {
+        int rows = 0;
+        float delay = float.NaN, duration = float.NaN;
         for (int s = _slab.HeadOnNode((int)node.Raw.Index); s >= 0; s = _slab.At(s).NextOnNode)
         {
             ref AnimValue r = ref _slab.At(s);
-            if (r.Has(AnimFlags.JustSeeded) && !r.Has(AnimFlags.Driven)) r.Flags |= AnimFlags.StartPending;
+            if (r.Has(AnimFlags.JustSeeded) && !r.Has(AnimFlags.Driven))
+            {
+                r.Flags |= AnimFlags.StartPending;
+                if (rows++ == 0) { delay = r.DelayRemainingMs; duration = r.Kind == GenKind.Spring ? float.NaN : r.Gen.DurationMs; }
+            }
         }
+        // `--fg frame-trace`: one seed row per node (the first row's delay and duration) — the join key of its hold/start/done rows.
+        if (rows > 0 && FluentGpu.Hosting.FrameTrace.Enabled) TraceSeed(node, kind, delay, duration, rows);
+    }
+
+    /// <summary>The seed row (`--fg frame-trace`). The node's key is not known yet at its seed (the reconciler notes keys after the
+    /// mount), so the node is queued and its <c>name</c> row is written by the next tick (<see cref="TraceNames"/>).</summary>
+    private void TraceSeed(NodeHandle node, FluentGpu.Hosting.TraceAnimKind kind, float delay, float duration, int rows)
+    {
+        FluentGpu.Hosting.FrameTrace.Anim(FluentGpu.Hosting.TraceAnimPhase.Seed, kind, (int)node.Raw.Index, -1, render: false,
+            double.NaN, delay, duration, rows: rows);
+        if (_traceNameCount < _traceNames.Length) _traceNames[_traceNameCount++] = node;
+    }
+
+    private NodeHandle[] _traceNames = new NodeHandle[2048];
+    private int _traceNameCount;
+
+    /// <summary>UI thread, frame trace on: one <c>anim ph=name</c> row per node seeded since the last tick — its own key and its nearest
+    /// keyed ancestor's (≤ 16 levels up), so a reader can name the zone. A dictionary probe per level, no allocation.</summary>
+    private void TraceNames()
+    {
+        for (int i = 0; i < _traceNameCount; i++)
+        {
+            NodeHandle node = _traceNames[i];
+            if (!_scene.IsLive(node)) continue;
+            string? key = _scene.DebugKeyOf(node), anc = null;
+            NodeHandle p = node;
+            for (int depth = 0; depth < 16 && anc is null; depth++)
+            {
+                p = _scene.Parent(p);
+                if (p.IsNull || !_scene.IsLive(p)) break;
+                anc = _scene.DebugKeyOf(p);
+            }
+            var e = new FluentGpu.Hosting.TraceEvent
+            {
+                Kind = FluentGpu.Hosting.TraceKind.Anim, B0 = (byte)FluentGpu.Hosting.TraceAnimPhase.Name,
+                B1 = (byte)FluentGpu.Hosting.TraceAnimKind.Other, I0 = (int)node.Raw.Index, I1 = -1,
+                L0 = BitConverter.DoubleToInt64Bits(double.NaN), F0 = float.NaN, F1 = float.NaN, F2 = float.NaN, Ref0 = key, Ref1 = anc,
+            };
+            FluentGpu.Hosting.FrameTrace.Push(ref e);
+        }
+        _traceNameCount = 0;
     }
 
     /// <summary>Spring/ease the gesture channels toward a <see cref="MotionTarget"/> (WhileHover/WhilePressed/WhileFocus
@@ -253,7 +301,7 @@ public sealed partial class AnimEngine
         if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, rest.ScaleX * e.Sx, dyn, delayMs: delay);
         if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, rest.ScaleY * e.Sy, dyn, delayMs: delay);
         if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, rest.Blur + e.Blur, dyn, delayMs: delay);
-        MarkStartPending(node);
+        MarkStartPending(node, FluentGpu.Hosting.TraceAnimKind.Exit);
         // SizeMode.Reflow exit: ease THIS node's layout size to 0. SeedExit used to seed only opacity/transform, so a
         // DrawerReveal-style orphan kept its last full Bounds (and therefore its ClipToBounds window) while its
         // measured virtual row snapped closed — one unclipped flash over the rows that had already slid up. The Size
@@ -292,7 +340,31 @@ public sealed partial class AnimEngine
     /// <summary>FLIP a moved node from its captured rect to its new laid-out rect, seeding/retargeting the requested
     /// channels. Position is velocity-continuous; Size uses Reveal (presented extent) or ScaleCorrect (GPU scale→1).
     /// Relayout re-solves the subtree each tick (live re-wrap); Reflow runs through the host's boundary worklist.</summary>
-    public void AnimateBounds(NodeHandle node, in RectF fromAbs, in RectF toAbs, in LayoutTransition spec)
+    public void AnimateBounds(NodeHandle node, in RectF fromAbs, in RectF toAbs, in LayoutTransition spec) => AnimateBounds(node, fromAbs, toAbs, spec, followLive: false);
+
+    /// <summary>A position FLIP seeded AFTER this frame's animation tick (a node a late re-solve moved, a paged shelf's re-fit glide measured on
+    /// the layout the frame presents): <see cref="AnimateBounds(NodeHandle, in RectF, in RectF, in LayoutTransition)"/>, then the start pose is
+    /// written into the node's transform now (the tick that composes the rows has run) and the rows start advancing on the next tick. A plain
+    /// seed holds its first tick at the start, which here would be the SECOND frame at the start, and a destination still moving under it
+    /// (a page a docking panel's reflow narrows) would carry the node away from where it was drawn for that frame.</summary>
+    public void AnimateBoundsPresented(NodeHandle node, in RectF fromAbs, in RectF toAbs, in LayoutTransition spec)
+    {
+        AnimateBounds(node, fromAbs, toAbs, spec, followLive: false);
+        if ((spec.Channels & TransitionChannels.Position) == 0 || !_scene.IsLive(node)) return;
+        float dx = fromAbs.X - toAbs.X, dy = fromAbs.Y - toAbs.Y;
+        ref NodePaint p = ref _scene.Paint(node);
+        p.LocalTransform = p.LocalTransform with { Dx = p.LocalTransform.Dx + dx, Dy = p.LocalTransform.Dy + dy };
+        _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        int sx = Find(node, AnimChannel.TranslateX), sy = Find(node, AnimChannel.TranslateY);
+        if (sx >= 0) _slab.At(sx).Flags &= ~AnimFlags.JustSeeded;
+        if (sy >= 0) _slab.At(sy).Flags &= ~AnimFlags.JustSeeded;
+    }
+
+    /// <summary><see cref="AnimateBounds(NodeHandle, in RectF, in RectF, in LayoutTransition)"/> for a commit inside a container a live reflow is
+    /// resizing (<paramref name="followLive"/>): a SizeMode.Relayout row already in flight is re-aimed at the new size over the time it has left (its
+    /// remaining delay kept) instead of restarting, so a target the live layout moves every commit (a column whose share follows a page easing
+    /// beside a docking pane) is followed by one motion, not restarted into a resize that never begins.</summary>
+    internal void AnimateBounds(NodeHandle node, in RectF fromAbs, in RectF toAbs, in LayoutTransition spec, bool followLive)
     {
         bool contracts = ((spec.Axes & SizeAxes.Width) != 0 && toAbs.W < fromAbs.W - 0.5f)
                       || ((spec.Axes & SizeAxes.Height) != 0 && toAbs.H < fromAbs.H - 0.5f);
@@ -317,8 +389,8 @@ public sealed partial class AnimEngine
                     if (height) RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
                     break;
                 case SizeMode.Relayout:   // re-solve the subtree at the interpolated size each tick (live re-wrap)
-                    if (width) RelayoutSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
-                    if (height) RelayoutSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
+                    if (width) RelayoutSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs, followLive);
+                    if (height) RelayoutSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs, followLive);
                     _scene.Mark(node, NodeFlags.Relayouting);
                     break;
                 case SizeMode.ScaleCorrect:
@@ -401,6 +473,54 @@ public sealed partial class AnimEngine
         }
     }
 
+    /// <summary>Re-aim every live presented-size REVEAL (SizeW / SizeH, not a Relayout's) whose node a re-solve that was no commit (a live reflow's
+    /// tick) laid out at another size than the row aims at: the row shifts by the layout's change (start and target alike, over the time it has
+    /// left), so the presented extent keeps its offset from the LIVE layout instead of easing toward the size of the commit that seeded it (a part
+    /// inside a page a docking panel's reflow narrows or widens: a widening page was clipped at the seeding commit's width until the reveal ended).
+    /// Host-called right after the reflow re-solve; a commit re-aims its rows itself (AnimateBounds). Allocates nothing.</summary>
+    public void FollowLayoutReveals()
+    {
+        for (int n = _slab.FirstActiveNode; n >= 0; n = _slab.NextActiveNode(n))
+            for (int s = _slab.HeadOnNode(n); s >= 0; s = _slab.At(s).NextOnNode)
+            {
+                ref readonly AnimValue r = ref _slab.At(s);
+                if (r.Channel is not (AnimChannel.SizeW or AnimChannel.SizeH)) continue;
+                if (r.Has(AnimFlags.Done) || r.Has(AnimFlags.Parked) || r.Has(AnimFlags.Driven) || r.Has(AnimFlags.Additive) || r.Has(AnimFlags.Loop)) continue;
+                NodeHandle node = r.Node;
+                if (!_scene.IsLive(node) || (_scene.Flags(node) & (NodeFlags.Relayouting | NodeFlags.Exiting)) != 0) continue;
+                float laid = r.Channel == AnimChannel.SizeW ? _scene.Bounds(node).W : _scene.Bounds(node).H;
+                float delta = laid - r.To;
+                if (MathF.Abs(delta) < 0.5f || !float.IsFinite(laid)) continue;
+                AnimChannel ch = r.Channel;
+                float uiBase = r.Position;
+                if (r.Kind == GenKind.Spring)
+                {
+                    TryGetTransition(node, out var sspec);
+                    var dyn = Normalize(sspec.Dynamics);
+                    Spring(node, ch, laid, SpringParams.FromResponse(dyn.Kind == DynamicsKind.Spring ? dyn.Response : 0.30f,
+                        dyn.Kind == DynamicsKind.Spring ? dyn.DampingRatio : 0.85f), initial: uiBase + delta);
+                }
+                else if (r.Kind is GenKind.Eased or GenKind.Keyframes)
+                {
+                    TryGetTransition(node, out var tspec);
+                    var dyn = Normalize(tspec.Dynamics);
+                    float remaining = MathF.Max(1f, r.Gen.DurationMs - r.ElapsedMs);
+                    float pendingDelay = r.DelayRemainingMs;
+                    Animate(node, ch, uiBase + delta, laid, remaining, dyn.Easing, delayMs: pendingDelay);
+                }
+                else continue;
+                int ns = Find(node, ch);
+                if (ns < 0) continue;
+                _slab.At(ns).Flags &= ~AnimFlags.JustSeeded;   // a re-aim keeps moving (as ReframePosition's retarget)
+                MarkSeedRelative(ns, uiBase);
+                // This frame's tick has run: present the re-aimed start NOW, or the frame draws the size the layout just left.
+                ref NodePaint pp = ref _scene.Paint(node);
+                if (ch == AnimChannel.SizeW) pp.PresentedW = uiBase + delta; else pp.PresentedH = uiBase + delta;
+                _scene.Mark(node, NodeFlags.PaintDirty);
+                s = ns;   // the walk continues from the row now on the node (Animate/Spring reuse the channel's slot)
+            }
+    }
+
     // Presented-extent reveal: spring/tween the recorder's drawn size old→new (works for grow and shrink).
     private void RevealSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn, float delayMs = 0f)
     {
@@ -425,15 +545,66 @@ public sealed partial class AnimEngine
     // re-reading the column as the "declared" size stashed the interp as RestoreTo, which SettleRestore then wrote back
     // as the node's permanent size. Mirror ReflowSize: an echo of our own interp keeps flying, and a genuine retarget
     // carries the declared value stashed at the row's creation (a re-render refreshes it through RecordDeclaredSize).
-    private void RelayoutSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn, float delayMs)
+    private void RelayoutSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn, float delayMs, bool followLive = false)
     {
         int ex = Find(node, ch);
         bool live = ex >= 0 && _slab.At(ex).Has(AnimFlags.RestoreLayout);
         if (live && MathF.Abs(_slab.At(ex).Position - toSize) < 0.5f) return;   // echo: layout still holds our own interp
         float declared = live ? _slab.At(ex).RestoreTo
             : ch == AnimChannel.SizeW ? _scene.Layout(node).Width : _scene.Layout(node).Height;
+        // Under a live reflow the commit only moved the target: follow it over the row's own clock.
+        if (followLive && live && RetargetRelayout(node, ch, toSize)) { MarkRestoreLayout(node, ch, declared); return; }
         RevealSize(node, ch, fromSize, toSize, dyn, delayMs);
         MarkRestoreLayout(node, ch, declared);
+    }
+
+    /// <summary>Re-aim a live SizeMode.Relayout row (<paramref name="ch"/> SizeW / SizeH) at <paramref name="to"/>, departing from where it is: a
+    /// tween over the time it has left (its remaining start delay kept), a spring by retarget. The row keeps its RestoreLayout stash and keeps
+    /// moving (the seed-frame hold is dropped). False when no such row flies or the target has not moved. Allocates nothing beyond the
+    /// re-seed's keyframes (as every retarget).</summary>
+    internal bool RetargetRelayout(NodeHandle node, AnimChannel ch, float to)
+    {
+        int ex = Find(node, ch);
+        if (ex < 0 || !_slab.At(ex).Has(AnimFlags.RestoreLayout) || _slab.At(ex).Has(AnimFlags.Done)) return false;
+        AnimValue cur = _slab.At(ex);   // copy: Animate/Spring may grow the slab's backing array
+        if (MathF.Abs(cur.To - to) < 0.5f) return false;
+        if (cur.Has(AnimFlags.Driven) || cur.Has(AnimFlags.Additive)) return false;
+        float restore = cur.RestoreTo;
+        float uiBase = cur.Position;
+        if (!TryGetTransition(node, out var spec)) spec = default;
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if (cur.Kind == GenKind.Spring)
+            Spring(node, ch, to, SpringParams.FromResponse(dyn.Kind == DynamicsKind.Spring ? dyn.Response : 0.30f,
+                dyn.Kind == DynamicsKind.Spring ? dyn.DampingRatio : 1f), initial: uiBase);
+        else if (cur.Kind is GenKind.Eased or GenKind.Keyframes)
+            Animate(node, ch, uiBase, to, MathF.Max(1f, cur.Gen.DurationMs - cur.ElapsedMs), dyn.Easing, delayMs: cur.DelayRemainingMs);
+        else return false;
+        int s = Find(node, ch);
+        if (s < 0) return false;
+        ref AnimValue r = ref _slab.At(s);
+        r.RestoreTo = restore;
+        r.Flags |= AnimFlags.RestoreLayout;
+        r.Flags &= ~AnimFlags.JustSeeded;   // a re-aim keeps moving (as ReframePosition's retarget)
+        MarkSeedRelative(s, uiBase);
+        return true;
+    }
+
+    /// <summary>A live SizeMode.Relayout row: its node, axis (SizeW / SizeH), target and the declared value its settle restores (NaN: auto).</summary>
+    internal readonly record struct LiveRelayout(NodeHandle Node, AnimChannel Channel, float To, float RestoreTo);
+
+    /// <summary>Fill <paramref name="dst"/> (cleared first) with the live SizeMode.Relayout rows: the host's per-tick worklist for re-aiming the ones the
+    /// live layout moves (AppHost.FollowStretchedRelayouts). Settled and parked rows are skipped. Allocation-free with a pre-sized list.</summary>
+    internal void CollectLiveRelayouts(List<LiveRelayout> dst)
+    {
+        dst.Clear();
+        for (int n = _slab.FirstActiveNode; n >= 0; n = _slab.NextActiveNode(n))
+            for (int s = _slab.HeadOnNode(n); s >= 0; s = _slab.At(s).NextOnNode)
+            {
+                ref readonly AnimValue r = ref _slab.At(s);
+                if (r.Channel is not (AnimChannel.SizeW or AnimChannel.SizeH) || !r.Has(AnimFlags.RestoreLayout)) continue;
+                if (r.Has(AnimFlags.Done) || r.Has(AnimFlags.Parked)) continue;
+                dst.Add(new LiveRelayout(r.Node, r.Channel, r.To, r.RestoreTo));
+            }
     }
 
     // ScaleCorrect: spring a scale channel old/new → 1 (recorder composites about centre; opted-in children counter-scale).

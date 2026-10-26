@@ -57,6 +57,14 @@ public static partial class SettingsExpander
         };
     }
 
+    /// <summary>The expander style now: the active theme's (<see cref="ControlStyles.SettingsExpanderStyle"/>), else <see cref="FluentStyle"/>.
+    /// An instance's <see cref="Options.Style"/> (or an item's <c>style:</c>) wins over it.</summary>
+    public static Style DefaultStyle => ControlStyles.Resolve(ControlStyles.SettingsExpanderStyle, FluentStyle);
+
+    /// <summary>The built-in default (what a theme table without a SettingsExpander entry resolves to): the settings-card ladders
+    /// above, read from the live Tok on every call.</summary>
+    public static Style FluentStyle() => new();
+
     public sealed record Options
     {
         public string? Header { get; init; }
@@ -92,7 +100,7 @@ public static partial class SettingsExpander
                                bool isEnabled = true, bool isClickEnabled = false, Action? onClick = null,
                                string? headerIcon = null, Style? style = null)
     {
-        var s = style ?? new Style();
+        var s = style ?? DefaultStyle;
         return SettingsCard.Create(new SettingsCard.Options
         {
             Header = header,
@@ -114,7 +122,7 @@ sealed class SettingsExpanderCore : Component
     public override Element Render()
     {
         var o = UseProps<SettingsExpander.Options>();
-        var s = o.Style ?? new SettingsExpander.Style();
+        var s = o.Style ?? SettingsExpander.DefaultStyle;
 
         var headerCard = SettingsCard.Create(new SettingsCard.Options
         {
@@ -131,14 +139,14 @@ sealed class SettingsExpanderCore : Component
         headerCard = o.Parts.Apply(SettingsExpander.PartHeaderCard, headerCard);
 
         var itemKids = new List<Element>(o.Items.Count * 2 + 2);
-        if (o.ItemsHeader is not null) itemKids.Add(o.ItemsHeader);
+        if (o.ItemsHeader is not null) itemKids.Add(o.ItemsHeader.Value);
         for (int i = 0; i < o.Items.Count; i++)
         {
             if (i > 0 || o.ItemsHeader is not null)
                 itemKids.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault });
             itemKids.Add(o.Items[i]);
         }
-        if (o.ItemsFooter is not null) itemKids.Add(o.ItemsFooter);
+        if (o.ItemsFooter is not null) itemKids.Add(o.ItemsFooter.Value);
 
         var items = o.Parts.Apply(SettingsExpander.PartItems, new BoxEl
         {

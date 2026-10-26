@@ -25,7 +25,7 @@ namespace FluentGpu.Hooks;
 //  equality-gated signal (no write, hence no notify, when the value is unchanged).
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/// <summary>Backs <see cref="RenderContext.UseMeasuredBounds"/> / <see cref="RenderContext.UseMeasuredWidth"/>: holds the
+/// <summary>Backs <see cref="RenderContext.UseMeasuredBounds(string?,int)"/> / <see cref="RenderContext.UseMeasuredWidth(float,string?,int)"/> (and their keyed overloads): holds the
 /// output signal + a stable handler installed in the host node's hook bounds-changed slot, removed on unmount.</summary>
 internal sealed class MeasuredBoundsCell : HookCell, IDisposableCell
 {
@@ -33,6 +33,11 @@ internal sealed class MeasuredBoundsCell : HookCell, IDisposableCell
     public Signal<RectF>? BoundsSig;
     public FloatSignal? WidthSig;
     public float Quantum;
+    // E17c: the full MeasureMemory key of a keyed hook (null = unkeyed), and the call site that names an unkeyed one in a
+    // settle's journal (the caller-info literal: no allocation).
+    public string? MemoryKey;
+    public string? SiteFile;
+    public int SiteLine;
 
     public readonly Action Register;              // layout-effect body (mount + root swap): seed + install (HostNode valid at 6.5)
     private readonly Action<RectF> _onBounds;     // stable handler in the SceneStore hook slot
@@ -78,16 +83,23 @@ internal sealed class MeasuredBoundsCell : HookCell, IDisposableCell
 
     private void OnBounds(RectF r) => Write(r);
 
+    /// <summary>The value a hook's signal holds for <paramref name="r"/> (the width hook rounds to its quantum).</summary>
+    internal float QuantizeWidth(float w) => Quantum > 0f ? MathF.Round(w / Quantum) * Quantum : w;
+
     private void Write(RectF r)
     {
         bool changed;
         if (WidthSig is { } ws)
-        {
-            float w = r.W;
-            if (Quantum > 0f) w = MathF.Round(w / Quantum) * Quantum;   // round to the quantum; the signal's exact-compare then coalesces sub-quantum churn
-            changed = ws.SetIfChanged(w);
-        }
+            changed = ws.SetIfChanged(QuantizeWidth(r.W));   // round to the quantum; the signal's exact-compare then coalesces sub-quantum churn
         else changed = BoundsSig!.SetIfChanged(r);     // RectF is a record struct ⇒ value-equality coalesces no-change writes
+        // E17c: a keyed hook remembers its rect for the next mount with the same key; a changed decision (keyed or not) bumps
+        // the measured-change serial a settle compares across a pass, and is journaled while one runs.
+        if (MemoryKey is { } key) MeasureMemory.Remember(key, r);
+        if (changed)
+        {
+            if (MemoryKey is { } k) MeasureMemory.NoteChanged(k);
+            else MeasureMemory.NoteChangedUnkeyed(SiteFile, SiteLine);
+        }
         if (Diag.CompiledIn && changed) Tripwire();
     }
 
@@ -120,40 +132,53 @@ public sealed partial class RenderContext
     /// updated whenever layout re-arranges it. Wiring: a layout-effect (mount, and again on a root-node swap) registers on the node's bounds-changed
     /// column (composed with any element-declared <c>OnBoundsChanged</c>, not clobbering it). The value is written during
     /// the layout phase, so a same-frame layout-effect sees the PREVIOUS value and the consumer re-renders NEXT frame (no
-    /// re-entrancy). Equality-gated: no re-render while the bounds are stable. Prefer <see cref="UseMeasuredWidth"/> when
-    /// only the width matters (a scalar signal + quantum kills sub-pixel churn).</summary>
+    /// re-entrancy). Equality-gated: no re-render while the bounds are stable. Prefer <see cref="UseMeasuredWidth(float,string?,int)"/> when
+    /// only the width matters (a scalar signal + quantum kills sub-pixel churn). Unkeyed: the first render reads an empty rect;
+    /// the keyed overload <see cref="UseMeasuredBounds(string,string?,int)"/> starts from the remembered one.</summary>
+    [OverloadResolutionPriority(-1)]   // a string argument means the KEYED overload, never this one's caller-info slot
     public IReadSignal<RectF> UseMeasuredBounds([CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
-    {
-        int idx = LookupCell(__hf, __hl, out var __k);
-        MeasuredBoundsCell cell;
-        if (idx < 0)
-        {
-            cell = new MeasuredBoundsCell(this) { BoundsSig = new Signal<RectF>(default) };
-            RegisterCell(__k, cell, cleanupCapable: true);
-            AddHostBound(cell.Register);                          // re-run when a root-type change remounts HostNode
-            EnqueueEffect(PendingLayoutEffects, cell.Register);   // runs at phase 6.5 (HostNode valid) then is cleared
-        }
-        else cell = (MeasuredBoundsCell)_cells[idx];
-        return cell.BoundsSig!;
-    }
+        => MeasuredCell(null, bounds: true, 0f, __hf, __hl).BoundsSig!;
 
     /// <summary>The arranged width of this component's rendered root (<see cref="HostNode"/>) as a read signal — the
-    /// width-only, hot-path form of <see cref="UseMeasuredBounds"/>. When <paramref name="quantum"/> &gt; 0 the width is
+    /// width-only, hot-path form of <see cref="UseMeasuredBounds(string?,int)"/>. When <paramref name="quantum"/> &gt; 0 the width is
     /// rounded to that grid before the (exact-compare) signal write, so sub-quantum layout jitter never re-renders the
-    /// consumer (e.g. quantum 4 ⇒ a &lt;4px wobble is absorbed). Same timing contract as <see cref="UseMeasuredBounds"/>:
+    /// consumer (e.g. quantum 4 ⇒ a &lt;4px wobble is absorbed). Same timing contract as <see cref="UseMeasuredBounds(string?,int)"/>:
     /// written during layout, consumer re-renders NEXT frame; a same-frame layout-effect sees the previous value.</summary>
     public IReadSignal<float> UseMeasuredWidth(float quantum = 0f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => MeasuredCell(null, bounds: false, quantum, __hf, __hl).WidthSig!;
+
+    /// <summary>E17c — the KEYED <see cref="UseMeasuredBounds(string?,int)"/>: the signal starts from the rect remembered for
+    /// <paramref name="key"/> (<see cref="MeasureMemory"/>, composed onto the ambient <see cref="MeasureMemory.Scope"/>), and every
+    /// arranged rect is remembered under it. A remount with the same key therefore renders its FIRST frame at its laid-out size
+    /// and the measurement that follows changes nothing (no corrective frame). <paramref name="key"/> is a semantic region role
+    /// (<c>"top-band"</c>); the scope supplies the route instance. Key and scope freeze at mount, like every hook input.</summary>
+    public IReadSignal<RectF> UseMeasuredBounds(string key, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => MeasuredCell(key ?? throw new ArgumentNullException(nameof(key)), bounds: true, 0f, __hf, __hl).BoundsSig!;
+
+    /// <summary>E17c — the KEYED <see cref="UseMeasuredWidth(float,string?,int)"/>: starts from the width remembered for
+    /// <paramref name="key"/> (rounded to <paramref name="quantum"/>) and remembers every arranged width; see
+    /// <see cref="UseMeasuredBounds(string,string?,int)"/>.</summary>
+    public IReadSignal<float> UseMeasuredWidth(string key, float quantum = 0f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+        => MeasuredCell(key ?? throw new ArgumentNullException(nameof(key)), bounds: false, quantum, __hf, __hl).WidthSig!;
+
+    private MeasuredBoundsCell MeasuredCell(string? key, bool bounds, float quantum, string? file, int line)
     {
-        int idx = LookupCell(__hf, __hl, out var __k);
-        MeasuredBoundsCell cell;
-        if (idx < 0)
+        int idx = LookupCell(file, line, out var __k);
+        if (idx >= 0) return (MeasuredBoundsCell)CellAt(idx);
+        var cell = new MeasuredBoundsCell(this) { Quantum = MathF.Max(quantum, 0f), SiteFile = file, SiteLine = line };
+        RectF seed = default;
+        if (key is not null)
         {
-            cell = new MeasuredBoundsCell(this) { WidthSig = new FloatSignal(0f), Quantum = MathF.Max(quantum, 0f) };
-            RegisterCell(__k, cell, cleanupCapable: true);
-            AddHostBound(cell.Register);                          // re-run when a root-type change remounts HostNode
-            EnqueueEffect(PendingLayoutEffects, cell.Register);
+            // The scope is read untracked: it is a mount input (the route instance), not something this hook follows.
+            string scope = ResolveContextSignal?.Invoke(AnchorNode, MeasureMemory.Scope)?.Peek() as string ?? MeasureMemory.Scope.Default;
+            cell.MemoryKey = MeasureMemory.Compose(scope, key);
+            MeasureMemory.TryGet(cell.MemoryKey, out seed);
         }
-        else cell = (MeasuredBoundsCell)_cells[idx];
-        return cell.WidthSig!;
+        if (bounds) cell.BoundsSig = new Signal<RectF>(seed);
+        else cell.WidthSig = new FloatSignal(cell.QuantizeWidth(seed.W));
+        RegisterCell(__k, cell, cleanupCapable: true);
+        AddHostBound(cell.Register);                          // re-run when a root-type change remounts HostNode
+        EnqueueEffect(PendingLayoutEffects, cell.Register);   // runs at phase 6.5 (HostNode valid) then is cleared
+        return cell;
     }
 }

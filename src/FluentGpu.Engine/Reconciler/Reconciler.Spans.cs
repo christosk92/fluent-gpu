@@ -20,12 +20,12 @@ public sealed partial class TreeReconciler
     /// shaping-gate + run-mint + scene-copy discipline as the static path), and folds the resolved run id back into
     /// <see cref="LayoutInput.TextStyle"/> — the only column this bind owns; every other TextStyle axis (size/weight/
     /// wrap/…) is <c>SpanTextEl</c>'s STATIC properties, already written once by WriteColumns before BindNode runs.</summary>
-    private void BindSpanText(NodeHandle node, SpanTextEl st)
+    private void BindSpanText(NodeHandle node, SpanTextEl st, SpanTextEl? prev)
     {
-        if (!st.Spans.IsBound) return;
+        if (!Wire(st.Spans.IsBound, prev?.Spans.IsBound == true)) return;   // prev: the static→bound flip pass (WireGainedBinds)
         // WritesLayout: a re-wire's re-run happens inside a render scope, so a re-shape it causes is promoted to a
         // layout-shape change exactly like the static path's inRenderScope:true (RewireBinds).
-        var fx = new BindEffect<TextSpans>(Runtime, st, static e => e is SpanTextEl x ? x.Spans : default) { WritesLayout = true };
+        var fx = NewBind<TextSpans>(st, static e => e is SpanTextEl x ? x.Spans : default, writesLayout: true);
         AddBinding(node, fx.Start(() =>
         {
             NodeBindingFireCount++;
@@ -38,6 +38,7 @@ public sealed partial class TreeReconciler
             {
                 li.TextStyle = li.TextStyle with { SpanRunId = runId };
                 NodeBindingWriteCount++;
+                NoteTextWrite(node);   // the shaping workers start on it now
             }
         }));
     }

@@ -83,11 +83,11 @@ public sealed partial class TreeReconciler
     /// shape as every other element's bound Prop&lt;T&gt; (Reconciler.cs's BoxEl.Fill block): wired at mount, re-wired in
     /// place when a re-render/recycle binds a new thunk/signal (Reconciler.Rewire.cs). Static companions (the placeholder
     /// color, the click flag, a static Placeholder) are read off <c>fx.El</c> — the element last reconciled — per fire.</summary>
-    private void BindListRowCells(NodeHandle node, ListRowEl lr)
+    private void BindListRowCells(NodeHandle node, ListRowEl lr, ListRowEl? prev)
     {
-        if (lr.Cells.IsBound)
+        if (Wire(lr.Cells.IsBound, prev?.Cells.IsBound == true))
         {
-            var fx = new BindEffect<RowCells>(Runtime, lr, static e => e is ListRowEl x ? x.Cells : default);
+            var fx = NewBind<RowCells>(lr, static e => e is ListRowEl x ? x.Cells : default);
             AddBinding(node, fx.Start(() =>
             {
                 NodeBindingFireCount++;
@@ -102,9 +102,9 @@ public sealed partial class TreeReconciler
             }));
         }
 
-        if (lr.Fill.IsBound)
+        if (Wire(lr.Fill.IsBound, prev?.Fill.IsBound == true))
         {
-            var fx = new BindEffect<ColorF>(Runtime, lr, static e => e is ListRowEl x ? x.Fill : default);
+            var fx = NewBind<ColorF>(lr, static e => e is ListRowEl x ? x.Fill : default);
             AddBinding(node, fx.Start(() =>
             {
                 NodeBindingFireCount++;
@@ -112,46 +112,49 @@ public sealed partial class TreeReconciler
                 ColorF next = fx.Read();
                 ref var paint = ref _scene.Paint(node);
                 if (paint.Fill == next) return;
+                BoundColorFade(fx, node, BrushAnim.FillBit);   // E20: inside the live theme fade a bound colour cross-fades
                 paint.Fill = next;
                 NodeBindingWriteCount++;
                 _scene.Mark(node, NodeFlags.PaintDirty);
             }));
         }
-        if (lr.HoverFill.IsBound)
+        if (Wire(lr.HoverFill.IsBound, prev?.HoverFill.IsBound == true))
         {
-            var fx = new BindEffect<ColorF>(Runtime, lr, static e => e is ListRowEl x ? x.HoverFill : default);
+            var fx = NewBind<ColorF>(lr, static e => e is ListRowEl x ? x.HoverFill : default);
             AddBinding(node, fx.Start(() =>
             {
                 NodeBindingFireCount++;
                 if (!_scene.IsLive(node)) return;
                 ColorF next = fx.Read();
-                ref var paint = ref _scene.Paint(node);
-                if (paint.HoverFill == next) return;
-                paint.HoverFill = next;
+                NodePaintCold cold = _scene.PaintCold(node);
+                if (cold.HoverFill == next) return;
+                cold.HoverFill = next;
+                _scene.SetPaintCold(node, in cold);
                 NodeBindingWriteCount++;
                 _scene.Mark(node, NodeFlags.PaintDirty);
             }));
         }
-        if (lr.SelectedFill.IsBound)
+        if (Wire(lr.SelectedFill.IsBound, prev?.SelectedFill.IsBound == true))
         {
             // Rides the generic PressedFill channel/state (ListRowEl.SelectedFill doc comment) — a row has no
             // separate pressed visual, so Selected repurposes the third paint-fill slot every element already has.
-            var fx = new BindEffect<ColorF>(Runtime, lr, static e => e is ListRowEl x ? x.SelectedFill : default);
+            var fx = NewBind<ColorF>(lr, static e => e is ListRowEl x ? x.SelectedFill : default);
             AddBinding(node, fx.Start(() =>
             {
                 NodeBindingFireCount++;
                 if (!_scene.IsLive(node)) return;
                 ColorF next = fx.Read();
-                ref var paint = ref _scene.Paint(node);
-                if (paint.PressedFill == next) return;
-                paint.PressedFill = next;
+                NodePaintCold cold = _scene.PaintCold(node);
+                if (cold.PressedFill == next) return;
+                cold.PressedFill = next;
+                _scene.SetPaintCold(node, in cold);
                 NodeBindingWriteCount++;
                 _scene.Mark(node, NodeFlags.PaintDirty);
             }));
         }
-        if (lr.Placeholder.IsBound)
+        if (Wire(lr.Placeholder.IsBound, prev?.Placeholder.IsBound == true))
         {
-            var fx = new BindEffect<bool>(Runtime, lr, static e => e is ListRowEl x ? x.Placeholder : default);
+            var fx = NewBind<bool>(lr, static e => e is ListRowEl x ? x.Placeholder : default);
             AddBinding(node, fx.Start(() =>
             {
                 NodeBindingFireCount++;

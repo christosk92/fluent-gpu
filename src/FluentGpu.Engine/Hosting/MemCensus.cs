@@ -17,6 +17,9 @@ public readonly struct CensusSnapshot
     public readonly int SceneSticky;
     public readonly int SceneScrollState;
     public readonly int SceneBrushAnims;
+    /// <summary>Nodes holding a cold paint row (<c>NodePaintCold</c>, scene-memory.md §2.6): the population the hot/cold
+    /// split relies on being a small fraction of <see cref="SceneLive"/>.</summary>
+    public readonly int ScenePaintColdRows;
     // Publisher-owned array payload, not managed heap size or working set. Sparse indices/headers are excluded.
     public readonly int SnapshotSlots;
     public readonly long SnapshotIndexedBytes, SnapshotTextStyleBytes, SnapshotCapacity, SnapshotRequired;
@@ -67,6 +70,7 @@ public readonly struct CensusSnapshot
         SceneSticky = scene.ScrollEffectCount;
         SceneScrollState = scene.ScrollStateCount;
         SceneBrushAnims = scene.BrushAnimCount;
+        ScenePaintColdRows = scene.PaintColdRowCount;
         var snapshots = host.SceneCapacityCensus;
         SnapshotSlots = snapshots.initializedSlots;
         SnapshotIndexedBytes = snapshots.indexedBytes;
@@ -228,7 +232,7 @@ internal sealed class MemCensus
         // Metric slots per line are contiguous in the packed vector (see the assignment order above) — pass a
         // (start,count) range so the grow-flag scan stays allocation-free.
         Line(sb, "  proc    ", $"workingSet={Mb(workingSet)} handles={(handles >= 0 ? handles.ToString(CultureInfo.InvariantCulture) : "n/a")}", 25, 2);
-        Line(sb, "  scene   ", $"live={s.SceneLive} cap={s.SceneCapacity} orphans={s.SceneOrphans} sticky={s.SceneSticky} scroll={s.SceneScrollState} brush={s.SceneBrushAnims}", 0, 6);
+        Line(sb, "  scene   ", $"live={s.SceneLive} cap={s.SceneCapacity} orphans={s.SceneOrphans} sticky={s.SceneSticky} scroll={s.SceneScrollState} brush={s.SceneBrushAnims} paintCold={s.ScenePaintColdRows}", 0, 6);
         Line(sb, "  strings ", $"map={s.StringMap} pendReclaim={s.StringPendingReclaim} idHighWater={s.StringIdHighWater}", 6, 3);
         sb.Append(CultureInfo.InvariantCulture,
             $"  snapshot slots={s.SnapshotSlots} indexedBytes={s.SnapshotIndexedBytes} textStyleBytes={s.SnapshotTextStyleBytes} capacity={s.SnapshotCapacity} required={s.SnapshotRequired} reclaims={s.SnapshotReclaims} reclaimedIndexedBytes={s.SnapshotReclaimedIndexedBytes}\n");

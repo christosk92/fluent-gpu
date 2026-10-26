@@ -17,16 +17,11 @@ authoring model is React/Reactor (`Element` records + `Component` + hooks) on a 
 core**. Immutable elements are reconciled into a retained struct-of-arrays scene; a recorder walks it into a GPU
 command list each frame. Updates are surgical — **no full-app re-render, no global dirty flag.**
 
-## Build & test (use these exact commands)
+## Build & verify (use these exact commands)
 
 ```bash
-# The canonical build (all 8 projects) — must be clean:
+# The canonical build (all 8 projects) — must be clean (Debug; Release is for releasing only):
 dotnet build src/FluentGpu.slnx
-
-# Run the headless golden-check harness — THE verification gate (do this after every engine change):
-dotnet run   --project src/FluentGpu.VerticalSlice      # expect: "ALL CHECKS PASSED"
-# Local subset (CI must run the full suite — do not set FG_SUITE in CI):
-dotnet run   --project src/FluentGpu.VerticalSlice -- --suite scroll
 
 # Build the real Windows app:
 dotnet build src/FluentGpu.WindowsApp
@@ -35,9 +30,9 @@ dotnet build src/FluentGpu.WindowsApp
 powershell -File docs/design/check-canon.ps1            # must exit 0
 ```
 
-The harness runs headlessly (no GPU/window), is deterministic, and asserts on the recorded DrawList + post-layout
-scene — not pixels. GPU pixel correctness is a separate manual check on the real D3D12 path. **Do not claim a change
-works without running the harness and seeing `ALL CHECKS PASSED`.**
+**No tests, ever.** No test projects, test files or VerticalSlice-style harnesses; they were deleted on 2026-10-20 and
+the build and `.githooks/pre-commit` reject new ones. Verification is a clean Debug build plus
+`-- --screenshot <path>` for pixels (and the headless inspector in the `WaveeMusic` app repo).
 
 ## The mental model (read before editing)
 
@@ -66,7 +61,7 @@ computation; a property *binding* is a finer one. Three update paths, cheapest f
 8. Scoped relayout needs a **boundary**: fixed `Width`+`Height` + `ClipToBounds=true` stops relayout escaping to the
    page. Give cards/panes/rows a boundary.
 9. **Zero managed allocation in paint phases 6–13.** Wire bindings/effects once at mount; no `new`/box/LINQ/per-call
-   closures in a bind thunk or hot effect. The harness asserts `FrameStats.HotPhaseAllocBytes == 0` on steady frames.
+   closures in a bind thunk or hot effect. `FrameStats.HotPhaseAllocBytes` reports it.
 10. High-frequency scalar? Bind it (`Slider.Create(FloatSignal)`), don't `setState` per move.
 
 ## Craft laws — no free-hand values
@@ -144,7 +139,6 @@ sealed class App : Component {
 | Retained scene (SoA, dirty flags, side-tables) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` |
 | Record → DrawList | `src/FluentGpu.Engine/Render/SceneRecorder.cs` |
 | Theming tokens | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` |
-| Tests / golden checks | `src/FluentGpu.VerticalSlice/` (`Program.cs` + `Harness/` + `Suites/` + `Probes/`) |
 
 Adding an `Element` type: assign a free `ElementTypeId`, then handle it in `Reconciler.Mount`/`Update` (and
 `ChildrenOf` if it has children).
@@ -156,7 +150,7 @@ Adding an `Element` type: assign a free `ElementTypeId`, then handle it in `Reco
 - Commit/push only when asked. Don't commit build output or diagnostics dumps (`*.dmp`/`*.gcdump` are gitignored).
 - **No `FG_*` env kill switches for new behavior** — the new path ships as the unconditional default (standing user
   ruling; existing diag flags are unaffected).
-- **The user runs the app themselves.** Verify headlessly (build + VerticalSlice + `-- --screenshot <path>` for
+- **The user runs the app themselves.** Verify headlessly (clean Debug build + `-- --screenshot <path>` for
   pixels); don't launch the gallery/app to check your work unless asked.
 - Before writing any primitive (animation, breakpoint, skeleton, validator, easing, cache), grep for the house one
   first — the #1 agent failure here is regenerating something that already exists and hardcoding around it.

@@ -81,7 +81,40 @@ public enum ImageAtlasExperiment : byte
 /// the A/B arm). <c>present-validate</c> — every primary composite is shadow-composited whole and compared with the back
 /// buffer, and every Present1's dirty rects are checked against what changed since the last presented frame.
 /// <c>present-structure-diff</c> — an item-structure change is diffed instead of taking the whole frame (investigation).
-/// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).</item>
+/// <c>pp-coverage=X</c> — the repaint share of the window from which the composite takes the whole-frame route (default 0.45;
+/// investigation). <c>no-cover-start</c> — a repaint rect inside an opaque occluder clears and composites every item there
+/// instead of starting at the occluder (the A/B arm). <c>no-zero-cull</c> — the D3D12 decoder draws ops whose effective alpha
+/// is exactly 0 instead of skipping them (the A/B arm). <c>no-clear-fold</c> — a whole-frame composite clears to the frame's colour
+/// and draws a window-covering ground fill instead of folding it into the clear (the A/B arm).
+/// <c>no-partial-keep</c> — a slice with a dirty nested slice re-walks whole instead of keeping its own arena and walking only
+/// the nested one (the A/B arm, <c>SceneRecorder.PartialKeep.cs</c>). <c>rewalk-validate</c> — every partial keep is re-walked
+/// instead and checked: the bytes it would have kept, the inputs it would have re-entered with, the offsets it would have used.
+/// <c>capture-validate</c> — every incremental scene capture is re-derived from scratch and compared column by column (the
+/// DEBUG parity self-check on every capture instead of every Nth; a summary line every 2 s). <c>no-ledgered-capture</c> — an
+/// incremental capture always re-walks the reachable tree instead of copying only the ledgered rows when the tree's topology
+/// is unchanged (the A/B arm, <c>SceneRecordingSnapshot.TryCaptureLedgered</c>).
+/// <c>shape-census</c> — every text layout engine reports its shape-cache hits and misses (first-ever / already shaped by
+/// another engine / re-shaped after its own eviction), shaping and re-wrap time and retained bytes every 5 s (diagnostic).
+/// <c>shape-validate</c> — every shape-store hit is laid out again with a real shape and compared glyph by glyph (diagnostic).
+/// <c>measure-census</c> — every real measure classified against the node's earlier ones in the frame (first / same width again /
+/// new width by its distance), by phase, node kind and solve kind, every 5 s (diagnostic).
+/// <c>no-measure-flat</c> — a re-measure inside the node's measure-validity interval descends anyway (the A/B arm of C1).
+/// <c>measure-flat-ring</c> — the cross-pass ring also answers offers inside its slot's interval (experimental: unsound while
+/// unmarked layout-input writers exist).
+/// <c>measure-flat-validate</c> — every offer a measure-validity interval would answer is measured for real and compared (diagnostic).
+/// <c>no-shape-prefetch</c> — first-visit text shapes inside its measure on the UI thread instead of on the shaping workers (the A/B arm).
+/// <c>warp</c> — the D3D12 device runs on the WARP software adapter (a validator run off the hardware driver).
+/// <c>raw-phase</c> — a slice under a composited transition layer rasters at its raw float placement even when that is a
+/// whole pixel up to float noise (<c>SliceRecorder.FractionalPx</c>; the A/B arm). <c>phase-validate</c> — every composited
+/// tile whose placement was snapped is re-rastered at the raw phase into a shadow surface and compared.
+/// <c>no-op-footprints</c> — a tile replay decodes every op of its segment instead of skipping the primitives whose
+/// footprint misses the tile (the A/B arm). <c>footprint-validate</c> — composited tiles are re-rastered without the skip
+/// into a shadow surface and compared. <c>no-defer-geometry</c> — a non-visible tile of a slice whose geometry is moving
+/// rasters every turn as before (the A/B arm of <c>SliceTable.DeferMovingGeometry</c>). <c>box-fade-test</c> — the edge-fade
+/// distribution test compares item footprint boxes only, without the per-op refinement (the A/B arm). <c>group-fades</c> —
+/// every edge fade composites through its group surface (the reference of the distribution's equivalence check).
+/// <c>ink-validate</c> — every replayed glyph run's quads are checked against the glyph ink extent the fade distribution test
+/// read for it (<c>GlyphInk</c>; breaches are logged).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -96,6 +129,9 @@ public static class EngineSwitches
     public static int MemDiagSeconds;
     public static bool ResizeDiag;
     public static bool MotionDiag;
+    /// <summary><c>--fg dissolve-ui-clock</c>: the theme dissolve on the UI thread's clock from the thaw call (before audit PERF r3 MOTION
+    /// M1), for an owner A/B of the feel. Default off: the render thread's present-time clock, t = 0 on the first presented frame.</summary>
+    public static bool DissolveUiClock;
     public static bool LayoutDiag;
     public static bool LayoutOverflow;
     public static bool LayoutVerify;
@@ -227,6 +263,7 @@ public static class EngineSwitches
                 return true;
             case "resize": ResizeDiag = true; return true;
             case "motion": MotionDiag = true; return true;
+            case "dissolve-ui-clock": DissolveUiClock = true; return true;
             case "layout": LayoutDiag = true; return true;
             case "layout-overflow": LayoutOverflow = true; return true;
             case "layout-verify": LayoutVerify = true; return true;
@@ -263,6 +300,10 @@ public static class EngineSwitches
             case "video-nv12": Nv12VideoOutput = true; return true;
             case "video-overlay": VideoOverlay = true; return true;
             case "playready-sl2000": ForcePlayReadySl2000 = true; return true;
+            case "frame-trace":
+                // `--fg frame-trace[=PATH]`: the frame/animation/input timeline (FrameTrace.cs); started by the platform once the host exists.
+                FrameTrace.RequestedPath = value ?? "";
+                return true;
             case "ledger":
                 Ledger = true;
                 if (!string.IsNullOrEmpty(value)) FrameLedger.DumpPath = value;
@@ -270,9 +311,36 @@ public static class EngineSwitches
             case "group-repair-validate": GroupRepairValidate = true; return true;
             case "no-partial-raster": FluentGpu.Render.Tiles.TileDamage.Enabled = false; return true;
             case "damage-validate": FluentGpu.Render.Tiles.TileDamage.Validate = true; return true;
+            case "phase-validate": FluentGpu.Render.Tiles.TileDamage.PhaseValidate = true; return true;
+            case "footprint-validate": FluentGpu.Render.Tiles.TileDamage.FootprintValidate = true; return true;
+            case "no-op-footprints": FluentGpu.Render.Tiles.TileDamage.OpFootprints = false; return true;
+            case "no-defer-geometry": FluentGpu.Render.Tiles.SliceTable.DeferMovingGeometry = false; return true;
+            case "raw-phase": FluentGpu.Render.SliceRecorder.CanonicalPhase = false; return true;
+            case "box-fade-test": FluentGpu.Render.SliceRecorder.BoxFadeTest = true; return true;
+            case "ink-validate": FluentGpu.Render.Tiles.TileDamage.InkValidate = true; return true;
+            case "group-fades": FluentGpu.Render.SliceRecorder.GroupFadesSwitch = true; return true;
+            case "rewalk-validate": FluentGpu.Render.SceneRecordingContext.PartialKeepValidate = true; return true;
+            case "capture-validate": FluentGpu.Scene.SceneRecordingSnapshot.ParityValidateEveryCapture = true; return true;
+            case "no-ledgered-capture": FluentGpu.Scene.SceneRecordingSnapshot.LedgeredCaptureEnabled = false; return true;
+            case "mount-census": FluentGpu.Reconciler.TreeReconciler.MountCensusEnabled = true; return true;
+            case "shape-census": FluentGpu.Text.TextDiagnostics.ShapeCensus = true; return true;
+            case "measure-census": FluentGpu.Layout.FlexLayout.MeasureCensusEnabled = true; return true;
+            case "no-measure-flat": FluentGpu.Layout.FlexLayout.MeasureFlatEnabled = false; return true;
+            case "measure-flat-ring": FluentGpu.Layout.FlexLayout.MeasureFlatRingEnabled = true; return true;
+            case "measure-flat-validate": FluentGpu.Layout.FlexLayout.MeasureFlatValidate = true; return true;
+            case "shape-validate": FluentGpu.Text.TextDiagnostics.ShapeValidate = true; return true;
+            case "no-shape-prefetch": FluentGpu.Text.TextDiagnostics.NoShapePrefetch = true; return true;
+            case "no-partial-keep": FluentGpu.Render.SceneRecordingContext.PartialKeepEnabled = false; return true;
             case "damage-log": FluentGpu.Render.Tiles.TileDamage.Log = true; return true;
             case "no-precise-present": FluentGpu.Render.Tiles.TileDamage.PrecisePresent = false; return true;
             case "present-structure-diff": FluentGpu.Render.Tiles.TileDamage.PresentStructureDiff = true; return true;
+            case "no-cover-start": FluentGpu.Render.Tiles.TileDamage.CoverStart = false; return true;
+            case "no-zero-cull": FluentGpu.Render.Tiles.TileDamage.ZeroAlphaCull = false; return true;
+            case "no-clear-fold": FluentGpu.Render.Tiles.TileDamage.ClearFold = false; return true;
+            case "pp-coverage":
+                if (value is null || !float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float ppc) || !(ppc > 0f) || ppc > 1.01f) return false;
+                FluentGpu.Render.Tiles.TileDamage.PartialPresentMaxCoverage = ppc;
+                return true;
             case "present-validate": FluentGpu.Render.Tiles.TileDamage.PresentValidate = true; return true;
             case "warp": ForceWarp = true; return true;
             case "shot-window": ShotWindowPath = string.IsNullOrWhiteSpace(value) ? null : value; return ShotWindowPath is not null;

@@ -107,10 +107,15 @@ public static class GroupDelta
                 if ((uint)k < (uint)itemSurfaces.Length && itemSurfaces[k] >= 0)
                 {
                     PixelRect r = (uint)k < (uint)itemRegions.Length ? itemRegions[k] : default;
+                    bool sub = it.SubPxX != 0f || it.SubPxY != 0f;
+                    // a posed self-blur drawn between whole pixels (CompositeItem.SubPxX) reaches a pixel further, and where it
+                    // sits between them is part of what it draws
+                    if (sub) r = new PixelRect(r.Left - 1, r.Top - 1, r.Right + 1, r.Bottom + 1);
                     var rel = new PixelRect(r.Left - region.Left, r.Top - region.Top, r.Right - region.Left, r.Bottom - region.Top);
                     PixelRect at = Intersect(in rel, in sci);
                     ulong sig = (uint)k < (uint)itemKeys.Length ? itemKeys[k] : 0UL;
                     if (sig == 0UL && !at.IsEmpty) cacheable = false;
+                    if (sub && sig != 0UL) Mix(ref sig, Bits(it.SubPxX, it.SubPxY));
                     Add(ref entries, ref count, at, sig != 0UL ? sig : Unkeyed);
                 }
                 else Add(ref entries, ref count, default, NoSurface);

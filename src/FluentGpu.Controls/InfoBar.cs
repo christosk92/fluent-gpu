@@ -61,6 +61,41 @@ public static class InfoBar
     // The per-severity status glyphs (F13F/F13E/F13C/F13D) + severity color ramp live in the shared SeverityVisuals
     // helper (single-sourced with Toast; see InfoBarTemplateSettings.For).
 
+    /// <summary>The bar's look, read at RENDER through the control style table (<see cref="ControlStyles.InfoBarStyle"/>): the
+    /// plate, the severity icon, the title and message, and the close button. A toast card is an InfoBar body, so this styles
+    /// toasts too. Every default is the InfoBar_themeresources value the bar has always used.</summary>
+    public sealed record Style
+    {
+        /// <summary>The plate's least height (InfoBarMinHeight 48).</summary>
+        public float MinHeight { get; init; } = InfoBar.MinHeight;
+        /// <summary>The plate's content padding (InfoBarContentRootPadding 16,0,0,0).</summary>
+        public Edges4 Padding { get; init; } = ContentRootPadding;
+        /// <summary>The plate's radius (ControlCornerRadius).</summary>
+        public float Radius { get; init; } = Radii.Control;
+        /// <summary>The plate fill; null = the severity tint (InfoBar*SeverityBackgroundBrush).</summary>
+        public ColorF? Background { get; init; }
+        /// <summary>The plate ring (CardStrokeColorDefault) and its width (InfoBarBorderThickness 1; 0 = none).</summary>
+        public ColorF Border { get; init; } = Tok.StrokeCardDefault;
+        public float BorderWidth { get; init; } = 1f;
+        /// <summary>The plate elevation; null = none (the WinUI bar is flat).</summary>
+        public ShadowSpec? Shadow { get; init; }
+        /// <summary>Whether the standard severity icon shows at all (ANDed with the instance's <c>isIconVisible</c>).</summary>
+        public bool ShowIcon { get; init; } = true;
+        /// <summary>The title (InfoBarTitleFontSize 14, SemiBold) and message (InfoBarMessageFontSize 14) text, and their colour (TextFillColorPrimary).</summary>
+        public float TitleSize { get; init; } = TitleFontSize;
+        public int TitleWeight { get; init; } = 600;
+        public float MessageSize { get; init; } = MessageFontSize;
+        public ColorF TextColor { get; init; } = Tok.TextPrimary;
+        /// <summary>The close button's hover / press backplate radius (ControlCornerRadius).</summary>
+        public float CloseButtonRadius { get; init; } = Radii.Control;
+    }
+
+    /// <summary>The bar style now: the active theme's (<see cref="ControlStyles.InfoBarStyle"/>), else <see cref="FluentStyle"/>.</summary>
+    public static Style DefaultStyle => ControlStyles.Resolve(ControlStyles.InfoBarStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without an InfoBar entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new();
+
     // WinUI sizes/margins (InfoBar_themeresources.xaml, verbatim).
     private const float MinHeight        = 48f;          // InfoBarMinHeight
     private const float IconFontSize     = 16f;          // InfoBarIconFontSize
@@ -176,6 +211,9 @@ public static class InfoBar
             return new BoxEl { };
 
         var ts = InfoBarTemplateSettings.For(severity);
+        // The bar's look, read now (the factory runs in its caller's render).
+        var st = DefaultStyle;
+        isIconVisible &= st.ShowIcon;
 
         // Column 0: the icon. UpdateIconVisibility (InfoBar.cpp:261-264): IsIconVisible ? (IconSource ? UserIconVisible
         // : StandardIconVisible) : NoIconVisible — a custom iconGlyph wins over the standard severity stack.
@@ -198,7 +236,7 @@ public static class InfoBar
                     Justify = FlexJustify.Center,
                     Children =
                     [
-                        new TextEl(iconGlyph) { Size = IconFontSize, FontFamily = Theme.IconFont, Color = Tok.TextPrimary },
+                        new TextEl(iconGlyph) { Size = IconFontSize, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextPrimary },
                     ],
                 })
                 : parts.Apply(PartIcon, new BoxEl
@@ -210,8 +248,8 @@ public static class InfoBar
                     AlignSelf = FlexAlign.Start,   // VerticalAlignment="Top"
                     Children =
                     [
-                        new TextEl(IconBackgroundGlyph) { Size = IconFontSize, FontFamily = Theme.IconFont, Color = ts.IconBackground },
-                        new TextEl(ts.Glyph)            { Size = IconFontSize, FontFamily = Theme.IconFont, Color = ts.IconForeground },
+                        new TextEl(IconBackgroundGlyph) { Size = IconFontSize, FontFamily = Tok.Definition.Fonts.Icon, Color = ts.IconBackground },
+                        new TextEl(ts.Glyph)            { Size = IconFontSize, FontFamily = Tok.Definition.Fonts.Icon, Color = ts.IconForeground },
                     ],
                 });
 
@@ -230,7 +268,7 @@ public static class InfoBar
 
         // WinUI's implicit InfoBar HyperlinkButton style matches by TYPE inside the action ContentPresenter
         // (InfoBar.xaml:117-122); our HyperlinkButton roots carry Role = Hyperlink, so detect the same way.
-        bool isHyperlinkAction = actionButton is BoxEl { Role: AutomationRole.Hyperlink };
+        bool isHyperlinkAction = actionButton.Is(out BoxEl actionBox) && actionBox.Role == AutomationRole.Hyperlink;
 
         // WinUI: nItems == 1 => vertical (the margins work out better that way). Approximate (b)/(c): when an action button
         // sits next to a long message it will not fit inline on one row, so WinUI flips to vertical — mirror that here.
@@ -248,8 +286,8 @@ public static class InfoBar
         BoxEl? panel = !hasBanner
             ? null
             : isVertical
-                ? BuildVerticalPanel(title, message, actionButton, hasTitle, hasMessage, isHyperlinkAction, parts)
-                : BuildHorizontalPanel(title, message, actionButton, hasTitle, hasMessage, isHyperlinkAction, parts);
+                ? BuildVerticalPanel(title, message, actionButton, hasTitle, hasMessage, isHyperlinkAction, parts, st)
+                : BuildHorizontalPanel(title, message, actionButton, hasTitle, hasMessage, isHyperlinkAction, parts, st);
 
         // Column 1 (the * column): row 0 = the InfoBarPanel, row 1 = the ContentArea ContentPresenter holding
         // Content/ContentTemplate (InfoBar.idl:94-95; InfoBar.xaml:126 — Grid.Row=1 Grid.Column=1, no margin,
@@ -264,12 +302,12 @@ public static class InfoBar
                 Grow = 1f,
                 // Inside the vertical stack the panel must not absorb the leftover column height (its Grow=1 is the
                 // *-column horizontal grow when it is the sole column child).
-                Children = panel is null ? [content] : [panel with { Grow = 0f }, content],
+                Children = panel is null ? [content.Value] : [panel.Value with { Grow = 0f }, content.Value],
             }
             : panel ?? new BoxEl { Grow = 1f };   // empty * column still pushes the close button to the trailing edge
 
         var children = new List<Element>(3);
-        if (icon is not null) children.Add(icon);
+        if (icon is not null) children.Add(icon.Value);
         children.Add(column);
 
         // Column 2: the close button. WinUI uses an AppBarButton-style Button: 38x38, Top-aligned, Margin 5, a 16px
@@ -288,7 +326,7 @@ public static class InfoBar
                 AlignSelf = FlexAlign.Start,                    // VerticalAlignment="Top"
                 AlignItems = FlexAlign.Center,
                 Justify = FlexJustify.Center,
-                Corners = Radii.ControlAll,                     // ControlCornerRadius = 4
+                Corners = CornerRadius4.All(st.CloseButtonRadius),   // ControlCornerRadius = 4
                 HoverFill = Tok.FillSubtleSecondary,            // AppBarButtonBackgroundPointerOver
                 PressedFill = Tok.FillSubtleTertiary,           // AppBarButtonBackgroundPressed
                 OnClick = closeClick,
@@ -297,7 +335,7 @@ public static class InfoBar
                 [
                     new TextEl(Icons.Cancel)
                     {
-                        Size = CloseGlyphSize, FontFamily = Theme.IconFont, Color = Tok.TextPrimary,
+                        Size = CloseGlyphSize, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextPrimary,
                         HoverColor = Tok.TextPrimary, PressedColor = Tok.TextSecondary,  // AppBarButtonForegroundPressed
                     },
                 ],
@@ -314,16 +352,17 @@ public static class InfoBar
         {
             Direction = 0,
             AlignItems = FlexAlign.Stretch,                     // columns stretch to row height (icon/close self-align Top)
-            MinHeight = MinHeight,                              // InfoBarMinHeight = 48
-            Padding = ContentRootPadding,                       // InfoBarContentRootPadding 16,0,0,0
-            Corners = Radii.ControlAll,                         // CornerRadius = ControlCornerRadius (4)
-            Fill = ts.Background,                               // InfoBar*SeverityBackgroundBrush
+            MinHeight = st.MinHeight,                           // InfoBarMinHeight = 48
+            Padding = st.Padding,                               // InfoBarContentRootPadding 16,0,0,0
+            Corners = CornerRadius4.All(st.Radius),             // CornerRadius = ControlCornerRadius (4)
+            Fill = st.Background ?? ts.Background,              // InfoBar*SeverityBackgroundBrush
             // Identity hover/border: WinUI InfoBar has no pointer-over tint. Without these, ResolveSurface's
             // Hovered-flag auto-lighten (8%) washes the severity background whenever the bar is the hit leaf.
-            HoverFill = ts.Background,
-            BorderWidth = 1f,                                   // InfoBarBorderThickness = 1
-            BorderColor = Tok.StrokeCardDefault,               // InfoBarBorderBrush = CardStrokeColorDefaultBrush
-            HoverBorderColor = Tok.StrokeCardDefault,
+            HoverFill = st.Background ?? ts.Background,
+            BorderWidth = st.BorderWidth,                       // InfoBarBorderThickness = 1
+            BorderColor = st.Border,                            // InfoBarBorderBrush = CardStrokeColorDefaultBrush
+            HoverBorderColor = st.Border,
+            Shadow = st.Shadow,
             Role = AutomationRole.InfoBar,
             Children = children.ToArray(),
         };
@@ -337,7 +376,7 @@ public static class InfoBar
     // gaps (title 0,14,0,0; message 12,14,0,0; action 16,8,0,0) — the panel ignores the FIRST child's leading-left margin
     // (WinUI "hasPreviousElement"), so the leftmost child gets only its top margin. AlignItems Top mirrors WinUI's
     // VerticalAlignment="Top" on Title/Message and Action. Cold Render path — array build here never hits a hot frame phase.
-    private static BoxEl BuildHorizontalPanel(string title, string message, Element? actionButton, bool hasTitle, bool hasMessage, bool isHyperlinkAction, TemplateParts? parts)
+    private static BoxEl BuildHorizontalPanel(string title, string message, Element? actionButton, bool hasTitle, bool hasMessage, bool isHyperlinkAction, TemplateParts? parts, Style st)
     {
         var kids = new List<Element>(3);
         bool first = true;
@@ -351,7 +390,7 @@ public static class InfoBar
             // InfoBar.xaml:113); the numeric TextEl weight pipeline shapes 600 directly.
             kids.Add(parts.Apply(PartTitle, new TextEl(title)
             {
-                Size = TitleFontSize, Weight = 600, Color = Tok.TextPrimary, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
+                Size = st.TitleSize, Weight = (ushort)st.TitleWeight, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
                 Margin = new Edges4(0f, TitleHMargin.Top, 0f, 0f),   // first child: ignore leading-left margin
             }));
             first = false;
@@ -360,7 +399,7 @@ public static class InfoBar
         {
             kids.Add(parts.Apply(PartMessage, new TextEl(message)
             {
-                Size = MessageFontSize, Color = Tok.TextPrimary, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
+                Size = st.MessageSize, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
                 Grow = hasAction ? 0f : 1f,                          // last child takes the remaining width (InfoBarPanel.cpp:144-147)
                 Margin = new Edges4(first ? 0f : MessageHMargin.Left, MessageHMargin.Top, 0f, 0f),
             }));
@@ -375,7 +414,7 @@ public static class InfoBar
                 Margin = new Edges4(left, ActionHMargin.Top, 0f, 0f),
                 AlignSelf = FlexAlign.Start,                        // VerticalAlignment="Top"
                 Grow = 1f,                                          // last child takes the remaining width (InfoBarPanel.cpp:144-147)
-                Children = [actionButton],
+                Children = [actionButton.Value],
             });
         }
         // SHRINK IS LOAD-BEARING, not cosmetic. The panel is the "*" column of a THREE-column row (icon | panel |
@@ -414,7 +453,7 @@ public static class InfoBar
     // (InfoBarPanelVerticalOrientationPadding); per-child vertical orientation margins give the inter-line spacing
     // (title 0,14,0,0; message 0,4,0,0; action 0,12,0,0) — the panel ignores the FIRST child's leading-TOP margin
     // (WinUI "hasPreviousElement"), and the panel's own top padding (14) supplies the leading gap instead.
-    private static BoxEl BuildVerticalPanel(string title, string message, Element? actionButton, bool hasTitle, bool hasMessage, bool isHyperlinkAction, TemplateParts? parts)
+    private static BoxEl BuildVerticalPanel(string title, string message, Element? actionButton, bool hasTitle, bool hasMessage, bool isHyperlinkAction, TemplateParts? parts, Style st)
     {
         var kids = new List<Element>(3);
         bool first = true;
@@ -424,7 +463,7 @@ public static class InfoBar
             // InfoBar.xaml:113); the numeric TextEl weight pipeline shapes 600 directly.
             kids.Add(parts.Apply(PartTitle, new TextEl(title)
             {
-                Size = TitleFontSize, Weight = 600, Color = Tok.TextPrimary, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
+                Size = st.TitleSize, Weight = (ushort)st.TitleWeight, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
                 Margin = new Edges4(0f, first ? 0f : TitleVMargin.Top, 0f, 0f),   // first child: ignore leading-top margin
             }));
             first = false;
@@ -433,8 +472,9 @@ public static class InfoBar
         {
             kids.Add(parts.Apply(PartMessage, new TextEl(message)
             {
-                Size = MessageFontSize, Color = Tok.TextPrimary, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
+                Size = st.MessageSize, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
                 Margin = new Edges4(0f, first ? 0f : MessageVMargin.Top, 0f, 0f), // 0,4,0,0 below the title
+
             }));
             first = false;
         }
@@ -445,7 +485,7 @@ public static class InfoBar
                 // A HyperlinkButton action adds its implicit-style own-margin (-12,0,0,0) on top of the orientation margin.
                 Margin = new Edges4(isHyperlinkAction ? HyperlinkActionMarginLeft : 0f, first ? 0f : ActionVMargin.Top, 0f, 0f), // 0,12,0,0 below the message
                 AlignSelf = FlexAlign.Start,                        // left-aligned action (WinUI HorizontalAlignment default)
-                Children = [actionButton],
+                Children = [actionButton.Value],
             });
         }
         return new BoxEl

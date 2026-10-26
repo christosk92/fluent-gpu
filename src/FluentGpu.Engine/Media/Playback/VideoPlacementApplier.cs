@@ -302,6 +302,11 @@ internal sealed class VideoPlacementApplier
 
     // ── apply ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
+    /// <summary>True while the presenting side is on a frame-freeze HOLD frame (E2): every apply path returns without touching the
+    /// presenter, so video releases (and creations and moves) wait for the thaw frame, whose turn applies the registry's full state.
+    /// Written by the presenting thread when it adopts a publication; read by the same thread.</summary>
+    internal bool DeferAll { get; set; }
+
     /// <summary>The early structural drain (F208): adopt the registry's content mailbox (handle, sequence, release - never geometry)
     /// and create / bind what is owed, placing a surface only when a publication has already delivered its geometry (a surface
     /// created without it is hidden until the first publication places it). A presenter
@@ -337,6 +342,7 @@ internal sealed class VideoPlacementApplier
     {
         _boundChanged = false;
         _lastTurnMoved = false;
+        if (DeferAll) return false;   // a frozen frame (E2): nothing is created, bound, moved or released; the thaw frame applies it all
         Adopt(intents);
         if (liveStructuralVersion >= 0) _seenStructuralVersion = liveStructuralVersion;
         // A different presenter instance means the previous one was disposed (device recovery rebuilt the DirectComposition

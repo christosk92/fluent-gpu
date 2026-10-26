@@ -11,13 +11,13 @@ FluentGpu is a near-zero-alloc, NativeAOT, D3D12-rendered .NET 10 UI engine. Rea
 
 > **⛔ HARD RULES for subagents (agents dispatched by an orchestrator).** (1) **Never `git stash`** — or any
 > other git state change (no commit/checkout/reset/restore/stash pop): the working tree is shared and a stash
-> wipes every parallel agent's in-progress edits. (2) **Never run builds or test suites** — no `dotnet build`,
-> no `dotnet run --project src/FluentGpu.VerticalSlice`, no `dotnet test`, no check-canon.ps1: parallel builds
-> on the shared `obj/bin` collide and exhaust the machine. Write code + gates/tests only; the orchestrator runs
+> wipes every parallel agent's in-progress edits. (2) **Never run builds** — no `dotnet build`,
+> no check-canon.ps1: parallel builds
+> on the shared `obj/bin` collide and exhaust the machine. Write code only; the orchestrator runs
 > the full verification once after the whole batch. (Working solo, not as a dispatched subagent? Then the usual
-> build/VerticalSlice loop applies.)
+> build loop applies.)
 
-> **✅ Animation engine — REWORKED (landed + verified, 521 VerticalSlice gates green).** Motion is a **signals-first** model: one POD `AnimValue` slab keyed `(node, channel)` driven by the slab scheduler (the class is still named `AnimEngine`) + the analytical closed-form spring (sampled at absolute `t` — dt-deterministic, replaced the sub-stepped Euler) + the complete declarative surface (`Transition`/`WhileHover`/`WhilePressed`/`WhileFocus`/`Enter`/`Exit`/`Stagger`/`Layout`), with **brush/color as just another channel** (the `BrushFade` channel; `BrushTransitionMs` still triggers it) and **reduced-motion as a value, never a `Use*` early-return**. `InteractionAnimator` and the `AdvanceBrushAnims` ticker are **deleted** (subsumed as `HoverFade`/`PressFade`/`BrushFade` side-table channels); `ConnectedAnimation` → `DetachedAnimSlab`/`RecordDetached` rebuild rides the runtime property `ConnectedAnimation.DetachedFly` (set in code; default-off = the proven live-overlay path). Implemented design: `docs/plans/animation-engine-rework-design.md`. **Prefer the declarative surface for new motion;** `BrushTransitionMs`/`MotionRecipes.*`/the `Use*` motion hooks still work (repointed at the new engine), so existing controls are unchanged.
+> **✅ Animation engine — REWORKED (landed + verified).** Motion is a **signals-first** model: one POD `AnimValue` slab keyed `(node, channel)` driven by the slab scheduler (the class is still named `AnimEngine`) + the analytical closed-form spring (sampled at absolute `t` — dt-deterministic, replaced the sub-stepped Euler) + the complete declarative surface (`Transition`/`WhileHover`/`WhilePressed`/`WhileFocus`/`Enter`/`Exit`/`Stagger`/`Layout`), with **brush/color as just another channel** (the `BrushFade` channel; `BrushTransitionMs` still triggers it) and **reduced-motion as a value, never a `Use*` early-return**. `InteractionAnimator` and the `AdvanceBrushAnims` ticker are **deleted** (subsumed as `HoverFade`/`PressFade`/`BrushFade` side-table channels); `ConnectedAnimation` → `DetachedAnimSlab`/`RecordDetached` rebuild rides the runtime property `ConnectedAnimation.DetachedFly` (set in code; default-off = the proven live-overlay path). Implemented design: `docs/plans/animation-engine-rework-design.md`. **Prefer the declarative surface for new motion;** `BrushTransitionMs`/`MotionRecipes.*`/the `Use*` motion hooks still work (repointed at the new engine), so existing controls are unchanged.
 
 ## The one mental model
 
@@ -42,7 +42,7 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
 4. A bind thunk must read `.Value` (subscribes), not `.Peek()`.
 5. Every bindable channel is ONE `Prop<T>` prop taking a value, a `Func<T>` (`Prop.Of` for inline lambdas), or a concrete signal. Bound `Transform`/`Opacity`/`Fill` = compositor-only; bound `Width`/`Height`/`Text` = scoped relayout.
    A bind is wired at mount; a re-render passing a NEW thunk/signal re-wires it (bound→bound — a thunk capturing a
-   render-time width is fine), but a static↔bound FLIP of one channel on a reused node silently loses (`BindContract`).
+   render-time width is fine), and a static↔bound FLIP of one channel on a reused node follows the new form (wired or unwired at the Update seam).
    Prefer a transform bind for hot values. `Visible : Prop<bool>` (on the base `Element`, every kind) is presence, not
    paint — `false` COLLAPSES the node (out of layout flow, paint, hit-test; CSS `display:none`), it does not merely
    fade it — for a visually-hidden-but-still-flowing box, bind `Opacity`/`HoverOpacity` instead.
@@ -151,15 +151,9 @@ Run an app: `FluentApp.Run(() => new App());` (`src/FluentGpu.WindowsApp/FluentA
 ## Verify (do this after EVERY engine change — evidence before claiming done)
 
 ```bash
-dotnet build src/FluentGpu.VerticalSlice          # must be clean
-dotnet run   --project src/FluentGpu.VerticalSlice # must print "ALL CHECKS PASSED"
-# Local subset while iterating (CI = full suite, no --suite):
-dotnet run   --project src/FluentGpu.VerticalSlice -- --suite scroll   # or --probe <name>; no env vars
+dotnet build src/FluentGpu.slnx             # must be clean (Debug)
 ```
-The harness (`src/FluentGpu.VerticalSlice/`) runs headless golden checks (no GPU/window): thin `Program.cs` +
-`Harness/` (`Gate.Check`, scene helpers, `SuiteRegistry`) + domain `Suites/*Suite.cs` + `Probes/`.
-Add a check with `Check("…", cond, detail)` in the owning suite and register it in that suite's `Run` +
-`SuiteRegistry` (new suite only). GPU pixels are a separate manual check.
+No tests exist or may be added (banned 2026-10-20). GPU pixels: `FluentGpu.WindowsApp -- --screenshot <path>`, or the app's headless inspector in `WaveeMusic`.
 Useful: `FrameStats` from `RunFrame()` — `Rendered` (false ⇒ compositor-only), `ComponentsRendered`,
 `HotPhaseAllocBytes` (must be 0 steady). Diagnostics are `--fg` command-line switches on any FluentApp host (the engine reads NO environment variables):
 `--fg dump` (scene dump), `--fg diag`, `--fg fps`, `--fg layout`, `--fg mem=N`, `--fg gpu-timing`, … — full list in
@@ -191,7 +185,6 @@ All engine subsystems now live under the single `src/FluentGpu.Engine` project (
 | Tile validity (content-derived: a tile re-rasters iff the ops it draws changed — no damage rects) | `Render/SliceRecorder.Content.cs` (per-op content table, `SegmentContent`) + `Render/Tiles/SliceTable.Content.cs` (`ITileContent`, the check in `Request<TContent>`) — design: `gpu-renderer.md` §13.1c |
 | Evidence ledgers / stale-tile invariant / pixel query / frame capture | `Render/Evidence/*`, `Render/SliceRecorder.Evidence.cs`, `Render/Tiles/SliceTable.Ledger.cs`, `Hosting/AppHost.Evidence.cs` — design: `gpu-renderer.md` §13.1j |
 | Theming tokens + LIVE theme switching (animated, in-place; gotchas) | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` — **read `theming.md` before any theme work** |
-| Tests | `src/FluentGpu.VerticalSlice/` (`Harness/`, `Suites/`, `Probes/`) |
 | Windows OS services | `src/FluentGpu.WindowsApi/*` (pillars, refs Engine only) — see below |
 
 ## Windows OS services (`FluentGpu.WindowsApi`)
@@ -203,13 +196,13 @@ AOT-clean Win32/WinRT interop behind a small managed surface — **no** WindowsA
 - **Power** (`Power/`) — `PowerSession.KeepAwake(keepDisplayOn)` (disposable), `Suspending`/`Resumed` events, and `PowerSession.ReadPower()` → `PowerStatus` (AC/DC, battery %, charging, energy-saver, est. discharge) via `GetSystemPowerStatus`.
 - **Media / SMTC** (`Media/`) — `SystemMediaControls.GetForWindow(hwnd)`: `UpdateDisplay`/`SetPlaybackStatus`/`SetEnabledButtons`/`ButtonPressed` (+ `ButtonDispatcher` to hop the OS-thread callback) and **timeline scrub** `UpdateTimeline(position, end)` / `PlaybackRate`.
 - Others: **Credentials** (locker), **Packaging** (identity), **Activation** (protocol/redirect), **Dialogs** (file pickers, owner HWND), **Shell** (taskbar progress/jump list), **Network** (NLM connectivity + change events).
-- **OS file/folder drop is engine-level, not a pillar:** a `BoxEl.DropTarget = new DropTargetSpec(new[]{ DropKinds.Files }, OnEnter, OnLeave, OnDrop: s => { var d = (FileDropData)s.Payload!; … })` receives an Explorer drag. The Windows backend auto-registers the top-level window with a hand-vtable OLE `IDropTarget` (`Win32DropTarget` → `InputHooks.ExternalDrag*` → `InputDispatcher` → `DragDropContext`), so the zone gets **live hover** (DragEnter/Over/Leave) + the OS "+Copy" cursor; the file list is read once, at drop. Handlers fire on the UI thread. Gates: `e5dragdrop.ext` + smoke `6c.1`.
+- **OS file/folder drop is engine-level, not a pillar:** a `BoxEl.DropTarget = new DropTargetSpec(new[]{ DropKinds.Files }, OnEnter, OnLeave, OnDrop: s => { var d = (FileDropData)s.Payload!; … })` receives an Explorer drag. The Windows backend auto-registers the top-level window with a hand-vtable OLE `IDropTarget` (`Win32DropTarget` → `InputHooks.ExternalDrag*` → `InputDispatcher` → `DragDropContext`), so the zone gets **live hover** (DragEnter/Over/Leave) + the OS "+Copy" cursor; the file list is read once, at drop. Handlers fire on the UI thread.
 
 ## Drag & drop → the **`dnd` skill** (`.claude/skills/dnd/`)
 
 **Read `.claude/skills/dnd/SKILL.md` before touching anything drag-related** — sources, drop targets, the chip,
 reorder/sortable lists, insertion, spring-load, captions/refusals, the spotlight scrim, thresholds, OS file drop. It
-carries the architecture map, the recipes, the shipped-bug pitfalls, the gate map and the file map. The 30-second
+carries the architecture map, the recipes, the shipped-bug pitfalls and the file map. The 30-second
 version:
 
 ```csharp
@@ -271,13 +264,13 @@ Design corpus (architecture authority, canon-gated) is `docs/design/`; as-built 
 ## Deeper docs (read for the relevant task)
 - **`fluentgpu-scroll` skill** (`.claude/skills/fluentgpu-scroll/`) — **scrolling end to end**: the plan/poser mental
   model, the file map, recipes (effect channel, feel knob, wheel curve, input source, debugging a jump/jitter/blank with
-  the probe + Scroll Lab, adding a gate), the shipped pitfalls (present time, one snap, coverage clamp, double prediction,
-  paired-counter ledger, props freeze) and the gate map. Read before any scroll, wheel, touchpad, virtualization or
+  the probe + Scroll Lab), the shipped pitfalls (present time, one snap, coverage clamp, double prediction,
+  paired-counter ledger, props freeze). Read before any scroll, wheel, touchpad, virtualization or
   scroll-effect change.
 - **`dnd` skill** (`.claude/skills/dnd/`) — **drag & drop end to end**: the L1 gesture / L2 session architecture, the
   `Drag`/`Drop`/`DragChip`/`DragPreviewLayer`/`InsertionOptions`/`Reorderable` recipes, the shipped-and-fixed pitfalls
   (bind-shape flip, parked-tab reachability, `DropTargetsVersion` staleness, per-frame alloc in drag delegates, the
-  L1/L2 pairing rule), the `e5dragdrop.*` gate map and the file map. Read before any DnD change.
+  L1/L2 pairing rule) and the file map. Read before any DnD change.
 - `theming.md` (this skill dir) — **how theming + LIVE theme switching work end-to-end**: tokens, the `Epoch`/`RethemeAll`/transition-window mechanism, the OS-follow + persistence wiring, what updates vs what's frozen, and the gotchas (frozen constructor-arg literals, `Flow.For`/bound colors, control `ColorF` props, app-local color constants, Mica/DWM). **Read before any theme work or "X won't change theme" debugging.**
 - `docs/guide/reactivity.md` — signals, hooks, the one `Component` model (run-once inferred), bindings, context (the core).
 - `docs/guide/components-elements-layout.md` — element zoo, layout, controls, navigation, virtualization, theming.
@@ -286,7 +279,7 @@ Design corpus (architecture authority, canon-gated) is `docs/design/`; as-built 
 - `docs/guide/control-fidelity.md` — **building WinUI-faithful controls**: exact WinUI template/storyboard/timing-token
   lookup, state-search pitfalls, the logical-state x interaction-state graph, rounded-rect rendering rules,
   `StateBrush`/interaction-channel (`HoverFade`/`PressFade`) visual states, explicit `AnimEngine` timelines like checkmark stroke trim, and the
-  empirical verify workflow (golden checks + `--shot` + slow-motion proof). Read before any control parity work.
+  empirical verify workflow (`--shot` + slow-motion proof). Read before any control parity work.
 - `docs/guide/motion-recipes.md` — the **Expressive Motion Kit** (`MotionRecipes.*`): named transitions adopted from
   transitions.dev (number pop-in, error shake, skeleton reveal, success check, icon swap, badge pop, soft/texts reveal,
   neighbour-falloff hover) on the engine's springs + the new per-node **self-blur** (`BoxEl.Blur`/`AnimChannel.BlurSigma`) +

@@ -1,121 +1,145 @@
-using System.Numerics;
 using System.Threading;
 
 namespace FluentGpu.Media;
 
 /// <summary>
-/// Bounded CPU pixel-buffer pool (media-pipeline.md §3 "recycled CPU pixel blocks, bucket-sized" — the as-built
-/// SlabAllocator&lt;StagingBlock&gt;). Thread-safe (decode workers Rent, UI/render threads Return). Power-of-two bucket
-/// ladder 16KB..16MB; an oversize request gets a plain exact-size array that is never retained. The cap bounds
-/// RETAINED (idle) bytes, not in-flight bytes: Rent always succeeds (allocates fresh when the bucket is empty),
-/// Return retains only while RetainedBytes stays under the cap and otherwise drops the array for the GC. Unlike
-/// ArrayPool&lt;byte&gt;.Shared there are no per-core partitions, so worst-case idle retention is exactly the cap.
+/// Bounded pool of decoded-pixel buffers (<see cref="PixelBlock"/>, native memory; media-pipeline.md §3 "recycled CPU
+/// pixel blocks"). Thread-safe (decode workers Rent, UI/render threads Return). The cap bounds RETAINED (idle) bytes, not
+/// in-flight bytes: Rent always succeeds (allocates a fresh block when nothing parked fits), Return parks a block only
+/// while RetainedBytes stays under the cap and otherwise frees it at once.
+/// <para>Blocks are sized to the request (a 4 KiB page multiple), not to a power of two: the old power-of-two ladder gave a
+/// 1024x576 cover (2.25 MiB) a 4 MiB array. A parked block serves a later request it fits within a quarter of
+/// (<see cref="FitSlack"/>), so a page of same-sized covers reuses one block per in-flight decode.</para>
 /// </summary>
 public sealed class PixelBufferPool
 {
-    public const int MinBucketBytes = 16 * 1024;          // 2^14
-    public const int MaxBucketBytes = 16 * 1024 * 1024;   // 2^24 — 2048×2048 BGRA; larger is unpooled
-    private const int MinShift = 14;
-    private const int BucketCount = 11;                   // 2^14 .. 2^24 inclusive
+    /// <summary>Requests are rounded up to this (a page): nothing finer pays.</summary>
+    public const int Granule = 4 * 1024;
+    /// <summary>A parked block serves a request when its capacity is at most need + need / FitSlack (25 % over).</summary>
+    public const int FitSlack = 4;
 
     public const long DefaultRetainedCapBytes = 32L * 1024 * 1024;
 
-    private readonly Stack<byte[]>[] _buckets = new Stack<byte[]>[BucketCount];
+    // Parked blocks, ascending by capacity (best fit = the first one that is large enough). Small: a page's worth.
+    private readonly List<PixelBlock> _parked = new();
     private readonly long _retainedCapBytes;
-    private long _retainedBytes;       // bytes PARKED in _buckets (never in-flight bytes)
+    private long _retainedBytes;       // bytes PARKED (never in-flight bytes)
     private long _peakRetainedBytes;
+    private long _liveBytes;           // every block alive: parked + rented
+    private long _peakLiveBytes;
 
     public PixelBufferPool(long retainedCapBytes = DefaultRetainedCapBytes)
     {
         _retainedCapBytes = Math.Max(0, retainedCapBytes);
-        for (int i = 0; i < BucketCount; i++) _buckets[i] = new Stack<byte[]>();
     }
 
     public long RetainedCapBytes => _retainedCapBytes;
     public long RetainedBytes => Interlocked.Read(ref _retainedBytes);
     public long PeakRetainedBytes => Interlocked.Read(ref _peakRetainedBytes);
+    /// <summary>Native bytes of every block alive, parked or rented (decodes in flight, queued uploads).</summary>
+    public long LiveBytes => Interlocked.Read(ref _liveBytes);
+    public long PeakLiveBytes => Interlocked.Read(ref _peakLiveBytes);
 
-    // Raised AFTER parking, outside the bucket lock, on the returning thread. Hosts coalesce this into one cold
-    // deadline and unsubscribe on pool replacement/disposal. No upload, signal write, or frame is requested here.
+    // Raised AFTER parking, outside the lock, on the returning thread. Hosts coalesce this into one cold deadline and
+    // unsubscribe on pool replacement/disposal. No upload, signal write, or frame is requested here.
     internal event Action<PixelBufferPool>? BufferRetained;
 
-    /// <summary>Rent ≥ minBytes. ALWAYS succeeds: bucket hit pops the parked array (zero-alloc), miss allocates a
-    /// fresh bucket-sized array, oversize allocates exact-size unpooled. Caller returns exactly once.</summary>
-    public byte[] Rent(int minBytes)
+    /// <summary>Rent a block of at least <paramref name="minBytes"/>. ALWAYS succeeds: the smallest parked block that fits
+    /// (within <see cref="FitSlack"/>) is reused, otherwise a fresh one is allocated. Caller returns exactly once.</summary>
+    public PixelBlock Rent(int minBytes)
     {
-        if (minBytes > MaxBucketBytes)
-            return GC.AllocateUninitializedArray<byte>(minBytes);   // oversize valve: unpooled, Return drops it
-        uint size = BitOperations.RoundUpToPowerOf2((uint)Math.Max(minBytes, MinBucketBytes));
-        var stack = _buckets[BitOperations.Log2(size) - MinShift];
-        lock (stack)
+        ArgumentOutOfRangeException.ThrowIfNegative(minBytes);
+        int need = (int)Math.Min(int.MaxValue, ((long)Math.Max(minBytes, 1) + Granule - 1) / Granule * Granule);
+        long fitLimit = need + (long)need / FitSlack;
+        lock (_parked)
         {
-            if (stack.Count > 0)
+            int i = FirstAtLeast(need);
+            if (i < _parked.Count && _parked[i].Capacity <= fitLimit)
             {
-                byte[] parked = stack.Pop();
-                Interlocked.Add(ref _retainedBytes, -parked.Length);
-                return parked;
+                PixelBlock block = _parked[i];
+                _parked.RemoveAt(i);
+                Interlocked.Add(ref _retainedBytes, -block.Capacity);
+                return block;
             }
         }
-        return GC.AllocateUninitializedArray<byte>((int)size);
+        var fresh = new PixelBlock(need);
+        UpdatePeak(ref _peakLiveBytes, Interlocked.Add(ref _liveBytes, need));
+        return fresh;
     }
 
-    /// <summary>Return a rented buffer. Retains only while the retained total stays under the cap; otherwise (or
-    /// for an oversize/foreign array) drops it for the GC. Never blocks on budget.</summary>
-    public void Return(byte[] buffer)
+    /// <summary>Return a rented block. Parks it while the retained total stays under the cap; otherwise frees it (its
+    /// memory goes back at once). Never blocks on budget.</summary>
+    public void Return(PixelBlock block)
     {
-        int len = buffer.Length;
-        if (len < MinBucketBytes || len > MaxBucketBytes || !BitOperations.IsPow2((uint)len))
-            return;   // oversize or not a bucket size → GC reclaims it
-        long cur = Interlocked.Read(ref _retainedBytes);      // reserve BEFORE parking so cap is never exceeded
+        ArgumentNullException.ThrowIfNull(block);
+        int len = block.Capacity;
+        long cur = Interlocked.Read(ref _retainedBytes);      // reserve BEFORE parking so the cap is never exceeded
         while (true)
         {
             long after = cur + len;
-            if (after > _retainedCapBytes) return;            // over budget → drop for GC
+            if (after > _retainedCapBytes) { Release(block); return; }
             long prev = Interlocked.CompareExchange(ref _retainedBytes, after, cur);
-            if (prev == cur) { UpdatePeak(after); break; }
+            if (prev == cur) { UpdatePeak(ref _peakRetainedBytes, after); break; }
             cur = prev;
         }
-        var stack = _buckets[BitOperations.Log2((uint)len) - MinShift];
-        lock (stack)
+        lock (_parked)
         {
-            AssertNotDoubleReturned(stack, buffer);
-            stack.Push(buffer);
+            AssertNotDoubleReturned(block);
+            _parked.Insert(FirstAtLeast(len), block);
         }
         BufferRetained?.Invoke(this);
     }
 
-    /// <summary>Cold one-shot maintenance: release every parked array to the GC, never in-flight buffers.</summary>
+    /// <summary>Cold one-shot maintenance: free every parked block, never in-flight ones.</summary>
     public void Trim()
     {
-        for (int i = 0; i < BucketCount; i++)
+        lock (_parked)
         {
-            var stack = _buckets[i];
-            lock (stack)
+            foreach (var block in _parked)
             {
-                while (stack.Count > 0)
-                    Interlocked.Add(ref _retainedBytes, -stack.Pop().Length);
-                stack.TrimExcess();
+                Interlocked.Add(ref _retainedBytes, -block.Capacity);
+                Release(block);
             }
+            _parked.Clear();
+            _parked.TrimExcess();
         }
     }
 
-    private void UpdatePeak(long candidate)
+    private void Release(PixelBlock block)
     {
-        long peak = Interlocked.Read(ref _peakRetainedBytes);
-        while (candidate > peak)
+        Interlocked.Add(ref _liveBytes, -block.Capacity);
+        block.Free();
+    }
+
+    // Lower bound by capacity in the ascending parked list (caller holds the lock).
+    private int FirstAtLeast(int capacity)
+    {
+        int lo = 0, hi = _parked.Count;
+        while (lo < hi)
         {
-            long prev = Interlocked.CompareExchange(ref _peakRetainedBytes, candidate, peak);
-            if (prev == peak) return;
-            peak = prev;
+            int mid = (lo + hi) >>> 1;
+            if (_parked[mid].Capacity < capacity) lo = mid + 1; else hi = mid;
+        }
+        return lo;
+    }
+
+    private static void UpdatePeak(ref long peak, long candidate)
+    {
+        long seen = Interlocked.Read(ref peak);
+        while (candidate > seen)
+        {
+            long prev = Interlocked.CompareExchange(ref peak, candidate, seen);
+            if (prev == seen) return;
+            seen = prev;
         }
     }
 
-    // Erased in Release like the D3D12Device confinement tripwires: a double-Return hands one array to two renters.
+    // Erased in Release like the D3D12Device confinement tripwires: a double-Return hands one block to two renters.
     [System.Diagnostics.Conditional("FGGUARD")]
-    private static void AssertNotDoubleReturned(Stack<byte[]> stack, byte[] buffer)
+    private void AssertNotDoubleReturned(PixelBlock block)
     {
-        foreach (var parked in stack)
-            if (ReferenceEquals(parked, buffer))
-                throw new InvalidOperationException("PixelBufferPool: buffer returned twice");
+        foreach (var parked in _parked)
+            if (ReferenceEquals(parked, block))
+                throw new InvalidOperationException("PixelBufferPool: block returned twice");
     }
 }

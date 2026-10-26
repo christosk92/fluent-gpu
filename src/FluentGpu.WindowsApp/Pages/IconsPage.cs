@@ -165,7 +165,7 @@ sealed class IconsPage : Component
                 new BoxEl { Width = 78f, Children = [Caption(label).Tertiary()] },
                 mono
                     ? new TextEl(display) { Size = 12.5f, Color = Tok.TextPrimary, FontFamily = "Cascadia Code", Grow = 1f, MaxLines = 1 }
-                    : new TextEl(display) { Size = 14f, Color = Tok.TextPrimary, FontFamily = Theme.IconFont, Grow = 1f },
+                    : new TextEl(display) { Size = 14f, Color = Tok.TextPrimary, FontFamily = Tok.Definition.Fonts.Icon, Grow = 1f },
                 Embed.Comp(() => new CopyButton { Text = text }) with { Key = label + text },
             ],
         };

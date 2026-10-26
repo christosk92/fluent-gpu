@@ -61,6 +61,11 @@ public static class TileDamage
     /// whole (the A/B arm and the escape hatch).</summary>
     public static bool Enabled = true;
 
+    /// <summary>A tile replay skips the primitives whose footprint (SliceOpBounds) misses the tile without decoding them
+    /// (default; the backend's per-segment footprint table). <c>--fg no-op-footprints</c> decodes every op (the A/B arm).</summary>
+    public static bool OpFootprints = true;
+
+
     /// <summary>The partial-present diff uses the precise damage (default): a re-rastered tile dirties only what its raster
     /// wrote, and an item STRUCTURE change dirties only the items that moved. <c>--fg no-precise-present</c> restores the
     /// whole-placement / whole-frame behaviour (the A/B arm).</summary>
@@ -70,10 +75,41 @@ public static class TileDamage
     /// navigation, a flyout) is diffed entry by entry like any other turn instead of taking the whole frame.</summary>
     public static bool PresentStructureDiff;
 
+    /// <summary><c>--fg pp-coverage=X</c> (an investigation arm): the repaint share of the window at or above which the primary
+    /// composite takes the whole-frame route instead of the partial (PRESERVE) one. Default 0.45 (D3D12Device.PartialPresent).</summary>
+    public static float PartialPresentMaxCoverage = 0.45f;
+
+    /// <summary>A partial-present repaint rect inside a top-level occluder's opaque pixels starts at that occluder (no clear, nothing
+    /// below it; default on). <c>--fg no-cover-start</c> clears and composites every item there (the A/B arm and identity control).</summary>
+    public static bool CoverStart = true;
+
+    /// <summary>The D3D12 decoder skips an op whose effective alpha is exactly 0 (default on; D3D12Device.ZeroAlpha).
+    /// <c>--fg no-zero-cull</c> draws it anyway (the A/B arm and identity control).</summary>
+    public static bool ZeroAlphaCull = true;
+
+    /// <summary>A whole-frame composite folds a window-covering opaque ground fill into its clear colour (default on;
+    /// D3D12Device.ClearFold). <c>--fg no-clear-fold</c> clears to the frame's colour and draws the fill (the A/B arm).</summary>
+    public static bool ClearFold = true;
+
     /// <summary><c>--fg present-validate</c>: every primary composite is re-composited whole into a shadow target and
     /// compared with the back buffer, and every Present1's dirty rects are checked to cover every pixel that changed since
     /// the last presented frame (a model of what DWM shows is kept and compared).</summary>
     public static bool PresentValidate;
+
+    /// <summary><c>--fg phase-validate</c> (audit PERF r3 RASTER): every composited tile of a slice whose fractional placement
+    /// was snapped to its whole pixel (<c>SliceRecorder.FractionalPx</c>) is re-rastered at its RAW phase into a shadow surface and the
+    /// two are compared byte for byte (the count of differing pixels and the largest channel delta are logged).</summary>
+    public static bool PhaseValidate;
+
+    /// <summary><c>--fg footprint-validate</c> (audit PERF r3 RASTER): composited tiles are re-rastered with the per-segment
+    /// op-footprint skip OFF (every op decoded) into a shadow surface and compared byte for byte with what the skipping
+    /// raster left in the tile (a mismatch is logged).</summary>
+    public static bool FootprintValidate;
+
+    /// <summary><c>--fg ink-validate</c> (audit PERF r3 RASTER, item 8): every replayed glyph run's quads are checked against the
+    /// extent <see cref="FluentGpu.Render.GlyphInk"/> held for the run before it (the extent the fade distribution test read);
+    /// a quad outside it (margin included) is a breach, logged with the count.</summary>
+    public static bool InkValidate;
 
     /// <summary><c>--fg damage-validate</c>: the backend re-rasters every partially rastered tile whole into a shadow
     /// surface and compares the two byte for byte (a mismatch is logged with its extent).</summary>

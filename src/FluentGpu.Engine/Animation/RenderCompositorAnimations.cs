@@ -24,6 +24,8 @@ public sealed class RenderCompositorAnimations
         /// <see cref="HoldRefMs"/>); the next one resolves the start from that presentation
         /// (<see cref="AnimEngine.PendingStartStep"/>), so a long first frame cannot eat the entrance.</summary>
         public bool StartPending;
+        /// <summary>The row began as a pending start (`--fg frame-trace` writes its hold, start and done edges).</summary>
+        public bool Traced;
         public double HoldNowMs;
         public float HoldRefMs;
         /// <summary>The value this row last POSED onto a scene snapshot, and whether it ever posed one. A row held by
@@ -68,6 +70,10 @@ public sealed class RenderCompositorAnimations
     /// host sets it on this thread before each turn. One gate for the whole set, not a per-row period: every row advances
     /// on the SAME turns, so rows adopted on different ticks cannot interleave into a faster combined present rate.</summary>
     public float CeilingPeriodMs { get; set; }
+    /// <summary>E21, the render-thread half of <see cref="AnimEngine.HoldPendingStarts"/>: the frame this turn poses will not be
+    /// shown (the publication's <c>EntranceHeld</c>, or the render side's restore latch). Set by the host on this thread before
+    /// each turn. A pending-start row stays at t = 0 and re-takes its hold on the first turn that is shown.</summary>
+    public bool HoldPendingStarts { get; set; }
     private double _lastCeilingAdvanceMs = double.NaN;
     private bool _ceilingHeld;   // this turn falls inside the ceiling interval: every row holds (CeilingHolds, once per Tick/Adopt)
 
@@ -249,6 +255,10 @@ public sealed class RenderCompositorAnimations
             ref readonly var row = ref state.Desired.Row;
             _rowLive[i] = !state.Parked && scene.IsLive(row.Node);
             _rowDoneEdge[i] = state.Done && !wasDone;
+            if (_rowDoneEdge[i] && state.Traced && FluentGpu.Hosting.FrameTrace.Enabled)
+                FluentGpu.Hosting.FrameTrace.Anim(FluentGpu.Hosting.TraceAnimPhase.Done, FluentGpu.Hosting.TraceAnimKind.Other,
+                    (int)state.Desired.Row.Node.Raw.Index, (int)state.Desired.Row.Channel, render: true,
+                    FluentGpu.Hosting.FrameTrace.MsFromAbsMs(nowMs), state.ElapsedMs);
             if (_rowLive[i] && !IsSideTable(row.Channel))
             {
                 ref var accumulator = ref CollectionsMarshal.GetValueRefOrAddDefault(_accumulators, row.Node, out bool exists);
@@ -333,8 +343,9 @@ public sealed class RenderCompositorAnimations
                 if (acc.OpacityMoving || (n == node && acc.OpacityPosed)) continue;
                 op = acc.Acc.Op;
             }
-            if (!float.IsNaN(p.HoverOpacity)) op = MathF.Max(op, p.HoverOpacity);
-            if (!float.IsNaN(p.PressedOpacity)) op = MathF.Max(op, p.PressedOpacity);
+            ref readonly NodePaintCold pc = ref scene.PaintCold(n);
+            if (!float.IsNaN(pc.HoverOpacity)) op = MathF.Max(op, pc.HoverOpacity);
+            if (!float.IsNaN(pc.PressedOpacity)) op = MathF.Max(op, pc.PressedOpacity);
             if (op <= 0f) return false;
         }
         return true;
@@ -378,6 +389,7 @@ public sealed class RenderCompositorAnimations
         Parked = entry.Row.Has(AnimFlags.Parked),
         Done = entry.Row.Has(AnimFlags.Done),
         StartPending = entry.Row.Has(AnimFlags.StartPending) && entry.PeriodMs == 0,
+        Traced = entry.Row.Has(AnimFlags.StartPending) && entry.PeriodMs == 0,
         HoldNowMs = double.NaN,
     };
 
@@ -412,16 +424,30 @@ public sealed class RenderCompositorAnimations
         // itself ran long (a first frame of a new page recording/uploading for 40-60 ms), exactly AnimEngine's PASS1 rule.
         if (state.StartPending)
         {
+            // E21: an unshown turn is not the presentation the start resolves at: stay at t = 0 and take the hold again later.
+            if (HoldPendingStarts)
+            {
+                state.HoldNowMs = double.NaN;
+                return;
+            }
             if (double.IsNaN(state.HoldNowMs))
             {
                 state.HoldNowMs = nowMs;
                 state.HoldRefMs = refIntervalMs > 0f ? refIntervalMs : AnimClock.DefaultDeltaMs;
+                if (FluentGpu.Hosting.FrameTrace.Enabled)
+                    FluentGpu.Hosting.FrameTrace.Anim(FluentGpu.Hosting.TraceAnimPhase.Hold, FluentGpu.Hosting.TraceAnimKind.Other,
+                        (int)state.Desired.Row.Node.Raw.Index, (int)state.Desired.Row.Channel, render: true,
+                        FluentGpu.Hosting.FrameTrace.MsFromAbsMs(nowMs), state.HoldRefMs);
                 return;
             }
             if (nowMs <= state.HoldNowMs) return;
             float first = AnimEngine.PendingStartStep((float)(nowMs - state.HoldNowMs), state.HoldRefMs);
             state.AnchorNowMs = nowMs - first;
             state.StartPending = false;
+            if (FluentGpu.Hosting.FrameTrace.Enabled)
+                FluentGpu.Hosting.FrameTrace.Anim(FluentGpu.Hosting.TraceAnimPhase.Start, FluentGpu.Hosting.TraceAnimKind.Other,
+                    (int)state.Desired.Row.Node.Raw.Index, (int)state.Desired.Row.Channel, render: true,
+                    FluentGpu.Hosting.FrameTrace.MsFromAbsMs(nowMs), (float)(nowMs - state.HoldNowMs), first);
         }
         // POWER CEILING: this turn is inside the host's ceiling interval (CeilingHolds) - hold, like a cadence row between
         // its periods; the next turn past it samples the absolute phase, so holding never drifts.

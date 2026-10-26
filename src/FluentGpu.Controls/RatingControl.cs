@@ -295,7 +295,7 @@ public sealed class RatingControl : Component
         {
             Width = starSize, Height = starSize, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             HitTestVisible = false,
-            Children = new Element[] { new TextEl(glyph) { Size = starSize, Color = color, FontFamily = Theme.IconFont } },
+            Children = new Element[] { new TextEl(glyph) { Size = starSize, Color = color, FontFamily = Tok.Definition.Fonts.Icon } },
         };
 
         var stars = new Element[max];
@@ -306,9 +306,9 @@ public sealed class RatingControl : Component
             float starCenter = RatingControlTemplateSettings.StarCenter(i, starSize, gap);
             BoxEl cell;
             if (frac >= 0.999f)
-                cell = (BoxEl)StarCell(FilledStar, ts.Foreground);
+                cell = StarCell(FilledStar, ts.Foreground).As<BoxEl>();
             else if (frac <= 0.001f)
-                cell = (BoxEl)StarCell(OutlineStar, ts.Background);
+                cell = StarCell(OutlineStar, ts.Background).As<BoxEl>();
             else
                 cell = new BoxEl   // partial star: outline full + filled clipped to the left `frac` (one star only)
                 {

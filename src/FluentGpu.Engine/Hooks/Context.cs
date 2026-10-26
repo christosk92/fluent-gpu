@@ -29,6 +29,11 @@ public static class Viewport
     /// using Scale — read this channel only to DISPLAY the level (a settings row, a diagnostics receipt), never to
     /// convert coordinates. Default 1.0 (headless / pre-publish).</summary>
     public static readonly Context<float> Zoom = new(1f);
+    /// <summary>True while the window is inside the OS modal move/size loop (a title-bar drag or an edge resize;
+    /// <c>IPlatformWindow.InModalLoop</c>). A host context signal: read with <c>UseContext(Viewport.InModalLoop)</c> (re-renders
+    /// on the edge) or <c>UseContextSignal</c>. The tier machinery's "resizing" fact; false in a headless/pre-publish context.
+    /// Written by the host at the top of a paint, on an edge only.</summary>
+    public static readonly Context<bool> InModalLoop = new(false);
 }
 
 /// <summary>
@@ -350,6 +355,15 @@ public sealed class InputHooks
     /// backend without secondary swapchains all say no). An affordance can PREFLIGHT with this instead of discovering the
     /// answer by opening nothing — the difference between "that option isn't available here" and a dead click.</summary>
     public Func<bool>? CanOpenDetachedWindow;
+    /// <summary>E5: run a theme transaction on this window (freeze, apply, settle, thaw; its pop-outs freeze with it). Host-wired
+    /// to <c>AppHost.RunThemeTransaction</c> on a main window; null on a pop-out and in a host-less tree.</summary>
+    public Func<FluentGpu.Hosting.ThemeTransactionRequest, Task<FluentGpu.Hosting.ThemeTransactionResult>>? RunThemeTransaction;
+    /// <summary>E5: true while a transaction's prewarm has held the live UI for 100 ms (the originating control shows a busy
+    /// ring). Host-wired to <c>AppHost.ThemeTransactionBusy</c>; null where <see cref="RunThemeTransaction"/> is.</summary>
+    public IReadSignal<bool>? ThemeTransactionBusy;
+    /// <summary>E5: true from a transaction's request to its thaw start (the app queues navigation until then). Host-wired to
+    /// <c>AppHost.IsThemeTransactionRunning</c>; null where <see cref="RunThemeTransaction"/> is.</summary>
+    public Func<bool>? IsThemeTransactionRunning;
     /// <summary>Push the titlebar drag/button regions (array + count — the caller reuses ONE array across pushes,
     /// the host COPIES <c>regions.AsSpan(0, count)</c> and composes it with the engine's <c>BoxEl.WindowDrag</c> regions
     /// before <c>IPlatformWindow.SetTitleBarRegions</c> — this push's non-Caption entries first, its Caption entries
@@ -359,6 +373,21 @@ public sealed class InputHooks
     /// <summary>Node → its laid-out absolute rect (window DIP) — host-wired to <c>SceneStore.AbsoluteRect</c>. The
     /// TitleBar control builds its region report from captured part handles in a layout effect.</summary>
     public Func<NodeHandle, RectF>? GetNodeRect;
+    /// <summary>Sets the host's hit floor (<see cref="FluentGpu.Input.InputDispatcher.MinHitSize"/>, DIP): click targets smaller than it take hits
+    /// that far out (an app's touch tier: 40 at a Compact window; 0 = none). Layout and paint never change.</summary>
+    public Action<float>? SetMinHitSize;
+    /// <summary>Run <c>action</c> ONCE after the current frame's layout settles: with the 6.5 layout effects when queued
+    /// during the main solve (an <see cref="Element.OnBoundsChanged"/> callback), else after the frame's late scoped
+    /// relayouts. The seam a control uses to publish something derived from SEVERAL nodes' final rects in the SAME frame a
+    /// child moved, without re-rendering itself: the TitleBar's keyed children re-push the non-client regions this way.
+    /// Callers dedupe (queue once per frame) and pass a cached delegate. Null in a host-less tree.</summary>
+    public Action<Action>? QueueAfterLayout;
+    /// <summary>Run <c>action</c> ONCE this frame after its LAST layout pass: the commit's, then the reflow re-solve after the animation tick
+    /// (a commit during a live reflow, a docking panel's reservation easing, is laid out at the reflow's target first and re-solved at its live
+    /// size there), then the presented flow. It reads the geometry this frame presents. It runs AFTER the animation tick: seed a position FLIP
+    /// here with <see cref="FluentGpu.Animation.AnimEngine.AnimateBoundsPresented"/>, which shows its start this frame and moves from the next.
+    /// Queue it from a layout effect; callers pass a cached delegate. Null in a host-less tree.</summary>
+    public Action<Action>? QueueAfterFrameLayout;
     /// <summary>Bumped by the host on WindowFocus/WindowBlur/WindowStateChanged: the TitleBar reads it (subscribes)
     /// and pulls <see cref="GetWindowState"/>/<see cref="IsWindowActive"/> for the current values on re-render.</summary>
     public Signal<int>? WindowChromeEpoch;

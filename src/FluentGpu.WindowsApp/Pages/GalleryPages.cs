@@ -1074,7 +1074,7 @@ sealed class ScrollPage : Component
             Labeled("Fade + chevron", ScrollCard(ScrollEdgeCues.FadeAndChevron, 300f)),
             new TextEl("Horizontal — left/right cues on the same gradient logic:") { Size = 13f, Color = Muted },
             Labeled("Horizontal scroll", hCard)
-        ) is BoxEl box
+        ).Is(out BoxEl box)
             ? Wrap(box)
             : Wrap(null!);
     }

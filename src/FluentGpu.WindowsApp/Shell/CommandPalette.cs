@@ -112,7 +112,7 @@ sealed class PaletteContent : Component
                 OnClick = () => Commit(idx),
                 Children =
                 [
-                    new TextEl(Icons.Grid) { Size = 14f, FontFamily = Theme.IconFont, Color = active ? Tok.AccentDefault : Tok.TextTertiary },
+                    new TextEl(Icons.Grid) { Size = 14f, FontFamily = Tok.Definition.Fonts.Icon, Color = active ? Tok.AccentDefault : Tok.TextTertiary },
                     new BoxEl { Grow = 1, Children = [new TextEl(results[idx].Label) { Size = 14f, Color = Tok.TextPrimary }] },
                     active ? new TextEl("Enter") { Size = 11f, Color = Tok.TextTertiary, FontFamily = "Cascadia Code" } : new BoxEl(),
                 ],

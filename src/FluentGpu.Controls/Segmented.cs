@@ -89,7 +89,10 @@ public static class Segmented
 
     static readonly SegmentedOptions DefaultOptions = new();
 
-    public static Style DefaultStyle => new()
+    public static Style DefaultStyle => ControlStyles.Resolve(ControlStyles.SegmentedStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a Segmented entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new()
     {
         Background = Tok.FillControlAltSecondary,
         Border = Tok.StrokeControlDefault,

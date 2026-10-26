@@ -70,6 +70,25 @@ public sealed class ComboBox : Component
     public const string PartItemPill = "ItemPill";
 
     // ── WinUI dims (ComboBox_themeresources.xaml) ──
+    /// <summary>The ComboBox's look, read at RENDER through the control style table (<see cref="ControlStyles.ComboBoxStyle"/>):
+    /// the field surface (both modes) and the dropdown card the host draws. Every default is the WinUI ComboBox, so a theme
+    /// without the key renders exactly the stock control.</summary>
+    public sealed record Style
+    {
+        /// <summary>The field: radius (ControlCornerRadius), the ControlFillColor* ramp, the ControlElevationBorder ring, the
+        /// editable field's 2-DIP accent bar, and an optional resting underline (none).</summary>
+        public TextFieldStyle Field { get; init; } = TextFieldStyle.Fluent();
+        /// <summary>The dropdown card (the host FlyoutSurface plate of <see cref="PopupChrome.Dropdown"/>): acrylic, flyout ring,
+        /// OverlayCornerRadius (squared where it abuts the field), flyout elevation, 0,2,0,2.</summary>
+        public PopupPlate DropdownPlate { get; init; } = PopupPlate.Fluent();
+    }
+
+    /// <summary>The ComboBox style now: the active theme's (<see cref="ControlStyles.ComboBoxStyle"/>), else <see cref="FluentStyle"/>.</summary>
+    public static Style DefaultStyle => ControlStyles.Resolve(ControlStyles.ComboBoxStyle, FluentStyle);
+
+    /// <summary>The built-in Fluent default (what a theme table without a ComboBox entry resolves to). Reads the live Tok on every call.</summary>
+    public static Style FluentStyle() => new();
+
     public const float MinHeight = 32f;          // ComboBoxMinHeight
     public const float ThemeMinWidth = 64f;      // ComboBoxThemeMinWidth
     public const float ChevronColumn = 38f;      // template column 2 width (the glyph cell) = the editable text right padding (ComboBoxEditableTextPadding 11,5,38,6)
@@ -101,7 +120,16 @@ public sealed class ComboBox : Component
     internal bool Editable;
     internal Signal<string>? Text;
     internal string Placeholder = "";
+    /// <summary>The field's width. <see cref="float.NaN"/> = fill the parent's cross axis (a column parent's width; the
+    /// dropdown then matches the field's laid-out width at open). Fill applies to the non-editable combo only: the editable
+    /// template places its drop-down overlay and glyph by the width, so an editable NaN keeps the 220 default.</summary>
     internal float Width = 220f;
+    /// <summary>The field's density on the kit's size axis: <see cref="ControlSize.Medium"/> (the default) is WinUI's 32-DIP
+    /// <c>ComboBoxMinHeight</c>; <see cref="ControlSize.Large"/> lifts the field to the 40-DIP touch target (the Button's Large
+    /// height). <see cref="ControlSize.Small"/> is remapped to Medium (no compact field is modelled — the ClampSize idiom). Live through
+    /// <see cref="Create"/> (with <see cref="Width"/> and <see cref="TouchInputMode"/>); an editable combo's text part keeps its
+    /// mount-time height.</summary>
+    internal ControlSize Size = ControlSize.Medium;
     internal bool IsEnabled = true;
     internal bool OpenOnMount;   // deterministic visual-shot hook: open the real popup after first mount
     /// <summary>WinUI <c>Header</c> (HeaderContentPresenter, generic.xaml:9155-9166): a label row above the field,
@@ -130,14 +158,15 @@ public sealed class ComboBox : Component
     internal Func<string, bool>? OnTextSubmitted;
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
     /// <see cref="TemplateParts"/> for the contract.</summary>
-    internal TemplateParts? Parts;
+    public TemplateParts? Parts;
 
-    /// <summary>LIVE enabled flag re-pushed to the mounted core (<c>Embed.Comp(props, …)</c>): <see cref="IsEnabled"/>
-    /// is a plain field, so via a propless <c>Embed.Comp</c> it freezes at mount — toggling a setting that enables/
-    /// disables a dropdown would be silently dropped. <see cref="Create"/> routes it through re-pushed props so the
-    /// flag re-renders reactively; the frozen field is the fallback for direct callers. A tiny record carries the bool
-    /// because re-pushed props are class-typed.</summary>
-    internal sealed record EnabledProps(bool IsEnabled);
+    /// <summary>LIVE props re-pushed to the mounted core (<c>Embed.Comp(props, …)</c>): the enabled flag and the geometry a
+    /// window tier changes (the size axis, the width — a fill at one tier, a fixed width at another — and the touch row
+    /// padding). The matching fields are plain, so via a propless <c>Embed.Comp</c> they would freeze at mount — toggling a
+    /// setting that enables/disables a dropdown, or crossing into a compact window, would be silently dropped.
+    /// <see cref="Create"/> routes them through re-pushed props so they re-render reactively; the frozen fields are the
+    /// fallback for direct callers. Re-pushed props are class-typed, hence the record.</summary>
+    internal sealed record LiveProps(bool IsEnabled, ControlSize Size, float Width, bool TouchInputMode);
 
     public static Element Create(IReadOnlyList<string> items, Signal<int> selectedIndex, bool editable = false,
                                  Signal<string>? text = null, float width = 220f, string placeholder = "",
@@ -147,15 +176,21 @@ public sealed class ComboBox : Component
                                  bool touchInputMode = false, Field<int>? field = null,
                                  IReadOnlyList<string>? itemDescriptions = null,
                                  IReadOnlyList<bool>? itemEnabled = null,
-                                 bool openOnMount = false)
-        => Embed.Comp(new EnabledProps(isEnabled), () => new ComboBox
+                                 bool openOnMount = false,
+                                 ControlSize size = ControlSize.Medium)
+        => Embed.Comp(new LiveProps(isEnabled, size, width, touchInputMode), () => new ComboBox
         {
+            Size = size,
             Items = items, ItemDescriptions = itemDescriptions, ItemEnabled = itemEnabled,
             SelectedIndex = selectedIndex, Editable = editable, Text = text,
             Width = width, Placeholder = placeholder, IsEnabled = isEnabled, OnChange = onChange,
             OnTextSubmitted = onTextSubmitted, OpenOnMount = openOnMount,
             Header = header, Description = description, ErrorText = errorText, TouchInputMode = touchInputMode, Field = field,
         });
+
+    /// <summary>The field height of <paramref name="size"/>: 40 for <see cref="ControlSize.Large"/>, else the WinUI 32.</summary>
+    internal static float FieldHeight(ControlSize size)
+        => size == ControlSize.Large ? ControlMetrics.For(ControlSize.Large).MinHeight : MinHeight;
 
     internal bool IsItemEnabled(int index)
         => ItemEnabled is not { } flags || index < 0 || index >= flags.Count || flags[index];
@@ -176,7 +211,10 @@ public sealed class ComboBox : Component
         // Read the enabled flag reactively: the provider (Create) wins over the frozen field. A shadowing local named
         // IsEnabled so every downstream read in this method — the field chrome, OpenPopup gate, key/click handlers —
         // sees the live value with no further edits. `this.IsEnabled` is the mount-time fallback for direct callers.
-        bool IsEnabled = UsePropsOrDefault<EnabledProps>()?.IsEnabled ?? this.IsEnabled;
+        var live = UsePropsOrDefault<LiveProps>();
+        bool IsEnabled = live?.IsEnabled ?? this.IsEnabled;
+        // The live geometry lands on the fields every render (the drop-down's row pitch reads TouchInputMode off the owner).
+        if (live is not null) { Size = live.Size; Width = live.Width; TouchInputMode = live.TouchInputMode; }
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var fallbackText = UseSignal("");
@@ -206,7 +244,10 @@ public sealed class ComboBox : Component
         var autoOpened = UseRef(false);
         int sel = SelectedIndex.Value;
         _ = openVer.Value;         // subscribe → re-render the field (corner-join / chevron) when we open/close
-        float w = MathF.Max(Width, ThemeMinWidth);
+        // Width NaN = fill (non-editable only, see Width); the size axis sets the field's height.
+        bool fill = float.IsNaN(Width) && !Editable;
+        float w = fill ? float.NaN : MathF.Max(float.IsNaN(Width) ? 220f : Width, ThemeMinWidth);
+        float fieldH = FieldHeight(Size);
 
         void Commit(int i)
         {
@@ -240,9 +281,11 @@ public sealed class ComboBox : Component
             if (handle.Value is { IsOpen: true } || !IsEnabled) return;
             highlight.Value = searchSet.Value ? searchIdx.Value : sel;   // keyboard cursor on the search result / selection
             Func<NodeHandle> anchorOf = () => anchor.Value;
+            // A filling field has no width of its own: the list takes the field's laid-out width at open.
+            float listW = fill ? MeasuredFieldWidth() : w;
             Func<Element> body = () => Embed.Comp(() => new ComboBoxList
             {
-                Owner = this, Selected = SelectedIndex, Highlight = highlight, Width = w, OnChoose = Choose,
+                Owner = this, Selected = SelectedIndex, Highlight = highlight, Width = listW, OnChoose = Choose,
             });
             // Editable mode keeps focus IN the text field while the list is open (WinUI: arrows preview from the
             // TextBox, ComboBox_Partial.cpp:2840–2886) — no focus trap; the non-editable list takes focus + owns keys.
@@ -310,6 +353,14 @@ public sealed class ComboBox : Component
         }
 
         void Toggle() { if (handle.Value is { IsOpen: true }) Close(); else OpenPopup(); }
+
+        float MeasuredFieldWidth()
+        {
+            var scene = Context.Scene;
+            var node = anchor.Value;
+            float measured = scene is not null && !node.IsNull && scene.IsLive(node) ? scene.AbsoluteRect(node).W : 0f;
+            return MathF.Max(measured, ThemeMinWidth);
+        }
 
         // The editable DropDownOverlay click. The overlay border is never a focus target (the dispatcher's pointer
         // activation finds no focusable in its chain, so focus stays unchanged — the WinUI IsTabStop=False shape);
@@ -466,14 +517,16 @@ public sealed class ComboBox : Component
             }
         }
 
+        // The field surface, read now (the theme's ComboBox field, else the WinUI one).
+        var fs = DefaultStyle.Field;
         bool isOpenNow = handle.Value is { IsOpen: true };
         // Corner-join (ComboBoxHelper.UpdateCornerRadius): ONLY the EDITABLE ComboBox squares the field corners — the
         // helper early-returns unless IsEditable(). The non-editable field keeps full ControlCornerRadius and the popup
         // overlaps it (XAML PopupBorder Margin 0,-0.5,0,-1). Editable, open-DOWN → square the field's BOTTOM corners
         // (the popup squares its abutting TOP corners host-side via the placement CornerJoin). Read live from the handle.
         var editableCorners = Editable && isOpenNow
-            ? new CornerRadius4(Radii.Control, Radii.Control, 0f, 0f)
-            : Radii.ControlAll;
+            ? new CornerRadius4(fs.Radius, fs.Radius, 0f, 0f)
+            : CornerRadius4.All(fs.Radius);
 
         // KEYBOARD focus on the closed field → the WinUI Focused visual state swaps the HighlightBackground border to
         // ComboBoxBackgroundBorderBrushFocused = FocusStrokeColorOuterBrush (ComboBox_themeresources.xaml:38;
@@ -503,11 +556,11 @@ public sealed class ComboBox : Component
             ? ColorF.FromRgba(0xC5, 0x05, 0x00)    // SystemErrorTextColor (Light), generic.xaml:4152
             : ColorF.FromRgba(0xFF, 0xF0, 0x00);   // SystemErrorTextColor (Default/dark), generic.xaml:227
 
-        GradientSpec restBorder =
+        GradientSpec? restBorder =
             hasError ? GradientSpec.Solid(errorColor)
             : focusedRing ? GradientSpec.Solid(Tok.FocusOuter)
-            : IsEnabled ? Tok.ControlElevationBorder
-            : GradientSpec.Solid(Tok.StrokeControlDefault);
+            : IsEnabled ? fs.BorderBrush
+            : fs.DisabledBorderBrush;
 
         Action<NodeHandle> anchorCapture = h => { anchor.Value = h; if (Field is { } fn) fn.Node.Value = h; };
 
@@ -519,7 +572,9 @@ public sealed class ComboBox : Component
             Width = ChevronGlyphSize, Height = ChevronGlyphSize,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             AlignSelf = FlexAlign.Center,
-            Margin = new Edges4(0, 0, ChevronRightInset, 0),
+            // A filling field may hug its label (in a row parent): keep the WinUI glyph column's lead (38 less the glyph and its inset) so the
+            // label never runs into the chevron. A fixed-width field's label column already grows to it.
+            Margin = new Edges4(fill ? ChevronColumn - ChevronGlyphSize - ChevronRightInset : 0f, 0, ChevronRightInset, 0),
             HitTestVisible = false,
             PressScale = 0.85f,                                  // AnimatedChevronDownSmall pressed-nudge stand-in
             PressDurationMs = Motion.ControlFaster,              // 83ms, ControlFastOutSlowInKeySpline
@@ -528,7 +583,7 @@ public sealed class ComboBox : Component
             [
                 new TextEl(Icons.ChevronDown)
                 {
-                    Size = ChevronGlyphSize, FontFamily = Theme.IconFont,
+                    Size = ChevronGlyphSize, FontFamily = Tok.Definition.Fonts.Icon,
                     Color = IsEnabled ? Tok.TextSecondary : Tok.TextDisabled,
                     DisabledColor = Tok.TextDisabled,
                 },
@@ -556,7 +611,7 @@ public sealed class ComboBox : Component
                 rows.Add(new TextEl(errorMsg) { Size = 12f, Color = errorColor, Wrap = TextWrap.Wrap, MaxWidth = w, Margin = new Edges4(0, 4, 0, 0) });
             else if (Description.Length > 0)
                 rows.Add(new TextEl(Description) { Size = 12f, Color = Tok.TextControlDescriptionForeground, Wrap = TextWrap.Wrap, MaxWidth = w, Margin = new Edges4(0, 4, 0, 0) });
-            return new BoxEl { Direction = 1, AlignItems = FlexAlign.Start, Children = rows.ToArray() };
+            return new BoxEl { Direction = 1, AlignItems = FlexAlign.Start, AlignSelf = fill ? FlexAlign.Stretch : FlexAlign.Auto, Children = rows.ToArray() };
         }
 
         if (Editable)
@@ -569,14 +624,14 @@ public sealed class ComboBox : Component
             {
                 Width = ChevronGlyphSize, Height = ChevronGlyphSize,
                 OffsetX = w - ChevronGlyphSize - ChevronRightInset,
-                OffsetY = (MinHeight - ChevronGlyphSize) * 0.5f,
+                OffsetY = (fieldH - ChevronGlyphSize) * 0.5f,
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 HitTestVisible = false,
                 Children =
                 [
                     new TextEl(Icons.ChevronDown)
                     {
-                        Size = ChevronGlyphSize, FontFamily = Theme.IconFont,
+                        Size = ChevronGlyphSize, FontFamily = Tok.Definition.Fonts.Icon,
                         Color = IsEnabled ? Tok.TextSecondary : Tok.TextDisabled,
                         DisabledColor = Tok.TextDisabled,
                     },
@@ -602,8 +657,9 @@ public sealed class ComboBox : Component
                 {
                     var e = new EditableText
                     {
-                        Text = text, Width = w, Height = MinHeight,
+                        Text = text, Width = w, Height = fieldH,
                         Chromeless = true,
+                        FieldStyle = static () => DefaultStyle.Field,   // the chromeless hover / focused fills follow this field's surface
                         LanePadding = new Edges4(11, 5, ChevronColumn, 6),
                         Placeholder = Placeholder, IsEnabled = IsEnabled,
                         // Enter commits the search (MainKeyDown Enter → CommitRevertEditableSearch(false),
@@ -660,7 +716,7 @@ public sealed class ComboBox : Component
                 // ComboBoxDropDownBackgroundPointerPressed=SubtleFillColorTertiary :312), never a focus target.
                 new BoxEl
                 {
-                    Width = OverlayButtonWidth, Height = MinHeight - 2f * OverlayButtonInset,
+                    Width = OverlayButtonWidth, Height = fieldH - 2f * OverlayButtonInset,
                     OffsetX = w - OverlayButtonWidth - OverlayButtonInset, OffsetY = OverlayButtonInset,
                     Corners = CornerRadius4.All(4f),
                     Fill = ColorF.Transparent,
@@ -675,19 +731,22 @@ public sealed class ComboBox : Component
             // Focused: the 2px accent bottom bar on the OUTER box (TextControlBorderThemeThicknessFocused 1,1,1,2 +
             // the TextControlElevationBorderFocusedBrush accent bottom stop — the 2px-bottom-bar equivalence; the
             // input-active fill is painted by the chromeless part). Appended LAST so it paints over the bottom edge.
-            if (editFocused && IsEnabled)
-                editChildren.Add(new BoxEl { Width = w, Height = 2f, OffsetY = MinHeight - 2f, Fill = Tok.AccentDefault });
+            if (editFocused && IsEnabled && fs.FocusBarThickness > 0f)
+                editChildren.Add(new BoxEl { Width = w, Height = fs.FocusBarThickness, OffsetY = fieldH - fs.FocusBarThickness, Fill = fs.FocusBar });
+            else if (fs.UnderlineThickness > 0f)   // a themed resting underline (none on the WinUI field)
+                editChildren.Add(new BoxEl { Width = w, Height = fs.UnderlineThickness, AlignSelf = FlexAlign.End, Fill = fs.Underline, HitTestVisible = false });
 
             var editKids = editChildren.ToArray();
             var editField = new BoxEl
             {
-                ZStack = true, Width = w, Height = MinHeight,
-                Corners = editableCorners, BorderWidth = 1f,
+                ZStack = true, Width = w, Height = fieldH,
+                Corners = editableCorners, BorderWidth = hasError ? MathF.Max(1f, fs.BorderWidth) : fs.BorderWidth,
                 // WinUI ComboBoxBorderBrush = ControlElevationBorderBrush (gradient); the InlineErrors state swaps it
                 // to the error stroke; disabled flattens to ControlStrokeColorDefault.
                 BorderBrush = hasError ? GradientSpec.Solid(errorColor)
-                    : IsEnabled ? Tok.ControlElevationBorder : GradientSpec.Solid(Tok.StrokeControlDefault),
-                Fill = IsEnabled ? Tok.FillControlDefault : Tok.FillControlDisabled,
+                    : IsEnabled ? fs.BorderBrush : fs.DisabledBorderBrush,
+                BorderColor = fs.BorderColor,
+                Fill = IsEnabled ? fs.Fill : fs.DisabledFill,
                 ClipToBounds = true,
                 IsEnabled = IsEnabled,
                 Role = AutomationRole.ComboBox,
@@ -728,13 +787,17 @@ public sealed class ComboBox : Component
         ];
         var field = new BoxEl
         {
-            Direction = 0, Width = w, MinHeight = MinHeight, AlignItems = FlexAlign.Center, Padding = new Edges4(12, 5, 0, 7),
-            Corners = Radii.ControlAll, BorderWidth = 1f,   // non-editable: popup overlaps the field; field keeps full ControlCornerRadius
+            Direction = 0, Width = w, MinHeight = fieldH, AlignItems = FlexAlign.Center, Padding = new Edges4(12, 5, 0, 7),
+            AlignSelf = fill ? FlexAlign.Stretch : FlexAlign.Auto, MinWidth = fill ? ThemeMinWidth : float.NaN,
+            // non-editable: popup overlaps the field; field keeps its full radius (ControlCornerRadius)
+            Corners = CornerRadius4.All(fs.Radius), BorderWidth = hasError || focusedRing ? MathF.Max(1f, fs.BorderWidth) : fs.BorderWidth,
             // Rest border: error > keyboard-focused (FocusStrokeColorOuter) > ControlElevationBorder > disabled flat.
             BorderBrush = restBorder,
+            BorderColor = fs.BorderColor,
             // CommonStates: rest=Default, PointerOver=Secondary, Pressed=Tertiary, Disabled=Disabled.
-            Fill = IsEnabled ? Tok.FillControlDefault : Tok.FillControlDisabled,
-            HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
+            Fill = IsEnabled ? fs.Fill : fs.DisabledFill,
+            HoverFill = fs.HoverFill, PressedFill = fs.PressedFill,
+
             // Pressed flattens the border to ControlStrokeColorDefault (ComboBoxBorderBrushPressed); the focused ring
             // and the error border hold through a press (the FocusedPressed/error states keep their border).
             PressedBorderBrush = (focusedRing || hasError) ? restBorder : GradientSpec.Solid(Tok.StrokeControlDefault),
@@ -764,7 +827,7 @@ public sealed class ComboBox : Component
                 Children = fieldKids,
             };
         }
-        return WithChrome(field);
+        return WithChrome(TextFieldStyle.WithUnderline(field, fs, focusedRing, IsEnabled));   // a themed underline (the stock field is returned as is)
     }
 }
 

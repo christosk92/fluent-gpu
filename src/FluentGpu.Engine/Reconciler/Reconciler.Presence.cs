@@ -30,39 +30,50 @@ public sealed partial class TreeReconciler
     /// <summary>Bound Visible wiring — called once at mount from <c>BindNode</c> for every element type (the channel
     /// lives on the base <see cref="Element"/>, not a concrete subtype, so this runs unconditionally, unlike the
     /// BoxEl-only channels above it); a re-render that binds a new thunk/signal re-wires the same effect
-    /// (<c>RewireBinds</c>). DEBUG-asserts (BindContract) that a MorphId (shared-element) node never binds
+    /// (<c>RewireBinds</c>), a static re-render unwires it, and a static→bound flip wires it here through
+    /// <c>WireGainedBinds</c>. DEBUG-asserts (BindContract) that a MorphId (shared-element) node never binds
     /// Visible — collapsing a hero participant mid-flight would break ConnectedAnimation capture.</summary>
-    private void BindPresence(NodeHandle node, Element el)
+    private void BindPresence(NodeHandle node, Element el, Element? prev)
     {
-        if (!el.Visible.IsBound) return;
+        // The wiring below captures `node` in closures, and C# allocates their display class on ENTRY of the method that
+        // declares them — bound or not. Nearly every node binds no Visible: test before entering (page-mount RCA, allocations).
+        // `prev` (the static→bound flip pass): a Visible already bound on the previous element already has its effect.
+        if (el.Visible.IsBound && (prev is null || !prev.Visible.IsBound)) BindPresenceCore(node, el);
+    }
+
+    private void BindPresenceCore(NodeHandle node, Element el)
+    {
         if (BindContract.CompiledIn && BindContract.Enabled && el.MorphId is not null)
             BindContract.MorphVisibleBind(el.GetType().Name);
 
-        var fx = new BindEffect<bool>(Runtime, el, static e => e.Visible);
-        AddBinding(node, fx.Start(() =>
+        var fx = NewBind<bool>(el, static e => e.Visible);
+        AddBinding(node, fx.Start(node, static f => f.Rec.FirePresence((Bind<bool>)f)));
+    }
+
+    private void FirePresence(Bind<bool> fx)
+    {
+        NodeHandle node = fx.Node;
+        NodeBindingFireCount++;
+        if (!_scene.IsLive(node)) return;
+        bool next = fx.Read();
+        bool wasCollapsed = _scene.IsCollapsed(node);
+        bool nowCollapsed = !next;
+        if (wasCollapsed == nowCollapsed) return;
+        NodeBindingWriteCount++;
+        _scene.SetCollapsed(node, nowCollapsed);
+        SetSubtreeHidden(node, nowCollapsed);
+        RemirrorAncestors(node);   // a component's root (or a bound anchor): the boundary above leaves/rejoins flow too
+        // false→true edge: treat like a mount — seed the node's declared Enter (the true→false edge just snaps,
+        // matching a static collapse; there is no exit-animation hook here because a collapsed node is already
+        // out of layout/paint the instant this effect runs, so there is nothing left to animate OUT of). The
+        // declared Enter is read off fx.El — the element this node was LAST reconciled against, not the mount one.
+        if (wasCollapsed && !nowCollapsed && SuppressBoundTransitions == 0 && Anim is { } anim && !Motion.ReducedMotion && !anim.Snapping
+            && SynthesizeDeclarative(node, fx.El) is { } dt && dt.Enter.Active)
         {
-            NodeBindingFireCount++;
-            if (!_scene.IsLive(node)) return;
-            bool next = fx.Read();
-            bool wasCollapsed = _scene.IsCollapsed(node);
-            bool nowCollapsed = !next;
-            if (wasCollapsed == nowCollapsed) return;
-            NodeBindingWriteCount++;
-            _scene.SetCollapsed(node, nowCollapsed);
-            SetSubtreeHidden(node, nowCollapsed);
-            RemirrorAncestors(node);   // a component's root (or a bound anchor): the boundary above leaves/rejoins flow too
-            // false→true edge: treat like a mount — seed the node's declared Enter (the true→false edge just snaps,
-            // matching a static collapse; there is no exit-animation hook here because a collapsed node is already
-            // out of layout/paint the instant this effect runs, so there is nothing left to animate OUT of). The
-            // declared Enter is read off fx.El — the element this node was LAST reconciled against, not the mount one.
-            if (wasCollapsed && !nowCollapsed && SuppressBoundTransitions == 0 && Anim is { } anim && !Motion.ReducedMotion
-                && SynthesizeDeclarative(node, fx.El) is { } dt && dt.Enter.Active)
-            {
-                anim.SeedEnterOver(node, dt.Enter, dt, EnterRestOf(fx.El));
-                if (dt.Size == SizeMode.Reflow) anim.PendingEnterReflow.Add(node);
-                else if (dt.Size == SizeMode.FlowReveal) anim.PendingEnterReveal.Add(node);
-            }
-        }));
+            anim.SeedEnterOver(node, dt.Enter, dt, EnterRestOf(fx.El));
+            if (dt.Size == SizeMode.Reflow) anim.PendingEnterReflow.Add(node);
+            else if (dt.Size == SizeMode.FlowReveal) anim.PendingEnterReveal.Add(node);
+        }
     }
 
     /// <summary>Walk NODE and every live descendant's mounted <c>CompEntry</c>, setting <c>Hidden</c> and refreshing

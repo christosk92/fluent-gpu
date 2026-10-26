@@ -45,7 +45,7 @@ static partial class PageInfo
              new("Guidelines — menus and context menus", "https://learn.microsoft.com/windows/apps/design/controls/menus-and-context-menus")],
             ["CommandBarFlyout", "MenuBar", "MenuFlyout"]),
         new("icons", "Every glyph in the Segoe Fluent Icons font, searchable by name, tag, or codepoint.",
-            "Ui.Icon(glyph) renders a glyph run from Theme.IconFont; the Icons class holds named codepoints so glyphs stay consistent across the app. Any text run can set a FontFamily — a system name or a custom \"path/to.ttf#Family Name\" (the WinUI FontIcon syntax).",
+            "Ui.Icon(glyph) renders a glyph run from Tok.Definition.Fonts.Icon; the Icons class holds named codepoints so glyphs stay consistent across the app. Any text run can set a FontFamily — a system name or a custom \"path/to.ttf#Family Name\" (the WinUI FontIcon syntax).",
             null, null, "src/FluentGpu.Controls/Icons.cs", "src/FluentGpu.WindowsApp/IconsPage.cs",
             [new("Segoe Fluent Icons font — reference", "https://learn.microsoft.com/windows/apps/design/style/segoe-fluent-icons-font"),
              new("Iconography in Windows apps", "https://learn.microsoft.com/windows/apps/design/style/iconography/overview"),

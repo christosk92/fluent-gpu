@@ -46,12 +46,15 @@ public struct TextMeasureEntry
     /// <summary>Strikethrough bar top, measured DOWN from the line top (DWrite strikethroughPosition flipped;
     /// headless model: SizeDip × 0.8).</summary>
     public float StrikeY;
+    /// <summary><see cref="FluentGpu.Text.FontRegistry.BodyVersion"/> at measure time (E9): a run with no family of its own
+    /// shapes in the theme's body font, which the style key cannot see, so a body-font change makes every entry miss.</summary>
+    public int FontEpoch;
     /// <summary>First line's advance without trailing hanging whitespace (TextMetrics.FirstLineWidth; NaN = not
     /// reported) — the width and alignment basis of an aligned single-run decoration bar.</summary>
     public float FirstLineWidth;
 
-    public readonly bool Matches(StringId text, in TextStyle style, float maxW)
-        => Valid && Text == text && MaxW == maxW && Style == style;
+    public readonly bool Matches(StringId text, in TextStyle style, float maxW, int fontEpoch = 0)
+        => Valid && Text == text && MaxW == maxW && FontEpoch == fontEpoch && Style == style;
 }
 
 /// <summary>Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
@@ -77,19 +80,24 @@ public struct TextMeasureCache
 
     /// <summary>Probe both entries. A hit also becomes the ring's "last used" entry, so the recorder's fallback follows
     /// the width the layout pass most recently resolved at (the arranged width).</summary>
-    public bool TryGet(StringId text, in TextStyle style, float maxW, out TextMeasureEntry hit)
+    public bool TryGet(StringId text, in TextStyle style, float maxW, out TextMeasureEntry hit, int fontEpoch = 0)
     {
-        if (E0.Matches(text, in style, maxW)) { _last = 0; hit = E0; return true; }
-        if (E1.Matches(text, in style, maxW)) { _last = 1; hit = E1; return true; }
+        if (E0.Matches(text, in style, maxW, fontEpoch)) { _last = 0; hit = E0; return true; }
+        if (E1.Matches(text, in style, maxW, fontEpoch)) { _last = 1; hit = E1; return true; }
         hit = default; return false;
     }
 
-    /// <summary>Store a fresh measure into the ring, alternating slots.</summary>
+    /// <summary>Store a fresh measure into the ring. A measure at a width a slot already holds REPLACES that slot (a re-measure
+    /// at the same width: new text, style or font epoch), so the stale entry can never win <see cref="ResolveForWidth"/>'s
+    /// exact-width match; a new width alternates slots, keeping the two widths a stretched leaf is measured at.</summary>
     public void Store(in TextMeasureEntry entry)
     {
-        if (_next == 0) E0 = entry; else E1 = entry;
-        _last = _next;
-        _next = (byte)(_next ^ 1);
+        byte slot = E0.Valid && E0.MaxW == entry.MaxW ? (byte)0
+                  : E1.Valid && E1.MaxW == entry.MaxW ? (byte)1
+                  : _next;
+        if (slot == 0) E0 = entry; else E1 = entry;
+        _last = slot;
+        _next = (byte)(slot ^ 1);
     }
 
     /// <summary>The entry the recorder should read for a run drawn at <paramref name="width"/>: an exact MaxW match wins,
@@ -153,12 +161,16 @@ public struct LayoutInput
     };
 }
 
-/// <summary>Paint column — one cache line of per-node visual state read by the record phase.</summary>
-public struct NodePaint
+/// <summary>Paint column — the HOT per-node visual state: every field the record walk, the capture copy, hit-testing or a
+/// per-frame animation/scroll/reveal writer touches for an ordinary node. The rarely-set authored extras (state colours,
+/// hover/press opacities, dash, tab flare, image focus) live in a referenced cold row (<see cref="NodePaintCold"/>, the
+/// scene-memory.md §2.6 hot/cold split): <see cref="ColdRef"/> 0 = the shared default row, so the common node pays four
+/// bytes for them. Read the cold half through <c>SceneStore.PaintCold</c> / <c>SceneRecordingSnapshot.PaintCold</c>;
+/// write it only through <c>SceneStore.SetPaintCold</c> (which owns the row's lifetime).</summary>
+public record struct NodePaint
 {
     public Affine2D LocalTransform;
     public float Opacity;
-    public float HoverOpacity, PressedOpacity;
     // Per-node self-blur sigma (px), animated by AnimChannel.BlurSigma (the Expressive Motion Kit's perceptual softener).
     // When > ε the recorder cuts this node's subtree as an effect slice (gpu-renderer.md §13): its tiles are blurred
     // into a retained surface by the composite (separable Gaussian, AcrylicBackdropMath). 0 = no blur (the default); a
@@ -220,30 +232,26 @@ public struct NodePaint
     // reveal containing it), so its own reveal is bounded by its content's presented bottom (AddReveal).
     public float FlowDelta;
     public float FlowOrphanTop, FlowOrphanDelta;
-    public byte FlowBits;
     public const byte FlowShiftsBit = 1, FlowOrphanBit = 2, FlowOwnsHBit = 4, FlowOwnsShiftBit = 8, FlowBoundaryBit = 16, FlowRevealBit = 32, FlowInnerBit = 64;
+    // Stroke trim (AnimChannel.StrokeTrimStart/End): written every tick while an indeterminate ProgressRing spins, so hot.
     public float StrokeTrimStart, StrokeTrimEnd;
-    public ColorF Fill;
-    public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover
-    public ColorF PressedFill;    // A==0 ⇒ recorder auto-darkens Fill on press
-    public ColorF BorderColor;
-    public ColorF HoverBorderColor;    // A==0 ⇒ recorder auto-lightens BorderColor on hover (else eases to this exact token)
-    public ColorF PressedBorderColor;  // A==0 ⇒ recorder auto-darkens BorderColor on press (else eases to this exact token)
-    // Validation error border (form-validation.md): the theme-resolved invalid color, written by the reconciler from the
-    // bound BoxEl.Validation channel. A==0 ⇒ valid/none; A>0 ⇒ the recorder overrides the resolved border with it.
-    public ColorF ValidationBorder;
-    public float BorderWidth;
-    public float BorderDashOn, BorderDashOff;   // 0/0 = solid stroke; >0 = dashed (DropZone look). Solid-border path only.
-    public float TabFlareRadius;
+    public ColorF Fill;           // hover/press state fills: NodePaintCold.HoverFill/PressedFill
+    public ColorF BorderColor;    // state borders and the validation border: NodePaintCold
+    public float BorderWidth;     // dash pattern and tab flare: NodePaintCold
     public CornerRadius4 Corners;
-    public ColorF TextColor;
-    // Stateful foreground ramps (text/glyph). A==0 ⇒ no state color for that axis; the recorder leaves TextColor as-is.
-    // Hover/Pressed ease with the nearest interactive ancestor's progress; Disabled/Focused are steps (see ResolveTextColor).
-    public ColorF TextHoverColor;
-    public ColorF TextPressedColor;
-    public ColorF TextDisabledColor;
-    public ColorF TextFocusedColor;
+    public ColorF TextColor;      // state ramps (hover/pressed/disabled/focused): NodePaintCold
     public StringId Text;
+    public int ImageId;           // VisualKind.Image: handle into the ImageCache (Fill doubles as the placeholder tint).
+                                  // VisualKind.IconLayer: DOUBLES as the IconGeometryTable.Shared PathId (Fill doubles as
+                                  // the resolved, theme-live layer tint) — no new NodePaint field.
+                                  // VisualKind.Video: DOUBLES as the video registry SurfaceId (the same pun as IconLayer's
+                                  // PathId — the hole punch carries no color, so nothing else on the node is displaced).
+    /// <summary>This node's cold row (<see cref="NodePaintCold"/>) in the container that owns this paint row: 0 = none
+    /// (every cold field at <see cref="NodePaintCold.Default"/>). Container-local — never copy it to another node or
+    /// container (a capture remaps it into the snapshot's own rows); only <c>SceneStore.SetPaintCold</c> writes it.</summary>
+    public int ColdRef;
+    // The byte fields pack together at the end (no padding between floats).
+    public byte FlowBits;
     /// <summary>Text decoration flags for a <see cref="VisualKind.Text"/> leaf (<see cref="UnderlineBit"/> |
     /// <see cref="StrikethroughBit"/>; 0 = none). The recorder emits the bars itself — FillRoundRect quads placed by
     /// the face metrics cached on <see cref="TextMeasureCache"/> (no new opcode), colored with the SAME resolved
@@ -257,13 +265,15 @@ public struct NodePaint
     /// offscreen and composite ONCE at the group alpha, so overlapping children don't double-blend. Default false =
     /// plain multiplied opacity (WinUI Visual.Opacity's per-visual behavior, the engine default).</summary>
     public bool OpacityGroup;
-    public int ImageId;           // VisualKind.Image: handle into the ImageCache (Fill doubles as the placeholder tint).
-                                  // VisualKind.IconLayer: DOUBLES as the IconGeometryTable.Shared PathId (Fill doubles as
-                                  // the resolved, theme-live layer tint) — no new NodePaint field, so the 64B cache line holds.
-                                  // VisualKind.Video: DOUBLES as the video registry SurfaceId (the same pun as IconLayer's
-                                  // PathId — the hole punch carries no color, so nothing else on the node is displaced).
+    /// <summary>A COMPOSITED transition layer (<see cref="FluentGpu.Hooks.KeepAliveOptions.CompositeTransitions"/>: a keep-alive
+    /// page root). The recorder cuts the node as a translation slice whose translate-only <see cref="LocalTransform"/> is a
+    /// composite parameter (recorded pose-free, placed at its current offset — the sticky/parallax route), and treats its
+    /// opacity as a GROUP (<see cref="OpacityGroup"/>), the group alpha riding the slice marker. A page's enter/exit fade
+    /// and slide then re-record nothing below the page root: its descendants' span inputs (world, opacity) no longer move
+    /// with the transition. Pixel note: group opacity is WinUI's Visual.Opacity semantics; during the fade it differs from
+    /// the multiplied (per-draw) opacity wherever the page's own draws overlap.</summary>
+    public bool CompositeLayer;
     public byte ImageFit;         // VisualKind.Image: (ImageFit) content-fit mode; 0 = Cover (default). Read by the recorder
-    public float ImageFocusX, ImageFocusY;
     public VisualKind VisualKind;
 
     /// <summary><see cref="TextDecorations"/>: draw the face-metric underline bar.</summary>
@@ -275,8 +285,6 @@ public struct NodePaint
     {
         LocalTransform = Affine2D.Identity,
         Opacity = 1f,
-        HoverOpacity = float.NaN,
-        PressedOpacity = float.NaN,
         OriginX = 0.5f,
         OriginY = 0.5f,
         PresentedW = float.NaN,
@@ -285,10 +293,129 @@ public struct NodePaint
         StrokeTrimStart = float.NaN,
         StrokeTrimEnd = float.NaN,
         Fill = ColorF.Transparent,
-        ImageFocusX = 0.5f,
-        ImageFocusY = 0.5f,
         VisualKind = VisualKind.None,
     };
+
+    /// <summary>Field equality ignoring <see cref="ColdRef"/> (a container-local row id): the snapshot parity check
+    /// compares hot halves with this and the cold rows by value. The columns the check compares are <c>record struct</c>s:
+    /// their compiler-generated <c>Equals(T)</c> compares every field without boxing, where a plain struct's
+    /// <c>ValueType.Equals</c> boxes each field through reflection (about 1 MB per verified frame on a Debug stage).</summary>
+    public readonly bool HotEquals(in NodePaint other)
+    {
+        NodePaint a = this, b = other;
+        a.ColdRef = 0; b.ColdRef = 0;
+        return a.Equals(b);
+    }
+}
+
+/// <summary>The COLD half of <see cref="NodePaint"/> (scene-memory.md §2.6 "referenced cold slabs"): authored extras most
+/// nodes never set, written by the reconciler, bind effects and controls at commit and never by a per-frame animation,
+/// scroll or reveal writer. A node whose every field is at <see cref="Default"/> has no row (<see cref="NodePaint.ColdRef"/>
+/// 0) and reads the shared default row 0, so readers need no branch and the common node pays only the 4-byte ref.
+/// <para>Measured (heap dump 2026-10-21): <c>NodePaint</c> was 356 B, stored densely in the SceneStore column and in the
+/// three SceneRecordingSnapshot copies (8192 slots each in Wavee); these fields were 172 B of every row.</para></summary>
+public struct NodePaintCold : IEquatable<NodePaintCold>
+{
+    // Hover/press reveal opacity (BoxEl.HoverOpacity/PressedOpacity). NaN = none. Eased with the interaction progress.
+    public float HoverOpacity, PressedOpacity;
+    public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover
+    public ColorF PressedFill;    // A==0 ⇒ recorder auto-darkens Fill on press
+    public ColorF HoverBorderColor;    // A==0 ⇒ recorder auto-lightens BorderColor on hover (else eases to this exact token)
+    public ColorF PressedBorderColor;  // A==0 ⇒ recorder auto-darkens BorderColor on press (else eases to this exact token)
+    // Validation error border (form-validation.md): the theme-resolved invalid color, written by the reconciler from the
+    // bound BoxEl.Validation channel. A==0 ⇒ valid/none; A>0 ⇒ the recorder overrides the resolved border with it.
+    public ColorF ValidationBorder;
+    public float BorderDashOn, BorderDashOff;   // 0/0 = solid stroke; >0 = dashed (DropZone look). Solid-border path only.
+    // VisualKind.TabShape flare radius. The reconciler resolves an unset (≤ 0) radius to 4, so 4 is the default and only a
+    // tab with its own radius carries a row.
+    public float TabFlareRadius;
+    // Stateful foreground ramps (text/glyph). A==0 ⇒ no state color for that axis; the recorder leaves TextColor as-is.
+    // Hover/Pressed ease with the nearest interactive ancestor's progress; Disabled/Focused are steps (see ResolveTextColor).
+    public ColorF TextHoverColor;
+    public ColorF TextPressedColor;
+    public ColorF TextDisabledColor;
+    public ColorF TextFocusedColor;
+    public float ImageFocusX, ImageFocusY;   // VisualKind.Image: content-fit crop focus (0..1; default centre)
+    public float ImageFrameX, ImageFrameY;   // VisualKind.Image: where in the box the crop places that focus (0..1; default centre)
+
+    /// <summary>What every node without a cold row reads.</summary>
+    public static NodePaintCold Default => new()
+    {
+        HoverOpacity = float.NaN,
+        PressedOpacity = float.NaN,
+        TabFlareRadius = 4f,
+        ImageFocusX = 0.5f,
+        ImageFocusY = 0.5f,
+        ImageFrameX = 0.5f,
+        ImageFrameY = 0.5f,
+    };
+
+    /// <summary>Field-wise and NaN-safe (<c>float.Equals</c>: an unset NaN opacity equals itself).</summary>
+    public readonly bool Equals(NodePaintCold o)
+        => HoverOpacity.Equals(o.HoverOpacity) && PressedOpacity.Equals(o.PressedOpacity)
+           && HoverFill.Equals(o.HoverFill) && PressedFill.Equals(o.PressedFill)
+           && HoverBorderColor.Equals(o.HoverBorderColor) && PressedBorderColor.Equals(o.PressedBorderColor)
+           && ValidationBorder.Equals(o.ValidationBorder)
+           && BorderDashOn.Equals(o.BorderDashOn) && BorderDashOff.Equals(o.BorderDashOff) && TabFlareRadius.Equals(o.TabFlareRadius)
+           && TextHoverColor.Equals(o.TextHoverColor) && TextPressedColor.Equals(o.TextPressedColor)
+           && TextDisabledColor.Equals(o.TextDisabledColor) && TextFocusedColor.Equals(o.TextFocusedColor)
+           && ImageFocusX.Equals(o.ImageFocusX) && ImageFocusY.Equals(o.ImageFocusY)
+           && ImageFrameX.Equals(o.ImageFrameX) && ImageFrameY.Equals(o.ImageFrameY);
+    public override readonly bool Equals(object? obj) => obj is NodePaintCold o && Equals(o);
+    public override readonly int GetHashCode()
+        => HashCode.Combine(
+            HashCode.Combine(HoverOpacity, PressedOpacity, HoverFill, PressedFill, HoverBorderColor, PressedBorderColor, ValidationBorder),
+            HashCode.Combine(BorderDashOn, BorderDashOff, TabFlareRadius, TextHoverColor, TextPressedColor, TextDisabledColor, TextFocusedColor),
+            HashCode.Combine(ImageFocusX, ImageFocusY, ImageFrameX, ImageFrameY));
+}
+
+/// <summary>One container's cold paint rows: a packed slab indexed by <see cref="NodePaint.ColdRef"/> whose row 0 is the
+/// shared, never-written <see cref="NodePaintCold.Default"/>, plus a LIFO free list (scene-memory.md §2.6a: sized by how
+/// many nodes carry the state, never by node index). The free list is kept as long as the slab, so a free never
+/// allocates; only an <see cref="Alloc"/> past the high-water grows, and only on the publisher/UI side.</summary>
+internal sealed class PaintColdRows
+{
+    private NodePaintCold[] _rows;
+    private int[] _free;
+    private int _freeCount;
+    private int _high = 1;
+
+    public PaintColdRows(int reserve)
+    {
+        _rows = new NodePaintCold[Math.Max(2, reserve + 1)];
+        _rows[0] = NodePaintCold.Default;
+        _free = new int[_rows.Length];
+    }
+
+    /// <summary>Rows in use (the shared default row excluded).</summary>
+    public int LiveCount => _high - 1 - _freeCount;
+
+    /// <summary>Row <paramref name="r"/> (0 = the shared default).</summary>
+    public ref readonly NodePaintCold this[int r] => ref _rows[r];
+
+    /// <summary>A writable owned row (never row 0).</summary>
+    public ref NodePaintCold Mutable(int r)
+    {
+        System.Diagnostics.Debug.Assert(r > 0 && r < _high, "cold paint write outside the owned rows");
+        return ref _rows[r];
+    }
+
+    public int Alloc()
+    {
+        if (_freeCount > 0) return _free[--_freeCount];
+        if (_high == _rows.Length)
+        {
+            Array.Resize(ref _rows, _rows.Length * 2);
+            Array.Resize(ref _free, _rows.Length);
+        }
+        return _high++;
+    }
+
+    public void Free(int r)
+    {
+        System.Diagnostics.Debug.Assert(r > 0 && r < _high, "cold paint free outside the owned rows");
+        _free[_freeCount++] = r;
+    }
 }
 
 /// <summary>
@@ -304,7 +431,7 @@ public struct NodePaint
 /// (UI-side for hit-testing; render-side by <c>ScrollPoser</c> at the predicted present time). Scrollbar chrome
 /// (fade/expand/hover/idle) lives in <c>FluentGpu.Scroll.Runtime.ScrollBarChromeTable</c>.
 /// </summary>
-public struct ScrollState
+public record struct ScrollState
 {
     // ── RESULT columns — written by the host's per-frame scroll step (AppHost.RunScrollFrame) from the plan. ──
     /// <summary>The displayed main-axis content offset this UI frame (DIP, content coordinates, double — positions
@@ -556,7 +683,7 @@ public struct GridSpec
 /// <c>HoverT</c>/<c>PressT</c> toward their targets on pointer enter/leave/press; the recorder lerps Fill/Border with them
 /// for the WinUI ~83ms brush transition (instead of the instant flag switch).
 /// </summary>
-public struct InteractionAnim
+public record struct InteractionAnim
 {
     public float HoverT, HoverTarget, PressT, PressTarget;
     public float HoverStart, PressStart, HoverElapsedMs, PressElapsedMs;
@@ -585,14 +712,17 @@ public struct InteractionAnim
 /// different Fill/BorderColor/TextColor and the element opted in (<c>BrushTransitionMs</c>), the reconciler captures the
 /// previously-DISPLAYED color here and the recorder cross-fades from it to the new resolved color as <c>T</c> advances
 /// (linear-light, like the hover/press cross-fade). Sparse side-table — O(transitioning nodes), 0-alloc steady frames.
+/// The live theme cross-fade (E20) rides the same row: <see cref="FillBit"/> also fades an icon layer's tint, an image's
+/// placeholder and a list row's fill, and <see cref="GradientBit"/>/<see cref="BorderBrushBit"/> fade a gradient fill and a
+/// gradient border from the spec kept in <c>SceneStore.TryGetGradientFadeFrom</c>/<c>TryGetBorderBrushFadeFrom</c>.
 /// </summary>
-public struct BrushAnim
+public record struct BrushAnim
 {
     public ColorF FillFrom, BorderFrom, TextFrom;
-    public float T;            // 0 → 1 progress (advanced by SceneStore.AdvanceBrushAnims at phase 7)
+    public float T;            // 0 → 1 progress (advanced by the unified engine's BrushFade track)
     public float DurationMs;
     public byte Channels;
-    public const byte FillBit = 1, BorderBit = 2, TextBit = 4;
+    public const byte FillBit = 1, BorderBit = 2, TextBit = 4, GradientBit = 8, BorderBrushBit = 16;
 }
 
 /// <summary>
@@ -602,7 +732,7 @@ public struct BrushAnim
 /// <see cref="SceneStore.SetTextEditRects"/>) to emit selection highlight / selected-text recolor / IME underlines /
 /// the caret bar — retained scene state, never composed elements (0 alloc in phases 6–13).
 /// </summary>
-public struct TextEditState
+public record struct TextEditState
 {
     public int CompStart, CompLen;          // in-flight IME composition span (document indices); CompLen 0 = none
     public float ScrollX;                   // horizontal caret-follow offset (applied by the control as a transform)
@@ -612,7 +742,7 @@ public struct TextEditState
 }
 
 /// <summary>Hit-test / input column.</summary>
-public struct InteractionInfo
+public record struct InteractionInfo
 {
     public uint HandlerMask;      // bit0 click, bit1 key, bit2 pointer, bit3 char, bit4 repeat, bit5 pressed, bit6 context,
                                   // bit7 focus, bit8 drag, bit9 explicit cursor, bit10 no-Enter-activate,
@@ -688,6 +818,9 @@ public struct InteractionInfo
                                                     // drag, so this bit STOPS that walk at itself. Discriminator only:
                                                     // never a hit/press/focus target, deliberately outside
                                                     // AnyInteractiveMask. Clear as `~BlocksDragArmBit`.
+    public const uint FocusRingHostBit = 1u << 22;          // BoxEl.FocusRingHost: paints its nearest focused ancestor's keyboard-focus ring on its
+                                                            // own rect (the recorder's ring emission looks for it). Paint-only discriminator: never a
+                                                            // hit-test or handler bit.
     public const uint HoverScopeTransparentBit = 1u << 20; // BoxEl.HoverScopeTransparent: a pointer LISTENER that is not
                                                     // an interaction scope (the ToolTip wrapper). The hover cascade,
                                                     // the lazy-mount hover seed and the un-hover re-resolve skip it and

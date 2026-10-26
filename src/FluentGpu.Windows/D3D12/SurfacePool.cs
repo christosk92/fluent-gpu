@@ -76,6 +76,10 @@ internal sealed unsafe class SurfacePool : IDisposable
     private int _retiredCount;
     private ID3D12DescriptorHeap* _rtvHeap;
     private ID3D12DescriptorHeap* _srvHeap;
+    // The heaps' start handles never change for a heap object: read once (audit PERF r3 COMP — every TileSrv / ScratchSrv / Rtv
+    // asked the driver again, ~6 % of a group repair's CPU).
+    private D3D12_CPU_DESCRIPTOR_HANDLE _rtvStart, _srvCpuStart;
+    private D3D12_GPU_DESCRIPTOR_HANDLE _srvGpuStart;
     private uint _rtvInc, _srvInc;
     private int _bank;
     private int _turn;
@@ -92,6 +96,7 @@ internal sealed unsafe class SurfacePool : IDisposable
         ID3D12DescriptorHeap* rhp;
         Check(_device->CreateDescriptorHeap(&rh, __uuidof<ID3D12DescriptorHeap>(), (void**)&rhp), "SurfacePool.RtvHeap");
         _rtvHeap = rhp;
+        _rtvStart = _rtvHeap->GetCPUDescriptorHandleForHeapStart();
         _rtvInc = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         D3D12MemoryDiagnostics.Track(_rtvHeap, "Tiles.RtvHeap", (ulong)rh.NumDescriptors * _rtvInc);
 
@@ -102,6 +107,8 @@ internal sealed unsafe class SurfacePool : IDisposable
         ID3D12DescriptorHeap* shp;
         Check(_device->CreateDescriptorHeap(&sh, __uuidof<ID3D12DescriptorHeap>(), (void**)&shp), "SurfacePool.SrvHeap");
         _srvHeap = shp;
+        _srvCpuStart = _srvHeap->GetCPUDescriptorHandleForHeapStart();
+        _srvGpuStart = _srvHeap->GetGPUDescriptorHandleForHeapStart();
         _srvInc = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         D3D12MemoryDiagnostics.Track(_srvHeap, "Tiles.SrvHeap", (ulong)sh.NumDescriptors * _srvInc);
         for (int i = 0; i < _tiles.Length; i++) _tiles[i].SrvStamp = int.MinValue;
@@ -109,6 +116,11 @@ internal sealed unsafe class SurfacePool : IDisposable
     }
 
     public ID3D12DescriptorHeap* SrvHeap => _srvHeap;
+
+    /// <summary>Textures this pool created / released since it was built (the raster cost counters: on the owner's UMA
+    /// driver a release zero-fills the texture, so both are real per-turn CPU).</summary>
+    public long TexturesCreated { get; private set; }
+    public long TexturesReleased { get; private set; }
     public int TileCap => _tileCap;
 
     private static void Check(HRESULT hr, string what)
@@ -145,6 +157,7 @@ internal sealed unsafe class SurfacePool : IDisposable
             if (!LayerTargetTrim.CanRelease(_retired[i].Fence, completedFence)) continue;
             D3D12MemoryDiagnostics.Release(_retired[i].Res, "Tiles.Surface");
             _retired[i].Res->Release();
+            TexturesReleased++;
             Interlocked.Add(ref _retiredBytes, -_retired[i].Bytes);
             Interlocked.Decrement(ref _retiredCount);
             _retired.RemoveAt(i);
@@ -476,6 +489,44 @@ internal sealed unsafe class SurfacePool : IDisposable
         }
     }
 
+    /// <summary>The surface census (diagnostics, render thread): tile textures by size, and every scratch texture with
+    /// what it is doing (leased this frame, holding a retained result, idle in the pool), plus fence-retired bytes.</summary>
+    public string SurfaceCensus()
+    {
+        const double MiB = 1024.0 * 1024.0;
+        var sb = new System.Text.StringBuilder(1024);
+        var tileSizes = new SortedDictionary<string, (int N, long B)>(StringComparer.Ordinal);
+        long tileBytes = 0; int tileN = 0;
+        for (int i = 0; i < _tiles.Length; i++)
+        {
+            if (_tiles[i].Res == null) continue;
+            long b = LayerTargetBucket.Bytes(_tiles[i].W, _tiles[i].H);
+            string k = _tiles[i].W + "x" + _tiles[i].H;
+            var v = tileSizes.GetValueOrDefault(k); tileSizes[k] = (v.N + 1, v.B + b);
+            tileBytes += b; tileN++;
+        }
+        long inUse = 0, retained = 0, idle = 0; int nIn = 0, nRet = 0, nIdle = 0;
+        var scratchSizes = new SortedDictionary<string, (int N, long B)>(StringComparer.Ordinal);
+        for (int i = 0; i < _scratch.Length; i++)
+        {
+            ref Entry e = ref _scratch[i];
+            if (e.Res == null) continue;
+            long b = LayerTargetBucket.Bytes(e.W, e.H);
+            string state = e.Retained ? "retained" : e.InUse ? "leased" : "idle";
+            if (e.Retained) { retained += b; nRet++; } else if (e.InUse) { inUse += b; nIn++; } else { idle += b; nIdle++; }
+            string k = state + " " + e.W + "x" + e.H;
+            var v = scratchSizes.GetValueOrDefault(k); scratchSizes[k] = (v.N + 1, v.B + b);
+        }
+        sb.Append("surface-census tiles=").Append(tileN).Append(' ').Append((tileBytes / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)).Append(" MiB")
+          .Append(" scratch leased=").Append(nIn).Append('/').Append((inUse / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
+          .Append(" retained=").Append(nRet).Append('/').Append((retained / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
+          .Append(" idle=").Append(nIdle).Append('/').Append((idle / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
+          .Append(" retired=").Append((Interlocked.Read(ref _retiredBytes) / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)).AppendLine(" MiB");
+        foreach (var kv in tileSizes) sb.Append("  tile ").Append(kv.Key).Append(" x").Append(kv.Value.N).Append(' ').Append((kv.Value.B / MiB).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)).AppendLine(" MiB");
+        foreach (var kv in scratchSizes) sb.Append("  scratch ").Append(kv.Key).Append(" x").Append(kv.Value.N).Append(' ').Append((kv.Value.B / MiB).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)).AppendLine(" MiB");
+        return sb.ToString();
+    }
+
     /// <summary>Bytes held by tile surface textures.</summary>
     public long TileBytes
     {
@@ -485,7 +536,7 @@ internal sealed unsafe class SurfacePool : IDisposable
     // ── internals ─────────────────────────────────────────────────────────────────────────────────────────────────
     private D3D12_CPU_DESCRIPTOR_HANDLE Rtv(int index)
     {
-        var h = _rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        var h = _rtvStart;
         h.ptr += (nuint)index * _rtvInc;
         return h;
     }
@@ -495,7 +546,7 @@ internal sealed unsafe class SurfacePool : IDisposable
         int slot = _bank * (_tileCap + ScratchCap) + index;
         if (e.SrvStamp != _turn)
         {
-            var cpu = _srvHeap->GetCPUDescriptorHandleForHeapStart();
+            var cpu = _srvCpuStart;
             cpu.ptr += (nuint)slot * _srvInc;
             D3D12_SHADER_RESOURCE_VIEW_DESC sd = default;
             sd.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -505,13 +556,14 @@ internal sealed unsafe class SurfacePool : IDisposable
             _device->CreateShaderResourceView(e.Res, &sd, cpu);
             e.SrvStamp = _turn;
         }
-        var gpu = _srvHeap->GetGPUDescriptorHandleForHeapStart();
+        var gpu = _srvGpuStart;
         gpu.ptr += (ulong)slot * _srvInc;
         return gpu;
     }
 
     private ID3D12Resource* CreateTarget(int w, int h, string name)
     {
+        TexturesCreated++;
         D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd = default;
         rd.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_TEXTURE2D;

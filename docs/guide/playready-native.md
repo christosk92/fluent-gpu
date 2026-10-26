@@ -117,16 +117,3 @@ an AAC track's edit takes its priming frame out of the presentation. The demuxer
 file is never merged), the matching `traf` of every `moof` and every `trun` in it, falls back to `trex` for sample
 durations and flags, and reads CENC records from `senc` or `saiz`/`saio`. Every count and offset is bounded by the bytes
 that hold it.
-
-## Tests
-
-`src/FluentGpu.Windows.Tests`, no window, no network, no license server:
-
-| File | Covers |
-|---|---|
-| `LicenseCachePolicyTests` | reuse / join / re-acquire, expiry guard, eviction, completion and expiry acceptance, `LicenseKeyId` on hostile PSSH boxes |
-| `ProtectedRuntimeTests`, `ProtectedRuntimeEventTests` | the runtime over `IPrRuntimeNative` fakes: bring-up, the relay, buffered waits, warm-idle teardown, license events |
-| `ProtectedRuntimeRecoveryTests` | the idle teardown standing down, a poisoned runtime replaced under a keep-alive, the retryable session error with the HRESULT, the renderer's adapter LUID reaching the native create |
-| `ProtectedVideoSessionTests` | `ProtectedVideoSession` over an `IPrSessionNative` fake: the open descriptor, attach, prefetch, pump (incl. zero allocation), seek, teardown |
-| `ProtectedSessionTests`, `DrmTests` | `ProtectedMediaSession` over a fake player, and the backend's prepare → open hand-off |
-| `CencDemuxTests` | the REAL DLL's demuxer via `FgPrProbeFile` over `Fixtures/video` — skipped when the DLL beside the test assembly is missing or stale |

@@ -151,6 +151,8 @@ public sealed partial class SliceTable
         _rows = new SliceRow[sliceCap];
         _live = new bool[sliceCap];
         _openedFrame = new int[sliceCap];
+        _geoFrame = new int[sliceCap];
+        Array.Fill(_geoFrame, int.MinValue);
         _degraded = new bool[sliceCap];
         _hasVp = new bool[sliceCap];
         _horizontal = new bool[sliceCap];
@@ -160,9 +162,10 @@ public sealed partial class SliceTable
         _tiles = new TileState[slab];
         _tx = new short[slab];
         _ty = new short[slab];
-        _used = new bool[slab];
+        _used = new bool[slab];   // only [0, _usedHigh) can hold a used entry: every slab sweep stops there
         _pendingFrame = new int[slab];
         _scheduledFrame = new int[slab];
+        _tGeo = new byte[slab];
         _usedMs = new long[slab];
         _pend0 = new int[slab]; _pend1 = new int[slab]; _pend2 = new int[slab];
 
@@ -210,9 +213,14 @@ public sealed partial class SliceTable
         get { int n = 0; for (int s = 0; s < SliceCap; s++) if (_live[s]) n++; return n; }
     }
 
+    /// <summary>One past the highest slab index ever marked used (monotonic): no entry at or above it is used, so the
+    /// per-turn sweeps (the census, the exposed-missing count, eviction scans) stop there instead of walking all
+    /// SliceCap × TileCap entries — 16 384 on the primary host, for a page that uses a few hundred (audit PERF).</summary>
+    private int _usedHigh;
+
     public int LiveTiles
     {
-        get { int n = 0; for (int t = 0; t < _used.Length; t++) if (_used[t]) n++; return n; }
+        get { int n = 0; for (int t = 0; t < _usedHigh; t++) if (_used[t]) n++; return n; }
     }
 
     /// <summary>Σ surface bytes (each charged its real extent) of every VISIBLE (order-0) tile requested in the current
@@ -223,7 +231,7 @@ public sealed partial class SliceTable
         get
         {
             long b = 0;
-            for (int t = 0; t < _tiles.Length; t++)
+            for (int t = 0; t < _usedHigh; t++)
             {
                 if (!_used[t]) continue;
                 ref TileState ts = ref _tiles[t];
@@ -252,6 +260,7 @@ public sealed partial class SliceTable
     /// every 16th turn, evicts tiles idle for more than <see cref="IdleEvictFrames"/> turns.</summary>
     public void BeginFrame(int frame)
     {
+        _geoDeferred = 0;
         _frame = frame;
         _reqCount = 0;
         _n0 = _n1 = _n2 = 0;
@@ -260,7 +269,7 @@ public sealed partial class SliceTable
         Array.Clear(_hasVp);
         if ((frame & 15) == 0)
         {
-            for (int t = 0; t < _tiles.Length; t++)
+            for (int t = 0; t < _usedHigh; t++)
                 if (_used[t] && _tiles[t].Surface >= 0 && (long)frame - _tiles[t].LastUsedFrame > IdleEvictFrames) Evict(t);
         }
         // Idle aging is housekeeping, not this frame's budget pressure: the census starts clean after it.
@@ -282,7 +291,7 @@ public sealed partial class SliceTable
     {
         if (_reqCount == 0) return 0;   // the last turn requested nothing (empty viewport): its protected set is empty, so never judge by it
         int n = 0;
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
         {
             if (!_used[t] || _tiles[t].Surface < 0) continue;
             if (!IsStale(nowMs, _usedMs[t], staleMs, _tiles[t].LastUsedFrame == _frame)) continue;
@@ -300,7 +309,7 @@ public sealed partial class SliceTable
     public int EvictAll()
     {
         int n = 0;
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
         {
             if (!_used[t] || _tiles[t].Surface < 0) continue;
             Evict(t);
@@ -315,7 +324,7 @@ public sealed partial class SliceTable
     {
         if (_reqCount == 0) return -1;
         long best = long.MaxValue;
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
         {
             if (!_used[t] || _tiles[t].Surface < 0 || _tiles[t].LastUsedFrame == _frame) continue;
             long due = _usedMs[t] + staleMs - nowMs;
@@ -359,8 +368,15 @@ public sealed partial class SliceTable
             if (row.Frame.Scale != frame.Scale) InvalidateSlice(s, InvalidationReason.ScaleChanged);
             else if (row.Kind != kind || row.Frame.OriginX != frame.OriginX || row.Frame.OriginY != frame.OriginY
                      || row.Frame.ResidualX != frame.ResidualX || row.Frame.ResidualY != frame.ResidualY
+                     || row.Frame.PhaseX != frame.PhaseX || row.Frame.PhaseY != frame.PhaseY
                      || row.Identity != identity)
+            {
+                _geoCause = row.Kind != kind ? GeoKind : row.Frame.OriginX != frame.OriginX || row.Frame.OriginY != frame.OriginY ? GeoOrigin
+                    : row.Frame.PhaseX != frame.PhaseX || row.Frame.PhaseY != frame.PhaseY ? GeoPhase
+                    : row.Identity != identity ? GeoIdentity : GeoResidual;
+                _geoFrame[s] = _frame;
                 InvalidateSlice(s, InvalidationReason.SliceGeometry);
+            }
         }
         else
         {
@@ -410,6 +426,30 @@ public sealed partial class SliceTable
     }
 
     // ── invalidation ──────────────────────────────────────────────────────────────────────────────────────────
+    /// <summary>Non-visible tiles of a slice whose geometry is moving are not rastered (default; see Request).
+    /// <c>--fg no-defer-geometry</c> rasters them every turn as before (the A/B arm).</summary>
+    public static bool DeferMovingGeometry = true;
+    private readonly int[] _geoFrame;   // per slice: the turn its geometry last moved (OpenSlice's SliceGeometry)
+    private int _geoDeferred;
+
+    /// <summary>Non-visible geometry rasters Request deferred this turn (diagnostics).</summary>
+    public int GeometryDeferredThisFrame => _geoDeferred;
+
+    // Diagnostics (the raster ledger, audit PERF r3 RASTER): WHICH part of a slice's geometry moved when a tile went
+    // SliceGeometry — its kind, its device origin, its sub-pixel phase, its identity, only its residual (an effect slice's
+    // content moved inside its grid cell), or its surface extent.
+    public const byte GeoKind = 1, GeoOrigin = 2, GeoPhase = 3, GeoIdentity = 4, GeoResidual = 5, GeoExtent = 6;
+    private byte _geoCause;
+    private byte[] _tGeo = [];
+
+    /// <summary>The geometry cause (<see cref="GeoKind"/>..<see cref="GeoExtent"/>) of <paramref name="key"/>'s last
+    /// SliceGeometry invalidation; 0 when its invalidation was another reason or the tile is unknown.</summary>
+    public byte GeometryCause(in TileKey key)
+    {
+        int t = Find(key.SliceId, key.Tx, key.Ty);
+        return t >= 0 ? _tGeo[t] : (byte)0;
+    }
+
     /// <summary>Invalidate every known tile of <paramref name="sliceId"/> whose rect shares area with the slice-space
     /// device-px <paramref name="sliceRect"/> (touching edges do not count). Returns the number of tiles that went from
     /// valid to <paramref name="reason"/>. A tile that has never been requested needs no invalidation — it is
@@ -452,6 +492,7 @@ public sealed partial class SliceTable
         ref TileState ts = ref _tiles[t];
         if (ts.Invalid != InvalidationReason.None) return false;
         ts.Invalid = reason;
+        _tGeo[t] = reason == InvalidationReason.SliceGeometry ? _geoCause : (byte)0;
         _reasonCounts[(int)reason]++;
         return true;
     }
@@ -515,6 +556,7 @@ public sealed partial class SliceTable
             {
                 if (ts.Surface >= 0) ReleaseSurface(t);   // re-acquired (and re-charged) at the new extent by Resolve
                 ts.SurfW = sw; ts.SurfH = sh;
+                _geoCause = GeoExtent;
                 Invalidate(t, InvalidationReason.SliceGeometry);
             }
 
@@ -526,6 +568,17 @@ public sealed partial class SliceTable
             if (ts.Invalid == InvalidationReason.None && ts.Surface >= 0) CheckContent(t, in key, ref content);
 
             if (ts.Invalid == InvalidationReason.None || _pendingFrame[t] == _frame) continue;
+            // A tile this turn does not composite (ahead / behind), invalid only because its slice's geometry moved, while
+            // that geometry is STILL moving (it moved again this turn: a sliding page's sub-pixel phase): its raster would
+            // be stale by the next turn and no pixel of it is shown in this one. It stays invalid and rasters when it is
+            // requested visible (Resolve rasters every visible tile in the submission that composites it, so it can never
+            // show blank) or on the first turn the geometry holds (audit PERF r3 RASTER).
+            if (DeferMovingGeometry && ord != TileGrid.OrderVisible && ts.Invalid == InvalidationReason.SliceGeometry
+                && _geoFrame[sliceId] == _frame)
+            {
+                _geoDeferred++;
+                continue;
+            }
             _pendingFrame[t] = _frame;
             ts.CoveredLo = lo;
             ts.CoveredHi = hi;
@@ -728,7 +781,7 @@ public sealed partial class SliceTable
     {
         int n = 0;
         BeginStaleSweep();
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
         {
             if (!_used[t]) continue;
             ref TileState ts = ref _tiles[t];
@@ -791,6 +844,7 @@ public sealed partial class SliceTable
         }
 
         _used[slot] = true;
+        if (slot >= _usedHigh) _usedHigh = slot + 1;
         _tx[slot] = tx;
         _ty[slot] = ty;
         _pendingFrame[slot] = int.MinValue;
@@ -837,7 +891,7 @@ public sealed partial class SliceTable
     {
         int best = -1;
         long bestScore = long.MinValue;
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
         {
             if (!_used[t] || _tiles[t].Surface < 0) continue;
             int cls = ClassOf(t);
@@ -851,7 +905,7 @@ public sealed partial class SliceTable
     private void CountEvictable(int minClass, out int count, out long bytes)
     {
         count = 0; bytes = 0;
-        for (int t = 0; t < _tiles.Length; t++)
+        for (int t = 0; t < _usedHigh; t++)
             if (_used[t] && _tiles[t].Surface >= 0 && ClassOf(t) >= minClass) { count++; bytes += BytesOf(_tiles[t]); }
     }
 
