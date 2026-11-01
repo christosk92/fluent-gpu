@@ -178,6 +178,7 @@ declarative `WhileHover`/`WhilePressed` + `Transition` motion token (the `press 
 new BoxEl { OnClick = go }.Interactive(Interaction.Subtle);      // transparent → subtle hover/press
 new BoxEl { OnClick = go }.Interactive(Interaction.Card);        // card fills + stroke + 0.985 spring press
 new BoxEl { OnClick = go }.Interactive(myRecipe, isEnabled: on); // isEnabled=false → Disabled legs, no hover/press
+new BoxEl { OnClick = go, Fill = on ? plate : ColorF.Transparent }.Interactive(Interaction.Subtle); // a caller-set brush wins while on
 
 var myRecipe = new InteractionRecipe {                           // build your own
     Fill = new StateBrush(rest, hover, pressed, disabled),

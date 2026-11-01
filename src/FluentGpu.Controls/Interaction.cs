@@ -72,9 +72,14 @@ public readonly record struct InteractionRecipe
 public static class Interaction
 {
     /// <summary>Expand a recipe onto a box (a pure `with`-expansion, cold path). The BRUSH half always applies
-    /// (Fill/HoverFill/PressedFill + optional border ramp + BrushTransitionMs + the disabled resting swap). The MOTION
-    /// half (WhileHover/WhilePressed + Transition) applies only when the recipe declares non-identity scale/opacity AND
-    /// the node does not already own a transform — see the composition rules below.
+    /// (Fill/HoverFill/PressedFill + optional border ramp + BrushTransitionMs + the disabled resting swap), unless the
+    /// caller owns that brush. The MOTION half (WhileHover/WhilePressed + Transition) applies only when the recipe
+    /// declares non-identity scale/opacity AND the node does not already own a transform — see the composition rules below.
+    /// <para>Caller-set brushes (a selected or lit state): a box that declares its own <see cref="BoxEl.Fill"/> or
+    /// <see cref="BoxEl.BorderColor"/> (bound, or a static value other than transparent and the recipe's Rest leg) keeps
+    /// it and its own hover/press legs for that ramp; unset legs get the engine's automatic tint of that brush. A
+    /// transparent or Rest-equal value is no claim, so <c>Fill = on ? plate : ColorF.Transparent</c> takes the whole
+    /// recipe ramp while off. A disabled box always takes the recipe's Disabled legs.</para>
     /// <para>Composition / one-transform-owner: the recipe's While* targets are SKIPPED when (a) <paramref name="isEnabled"/>
     /// is false, (b) the recipe declares no motion (HoverScale/PressScale == 1 and both opacities NaN), or (c) the box
     /// already carries a bound <see cref="BoxEl.Transform"/> — the bound transform is the single transform owner, and a
@@ -97,17 +102,18 @@ public static class Interaction
     /// is non-null (material package, not cloned locally).</para></summary>
     public static BoxEl Interactive(this BoxEl el, in InteractionRecipe r, bool isEnabled = true)
     {
-        // ── BRUSH half (always) + the clickable-hand cursor default (caller-set cursor wins) ────────────────────
+        // ── BRUSH half (caller-owned brushes win) + the clickable-hand cursor default (caller-set cursor wins) ──
+        bool ownsFill = isEnabled && CallerOwns(el.Fill, r.Fill.Rest);
         var box = el with
         {
-            Fill = r.Fill.Resting(isEnabled),
-            HoverFill = r.Fill.Hover,
-            PressedFill = r.Fill.Pressed,
+            Fill = ownsFill ? el.Fill : r.Fill.Resting(isEnabled),
+            HoverFill = ownsFill ? el.HoverFill : r.Fill.Hover,
+            PressedFill = ownsFill ? el.PressedFill : r.Fill.Pressed,
             BrushTransitionMs = r.BrushMs,
             IsEnabled = isEnabled,
             Cursor = el.Cursor ?? ClickableCursor(el),
         };
-        if (r.Stroke is { } stroke)
+        if (r.Stroke is { } stroke && !(isEnabled && CallerOwns(el.BorderColor, stroke.Rest)))
             box = box with
             {
                 BorderColor = stroke.Resting(isEnabled),
@@ -115,6 +121,8 @@ public static class Interaction
                 PressedBorderColor = stroke.Pressed,
                 BorderWidth = r.StrokeWidth,
             };
+        else if (r.Stroke is not null && el.BorderWidth <= 0f)
+            box = box with { BorderWidth = r.StrokeWidth };
 
         // ── MOTION half (declarative While*) ───────────────────────────────────────────────────────────────────
         bool wantsHover = r.HoverScale != 1f || float.IsFinite(r.HoverOpacity);
@@ -139,6 +147,10 @@ public static class Interaction
         }
         return box;
     }
+
+    /// <summary>A declared brush is the caller's claim when it is bound, or a static value the recipe would not paint anyway.</summary>
+    static bool CallerOwns(Signals.Prop<ColorF> brush, ColorF recipeRest)
+        => brush.IsBound || (brush.Value != default && brush.Value != ColorF.Transparent && brush.Value != recipeRest);
 
     /// <summary>The E3 default: the hand for a box that is clickable (a click target or a context-invoker), else none.</summary>
     static CursorId? ClickableCursor(BoxEl el)
