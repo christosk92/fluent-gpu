@@ -134,6 +134,11 @@ public static class FluentApp
     /// Works on a window that is not <see cref="AppOptions.Resizable"/>. UI-thread only.</summary>
     public static void ResizeWindow(float widthDip, float heightDip) => s_window?.SetClientSizeDip(widthDip, heightDip);
 
+    internal static void QueueInput(in InputEvent e)
+    {
+        if (s_window is { IsClosed: false } w) w.QueueInput(in e);
+    }
+
     // Seeded from AppOptions.SizeToContent at Run; the live value is the host's (the user resizing the frame flips it).
     private static SizeToContent s_sizeToContent;
 
@@ -1123,4 +1128,9 @@ public static class FluentAppHarness
     /// <paramref name="harness"/> controls.</summary>
     public static void Run(Func<Component> root, AppOptions? options = null, HarnessOptions? harness = null)
         => FluentApp.RunCore(root, options ?? new AppOptions(), harness ?? new HarnessOptions());
+
+    /// <summary>Inject an input event onto the queue the window's own message handler feeds, so an app can drive its
+    /// real input path in a check without moving the person's cursor or touching any other window. Positions are window
+    /// client px. UI-thread only.</summary>
+    public static void QueueInput(in InputEvent e) => FluentApp.QueueInput(in e);
 }
