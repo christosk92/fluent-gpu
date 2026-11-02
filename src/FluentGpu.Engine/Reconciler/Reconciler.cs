@@ -6144,6 +6144,7 @@ public sealed partial class TreeReconciler
                 ref ScrollState ss = ref _scene.ScrollRef(node);
                 ss.Orientation = s.Horizontal ? (byte)1 : (byte)0;
                 ss.ContentSized = s.ContentSized;
+                ss.FitContentWidth = s.FitContentWidth;
                 ss.LineDip = s.ScrollLineDip > 0f ? s.ScrollLineDip : 0f;   // wheel line height hint (S6); 0 = viewport rule
                 // Pinch-zoom opt-in (Input owns the live ZoomFactor — re-reconciling the element must NOT reset a
                 // mid-gesture / committed zoom, so only the declared opt-in + clamp bounds are written here).
@@ -6531,7 +6532,7 @@ public sealed partial class TreeReconciler
                 var famId = _strings.Intern(st.FontFamily);
                 if (li.TextStyle.FontFamily != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.FontFamily); }
                 TextStyle prevSpanStyle = li.TextStyle;
-                li.TextStyle = new TextStyle(famId, st.Size, st.Weight != 0 ? st.Weight : (ushort)400,
+                li.TextStyle = new TextStyle(famId, st.Size, FontWeightWord.Make(st.Weight != 0 ? st.Weight : 400, st.Italic),
                     st.Wrap, st.Trim, st.MaxLines, st.CharSpacing, st.LineHeight, st.LineStacking, st.LineBounds, runId,
                     Align: st.TextAlign, Features: st.FontFeatures);
                 if (isMount || prevSpanStyle != li.TextStyle) NoteTextWrite(node);   // the shaping workers start on it now
@@ -6668,7 +6669,7 @@ public sealed partial class TreeReconciler
             if (!string.Equals(x.Text, y.Text, StringComparison.Ordinal) || x.Weight != y.Weight
                 || x.Color != y.Color || x.Underline != y.Underline || x.Strikethrough != y.Strikethrough
                 || !Nullable.Equals(x.Size, y.Size) || !string.Equals(x.FontFamily, y.FontFamily, StringComparison.Ordinal)
-                || x.IsHyperlink != y.IsHyperlink) return false;
+                || x.IsHyperlink != y.IsHyperlink || x.Italic != y.Italic || x.Background != y.Background) return false;
         }
         return true;
     }
@@ -6744,10 +6745,17 @@ public sealed partial class TreeReconciler
                 int len = sp.Text?.Length ?? 0;
                 byte flags = (byte)((sp.Underline ? SpanStyle.UnderlineBit : 0)
                                   | (sp.Strikethrough ? SpanStyle.StrikethroughBit : 0)
-                                  | (sp.IsHyperlink ? SpanStyle.LinkBit : 0));
+                                  | (sp.IsHyperlink ? SpanStyle.LinkBit : 0)
+                                  | (sp.Background.A > 0f ? SpanStyle.HighlightBit : 0));
                 var spanFam = _strings.Intern(sp.FontFamily);
                 _strings.AddRef(spanFam);   // released by SceneStore.ReleaseSpanRun with the run
-                styles[i] = new SpanStyle(pos, pos + len, sp.Weight, sp.Size ?? 0f, spanFam, sp.Color, flags);
+                // The span's weight WORD: an italic-only span inherits the paragraph's numeric weight (0 would mean
+                // "inherit the whole word" and lose the axis), so the base weight is folded in here.
+                int baseWeight = FontWeightWord.Weight(li.TextStyle.Weight);
+                ushort word = sp.Italic
+                    ? FontWeightWord.Make(sp.Weight != 0 ? sp.Weight : baseWeight != 0 ? baseWeight : 400, true)
+                    : sp.Weight;
+                styles[i] = new SpanStyle(pos, pos + len, word, sp.Size ?? 0f, spanFam, sp.Color, flags, sp.Background);
                 pos += len;
             }
             int newRunId = SpanRunTable.Shared.Create(styles, overflowSuffixStart);

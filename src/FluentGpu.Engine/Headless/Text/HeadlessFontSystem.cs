@@ -68,7 +68,7 @@ public sealed class HeadlessFontSystem : IFontSystem
     }
 
     private static float AdvanceOf(in TextStyle style)
-        => style.SizeDip * (style.Weight >= 600 ? 0.62f : 0.55f) + style.SizeDip * style.CharSpacing / 1000f;
+        => style.SizeDip * (FontWeightWord.Weight(style.Weight) >= 600 ? 0.62f : 0.55f) + style.SizeDip * style.CharSpacing / 1000f;
 
     /// <summary>Resolve the span overlay for this call; build the per-char prefix table when present.</summary>
     private void ResolveSpans(ReadOnlySpan<char> text, in TextStyle style)
@@ -91,7 +91,7 @@ public sealed class HeadlessFontSystem : IFontSystem
                 if (_spans[cursor].Weight != 0) w = _spans[cursor].Weight;
                 if (_spans[cursor].SizeDip > 0f) sz = _spans[cursor].SizeDip;
             }
-            x += sz * (w >= 600 ? 0.62f : 0.55f) + sz * style.CharSpacing / 1000f;
+            x += sz * (FontWeightWord.Weight(w) >= 600 ? 0.62f : 0.55f) + sz * style.CharSpacing / 1000f;
         }
         _xs[n] = x;
     }
@@ -169,7 +169,7 @@ public sealed class HeadlessFontSystem : IFontSystem
         if (publishArtifacts && style.SpanRunId != 0 && SpanRunTable.Shared.Resolve(style.SpanRunId) is { } run && ReferenceEquals(run.Spans, _spans))
             PublishSpanArtifacts(run, in style, maxWidth, lineH, baseline);
         float metricSize = MetricSize(in style);
-        return new TextMetrics(size, baseline, baseline + 1f, 1f, metricSize * 0.8f, firstLineW);
+        return new TextMetrics(size, baseline, baseline + 1f, 1f, metricSize * 0.8f, firstLineW, size.Width);
     }
 
     private void PublishSpanArtifacts(SpanRun run, in TextStyle style, float maxWidth, float lineH, float baseline)
@@ -531,6 +531,8 @@ public sealed class HeadlessFontSystem : IFontSystem
         }
         if ((flags & SpanStyle.LinkBit) != 0)
             rects.Add(new SpanRect(new RectF(x0, top, w, lineH), spanIndex, SpanStyle.LinkBit, lineW, gaps, before, inside));
+        if ((flags & SpanStyle.HighlightBit) != 0)
+            rects.Add(new SpanRect(new RectF(x0, top, w, lineH), spanIndex, SpanStyle.HighlightBit, lineW, gaps, before, inside));
         if ((flags & SpanStyle.UnderlineBit) != 0)
             rects.Add(new SpanRect(new RectF(x0, top + baseline + 1f, w, 1f), spanIndex, SpanStyle.UnderlineBit, lineW, gaps, before, inside));
         if ((flags & SpanStyle.StrikethroughBit) != 0)

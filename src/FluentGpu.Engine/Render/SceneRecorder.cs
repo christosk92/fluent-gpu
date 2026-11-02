@@ -2614,6 +2614,21 @@ internal sealed partial class SceneRecordingContext
                 // (a) selection highlight: the per-node SelectionHighlightColor override (api-04, WinUI
                 // TextBlock.SelectionHighlightColor — TextBlock.cpp:266/330) wins over the host theme brush
                 // (TextControlSelectionHighlightColor ≡ the system accent, TextSelectionManager.cpp:52-56).
+                // (a0) span highlights (SpanStyle.HighlightBit — the inline-code pill / ==mark== band): the text seam laid
+                // one line-fragment band per wrapped line at measure (the link-band geometry); filled BEFORE the selection fill and the glyphs in
+                // the span's Background, placed like every span rect (alignment offset, justify widening). 0-touch on the
+                // font seam at record time, no new opcode — a radius-2 fill (the Labs InlineCodeCornerRadius).
+                if (!p.Text.IsEmpty && style.SpanRunId != 0 && scene.TryGetSpanDecorations(node, out var hlStyles, out var hlArts))
+                {
+                    for (int i = 0; i < hlArts.Length; i++)
+                    {
+                        if (hlArts[i].Kind != SpanStyle.HighlightBit) continue;
+                        ColorF bg = hlStyles[hlArts[i].Span].Background;
+                        if (bg.A <= 0f) continue;
+                        RectF band = TextTypography.PlaceSpanRect(in hlArts[i], style.Align, local.W);
+                        dl.FillRoundRect(band, CornerRadius4.All(2f), bg, world, opacity, key | 0x8);
+                    }
+                }
                 ColorF selFill = scene.TryGetSelectionHighlight(node, out var selOverride) ? selOverride : textEdit.SelectionFill;
                 if (selFill.A > 0f)
                     for (int i = 0; i < selRects.Length; i++)
@@ -2667,7 +2682,7 @@ internal sealed partial class SceneRecordingContext
                 {
                     for (int i = 0; i < arts.Length; i++)
                     {
-                        if (arts[i].Kind == SpanStyle.LinkBit) continue;   // hit-test bands, not painted
+                        if (arts[i].Kind == SpanStyle.LinkBit || arts[i].Kind == SpanStyle.HighlightBit) continue;   // hit-test bands / already filled in (a0)
                         ColorF spanColor = spanStyles[arts[i].Span].Color;
                         // Laid Start-aligned + unjustified at measure: place at THIS box (local.W = the glyph op's
                         // Bounds.W the renderer aligns/justifies at) — Center/End line offset, Justify gap widening.

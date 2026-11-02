@@ -1,3 +1,4 @@
+using FluentGpu.Foundation;
 using FluentGpu.Text;
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
@@ -87,6 +88,9 @@ public sealed unsafe class DWriteFontFaceSource : IFontFaceSource, IDisposable
     public nint CreateSystemFace(string family, int weight, out FontFaceMetrics metrics)
     {
         metrics = default;
+        // The weight WORD carries the style axis (FontWeightWord): decode here, the one place a system face is chosen.
+        bool italic = FontWeightWord.IsItalic(weight);
+        weight = FontWeightWord.Weight(weight);
         IDWriteFontCollection* coll;
         if ((int)_dw->GetSystemFontCollection(&coll, BOOL.FALSE) < 0) return 0;
         IDWriteFontFace* face = null;
@@ -99,7 +103,8 @@ public sealed unsafe class DWriteFontFaceSource : IFontFaceSource, IDisposable
             // The numeric weight IS the DWRITE_FONT_WEIGHT - GetFirstMatchingFont picks the nearest face / variable-font
             // named instance (e.g. SemiBold 600 of "Segoe UI Variable Text").
             IDWriteFont* font;
-            Check(fam->GetFirstMatchingFont((DWRITE_FONT_WEIGHT)weight, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, &font), "GetFirstMatchingFont");
+            Check(fam->GetFirstMatchingFont((DWRITE_FONT_WEIGHT)weight, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL,
+                italic ? DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, &font), "GetFirstMatchingFont");
             fam->Release();
             int hr = (int)font->CreateFontFace(&face);
             font->Release();
@@ -113,6 +118,9 @@ public sealed unsafe class DWriteFontFaceSource : IFontFaceSource, IDisposable
     public nint CreateFileFace(string path, int faceIndex, int weight, out FontFaceMetrics metrics)
     {
         metrics = default;
+        // A file face has one style; an italic request slants it synthetically (DWRITE_FONT_SIMULATIONS_OBLIQUE).
+        bool italic = FontWeightWord.IsItalic(weight);
+        weight = FontWeightWord.Weight(weight);
         IDWriteFontFile* file;
         int hr;
         fixed (char* p = path) hr = (int)_dw->CreateFontFileReference(p, null, &file);
@@ -125,6 +133,7 @@ public sealed unsafe class DWriteFontFaceSource : IFontFaceSource, IDisposable
             IDWriteFontFile** files = &file;
             // A raw file has no weight family to pick from - synthesize bold for the heavy half (>= 600).
             var sim = weight >= 600 ? DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_BOLD : DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_NONE;
+            if (italic) sim |= DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_OBLIQUE;
             if ((int)_dw->CreateFontFace(faceType, 1, files, (uint)faceIndex, sim, &face) < 0 || face == null) return 0;
         }
         finally { file->Release(); }
