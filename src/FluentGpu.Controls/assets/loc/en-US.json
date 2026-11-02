@@ -7,6 +7,23 @@
     "ok": "OK"
   },
 
+  "markdown": {
+    "$comment": "MarkdownTextBlock: the default link warning dialog (markdown.md §6.1) and the code card's copy affordance.",
+    "linkOpenTitle": "Open this link?",
+    "linkOpenMessage": "You're about to leave the app and open this address in your browser:",
+    "linkMailTitle": "Write an email?",
+    "linkMailMessage": "You're about to open your mail app with this address:",
+    "write": "Write",
+    "linkRefusedTitle": "This link can't be opened",
+    "linkRefusedNoScheme": "Only web (http, https) and email (mailto) links open from here. This link has no address scheme:",
+    "linkRefusedScheme": "Only web (http, https) and email (mailto) links open from here. This link uses the \"{0}\" scheme:",
+    "open": "Open",
+    "cancel": "Cancel",
+    "close": "Close",
+    "copy": "Copy",
+    "copied": "Copied"
+  },
+
   "infoBar": {
     "$comment": "InfoBar (and Toast, which builds on InfoBar) close-button tooltip — WinUI SR_InfoBarCloseButtonTooltip.",
     "close": "Close"
