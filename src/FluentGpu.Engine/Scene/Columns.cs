@@ -318,8 +318,8 @@ public struct NodePaintCold : IEquatable<NodePaintCold>
 {
     // Hover/press reveal opacity (BoxEl.HoverOpacity/PressedOpacity). NaN = none. Eased with the interaction progress.
     public float HoverOpacity, PressedOpacity;
-    public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover
-    public ColorF PressedFill;    // A==0 ⇒ recorder auto-darkens Fill on press
+    public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover (SceneRecorder.AutoTints says which boxes)
+    public ColorF PressedFill;    // A==0 ⇒ recorder auto-darkens Fill on press (SceneRecorder.AutoTints says which boxes)
     public ColorF HoverBorderColor;    // A==0 ⇒ recorder auto-lightens BorderColor on hover (else eases to this exact token)
     public ColorF PressedBorderColor;  // A==0 ⇒ recorder auto-darkens BorderColor on press (else eases to this exact token)
     // Validation error border (form-validation.md): the theme-resolved invalid color, written by the reconciler from the
