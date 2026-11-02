@@ -348,6 +348,15 @@ dispatcher implements `ParentScroller`/`CanMove` from the live plan):
   hand-off (WinUI shelf rule). A contact whose scroller is pinned at its starting edge hands its deltas up mid-stream
   (`ContactCancel` on the old handle — a hand-off is not a release, it must not fling).
 - Keyboard / thumb / programmatic are never latched: the owning scroller, walking up only when it cannot move.
+- **A scroller with no range on the axis is never a target (as-built 2026-11-02, `IScrollerQuery.HasRange`).** The
+  fallback when nothing can move used to be "the latched / outermost scroller", which handed a horizontal notch to a
+  horizontal viewport whose content FITS — a Markdown table that fits rubber-banded sideways. Now the fallback is the
+  nearest self-or-ancestor that HAS a range on the axis (it absorbs the notch at its edge — the rubber band stays for a
+  page at its end), else none: a vertical wheel over a horizontal scroller always reaches the page; a horizontal notch
+  over a horizontal scroller that fits moves nothing (a Wavee shelf whose cards fit its width no longer bounces on a
+  horizontal wheel or touchpad swipe — the one behaviour change; shelves with range are untouched, including the
+  at-edge bounce). Only a horizontal wheel, a horizontal touchpad/touch contact or Shift + wheel pan a horizontal
+  scroller, and only one with range.
 
 Wheel dispatch order (`DispatchWheelNotch`): element `OnPointerWheel` first-refusal → Ctrl + `InputHooks.ZoomWheel`
 (owned by `input-a11y.md` §7B) → `Element.WheelTarget` routing (a header forwarding to its list's handle) → router →
