@@ -26,16 +26,25 @@ public abstract record MarkdownBlock
 {
     public int SourceStart { get; init; } = -1;
     public int SourceEnd { get; init; } = -1;
+    /// <summary>The editor's parse: the inline text's range in the source (a paragraph or heading).</summary>
+    internal int ContentStart { get; init; } = -1;
+    internal int ContentEnd { get; init; } = -1;
 }
 
 /// <summary>ATX (<c># Title</c>) or setext heading, level 1-6.</summary>
-public sealed record MarkdownHeading(int Level, MarkdownInline[] Inlines) : MarkdownBlock;
+public sealed record MarkdownHeading(int Level, MarkdownInline[] Inlines) : MarkdownBlock
+{
+    internal bool Setext { get; init; }
+}
 
 public sealed record MarkdownParagraph(MarkdownInline[] Inlines) : MarkdownBlock;
 
 /// <summary>A fenced or indented code block. <see cref="Language"/> is the first word of the fence info string
 /// (empty for an indented block or a bare fence).</summary>
-public sealed record MarkdownCodeBlock(string Language, string Code) : MarkdownBlock;
+public sealed record MarkdownCodeBlock(string Language, string Code) : MarkdownBlock
+{
+    internal bool Fenced { get; init; }
+}
 
 public sealed record MarkdownQuote(MarkdownBlock[] Children) : MarkdownBlock;
 
@@ -49,7 +58,14 @@ public sealed record MarkdownList(bool Ordered, int Start, bool Tight, MarkdownL
 /// before its nested items — the index handed to <see cref="MarkdownOptions.OnTaskToggled"/>), -1 for a plain item;
 /// <see cref="MarkerOffset"/> is the UTF-16 offset in the ORIGINAL source of the character inside the marker's
 /// brackets (the one <see cref="MarkdownTasks.Toggle"/> rewrites), -1 for a plain item.</summary>
-public sealed record MarkdownListItem(MarkdownBlock[] Children, bool? Checked, int TaskIndex, int MarkerOffset = -1);
+public sealed record MarkdownListItem(MarkdownBlock[] Children, bool? Checked, int TaskIndex, int MarkerOffset = -1)
+{
+    // The editor's parse: where the item's marker and first content sit in the source, and its written number.
+    internal int MarkerStart { get; init; } = -1;
+    internal int ContentStart { get; init; } = -1;
+    internal int LineEnd { get; init; } = -1;
+    internal int Ordinal { get; init; }
+}
 
 public sealed record MarkdownThematicBreak : MarkdownBlock
 {
@@ -68,9 +84,25 @@ public enum MarkdownTableAlign : byte { None, Left, Center, Right }
 public sealed record MarkdownHtmlBlock(string Html) : MarkdownBlock;
 
 /// <summary>An inline node inside a paragraph, heading, table cell or list item.</summary>
-public abstract record MarkdownInline;
+public abstract record MarkdownInline
+{
+    // The editor's parse (MarkdownParser.ParseForEditor), -1 otherwise: the node's source range, and for a delimited node
+    // the two delimiter ranges. A node with a source range and no text map inside is one atom (a consumer syntax, an image).
+    internal int SourceStart { get; init; } = -1;
+    internal int SourceEnd { get; init; } = -1;
+    internal int OpenStart { get; init; } = -1;
+    internal int OpenEnd { get; init; } = -1;
+    internal int CloseStart { get; init; } = -1;
+    internal int CloseEnd { get; init; } = -1;
+}
 
-public sealed record MarkdownText(string Text) : MarkdownInline;
+public sealed record MarkdownText(string Text) : MarkdownInline
+{
+    /// <summary>The editor's parse: start and end source offset per UTF-16 unit of <see cref="Text"/>.</summary>
+    internal int[]? Map { get; init; }
+    /// <summary>The editor's parse: a delimiter run left over that could open, waiting for its closer.</summary>
+    internal bool UnmatchedOpener { get; init; }
+}
 
 /// <summary><c>*em*</c> / <c>**strong**</c>. The engine's shaper has no italic axis yet (text.md §4 face
 /// resolution is family+weight), so the renderer maps emphasis to a weight step, not a slant — markdown.md §5.2.</summary>
@@ -81,12 +113,21 @@ public sealed record MarkdownStrikethrough(MarkdownInline[] Children) : Markdown
 /// <summary><c>==marked==</c> (the markdown-it-mark / pulldown-cmark highlight extension): a line-band highlight.</summary>
 public sealed record MarkdownMark(MarkdownInline[] Children) : MarkdownInline;
 
-public sealed record MarkdownCodeSpan(string Code) : MarkdownInline;
+public sealed record MarkdownCodeSpan(string Code) : MarkdownInline
+{
+    /// <summary>The editor's parse: start and end source offset per UTF-16 unit of <see cref="Code"/>.</summary>
+    internal int[]? Map { get; init; }
+}
 
 /// <summary>A link. <see cref="Syntax"/> is <c>null</c> for a CommonMark link or autolink and the extension's
 /// <see cref="MarkdownInlineSyntax.Name"/> for one produced by a consumer-registered inline syntax (a
 /// <c>[[wikilink]]</c>), so the click handler can route by origin without re-parsing the URL.</summary>
-public sealed record MarkdownLink(MarkdownInline[] Children, string Url, string Title, string? Syntax = null) : MarkdownInline;
+public sealed record MarkdownLink(MarkdownInline[] Children, string Url, string Title, string? Syntax = null) : MarkdownInline
+{
+    /// <summary>The editor's parse: the written destination of an inline link, -1 for a reference link or autolink.</summary>
+    internal int UrlStart { get; init; } = -1;
+    internal int UrlEnd { get; init; } = -1;
+}
 
 /// <summary>An image reference. The viewer never fetches <see cref="Url"/> itself: it is handed to
 /// <see cref="MarkdownOptions.ImageResolver"/>, and without one the alt text shows instead (markdown.md §6.3).</summary>
@@ -171,4 +212,46 @@ public enum MarkdownExtensions : byte
     /// <summary><c>==mark==</c> highlight (not GFM; markdown-it-mark, pulldown-cmark <c>ENABLE_MARK</c>).</summary>
     Mark = 16,
     All = Tables | TaskLists | Strikethrough | Autolinks | Mark,
+    /// <summary>A leading <c>---</c> block is front matter, not content. Off in <see cref="All"/>: a viewer of plain Markdown
+    /// keeps reading <c>---</c> as a rule. The editor always turns it on (markdown-editor.md, R5).</summary>
+    FrontMatter = 32,
+}
+
+/// <summary>Finds a leading front matter block (a <c>---</c> line, a closing <c>---</c> or <c>...</c> line), after an optional BOM.</summary>
+public static class MarkdownFrontMatter
+{
+    /// <summary>The block's range, closing line and its newline included. False when the text has no closed block at its start.</summary>
+    public static bool TryFind(string text, out int start, out int end)
+    {
+        start = text.Length > 0 && text[0] == '\uFEFF' ? 1 : 0;
+        end = start;
+        int lineEnd = LineEnd(text, start);
+        if (!text.AsSpan(start, lineEnd - start).TrimEnd(' ').SequenceEqual("---")) return false;
+        int at = NextLine(text, lineEnd);
+        while (at < text.Length)
+        {
+            lineEnd = LineEnd(text, at);
+            var line = text.AsSpan(at, lineEnd - at).TrimEnd(' ');
+            if (line.SequenceEqual("---") || line.SequenceEqual("..."))
+            {
+                end = NextLine(text, lineEnd);
+                return true;
+            }
+            at = NextLine(text, lineEnd);
+        }
+        return false;
+    }
+
+    private static int LineEnd(string t, int from)
+    {
+        int i = from;
+        while (i < t.Length && t[i] != '\n' && t[i] != '\r') i++;
+        return i;
+    }
+
+    private static int NextLine(string t, int lineEnd)
+    {
+        if (lineEnd >= t.Length) return t.Length;
+        return t[lineEnd] == '\r' && lineEnd + 1 < t.Length && t[lineEnd + 1] == '\n' ? lineEnd + 2 : lineEnd + 1;
+    }
 }
