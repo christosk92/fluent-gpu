@@ -6,6 +6,82 @@ using FluentGpu.Hooks;
 using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
+// ── MarkdownEditor: the WYSIWYG editor, a projection over the source text (docs/design/subsystems/markdown-editor.md) ──
+
+[GalleryPage("MarkdownEditor", "MarkdownEditor", "Text", Icon = Icons.Edit, Level = GalleryLevel.RealWorld,
+    Keywords = ["markdown", "editor", "wysiwyg", "rich text", "richeditbox", "notes"])]
+sealed partial class MarkdownEditorPage : Component
+{
+    // Deliberately untidy: CRLF and LF, `*` bullets, __strong__, a setext heading, a reference link, trailing spaces. It stays so.
+    const string Untidy =
+        "---\r\ntitle: Atlas launch\r\n---\r\n\r\n" +
+        "Atlas launch\r\n============\r\n\r\n" +
+        "Draft for the __launch__ on *Monday*. See the [rollout guide][guide] and `dry-run` notes, with ==first draft== marked.   \r\n\r\n" +
+        "* Freeze the copy\r\n* Book the room\r\n\r\n" +
+        "- [x] Confirm the pilot group\r\n- [ ] Review risks\r\n\r\n" +
+        "> Keep the first release small.\r\n\r\n" +
+        "```sh\r\natlas release --dry-run\r\n```\r\n\r\n" +
+        "| Item | Due |\r\n|---|---|\r\n| Copy | Mon |\r\n\r\n" +
+        "[guide]: https://example.com/rollout \"Rollout\"\r\n";
+
+    static readonly Signal<string> _panel = new(Untidy);
+    static readonly Signal<string> _wide = new(Untidy);
+    static readonly Signal<string> _links = new("Send the draft to [[Bulletin list|the list]] and type two brackets for more: \n");
+    static readonly Signal<string> _empty = new("");
+
+    static readonly string[] Notes = ["Bulletin list", "Bulletin schedule", "Atlas launch", "Risks", "Rollout"];
+
+    public override Element Render() => GalleryPage.Shell("MarkdownEditor",
+        "Write Markdown without seeing it. The file is the document: the markers are hidden, every edit is one replace on the text, and nothing " +
+        "you did not touch changes. Ctrl+/ shows the source at the same place.",
+        ExampleCard.Show(PanelSample),
+        ExampleCard.Show(WideSample),
+        ExampleCard.Show(ConsumerSample),
+        ExampleCard.Show(EmptySample));
+
+    static Element Sized(float width, float height, Element child) => new BoxEl { Direction = 1, Width = width, Height = height, Children = [child] };
+
+    [Sample("In a 460 px panel", Description = "No toolbar: a selection flyout, shortcuts and a footer carry everything. The note on the page is the file below it, byte for byte.")]
+    static Element Panel() => VStack(8,
+        Sized(460f, 420f, MarkdownEditor.Create(_panel, new MarkdownEditorOptions { Chrome = MarkdownEditorChrome.Field })));
+
+    [Sample("In a wide window", Description = "A command bar, and a text column capped for reading.")]
+    static Element Wide() => new BoxEl { Direction = 1, Height = 420f, Children = [MarkdownEditor.Create(_wide, new MarkdownEditorOptions { Chrome = MarkdownEditorChrome.Field, CommandBarMinWidth = 560f })] };
+
+    [Sample("Consumer syntax and completion", Description = "Two registrations in the app: an inline syntax and a completion source. The engine knows neither names nor notes. A link is one caret stop and its alias is never rewritten.")]
+    static Element Consumer() => Sized(460f, 200f, MarkdownEditor.Create(_links, new MarkdownEditorOptions
+    {
+        Chrome = MarkdownEditorChrome.Field,
+        Markdown = new MarkdownOptions
+        {
+            InlineSyntaxes =
+            [
+                new MarkdownInlineSyntax("wikilink", "[[", "]]", inner =>
+                {
+                    int bar = inner.IndexOf('|');
+                    return new MarkdownLink([new MarkdownText(bar < 0 ? inner : inner[(bar + 1)..])], bar < 0 ? inner : inner[..bar], "", "wikilink");
+                }),
+            ],
+        },
+        Completions =
+        [
+            new MarkdownCompletionSource("[[", "]]", q =>
+            {
+                var rows = new List<MarkdownCompletion>();
+                foreach (var n in Notes) if (n.Contains(q, StringComparison.OrdinalIgnoreCase)) rows.Add(new MarkdownCompletion(n, n));
+                return rows;
+            }),
+        ],
+    }));
+
+    [Sample("An empty note", Description = "One line of placeholder, and / for the insert menu.")]
+    static Element Empty() => Sized(460f, 160f, MarkdownEditor.Create(_empty, new MarkdownEditorOptions
+    {
+        Chrome = MarkdownEditorChrome.Field,
+        Placeholder = "Write a note, or type / to insert",
+    }));
+}
+
 // ── MarkdownTextBlock: the read-only CommonMark + GFM viewer (docs/design/subsystems/markdown.md) ─────────────────
 
 [GalleryPage("MarkdownTextBlock", "MarkdownTextBlock", "Text", Icon = Icons.Document, Level = GalleryLevel.RealWorld,
