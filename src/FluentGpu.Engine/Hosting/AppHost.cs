@@ -5231,6 +5231,9 @@ public sealed partial class AppHost : IDisposable
 
         // Text-editing seams for EditableText (clipboard / IME / caret blink / shared text metrics) — see InputHooks.
         _inputHooks.Clipboard = app.Clipboard;
+        // The dispatcher's own seam for Ctrl+C over a READ-ONLY selection (rtb-02, InputDispatcher.Clipboard) — the editor
+        // copies through InputHooks, a SpanTextEl/TextEl selection through this; both must point at the platform clipboard.
+        _dispatcher.Clipboard = app.Clipboard;
         _inputHooks.OpenUri = app.OpenUri;
         // Static factories (HyperlinkButton.Create) have no component scope → no UseContext: mirror the seam onto
         // the InputHooks.Current channel-default instance too (last-constructed host wins — matches the
@@ -6490,6 +6493,20 @@ public sealed partial class AppHost : IDisposable
             // rationale as the UI-post drain above). Skipped when nothing is armed → 0-alloc on every frame that uses no
             // timer, and 0-alloc on a quiet frame with an armed-but-not-due timer (Drain is one comparison then returns).
             if (_timers.Count > 0) _runtime.Batch(_drainTimers);
+            // An INTERVAL tick is not a state change for the capture above (capturing on every tick cost the seek rail a capture
+            // and a projection walk per playing frame — audited away), but a tick that RE-RENDERS a component is this frame's commit
+            // like any other write: without a "before", every layout transition and FlowReveal under that component lands at once
+            // (a streaming Markdown column stepped a line per tick, no spring). So open the capture now — after the drain queued
+            // the render, before the flush runs it — gated on a queued COMPONENT-RENDER row (Reconciler.RowKindComp): a tick that
+            // only wrote bound values (the seek rail's pixel stepper) queues bind rows, never a render row, and still captures nothing.
+            if (!capturedProjections && !_projectionCaptureOpen && _everLaidOut && !_scene.Root.IsNull && !resized
+                && _scene.BoundsAnimatedNodes.Count > 0 && _runtime.HasPendingRowOfKind(_runtime.Rows, TreeReconciler.RowKindComp))
+            {
+                _projectBefore.Clear();
+                CaptureProjections();
+                capturedProjections = _projectBefore.Count > 0;
+                _projectionCaptureOpen = true;
+            }
             // Frame clock: publish BEFORE the flush so per-frame pollers (FrameClock.Tick subscribers — the seek ticker,
             // overlay-close watchers) drain in THIS frame's flush and the runtime queue is EMPTY at frame end. Published
             // last it left one queued computation every single frame, so the RuntimePending wake reason fired on every

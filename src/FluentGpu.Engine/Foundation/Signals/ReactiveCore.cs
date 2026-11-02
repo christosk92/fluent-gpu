@@ -391,6 +391,19 @@ public sealed class ReactiveRuntime
     public bool HasPending => _pending.Count > 0 || _pendingStructural.Count > 0
         || _normalCursor < _draining.Count || _structuralCursor < _drainingStructural.Count;
 
+    /// <summary>True when a queued unit is a row of <paramref name="table"/> whose kind is <paramref name="kind"/> — the host
+    /// asks for the reconciler's COMPONENT-RENDER rows, so it can tell "this flush will re-render a component (layout may
+    /// change)" from "only bound values changed" without classifying every computation. A linear scan of what is queued:
+    /// a handful of entries on the frames it runs (after a frame-clock tick), none on a quiet frame (every list empty).</summary>
+    public bool HasPendingRowOfKind(RxTable table, int kind)
+    {
+        for (int i = 0; i < _pendingStructural.Count; i++) { var s = _pendingStructural[i]; if (s.Row != 0 && ReferenceEquals(s.Target, table) && table.KindOf(s.Row) == kind) return true; }
+        for (int i = 0; i < _pending.Count; i++) { var s = _pending[i]; if (s.Row != 0 && ReferenceEquals(s.Target, table) && table.KindOf(s.Row) == kind) return true; }
+        for (int i = _structuralCursor; i < _drainingStructural.Count; i++) { var s = _drainingStructural[i]; if (s.Row != 0 && ReferenceEquals(s.Target, table) && table.KindOf(s.Row) == kind) return true; }
+        for (int i = _normalCursor; i < _draining.Count; i++) { var s = _draining[i]; if (s.Row != 0 && ReferenceEquals(s.Target, table) && table.KindOf(s.Row) == kind) return true; }
+        return false;
+    }
+
     internal void Schedule(Computation c)
     {
         if (c.Queued || c.Disposed) return;

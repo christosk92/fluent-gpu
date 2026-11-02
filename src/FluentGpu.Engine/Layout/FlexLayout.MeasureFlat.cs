@@ -148,6 +148,7 @@ public sealed partial class FlexLayout
                 if (ca < need) return;   // some child would be offered less than its interval at this box's low end
             }
         }
+        if (_minContentProbe) return;   // a probe's interval is not the node's (it measured at a 2 px offer with a different wrap)
         m.FlatGen = _measureGen; m.FlatLo = lo; m.FlatHi = hi; m.FlatW = w; m.FlatH = h;
         m.FlatVer = _scene.SubtreeVersion(node);   // a layout-dirty mark anywhere below, later in this pass, voids the interval
         // The ring slot StoreRing just wrote for this offer carries the interval across passes.
