@@ -41,7 +41,7 @@ sealed partial class MarkdownEditorPage : Component
 
     static Element Sized(float width, float height, Element child) => new BoxEl { Direction = 1, Width = width, Height = height, Children = [child] };
 
-    [Sample("In a 460 px panel", Description = "No toolbar: a selection flyout, shortcuts and a footer carry everything. The note on the page is the file below it, byte for byte.")]
+    [Sample("In a 460 px panel", Description = "No toolbar: a selection flyout, shortcuts and a footer carry everything. The sample file is deliberately untidy and stays so.")]
     static Element Panel() => VStack(8,
         Sized(460f, 420f, MarkdownEditor.Create(_panel, new MarkdownEditorOptions { Chrome = MarkdownEditorChrome.Field })));
 

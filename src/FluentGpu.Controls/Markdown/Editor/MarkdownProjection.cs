@@ -775,7 +775,7 @@ internal sealed class MdProjection
         }
     }
 
-    private static bool SameShape(MdView a, MdView b) => a.GetType() == b.GetType();
+    private static bool SameShape(MdView a, MdView b) => a.GetType() == b.GetType() || (a is MdObjectView or MdRawBlockView && b is MdObjectView or MdRawBlockView);
 
     private static void NumberFlows(MdView v, long block, ref int ordinal)
     {

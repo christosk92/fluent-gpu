@@ -95,6 +95,7 @@ public sealed class MarkdownEditor : Component
     private Signal<bool> _wide = null!;
     private Signal<bool> _focusSig = null!;
     private float _anchorCaretY = float.NaN;
+    private bool _sourceToggled;
     private readonly Dictionary<long, NodeHandle> _wrappers = new();
     private readonly Dictionary<long, Action<NodeHandle>> _captures = new();
     private readonly Dictionary<long, ScrollHandle> _codeScrolls = new();
@@ -151,6 +152,9 @@ public sealed class MarkdownEditor : Component
 
         var p = _model.P;
         var column = new List<Element>(p.Views.Count);
+        // An edit that made or merged a block lands at once: the block it splits would ease while the new one is already there, and the note below would bounce.
+        _structural = p.Views.Count != _lastViewCount;
+        _lastViewCount = p.Views.Count;
         long dimId = DimFlowId();
         long selObject = SelectedObjectId();
         _viewsById.Clear();
@@ -175,8 +179,9 @@ public sealed class MarkdownEditor : Component
             Gap = _model.IsRaw ? 0f : _style.BlockGap,
             Grow = 1f, Shrink = 1f, MinWidth = 0f,
             MaxWidth = wide ? Options.ReadingWidth : float.NaN,
-            Enter = new EnterExit(Opacity: 0f, Active: true),
-            Transition = MotionTok.StandardEnter,
+            // The short crossfade of the source toggle. A note that just mounted is simply there.
+            Enter = _sourceToggled ? new EnterExit(Opacity: 0f, Active: true) : default,
+            Transition = _sourceToggled ? MotionTok.StandardEnter : default,
             Children = column.ToArray(),
         };
         var content = new BoxEl
@@ -352,11 +357,13 @@ public sealed class MarkdownEditor : Component
             Direction = 1,
             Margin = top > 0f ? new Edges4(0, top, 0, 0) : default,
             ClipToBounds = v is not MdRawBlockView { Kind: MdObjectKind.None },
-            Layout = v is MdRawBlockView { Kind: MdObjectKind.None } ? default : new LayoutTransition(TransitionChannels.Size, MotionTok.Reveal.ToDynamics(), Size: SizeMode.FlowReveal, Anchor: SizeAnchor.Parallax),
+            Layout = _structural || v is MdRawBlockView { Kind: MdObjectKind.None } ? default : new LayoutTransition(TransitionChannels.Size, MotionTok.Reveal.ToDynamics(), Size: SizeMode.FlowReveal, Anchor: SizeAnchor.Parallax),
             Children = [el],
         };
     }
 
+    private bool _structural;
+    private int _lastViewCount = -1;
     private long _renderingView;
     private int _renderingTask;
 
@@ -879,6 +886,7 @@ public sealed class MarkdownEditor : Component
         CloseFlyouts();
         // Keep the caret's line where it is on screen.
         _anchorCaretY = CaretViewY();
+        _sourceToggled = true;
         _model.ToggleRaw();
         _follow = false;
         RequestRender();
@@ -1482,7 +1490,7 @@ public sealed class MarkdownEditor : Component
             var kids = new List<Element>(12);
             if (Wide)
             {
-                kids.Add(LabelButton(BlockLabel(model), o.OpenStyleMenu));
+                kids.Add(LabelButton(BlockLabel(model), o.OpenStyleMenu) with { Width = 104f });   // fixed: a caret move changes the label and moves nothing
                 kids.Add(Sep());
                 kids.Add(Tool(Icons.Bold, model.IsMarkActive(MarkdownMarkKind.Bold), () => o.BarMark(MarkdownMarkKind.Bold)));
                 kids.Add(Tool(Icons.Italic, model.IsMarkActive(MarkdownMarkKind.Italic), () => o.BarMark(MarkdownMarkKind.Italic)));
@@ -1517,7 +1525,7 @@ public sealed class MarkdownEditor : Component
 
         private static Element Sep() => new BoxEl { Width = 1f, Height = 20f, Fill = Tok.StrokeDividerDefault, Margin = new Edges4(Spacing.XS, 0, Spacing.XS, 0) };
 
-        private static Element LabelButton(string label, Action onClick)
+        private static BoxEl LabelButton(string label, Action onClick)
         {
             var body = Tok.Definition.Type.Body;
             return new BoxEl
@@ -1570,6 +1578,7 @@ public sealed class MarkdownEditor : Component
     // ── menus: insert (/) and completion ───────────────────────────────────────────────────────────────────────────
 
     private sealed record MenuRow(string Label, string Hint, Action Accept);
+    private const int MaxMenuRows = 12;
 
     private readonly Signal<int> _menuEpoch = new(0);
     private List<MenuRow> _menuRows = new();
@@ -1736,6 +1745,7 @@ public sealed class MarkdownEditor : Component
     private void ShowMenu(List<MenuRow> rows, int anchorStart)
     {
         if (rows.Count == 0) { CloseMenu(); return; }
+        if (rows.Count > MaxMenuRows) rows.RemoveRange(MaxMenuRows, rows.Count - MaxMenuRows);   // the query narrows it
         _menuRows = rows;
         _menuIndex = Math.Clamp(_menuIndex, 0, rows.Count - 1);
         _menuEpoch.Value = _menuEpoch.Peek() + 1;
@@ -1781,7 +1791,7 @@ public sealed class MarkdownEditor : Component
                     ],
                 };
             }
-            return new ScrollEl { MaxHeight = 320f, ContentSized = true, Content = new BoxEl { Direction = 1, Width = 260f, Padding = new Edges4(0, 2f, 0, 2f), Children = kids } };
+            return new BoxEl { Direction = 1, Width = 260f, Padding = new Edges4(0, 2f, 0, 2f), Children = kids };
         }
     }
 
