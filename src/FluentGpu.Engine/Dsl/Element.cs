@@ -137,7 +137,8 @@ public sealed record BoxEl : Element
     public Prop<ColorF> Fill { get; init; } = ColorF.Transparent;
     /// <summary>Bindable like <see cref="Fill"/>: a bound hover/press fill re-fires on RethemeAll (theme/palette
     /// switch) and can read recycle-varying state (e.g. a virtual list's slot index for zebra-aware hover depth)
-    /// without remounting the slot. A==0 ⇒ the recorder auto-lightens/darkens <see cref="Fill"/> instead.</summary>
+    /// without remounting the slot. A==0 ⇒ the recorder auto-lightens/darkens <see cref="Fill"/> instead on a click target;
+    /// a box that takes pointer input with no <see cref="OnClick"/> (a canvas, a scrim, a hover zone) stays as it is.</summary>
     public Prop<ColorF> HoverFill { get => (_cHover ?? BoxColdHover.Default).HoverFill; init { if (!EqualityComparer<Prop<ColorF>>.Default.Equals((_cHover ?? BoxColdHover.Default).HoverFill, value)) CHover.HoverFill = value; } }
     public Prop<ColorF> PressedFill { get => (_cHover ?? BoxColdHover.Default).PressedFill; init { if (!EqualityComparer<Prop<ColorF>>.Default.Equals((_cHover ?? BoxColdHover.Default).PressedFill, value)) CHover.PressedFill = value; } }
     /// <summary>Bindable like <see cref="Fill"/> so retained shell/card borders can follow a live theme switch.</summary>

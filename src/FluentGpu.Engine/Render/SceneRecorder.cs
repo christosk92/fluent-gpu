@@ -3881,19 +3881,27 @@ internal sealed partial class SceneRecordingContext
         => scene.TryGetBrushAnim(node, out var ba)
            && (ba.Channels & BrushAnim.FillBit) != 0 && ba.FillFrom.A > 0f && ba.T < 1f;
 
+    /// <summary>May an unset HoverFill/PressedFill (and border) fall back to the auto lighten/darken? A click target may. So may
+    /// a part with no input of its own (a seek line, a reveal plate) driven by its control's hover. A box that takes pointer input
+    /// without a click is a surface, not a button (a canvas, an editor, a scrim, a hover zone): it lights only when it asks to.</summary>
+    private static bool AutoTints(uint handlerMask)
+        => (handlerMask & InteractionInfo.ClickBit) != 0
+           || (handlerMask & (InteractionInfo.AnyInteractiveMask | InteractionInfo.CursorBit)) == 0;
+
     private void ResolveSurface(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, in NodePaint p, in NodePaintCold pc, in InheritedState inherited,
                                        bool nodeInteractive, bool hasLocalProgress, float localHoverT, float localPressT,
                                        out ColorF fill, out ColorF border)
     {
         fill = p.Fill; border = p.BorderColor;
+        bool autoTints = AutoTints(scene.Interaction(node).HandlerMask);
         if (TryResolveInteractionProgress(in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out float hoverT, out float pressT)
             && (hoverT > 0.001f || pressT > 0.001f))
         {
             // Inherited progress from a hovered container must NOT auto-lighten descendant fills — only an explicit
             // HoverFill/PressedFill opts in (matches FollowsContainerHover: reveal/scale only; pure-fill tracks the
-            // actual pointer). Local interactive nodes keep the auto-lighten default when HoverFill is unset.
-            // Cross-fade in LINEAR light (color canon: linear-blend / premultiplied) — not straight sRGB.
-            bool local = hasLocalProgress;
+            // actual pointer). Local nodes keep the auto-lighten default when HoverFill is unset, unless they are input
+            // surfaces (AutoTints). Cross-fade in LINEAR light (color canon: linear-blend / premultiplied) — not straight sRGB.
+            bool local = hasLocalProgress && autoTints;
             if (hoverT > 0.001f && (pc.HoverFill.A > 0f || local))
             {
                 ColorF hov = pc.HoverFill.A > 0f ? pc.HoverFill : Lighten(p.Fill, 0.08f);
@@ -3920,13 +3928,13 @@ internal sealed partial class SceneRecordingContext
         }
         else if ((flags & NodeFlags.Pressed) != 0)
         {
-            fill = pc.PressedFill.A > 0f ? pc.PressedFill : Darken(fill, 0.12f);
-            border = pc.PressedBorderColor.A > 0f ? pc.PressedBorderColor : Darken(border, 0.12f);
+            fill = pc.PressedFill.A > 0f ? pc.PressedFill : autoTints ? Darken(fill, 0.12f) : fill;
+            border = pc.PressedBorderColor.A > 0f ? pc.PressedBorderColor : autoTints ? Darken(border, 0.12f) : border;
         }
         else if ((flags & NodeFlags.Hovered) != 0)
         {
-            fill = pc.HoverFill.A > 0f ? pc.HoverFill : Lighten(fill, 0.08f);
-            border = pc.HoverBorderColor.A > 0f ? pc.HoverBorderColor : Lighten(border, 0.08f);
+            fill = pc.HoverFill.A > 0f ? pc.HoverFill : autoTints ? Lighten(fill, 0.08f) : fill;
+            border = pc.HoverBorderColor.A > 0f ? pc.HoverBorderColor : autoTints ? Lighten(border, 0.08f) : border;
         }
 
         // Implicit BrushTransition (logical state flip): cross-fade from the previously-displayed color toward the
