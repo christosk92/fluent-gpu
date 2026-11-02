@@ -33,6 +33,7 @@ public static class MarkdownParser
         options ??= MarkdownOptions.Default;
         var p = new State(options);
         var lines = SplitLines(text, out var offsets);
+        if ((options.Extensions & MarkdownExtensions.FrontMatter) != 0) BlankFrontMatter(text, lines, offsets);
         int refs = p.CollectReferences(lines);
         int from = 0;
         MarkdownBlock[] reused = Array.Empty<MarkdownBlock>();
@@ -62,6 +63,27 @@ public static class MarkdownParser
         if (reused.Length == 0) blocks = tail;
         else { blocks = new MarkdownBlock[reused.Length + tail.Length]; reused.CopyTo(blocks, 0); tail.CopyTo(blocks, reused.Length); }
         return new MarkdownDocument(blocks) { ReferenceCount = refs };
+    }
+
+    /// <summary>The editor's parse (markdown-editor.md §4): the same grammar, with an inline source map on every node, and
+    /// three readings that keep a half-typed construct from flipping the note: an unclosed fence is not a fence, and a bare
+    /// <c>#</c>, <c>-</c>, <c>1.</c> or <c>&gt;</c> with nothing after it is text until the space arrives. Offsets are into
+    /// <paramref name="text"/>, which must hold no tabs (the editor expands them first and maps back).</summary>
+    internal static MarkdownDocument ParseForEditor(string text, MarkdownOptions options)
+    {
+        if (text.Length == 0) return MarkdownDocument.Empty;
+        var p = new State(options) { Mapped = true };
+        var lines = SplitLines(text, out var offsets);
+        if ((options.Extensions & MarkdownExtensions.FrontMatter) != 0) BlankFrontMatter(text, lines, offsets);
+        int refs = p.CollectReferences(lines);
+        return new MarkdownDocument(p.ParseBlocks(lines, 0, lines.Count, offsets)) { ReferenceCount = refs };
+    }
+
+    /// <summary>Front matter is not content: its lines read as blank.</summary>
+    private static void BlankFrontMatter(string text, List<string> lines, List<int> offsets)
+    {
+        if (!MarkdownFrontMatter.TryFind(text, out _, out int end)) return;
+        for (int i = 0; i < lines.Count && offsets[i] < end; i++) lines[i] = "";
     }
 
     private static int LineAt(List<int> offsets, int charOffset)
@@ -215,6 +237,8 @@ public static class MarkdownParser
         private readonly MarkdownOptions _o = options;
         private readonly Dictionary<string, (string Url, string Title)> _refs = new(StringComparer.OrdinalIgnoreCase);
         private int _taskCount;
+        /// <summary>The editor's parse: inline nodes carry source offsets (<see cref="ParseForEditor"/>).</summary>
+        public bool Mapped { get; init; }
 
         private bool Has(MarkdownExtensions e) => (_o.Extensions & e) != 0;
 
@@ -305,8 +329,9 @@ public static class MarkdownParser
                 }
 
                 var body = line.AsSpan(ind);
+                bool bare = Mapped && IsBareMarkerLine(body);
 
-                if (TryFence(body, out char fc, out int flen, out string info))
+                if (!bare && TryFence(body, out char fc, out int flen, out string info) && (!Mapped || HasClosingFence(lines, i + 1, to, fc, flen)))
                 {
                     var sb = new StringBuilder();
                     int j = i + 1;
@@ -321,14 +346,22 @@ public static class MarkdownParser
                         j++;
                     }
                 fenced_done:
-                    blocks.Add(new MarkdownCodeBlock(info, sb.ToString().TrimEnd('\n')));
+                    blocks.Add(new MarkdownCodeBlock(info, sb.ToString().TrimEnd('\n')) { Fenced = true });
                     i = j;
                     return;
                 }
 
-                if (TryAtxHeading(body, out int level, out string headText))
+                if (!bare && TryAtxHeading(body, out int level, out string headText))
                 {
-                    blocks.Add(new MarkdownHeading(level, ParseInlines(headText)));
+                    if (Mapped)
+                    {
+                        int textAt = offsets[i] + ind + level;
+                        var afterHashes = body.Slice(level);
+                        while (textAt < offsets[i] + line.Length && afterHashes.Length > 0 && afterHashes[0] == ' ') { textAt++; afterHashes = afterHashes.Slice(1); }
+                        int[] hm = IdentityMap(textAt, headText.Length);
+                        blocks.Add(new MarkdownHeading(level, ParseInlines(headText, hm)) { ContentStart = hm[0], ContentEnd = hm[^1] });
+                    }
+                    else blocks.Add(new MarkdownHeading(level, ParseInlines(headText)));
                     i++;
                     return;
                 }
@@ -340,7 +373,7 @@ public static class MarkdownParser
                     return;
                 }
 
-                if (body.Length > 0 && body[0] == '>')
+                if (!bare && body.Length > 0 && body[0] == '>')
                 {
                     // Block quote: collect `>` lines + lazy paragraph continuations, strip the marker, recurse.
                     var inner = new List<string>();
@@ -370,20 +403,20 @@ public static class MarkdownParser
                     return;
                 }
 
-                if (TryListMarker(body, out bool ordered, out int start, out int markerWidth, out _))
+                if (!bare && TryListMarker(body, out bool ordered, out int start, out int markerWidth, out _))
                 {
                     i = ParseList(lines, i, to, ordered, start, blocks, offsets);
                     return;
                 }
 
-                if (Has(MarkdownExtensions.Tables) && i + 1 < to && TryTable(lines, i, to, out var table, out int consumed))
+                if (!bare && Has(MarkdownExtensions.Tables) && i + 1 < to && TryTable(lines, i, to, out var table, out int consumed))
                 {
                     blocks.Add(table);
                     i += consumed;
                     return;
                 }
 
-                if (IsHtmlBlockStart(body))
+                if (!bare && IsHtmlBlockStart(body))
                 {
                     var sb = new StringBuilder();
                     int j = i;
@@ -396,6 +429,7 @@ public static class MarkdownParser
                 // Paragraph: until a blank line or an interrupting block start; a setext underline closes it as a heading.
                 {
                     var para = new List<string> { body.ToString() };
+                    var paraOff = Mapped ? new List<int> { offsets[i] + ind } : null;
                     int j = i + 1;
                     while (j < to)
                     {
@@ -404,18 +438,80 @@ public static class MarkdownParser
                         var lb = l.AsSpan(Math.Min(Indent(l), 3));
                         if (Indent(l) <= 3 && TrySetext(lb, out int slevel))
                         {
-                            blocks.Add(new MarkdownHeading(slevel, ParseInlines(string.Join("\n", para))));
+                            blocks.Add(LeafOf(slevel, para, paraOff));
                             i = j + 1;
                             return;
                         }
                         if (Indent(l) <= 3 && InterruptsParagraph(lb)) break;
                         para.Add(l.TrimStart(' '));
+                        paraOff?.Add(offsets[j] + (l.Length - para[^1].Length));
                         j++;
                     }
-                    blocks.Add(new MarkdownParagraph(ParseInlines(string.Join("\n", para))));
+                    blocks.Add(LeafOf(0, para, paraOff));
                     i = j;
                 }
             }
+        }
+
+        /// <summary>A paragraph (level 0) or setext heading from its lines, with the map from the joined inline text back
+        /// to the source when the parse is mapped.</summary>
+        private MarkdownBlock LeafOf(int level, List<string> para, List<int>? paraOff)
+        {
+            string joined = string.Join("\n", para);
+            if (paraOff is null) return level == 0 ? new MarkdownParagraph(ParseInlines(joined)) : new MarkdownHeading(level, ParseInlines(joined));
+            int[] m = LinesMap(para, paraOff, joined.Length);
+            MarkdownInline[] inl = ParseInlines(joined, m);
+            return level == 0
+                ? new MarkdownParagraph(inl) { ContentStart = m[0], ContentEnd = m[^1] }
+                : new MarkdownHeading(level, inl) { ContentStart = m[0], ContentEnd = m[^1], Setext = true };
+        }
+
+        private static int[] IdentityMap(int start, int length)
+        {
+            var m = new int[length + 1];
+            for (int k = 0; k <= length; k++) m[k] = start + k;
+            return m;
+        }
+
+        /// <summary>Position in the joined text -> source offset. A joining newline maps to the end of its line.</summary>
+        private static int[] LinesMap(List<string> lines, List<int> origins, int joinedLength)
+        {
+            var m = new int[joinedLength + 1];
+            int at = 0;
+            for (int li = 0; li < lines.Count; li++)
+            {
+                for (int k = 0; k < lines[li].Length; k++) m[at++] = origins[li] + k;
+                m[at] = origins[li] + lines[li].Length;   // the newline, or the end sentinel on the last line
+                at++;
+            }
+            return m;
+        }
+
+        /// <summary>A line that holds only a block marker with no space after it: text until the space arrives, in the editor.</summary>
+        private static bool IsBareMarkerLine(ReadOnlySpan<char> b)
+        {
+            if (b.Length == 0) return false;
+            if (b[0] == '>') return b.Length == 1;
+            if (b[0] == '#')
+            {
+                int n = 0;
+                while (n < b.Length && b[n] == '#') n++;
+                return n == b.Length && n <= 6;
+            }
+            if (b[0] == '-' || b[0] == '+' || b[0] == '*') return b.Length == 1;
+            int d = 0;
+            while (d < b.Length && d < 9 && char.IsAsciiDigit(b[d])) d++;
+            return d > 0 && d == b.Length - 1 && (b[d] == '.' || b[d] == ')');
+        }
+
+        private static bool HasClosingFence(List<string> lines, int from, int to, char fc, int flen)
+        {
+            for (int j = from; j < to; j++)
+            {
+                var l = lines[j];
+                if (IsClosingFence(l.AsSpan(Math.Min(Indent(l), 3)), fc, flen)) return true;
+            }
+            return false;
         }
 
         internal static bool IsFenceLine(ReadOnlySpan<char> b, out char fc, out int len) => TryFence(b, out fc, out len, out _);
@@ -435,6 +531,7 @@ public static class MarkdownParser
         private bool InterruptsParagraph(ReadOnlySpan<char> b)
         {
             if (b.Length == 0) return false;
+            if (Mapped && IsBareMarkerLine(b)) return false;
             if (b[0] == '>') return true;
             if (TryAtxHeading(b, out _, out _)) return true;
             if (TryFence(b, out _, out _, out _)) return true;
@@ -455,6 +552,7 @@ public static class MarkdownParser
             {
                 string line = lines[i];
                 int ind = Indent(line);
+                if (Mapped && ind <= 3 && IsBareMarkerLine(line.AsSpan(ind))) break;
                 if (ind > 3 || !TryListMarker(line.AsSpan(ind), out bool o, out _, out int mw, out bool empty) || o != ordered) break;
                 char mc = line[ind];
                 char dl = ordered ? line[ind + mw - 2] : '\0';
@@ -514,7 +612,13 @@ public static class MarkdownParser
                 int taskIndex = isChecked is null ? -1 : _taskCount++;
                 innerOff.Add(offsets[j]);   // sentinel: the end of the item's last line region
                 var children = ParseBlocks(inner, 0, endTrim, innerOff);
-                items.Add(new MarkdownListItem(children, isChecked, taskIndex, markerOffset));
+                items.Add(new MarkdownListItem(children, isChecked, taskIndex, markerOffset)
+                {
+                    MarkerStart = offsets[i] + ind,
+                    ContentStart = innerOff[0],
+                    LineEnd = offsets[i] + line.Length,
+                    Ordinal = ordered ? ParseOrdinal(line.AsSpan(ind)) : 0,
+                });
                 i = j;
             }
             blocks.Add(new MarkdownList(ordered, start, !loose, items.ToArray()));
@@ -633,6 +737,13 @@ public static class MarkdownParser
             return true;
         }
 
+        private static int ParseOrdinal(ReadOnlySpan<char> b)
+        {
+            int d = 0;
+            while (d < b.Length && d < 9 && char.IsAsciiDigit(b[d])) d++;
+            return d == 0 ? 0 : int.Parse(b.Slice(0, d), CultureInfo.InvariantCulture);
+        }
+
         private static bool TryTaskMarker(string s, out bool isChecked, out int width)
         {
             isChecked = false; width = 0;
@@ -736,24 +847,42 @@ public static class MarkdownParser
             public int Count;                   // remaining length of the run
             public bool CanOpen, CanClose;
             public string Text = "";            // the run's literal text (what remains if unmatched)
+            public int Pos;                     // mapped parse: the run's first unconsumed position in the inline text
+            public int[]? M;                    // mapped parse: inline text position -> source offset
         }
 
-        public MarkdownInline[] ParseInlines(string text)
+        public MarkdownInline[] ParseInlines(string text, int[]? m = null)
         {
-            var toks = Tokenize(text);
+            var toks = Tokenize(text, m);
             ProcessEmphasis(toks);
             return Flatten(toks);
         }
 
-        private List<Tok> Tokenize(string s)
+        private List<Tok> Tokenize(string s, int[]? m)
         {
             var toks = new List<Tok>();
             var sb = new StringBuilder();
             int n = s.Length;
+            // Mapped parse: per text character, the source range it came from (an escape or entity is one range).
+            List<int>? starts = m is null ? null : new List<int>();
+            List<int>? ends = m is null ? null : new List<int>();
+            int Mp(int p) => m is null ? -1 : m[p];
+            void A(char ch, int from, int to)
+            {
+                sb.Append(ch);
+                if (m is not null) { starts!.Add(m[from]); ends!.Add(m[to]); }
+            }
             void FlushText()
             {
                 if (sb.Length == 0) return;
-                toks.Add(new Tok { Node = new MarkdownText(sb.ToString()) });
+                int[]? map = null;
+                if (m is not null)
+                {
+                    map = new int[starts!.Count * 2];
+                    for (int k = 0; k < starts.Count; k++) { map[2 * k] = starts[k]; map[2 * k + 1] = ends![k]; }
+                    starts.Clear(); ends!.Clear();
+                }
+                toks.Add(new Tok { Node = new MarkdownText(sb.ToString()) { Map = map } });
                 sb.Clear();
             }
 
@@ -775,7 +904,7 @@ public static class MarkdownParser
                         var node = ext.Build(s.Substring(i + ext.Open.Length, close - i - ext.Open.Length));
                         if (node is null) continue;
                         FlushText();
-                        toks.Add(new Tok { Node = node });
+                        toks.Add(new Tok { Node = m is null ? node : node with { SourceStart = m[i], SourceEnd = m[close + ext.Close.Length] } });
                         i = close + ext.Close.Length;
                         matched = true;
                         break;
@@ -786,20 +915,32 @@ public static class MarkdownParser
                 switch (c)
                 {
                     case '\\':
-                        if (i + 1 < n && IsAsciiPunct(s[i + 1])) { sb.Append(s[i + 1]); i += 2; continue; }
-                        if (i + 1 < n && s[i + 1] == '\n') { FlushText(); toks.Add(new Tok { Node = new MarkdownLineBreak(true) }); i += 2; continue; }
-                        sb.Append('\\'); i++; continue;
+                        if (i + 1 < n && IsAsciiPunct(s[i + 1])) { A(s[i + 1], i, i + 2); i += 2; continue; }
+                        if (i + 1 < n && s[i + 1] == '\n')
+                        {
+                            FlushText();
+                            int brStart = Mp(i);
+                            i += 2;
+                            toks.Add(new Tok { Node = new MarkdownLineBreak(true) { SourceStart = brStart, SourceEnd = Mp(i) } });
+                            continue;
+                        }
+                        A('\\', i, i + 1); i++; continue;
 
                     case '\n':
                     {
                         // Hard break on 2+ trailing spaces, else a soft break.
                         int trailing = 0;
                         while (sb.Length - trailing > 0 && sb[sb.Length - 1 - trailing] == ' ') trailing++;
-                        if (trailing > 0) sb.Length -= trailing;
+                        if (trailing > 0)
+                        {
+                            sb.Length -= trailing;
+                            if (m is not null) { starts!.RemoveRange(starts.Count - trailing, trailing); ends!.RemoveRange(ends.Count - trailing, trailing); }
+                        }
                         FlushText();
-                        toks.Add(new Tok { Node = new MarkdownLineBreak(trailing >= 2) });
+                        int lbStart = Mp(i - trailing);
                         i++;
                         while (i < n && s[i] == ' ') i++;   // leading spaces of the next line are stripped
+                        toks.Add(new Tok { Node = new MarkdownLineBreak(trailing >= 2) { SourceStart = lbStart, SourceEnd = Mp(i) } });
                         continue;
                     }
 
@@ -808,22 +949,39 @@ public static class MarkdownParser
                         int run = 0;
                         while (i + run < n && s[i + run] == '`') run++;
                         int close = FindBacktickClose(s, i + run, run);
-                        if (close < 0) { sb.Append('`', run); i += run; continue; }
+                        if (close < 0) { for (int k = 0; k < run; k++) A('`', i + k, i + k + 1); i += run; continue; }
                         FlushText();
                         var code = s.AsSpan(i + run, close - i - run);
                         // CommonMark §6.1: line endings become spaces; one leading+trailing space pair is stripped.
                         string codeText = code.ToString().Replace('\n', ' ');
+                        int stripped = 0;
                         if (codeText.Length >= 2 && codeText[0] == ' ' && codeText[^1] == ' ' && codeText.AsSpan().Trim().Length > 0)
+                        {
                             codeText = codeText.Substring(1, codeText.Length - 2);
-                        toks.Add(new Tok { Node = new MarkdownCodeSpan(codeText) });
+                            stripped = 1;
+                        }
+                        int[]? codeMap = null;
+                        if (m is not null)
+                        {
+                            codeMap = new int[codeText.Length * 2];
+                            for (int k = 0; k < codeText.Length; k++) { codeMap[2 * k] = m[i + run + stripped + k]; codeMap[2 * k + 1] = m[i + run + stripped + k + 1]; }
+                        }
+                        toks.Add(new Tok
+                        {
+                            Node = new MarkdownCodeSpan(codeText)
+                            {
+                                Map = codeMap, SourceStart = Mp(i), SourceEnd = Mp(close + run),
+                                OpenStart = Mp(i), OpenEnd = Mp(i + run), CloseStart = Mp(close), CloseEnd = Mp(close + run),
+                            },
+                        });
                         i = close + run;
                         continue;
                     }
 
                     case '&':
                     {
-                        if (TryEntity(s, i, out string decoded, out int used)) { sb.Append(decoded); i += used; continue; }
-                        sb.Append('&'); i++; continue;
+                        if (TryEntity(s, i, out string decoded, out int used)) { foreach (char dc in decoded) A(dc, i, i + used); i += used; continue; }
+                        A('&', i, i + 1); i++; continue;
                     }
 
                     case '<':
@@ -831,43 +989,58 @@ public static class MarkdownParser
                         if (TryAngleAutolink(s, i, out string url, out string label, out int used))
                         {
                             FlushText();
-                            toks.Add(new Tok { Node = new MarkdownLink([new MarkdownText(label)], url, "") });
+                            toks.Add(new Tok
+                            {
+                                Node = new MarkdownLink([new MarkdownText(label) { Map = SpanMap(m, i + 1, label.Length) }], url, "")
+                                {
+                                    SourceStart = Mp(i), SourceEnd = Mp(i + used),
+                                    OpenStart = Mp(i), OpenEnd = Mp(i + 1), CloseStart = Mp(i + used - 1), CloseEnd = Mp(i + used),
+                                },
+                            });
                             i += used;
                             continue;
                         }
-                        sb.Append('<'); i++; continue;
+                        A('<', i, i + 1); i++; continue;
                     }
 
                     case '!':
-                        if (i + 1 < n && s[i + 1] == '[' && TryLink(s, i + 1, out var alt, out string iurl, out string ititle, out int iused))
+                        if (i + 1 < n && s[i + 1] == '[' && TryLink(s, i + 1, m, out var alt, out string iurl, out string ititle, out int iused, out _, out _, out _))
                         {
                             FlushText();
-                            toks.Add(new Tok { Node = new MarkdownImage(PlainText(alt), iurl, ititle) });
+                            toks.Add(new Tok { Node = new MarkdownImage(PlainText(alt), iurl, ititle) { SourceStart = Mp(i), SourceEnd = Mp(i + 1 + iused) } });
                             i += 1 + iused;
                             continue;
                         }
-                        sb.Append('!'); i++; continue;
+                        A('!', i, i + 1); i++; continue;
 
                     case '[':
-                        if (TryLink(s, i, out var kids, out string lurl, out string ltitle, out int lused))
+                        if (TryLink(s, i, m, out var kids, out string lurl, out string ltitle, out int lused, out int labelClose, out int urlAt, out int urlEnd))
                         {
                             FlushText();
-                            toks.Add(new Tok { Node = new MarkdownLink(kids, lurl, ltitle) });
+                            toks.Add(new Tok
+                            {
+                                Node = new MarkdownLink(kids, lurl, ltitle)
+                                {
+                                    SourceStart = Mp(i), SourceEnd = Mp(i + lused),
+                                    OpenStart = Mp(i), OpenEnd = Mp(i + 1), CloseStart = Mp(labelClose), CloseEnd = Mp(i + lused),
+                                    UrlStart = urlAt < 0 ? -1 : Mp(urlAt), UrlEnd = urlAt < 0 ? -1 : Mp(urlEnd),
+                                },
+                            });
                             i += lused;
                             continue;
                         }
-                        sb.Append('['); i++; continue;
+                        A('[', i, i + 1); i++; continue;
 
                     case '*':
                     case '_':
                     case '~':
                     case '=':
                     {
-                        if (c == '~' && !Has(MarkdownExtensions.Strikethrough)) { sb.Append(c); i++; continue; }
-                        if (c == '=' && !Has(MarkdownExtensions.Mark)) { sb.Append(c); i++; continue; }
+                        if (c == '~' && !Has(MarkdownExtensions.Strikethrough)) { A(c, i, i + 1); i++; continue; }
+                        if (c == '=' && !Has(MarkdownExtensions.Mark)) { A(c, i, i + 1); i++; continue; }
                         int run = 0;
                         while (i + run < n && s[i + run] == c) run++;
-                        if ((c == '~' || c == '=') && run != 2) { sb.Append(c, run); i += run; continue; }   // GFM: exactly two tildes; mark: exactly two =
+                        if ((c == '~' || c == '=') && run != 2) { for (int k = 0; k < run; k++) A(c, i + k, i + k + 1); i += run; continue; }   // GFM: exactly two tildes; mark: exactly two =
                         char before = i > 0 ? s[i - 1] : ' ';
                         char after = i + run < n ? s[i + run] : ' ';
                         bool leftFlank = !IsWs(after) && (!IsPunct(after) || IsWs(before) || IsPunct(before));
@@ -880,7 +1053,7 @@ public static class MarkdownParser
                         }
                         else { canOpen = leftFlank; canClose = rightFlank; }
                         FlushText();
-                        toks.Add(new Tok { Delim = c, Count = run, CanOpen = canOpen, CanClose = canClose, Text = new string(c, run) });
+                        toks.Add(new Tok { Delim = c, Count = run, CanOpen = canOpen, CanClose = canClose, Text = new string(c, run), Pos = i, M = m });
                         i += run;
                         continue;
                     }
@@ -890,15 +1063,27 @@ public static class MarkdownParser
                             && (i == 0 || IsWs(s[i - 1]) || s[i - 1] == '(' || s[i - 1] == '*' || s[i - 1] == '_' || s[i - 1] == '~'))
                         {
                             FlushText();
-                            toks.Add(new Tok { Node = new MarkdownLink([new MarkdownText(blabel)], burl, "") });
+                            toks.Add(new Tok
+                            {
+                                Node = new MarkdownLink([new MarkdownText(blabel) { Map = SpanMap(m, i, blabel.Length) }], burl, "")
+                                { SourceStart = Mp(i), SourceEnd = Mp(i + bused) },
+                            });
                             i += bused;
                             continue;
                         }
-                        sb.Append(c); i++; continue;
+                        A(c, i, i + 1); i++; continue;
                 }
             }
             FlushText();
             return toks;
+        }
+
+        private static int[]? SpanMap(int[]? m, int from, int length)
+        {
+            if (m is null) return null;
+            var map = new int[length * 2];
+            for (int k = 0; k < length; k++) { map[2 * k] = m[from + k]; map[2 * k + 1] = m[from + k + 1]; }
+            return map;
         }
 
         /// <summary>CommonMark §6.2 "process emphasis": walk closers, find the nearest matching opener, wrap the
@@ -925,6 +1110,18 @@ public static class MarkdownParser
                     for (int k = oi + 1; k < ci; k++) inner.Add(toks[k]);
                     MarkdownInline[] kids = Flatten(inner);
                     MarkdownInline node = closer.Delim == '~' ? new MarkdownStrikethrough(kids) : closer.Delim == '=' ? new MarkdownMark(kids) : new MarkdownEmphasis(kids, use == 2);
+                    if (closer.M is { } dm)
+                    {
+                        // The inner end of each run is what pairs: an opener spends from its right, a closer from its left.
+                        int openAt = opener.Pos + opener.Count - use;
+                        node = node with
+                        {
+                            OpenStart = dm[openAt], OpenEnd = dm[openAt + use],
+                            CloseStart = dm[closer.Pos], CloseEnd = dm[closer.Pos + use],
+                            SourceStart = dm[openAt], SourceEnd = dm[closer.Pos + use],
+                        };
+                        closer.Pos += use;
+                    }
                     opener.Count -= use;
                     closer.Count -= use;
                     opener.Text = opener.Text.Substring(0, opener.Count);
@@ -946,6 +1143,13 @@ public static class MarkdownParser
             StringBuilder? pending = null;
             foreach (var t in toks)
             {
+                if (t.M is { } dm && t.Delim != '\0')
+                {
+                    // Mapped: an unmatched delimiter stays its own node, so the editor can dim an opener still waiting for its closer.
+                    if (t.Count > 0) list.Add(new MarkdownText(t.Text) { Map = SpanMap(dm, t.Pos, t.Count), UnmatchedOpener = t.CanOpen });
+                    continue;
+                }
+                if (t.Node is MarkdownText { Map: not null }) { list.Add(t.Node); continue; }   // mapped text keeps its map: never merged
                 string? lit = t.Node is MarkdownText mt ? mt.Text : t.Delim != '\0' ? (t.Count > 0 ? t.Text : null) : null;
                 if (lit is not null)
                 {
@@ -1003,9 +1207,10 @@ public static class MarkdownParser
 
         /// <summary>`[text](dest "title")`, `[text][ref]`, `[text][]`, `[ref]` — with balanced nested brackets in the
         /// text. Link text is parsed recursively (links may not nest: an inner link stays literal).</summary>
-        private bool TryLink(string s, int i, out MarkdownInline[] children, out string url, out string title, out int used)
+        private bool TryLink(string s, int i, int[]? m, out MarkdownInline[] children, out string url, out string title, out int used,
+            out int labelClose, out int urlAt, out int urlEnd)
         {
-            children = Array.Empty<MarkdownInline>(); url = ""; title = ""; used = 0;
+            children = Array.Empty<MarkdownInline>(); url = ""; title = ""; used = 0; labelClose = -1; urlAt = -1; urlEnd = -1;
             int depth = 0, j = i;
             for (; j < s.Length; j++)
             {
@@ -1027,6 +1232,14 @@ public static class MarkdownParser
                 if (body.Length == 0) { url = ""; }
                 else if (!TryParseDestinationAndTitle(body, out url, out title, out int bu) || body.Slice(bu).Trim().Length != 0) return false;
                 used = k + 1 + close + 1 - i;
+                // The written destination, for the link card's one replace.
+                int lead = 0;
+                while (lead < rest.Length && char.IsWhiteSpace(rest[lead])) lead++;
+                urlAt = k + 1 + lead;
+                int dl = 0;
+                if (body.Length > 0 && body[0] == '<') dl = body.IndexOf('>') + 1;
+                else while (dl < body.Length && !char.IsWhiteSpace(body[dl])) dl++;
+                urlEnd = urlAt + dl;
             }
             else
             {
@@ -1043,7 +1256,8 @@ public static class MarkdownParser
                 url = def.Url; title = def.Title;
             }
             if (inner.Contains('[') && inner.Contains("](")) return false;   // no nested links
-            children = ParseInlines(inner);
+            labelClose = j;
+            children = ParseInlines(inner, m is null ? null : m.AsSpan(i + 1, inner.Length + 1).ToArray());
             return true;
         }
 

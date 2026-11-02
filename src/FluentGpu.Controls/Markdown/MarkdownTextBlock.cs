@@ -236,6 +236,9 @@ internal sealed class MarkdownRenderer(MarkdownOptions options, MarkdownStyle st
         _ => new BoxEl { Direction = 1, Margin = new Edges4(0, top, 0, 0), Children = [el] },
     };
 
+    /// <summary>One block as the viewer draws it: the editor's islands.</summary>
+    internal Element BlockElement(MarkdownBlock block) => Block(block, 0);
+
     private Element Block(MarkdownBlock block, int depth) => block switch
     {
         MarkdownHeading h => Paragraph(h.Inlines, HeadingStyle(h.Level)),
