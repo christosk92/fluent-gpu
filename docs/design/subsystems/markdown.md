@@ -361,6 +361,8 @@ mount once.
 
 ## 9. Editing: the comparison the owner asked for (decision open)
 
+> `MarkdownEditor` now exists as a projection over the source text: [`markdown-editor.md`](markdown-editor.md). The options below are the reasoning that led there; the owner has not yet formally reversed the source + preview choice.
+
 The accepted baseline is a plain `TextBox` (`AcceptsReturn`) plus "Open in Obsidian". Three ways past it:
 
 | Option | What it is | Precedent | Cost on this engine | Risk |
