@@ -99,6 +99,11 @@ public sealed class EditableText : Component
     /// flag clear nothing reads it and no extra callback can fire.</para></summary>
     public bool CommitOnLostFocus;
 
+    /// <summary>OPT-IN: Escape still fires <see cref="OnCancel"/> and blurs, but keeps the text. For a document editor,
+    /// where reverting to the focus-time snapshot would throw away everything typed since focus, including what the
+    /// app has already saved. Default false ⇒ the revert that NumberBox, ComboBox and ColorPicker rely on.</summary>
+    public bool KeepTextOnEscape;
+
     public Action<bool>? OnFocusChanged;     // focus gained(true)/lost(false): NumberBox validate-on-blur / open-Compact
     public Func<string, string>? Sanitize;   // applied after every user edit (numeric/hex clamp); null = free text
     /// <summary>Optional validation binding (form-validation.md): when set, the chrome border swaps to the theme critical
@@ -915,7 +920,7 @@ public sealed class EditableText : Component
     private void DoCancel()
     {
         string snap = _snapshot ?? _text?.Peek() ?? "";
-        if (!_core.Doc.AsSpan().SequenceEqual(snap))
+        if (!KeepTextOnEscape && !_core.Doc.AsSpan().SequenceEqual(snap))
         {
             _core.ResetText(snap);
             PushDocToSignal(TextChangeReason.ProgrammaticChange);   // a revert is not a user edit

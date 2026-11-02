@@ -472,7 +472,8 @@ internal sealed class MarkdownRenderer(MarkdownOptions options, MarkdownStyle st
     {
         var ta = align switch { MarkdownTableAlign.Center => TextAlign.Center, MarkdownTableAlign.Right => TextAlign.End, _ => TextAlign.Start };
         var body = Paragraph(inlines, header ? _s.Body with { Weight = 600 } : _s.Body, ta);
-        var kids = new List<Element>(2) { new BoxEl { Direction = 1, Padding = new Edges4(_s.Inset, _s.CellPadY, _s.Inset, _s.CellPadY), Children = [body] } };   // a column: the flow stretches to the cell
+        // A column, so the flow stretches to the cell. It grows, so a row's rule stays on the row's edge in a shorter cell.
+        var kids = new List<Element>(2) { new BoxEl { Direction = 1, Grow = 1f, Padding = new Edges4(_s.Inset, _s.CellPadY, _s.Inset, _s.CellPadY), Children = [body] } };
         if (divider) kids.Add(new BoxEl { Height = 1f, Fill = _s.TableStroke, AlignSelf = FlexAlign.Stretch });
         return new BoxEl { Direction = 1, Fill = header ? _s.TableHeaderFill : default, Children = kids.ToArray() };
     }
