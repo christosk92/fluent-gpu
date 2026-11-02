@@ -208,6 +208,7 @@ public sealed class MarkdownEditor : Component
         };
         var scroller = new ScrollEl
         {
+            Key = "note", // The bar moves from below it to above it at CommandBarMinWidth: keyed, so the crossing keeps focus and scroll.
             Grow = 1f, Shrink = 1f, MinHeight = 0f,
             Handle = _scroll,
             OnRealized = h => _scrollNode = h,
@@ -215,9 +216,9 @@ public sealed class MarkdownEditor : Component
         };
 
         var rootKids = new List<Element>(3);
-        if (wide) rootKids.Add(Embed.Comp(() => new Bar { Owner = this, Wide = true }));
+        if (wide) rootKids.Add(Embed.Comp(() => new Bar { Owner = this, Wide = true }) with { Key = "bar" });
         rootKids.Add(scroller);
-        if (!wide) rootKids.Add(Embed.Comp(() => new Bar { Owner = this, Wide = false }));
+        if (!wide) rootKids.Add(Embed.Comp(() => new Bar { Owner = this, Wide = false }) with { Key = "footer" });
 
         var fs = TextBox.DefaultFieldStyle;
         var fill = fieldChrome ? fs.Fill : ColorF.Transparent;
