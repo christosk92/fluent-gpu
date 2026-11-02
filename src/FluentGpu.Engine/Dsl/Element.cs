@@ -589,6 +589,9 @@ public sealed record BoxEl : Element
     public FlexJustify Justify { get; init; } = FlexJustify.Start;
     public FlexAlign AlignItems { get; init; } = FlexAlign.Stretch;
     public bool Wrap { get; init; }
+    /// <summary>Lay the children in a row (<c>Direction</c> is ignored) while they fit, and otherwise stack them with these
+    /// spacings. See <see cref="Foundation.StackFallback"/>.</summary>
+    public StackFallback? StackFallback { get; init; }
     /// <summary>ZStack-only measure opt-out (A3): this child ignores the stack's own constrained width and measures
     /// at PositiveInfinity instead, reporting its NATURAL content width — for a layer that must overflow its ZStack
     /// parent's bounds (a rail tooltip whose stack pins a fixed narrow width) rather than being squeezed to it.
