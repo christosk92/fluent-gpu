@@ -373,7 +373,7 @@ public static class InfoBar
 
     // HORIZONTAL InfoBarPanel: icon-column already trails; here title + message + action sit inline on one row. Panel
     // padding is 0 (InfoBarPanelHorizontalOrientationPadding); per-child horizontal orientation margins give the inline
-    // gaps (title 0,14,0,0; message 12,14,0,0; action 16,8,0,0) — the panel ignores the FIRST child's leading-left margin
+    // gaps (title 0,14,0,14; message 12,14,0,14; action 16,8,0,0) — the panel ignores the FIRST child's leading-left margin
     // (WinUI "hasPreviousElement"), so the leftmost child gets only its top margin. AlignItems Top mirrors WinUI's
     // VerticalAlignment="Top" on Title/Message and Action. Cold Render path — array build here never hits a hot frame phase.
     private static BoxEl BuildHorizontalPanel(string title, string message, Element? actionButton, bool hasTitle, bool hasMessage, bool isHyperlinkAction, TemplateParts? parts, Style st)
@@ -391,7 +391,7 @@ public static class InfoBar
             kids.Add(parts.Apply(PartTitle, new TextEl(title)
             {
                 Size = st.TitleSize, Weight = (ushort)st.TitleWeight, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
-                Margin = new Edges4(0f, TitleHMargin.Top, 0f, 0f),   // first child: ignore leading-left margin
+                Margin = new Edges4(0f, TitleHMargin.Top, 0f, TitleHMargin.Bottom),   // first child: ignore leading-left margin
             }));
             first = false;
         }
@@ -401,7 +401,7 @@ public static class InfoBar
             {
                 Size = st.MessageSize, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
                 Grow = hasAction ? 0f : 1f,                          // last child takes the remaining width (InfoBarPanel.cpp:144-147)
-                Margin = new Edges4(first ? 0f : MessageHMargin.Left, MessageHMargin.Top, 0f, 0f),
+                Margin = new Edges4(first ? 0f : MessageHMargin.Left, MessageHMargin.Top, 0f, MessageHMargin.Bottom),
             }));
             first = false;
         }
