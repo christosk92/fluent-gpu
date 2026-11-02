@@ -91,8 +91,12 @@ public static class TextTypography
 /// the width an aligned single-run decoration bar spans and is offset by (<see cref="TextTypography.LineOffset"/>).
 /// Under <see cref="TextAlign.Justify"/> it is +Inf when the first line is justified (it fills whatever box it is drawn
 /// in — the measure does not know that box), else that line's natural visible width.</summary>
+/// <para><see cref="MaxLineWidth"/> is the widest laid line UNCLAMPED by the measure width (NaN = not reported): under
+/// <see cref="TextWrap.WrapWholeWords"/> a word that cannot break overhangs the box, and <see cref="Size"/>.Width is
+/// clamped to the box; the layout's min-content probe (a grid column's longest word, layout.md §7.2) reads this.</para>
 public readonly record struct TextMetrics(Size2 Size, float Baseline,
-    float UnderlineY = 0f, float UnderlineThickness = 0f, float StrikeY = 0f, float FirstLineWidth = float.NaN);
+    float UnderlineY = 0f, float UnderlineThickness = 0f, float StrikeY = 0f, float FirstLineWidth = float.NaN,
+    float MaxLineWidth = float.NaN);
 
 /// <summary>Process-default <see cref="IFontSystem"/> for engine layers that have no host seam to receive an instance
 /// through — concretely the input dispatcher's read-only text-selection/hyperlink gestures (rtb-02), which need the

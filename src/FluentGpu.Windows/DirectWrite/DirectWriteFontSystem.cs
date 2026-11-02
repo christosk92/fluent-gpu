@@ -62,7 +62,7 @@ public sealed class DirectWriteFontSystem : IFontSystem, IDisposable
         if (publishArtifacts && style.SpanRunId != 0 && SpanRunTable.Shared.Resolve(style.SpanRunId) is { } run)
             PublishSpanArtifacts(run, maxWidth, style.Align);
         return new TextMetrics(new Size2(_engine.Width, _engine.Height), _engine.Baseline,
-            _engine.UnderlineY, _engine.UnderlineThickness, _engine.StrikeY, MeasureFirstLineWidth(in style));
+            _engine.UnderlineY, _engine.UnderlineThickness, _engine.StrikeY, MeasureFirstLineWidth(in style), _engine.MaxLineWidth);
     }
 
     /// <summary>TextMetrics.FirstLineWidth of the (Start-laid) measure layout: the first line's visible width — or +Inf
@@ -108,6 +108,8 @@ public sealed class DirectWriteFontSystem : IFontSystem, IDisposable
                 }
                 if ((flags & SpanStyle.LinkBit) != 0)
                     _artifactScratch.Add(new SpanRect(frags[f], i, SpanStyle.LinkBit, lineW, gaps, before, inside));
+                if ((flags & SpanStyle.HighlightBit) != 0)
+                    _artifactScratch.Add(new SpanRect(frags[f], i, SpanStyle.HighlightBit, lineW, gaps, before, inside));
                 if ((flags & SpanStyle.UnderlineBit) != 0)
                     _artifactScratch.Add(new SpanRect(
                         new RectF(frags[f].X, frags[f].Y + _engine.UnderlineY, frags[f].W, _engine.UnderlineThickness), i, SpanStyle.UnderlineBit, lineW, gaps, before, inside));
