@@ -5544,11 +5544,13 @@ public sealed partial class TreeReconciler
         NodeFlags layoutFlagsBefore = 0;
         bool hadGrid = false;
         GridSpec gridBefore = default;
+        StackFallback? stackBefore = null;
         if (!isMount)
         {
             layoutBefore = _scene.Layout(node);
             layoutFlagsBefore = _scene.Flags(node) & (NodeFlags.ClipsToBounds | NodeFlags.LayoutBoundary | NodeFlags.ZStack);
             hadGrid = _scene.TryGetGrid(node, out gridBefore);
+            _scene.TryGetStackFallback(node, out stackBefore);
         }
 
         // Shared-element (connected-animation) tag: a node carrying MorphId is a Hero participant — its laid-out rect +
@@ -5794,6 +5796,7 @@ public sealed partial class TreeReconciler
                 li.Justify = b.Justify;
                 li.AlignItems = b.AlignItems;
                 li.Wrap = b.Wrap;
+                _scene.SetStackFallback(node, b.StackFallback);
                 li.MeasureUnboundedWidth = b.MeasureUnboundedWidth;
                 li.AspectRatio = b.AspectRatio;   // CSS aspect-ratio: FlexLayout.Measure derives the missing extent (Ui.AspectRatio)
                 if (b.ZStack) _scene.Mark(node, NodeFlags.ZStack); else _scene.Unmark(node, NodeFlags.ZStack);
@@ -6562,7 +6565,8 @@ public sealed partial class TreeReconciler
                 bool hasGrid = _scene.TryGetGrid(node, out var gridAfter);
                 gridChanged = hadGrid != hasGrid || (hasGrid && !SameGridSpec(in gridBefore, in gridAfter));
             }
-            if (gridChanged || layoutFlagsBefore != layoutFlagsAfter || !SameLayoutInput(in layoutBefore, in layoutAfter))
+            bool stackChanged = el is BoxEl stackBox && !Equals(stackBefore, stackBox.StackFallback);
+            if (gridChanged || stackChanged || layoutFlagsBefore != layoutFlagsAfter || !SameLayoutInput(in layoutBefore, in layoutAfter))
             {
                 MarkLayoutShape(node);
                 if (!SameParentFacing(in layoutBefore, in layoutAfter)) MarkParentLayoutDirty(node);

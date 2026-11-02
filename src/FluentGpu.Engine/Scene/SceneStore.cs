@@ -160,6 +160,8 @@ public sealed partial class SceneStore : ISceneBackend
     private readonly Dictionary<int, ExtentTable> _extents = new();
     // Grid specs for grid-container nodes (O(grids)). Keyed by node index.
     private readonly ColdSlab<GridSpec> _grids = new();   // GEN-17 (wired)
+    private struct StackFallbackRow { public StackFallback Value; }
+    private readonly ColdSlab<StackFallbackRow> _stackFallbacks = new();   // BoxEl.StackFallback (FlexLayout.StackFallback.cs)
     // Optional rich-paint side-tables (O(decorated nodes), keyed by node index): eased interaction, shadow, gradient, acrylic.
     private readonly ColdSlab<InteractionAnim> _interact = new();   // GEN-17 (wired)
     private readonly ColdSlab<ShadowSpec> _shadows = new();   // GEN-17 (wired): dense slab, not Dictionary
@@ -514,6 +516,7 @@ public sealed partial class SceneStore : ISceneBackend
             _authoredHandles.Remove(idx);
         }
         _grids.Remove(idx);
+        _stackFallbacks.Remove(idx);
         // A viewport's measured row extents are keyed by its index like every side-table here: the next node to reuse the
         // slot must start from its own estimates, not the freed list's row heights (and the table must not outlive it).
         if (_extents.Count != 0) _extents.Remove(idx);
@@ -2099,6 +2102,19 @@ public sealed partial class SceneStore : ISceneBackend
     public void SetGrid(NodeHandle h, in GridSpec spec) => _grids.GetOrAdd((int)h.Raw.Index) = spec;
     public bool HasGrid(NodeHandle h) => _grids.Contains((int)h.Raw.Index);
     public bool TryGetGrid(NodeHandle h, out GridSpec spec) => _grids.TryGet((int)h.Raw.Index, out spec);
+
+    public void SetStackFallback(NodeHandle h, StackFallback? fallback)
+    {
+        if (fallback is null) _stackFallbacks.Remove((int)h.Raw.Index);
+        else _stackFallbacks.GetOrAdd((int)h.Raw.Index).Value = fallback;
+    }
+    public bool HasStackFallback(NodeHandle h) => _stackFallbacks.Contains((int)h.Raw.Index);
+    public bool TryGetStackFallback(NodeHandle h, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out StackFallback? fallback)
+    {
+        bool has = _stackFallbacks.TryGet((int)h.Raw.Index, out var row);
+        fallback = row.Value;
+        return has;
+    }
 
     // ── rich-paint side-tables ──
     /// <summary>Get-or-create the eased-interaction row for a node (hover/press progress).</summary>

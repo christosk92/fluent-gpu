@@ -354,7 +354,7 @@ public sealed partial class FlexLayout
         uint i = node.Raw.Index;
         if (i >= (uint)_memo.Length) return false;
         // Viewport/grid/z-stack measure paths return without StoreMemo, so they carry no record to compare against.
-        if (_scene.HasScroll(node) || _scene.HasGrid(node) || (_scene.Flags(node) & NodeFlags.ZStack) != 0) return false;
+        if (_scene.HasScroll(node) || _scene.HasGrid(node) || _scene.HasStackFallback(node) || (_scene.Flags(node) & NodeFlags.ZStack) != 0) return false;
         ref MeasureMemo rec = ref _memo[i];
         if (rec.PassGen == 0 || rec.NodeGen != node.Raw.Gen) return false;
         // Copy out BEFORE BeginMeasurePass: the probe measure re-writes this slot (and may resize the array).
@@ -801,7 +801,7 @@ public sealed partial class FlexLayout
         // NOTE: the viewport/grid/zstack measure paths are NOT memoized (only the pure general flex path below is) — they
         // recompute every call. Their SUBTREES still benefit (the general-path nodes inside them memoize). Conservative:
         // the flex-row pre-pass/main-loop redundancy that compounds is entirely in the general path.
-        bool special = _scene.HasScroll(node) || _scene.HasGrid(node) || (_scene.Flags(node) & NodeFlags.ZStack) != 0;
+        bool special = _scene.HasScroll(node) || _scene.HasGrid(node) || _scene.HasStackFallback(node) || (_scene.Flags(node) & NodeFlags.ZStack) != 0;
 
         // P4 cross-pass ring: a hit means this exact (node, availW) was measured before, NOTHING in the subtree has
         // moved since (SceneStore.IsLayoutClean), the node index hasn't been recycled, and this node's own
@@ -831,6 +831,7 @@ public sealed partial class FlexLayout
         if (_scene.HasScroll(node)) return MeasureViewport(node, in li, availW);
         if (_scene.HasGrid(node)) return MeasureGrid(node, in li, availW);
         if ((_scene.Flags(node) & NodeFlags.ZStack) != 0) return MeasureZStack(node, in li, availW);
+        if (_scene.TryGetStackFallback(node, out var stackFallback)) return MeasureStackFallback(node, in li, stackFallback, availW);
 
         float w, h;
         // C1: what this measure's validity interval needs (FlexLayout.MeasureFlat.cs). Kind 0 = not flat, 1 = text, 2 = flex box.
@@ -1177,6 +1178,7 @@ public sealed partial class FlexLayout
         if (_scene.HasScroll(node)) { ArrangeViewport(node, finalW, finalH, in li); return; }
         if (_scene.HasGrid(node)) { ArrangeGrid(node, finalW, finalH, in li); return; }
         if ((_scene.Flags(node) & NodeFlags.ZStack) != 0) { ArrangeZStack(node, finalW, finalH, in li); return; }
+        if (_scene.TryGetStackFallback(node, out var stackFallback)) { ArrangeStackFallback(node, finalW, in li, stackFallback); return; }
         if (_scene.FirstChild(node).IsNull) return;
         bool row = Row(li);
 

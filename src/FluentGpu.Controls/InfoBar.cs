@@ -1,5 +1,6 @@
 using FluentGpu.Foundation;
 using FluentGpu.Dsl;
+using FluentGpu.Hooks;
 using FluentGpu.Localization;
 
 namespace FluentGpu.Controls;
@@ -104,25 +105,6 @@ public static class InfoBar
     private const float CloseButtonSize  = 38f;          // InfoBarCloseButtonSize
     private const float CloseGlyphSize   = 16f;          // InfoBarCloseButtonGlyphSize
 
-    /// <summary>WinUI's InfoBarPanel.MeasureOverride flips to the vertical layout when the horizontal row would not fit
-    /// the width it is offered. The engine has no measure-time callback at element-construction time, so a caller that
-    /// KNOWS its width (the toast strip: a 380 px card) passes it as <c>availableWidth</c> and this estimates the row —
-    /// content padding + icon column + close column + panel margin + the title/message glyph run + the action button
-    /// (WinUI: 16 leading + the label + Button padding). Average Segoe UI Variable advance at 14 px ≈ 7.2 px; erring
-    /// wide is the safe direction (a vertical bar is never clipped, a horizontal one can be).</summary>
-    private static float EstimateHorizontalWidth(string title, string message, bool iconVisible, bool closable)
-    {
-        const float avgAdvance = 7.2f;
-        const float actionButtonEstimate = 90f;        // "Retry"/"Update now" + Button padding; a longer label only pushes toward vertical
-        float w = ContentRootPadding.Left + PanelMargin.Right;
-        if (iconVisible) w += 16f + IconMargin.Right;
-        if (closable) w += 38f + CloseButtonMargin.Left + CloseButtonMargin.Right;
-        if (!string.IsNullOrEmpty(title)) w += title.Length * avgAdvance + MessageHMargin.Left;
-        if (!string.IsNullOrEmpty(message)) w += message.Length * avgAdvance;
-        w += ActionHMargin.Left + actionButtonEstimate;
-        return w;
-    }
-
     private static readonly Edges4 ContentRootPadding = new(16f, 0f, 0f, 0f);   // InfoBarContentRootPadding 16,0,0,0
     private static readonly Edges4 IconMargin         = new(0f, 16f, 14f, 16f); // InfoBarIconMargin 0,16,14,16
     private static readonly Edges4 PanelMargin        = new(0f, 0f, 16f, 0f);   // InfoBarPanelMargin 0,0,16,0
@@ -132,12 +114,9 @@ public static class InfoBar
     // child's leading orientation margin (Measure: "nItems > 0" gate; Arrange: "hasPreviousElement" gate).
     private static readonly Edges4 PanelHorizontalPadding = new(0f, 0f, 0f, 0f);  // InfoBarPanelHorizontalOrientationPadding
     private static readonly Edges4 PanelVerticalPadding   = new(0f, 14f, 0f, 18f); // InfoBarPanelVerticalOrientationPadding
-    // Horizontal-orientation per-child margins.
-    // WinUI: 0,14,0,0 and 12,14,0,0 — no bottom, because WinUI's panel never lets a horizontal row wrap (it flips to
-    // vertical by MEASURED width). Ours decides from an estimate, so the bottom 14 is the safety net: a one-line row is
-    // unchanged (20 px text + 28 = 48 = InfoBarMinHeight), a row that still wraps no longer sits on the plate's edge.
-    private static readonly Edges4 TitleHMargin   = new(0f, 14f, 0f, 14f);        // InfoBarTitleHorizontalOrientationMargin (+bottom)
-    private static readonly Edges4 MessageHMargin = new(12f, 14f, 0f, 14f);       // InfoBarMessageHorizontalOrientationMargin (+bottom)
+    // Horizontal-orientation per-child margins. No bottom margin: a row never wraps, and InfoBarMinHeight makes a one-line bar 48.
+    private static readonly Edges4 TitleHMargin   = new(0f, 14f, 0f, 0f);         // InfoBarTitleHorizontalOrientationMargin
+    private static readonly Edges4 MessageHMargin = new(12f, 14f, 0f, 0f);        // InfoBarMessageHorizontalOrientationMargin
     private static readonly Edges4 ActionHMargin  = new(16f, 8f, 0f, 0f);         // InfoBarActionHorizontalOrientationMargin
     // Vertical-orientation per-child margins.
     private static readonly Edges4 TitleVMargin   = new(0f, 14f, 0f, 0f);         // InfoBarTitleVerticalOrientationMargin
@@ -204,8 +183,7 @@ public static class InfoBar
         Action<InfoBarClosedEventArgs>? onClosed = null,
         Element? content = null,
         string? iconGlyph = null,
-        TemplateParts? parts = null,
-        float availableWidth = float.NaN)
+        TemplateParts? parts = null)
     {
         if (!isOpen)
             return new BoxEl { };
@@ -253,41 +231,20 @@ public static class InfoBar
                     ],
                 });
 
-        // Column 1: the InfoBarPanel (Title / Message / Action). WinUI's InfoBarPanel.MeasureOverride switches orientation:
-        // it lays the children out VERTICALLY when (a) there is a single laid-out child, (b) the horizontal total width
-        // exceeds the available width (the message can't sit inline / would wrap), or (c) any child measured taller than
-        // InfoBarMinHeight; otherwise HORIZONTALLY. The engine has no width-aware measure-time orientation switch, so we
-        // make the decision here from the available signals: a single content child => vertical; an action button present
-        // alongside a (non-trivial) message => the inline row would overflow, so vertical; otherwise horizontal. This is
-        // the cold Render path (per-severity), so the bool/factory work below allocates nothing on the hot frame phases.
+        // Column 1: the InfoBarPanel (Title / Message / Action), see BuildPanel.
         bool hasTitle = !string.IsNullOrEmpty(title);
         bool hasMessage = !string.IsNullOrEmpty(message);
-        bool hasAction = actionButton is not null;
-        bool hasBanner = hasTitle || hasMessage || hasAction;
-        int contentItems = (hasTitle ? 1 : 0) + (hasMessage ? 1 : 0) + (hasAction ? 1 : 0);
+        bool hasBanner = hasTitle || hasMessage || actionButton is not null;
 
         // WinUI's implicit InfoBar HyperlinkButton style matches by TYPE inside the action ContentPresenter
         // (InfoBar.xaml:117-122); our HyperlinkButton roots carry Role = Hyperlink, so detect the same way.
         bool isHyperlinkAction = actionButton.Is(out BoxEl actionBox) && actionBox.Role == AutomationRole.Hyperlink;
 
-        // WinUI: nItems == 1 => vertical (the margins work out better that way). Approximate (b)/(c): when an action button
-        // sits next to a long message it will not fit inline on one row, so WinUI flips to vertical — mirror that here.
-        const int LongMessageChars = 60; // heuristic for "message wraps / doesn't fit on one line" alongside an action
-        bool isVertical = contentItems <= 1
-            || (hasAction && hasMessage && message.Length >= LongMessageChars)
-            // The width estimate is not gated on an action: a title beside a message that cannot fit the row is the
-            // InfoBarPanel's own vertical case (title over message) with or without a button — gating it on hasAction
-            // left a 25-char title and a 95-char message wrapping side by side in a 500-DIP dialog.
-            || (!float.IsNaN(availableWidth)
-                && EstimateHorizontalWidth(title, message, isIconVisible, isClosable) > availableWidth);
-
         // With no banner items the panel measures ZERO in WinUI (InfoBarPanel.MeasureOverride falls to the horizontal
         // branch with 0 items and 0,0,0,0 padding), so omit it outright instead of rendering dead vertical padding.
         BoxEl? panel = !hasBanner
             ? null
-            : isVertical
-                ? BuildVerticalPanel(title, message, actionButton, hasTitle, hasMessage, isHyperlinkAction, parts, st)
-                : BuildHorizontalPanel(title, message, actionButton, hasTitle, hasMessage, isHyperlinkAction, parts, st);
+            : BuildPanel(title, message, actionButton, hasTitle, hasMessage, isHyperlinkAction, parts, st);
 
         // Column 1 (the * column): row 0 = the InfoBarPanel, row 1 = the ContentArea ContentPresenter holding
         // Content/ContentTemplate (InfoBar.idl:94-95; InfoBar.xaml:126 — Grid.Row=1 Grid.Column=1, no margin,
@@ -363,6 +320,7 @@ public static class InfoBar
             BorderColor = st.Border,                            // InfoBarBorderBrush = CardStrokeColorDefaultBrush
             HoverBorderColor = st.Border,
             Shadow = st.Shadow,
+            Animate = MotionRecipes.CardResizeHeight,           // the panel stacking or a line wrapping eases the bar, and what sits below it
             Role = AutomationRole.InfoBar,
             Children = children.ToArray(),
         };
@@ -371,133 +329,63 @@ public static class InfoBar
         return parts.Apply(PartRoot, root) with { Children = root.Children, Role = AutomationRole.InfoBar };
     }
 
-    // HORIZONTAL InfoBarPanel: icon-column already trails; here title + message + action sit inline on one row. Panel
-    // padding is 0 (InfoBarPanelHorizontalOrientationPadding); per-child horizontal orientation margins give the inline
-    // gaps (title 0,14,0,0; message 12,14,0,0; action 16,8,0,0) — the panel ignores the FIRST child's leading-left margin
-    // (WinUI "hasPreviousElement"), so the leftmost child gets only its top margin. AlignItems Top mirrors WinUI's
-    // VerticalAlignment="Top" on Title/Message and Action. Cold Render path — array build here never hits a hot frame phase.
-    private static BoxEl BuildHorizontalPanel(string title, string message, Element? actionButton, bool hasTitle, bool hasMessage, bool isHyperlinkAction, TemplateParts? parts, Style st)
+    // InfoBarPanel: title, message and action in one row while they fit and the row keeps to the bar's minimum height, stacked
+    // otherwise. FlexLayout decides from what the children measure at the width the panel gets, as InfoBarPanel.MeasureOverride
+    // does (BoxEl.StackFallback), and ignores the first child's leading margin in either form (WinUI "hasPreviousElement"). The
+    // title and message wrap only when stacked: a row that would wrap one of them does not fit. Each child's own Margin is its
+    // row margin. Cold Render path: the array build here never hits a hot frame phase.
+    private static BoxEl BuildPanel(string title, string message, Element? actionButton, bool hasTitle, bool hasMessage, bool isHyperlinkAction, TemplateParts? parts, Style st)
     {
         var kids = new List<Element>(3);
-        bool first = true;
-        // The LAST horizontal child is handed the remaining row width — InfoBarPanel.ArrangeOverride arranges it at
-        // max(desired, finalSize.Width − offset) (InfoBarPanel.cpp:144-147). Horizontal needs >= 2 items, so the last
-        // is the action when present, else the message (the title is always first).
-        bool hasAction = actionButton is not null;
+        var stacked = new List<Edges4>(3);
         if (hasTitle)
         {
             // Title FontWeight = SemiBold — InfoBarTitleFontWeight (InfoBar_themeresources.xaml:63, bound at
             // InfoBar.xaml:113); the numeric TextEl weight pipeline shapes 600 directly.
             kids.Add(parts.Apply(PartTitle, new TextEl(title)
             {
-                Size = st.TitleSize, Weight = (ushort)st.TitleWeight, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
-                Margin = new Edges4(0f, TitleHMargin.Top, 0f, 0f),   // first child: ignore leading-left margin
+                Size = st.TitleSize, Weight = (ushort)st.TitleWeight, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords,
+                Margin = TitleHMargin,
             }));
-            first = false;
+            stacked.Add(TitleVMargin);
         }
         if (hasMessage)
         {
             kids.Add(parts.Apply(PartMessage, new TextEl(message)
             {
-                Size = st.MessageSize, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
-                Grow = hasAction ? 0f : 1f,                          // last child takes the remaining width (InfoBarPanel.cpp:144-147)
-                Margin = new Edges4(first ? 0f : MessageHMargin.Left, MessageHMargin.Top, 0f, 0f),
+                Size = st.MessageSize, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords,
+                Margin = MessageHMargin,
             }));
-            first = false;
+            stacked.Add(MessageVMargin);
         }
         if (actionButton is not null)
         {
             // A HyperlinkButton action adds its implicit-style own-margin (-12,0,0,0) on top of the orientation margin.
-            float left = (first ? 0f : ActionHMargin.Left) + (isHyperlinkAction ? HyperlinkActionMarginLeft : 0f);
+            float hyperlink = isHyperlinkAction ? HyperlinkActionMarginLeft : 0f;
             kids.Add(new BoxEl
             {
-                Margin = new Edges4(left, ActionHMargin.Top, 0f, 0f),
-                AlignSelf = FlexAlign.Start,                        // VerticalAlignment="Top"
-                Grow = 1f,                                          // last child takes the remaining width (InfoBarPanel.cpp:144-147)
+                Margin = new Edges4(ActionHMargin.Left + hyperlink, ActionHMargin.Top, 0f, 0f),
                 Children = [actionButton.Value],
             });
+            stacked.Add(new Edges4(hyperlink, ActionVMargin.Top, 0f, 0f));
         }
         // SHRINK IS LOAD-BEARING, not cosmetic. The panel is the "*" column of a THREE-column row (icon | panel |
         // close button); it declares Grow so it eats the leftover, but a column that never declares Shrink also opts
         // OUT of absorbing NEGATIVE free space: FlexLayout distributes an overflow only across children whose
-        // FlexShrink x baseMain sums above zero (FlexLayout.cs:527 — `else if (free < 0f && totalShrinkScaled > 0f)`),
-        // so with totalShrinkScaled == 0 the deficit is silently discarded and every child keeps its measured width.
-        // That is exactly how the toast close button ended up outside the painted plate: a 39-char message plus a
-        // "Retry" action measured 324 DIP inside a 286 DIP slot (a 380 DIP card minus the 16 content padding, the
-        // 30 DIP icon column and the 48 DIP close column), the row could not take the 38 DIP back from the one column
-        // that was meant to give it, and the close column was arranged past the right edge of the plate. Shrink = 1
-        // with MinWidth = 0 lets the row claw the overflow back out of this column, and the message TextEl inside
-        // (Wrap = WrapWholeWords, Shrink = 1) then re-measures at the narrower width and wraps to a second line.
-        // Deliberately NOT Basis = 0 (that collapses a standalone InfoBar to its minimum) and deliberately not a
-        // ClipToBounds on the root (clipping hides an overflow instead of resolving it).
-        // WinUI parity note: real InfoBarPanel.MeasureOverride picks its orientation from the MEASURED width — it
-        // flips to vertical the moment the inline row exceeds the available width — while we decide up front from a
-        // 60-character heuristic (see Create). The heuristic stays (an engine measure-time orientation switch is a
-        // separate seam); this fix is what makes the horizontal branch SAFE when the heuristic guesses "fits" and the
-        // row does not: the panel narrows and the message wraps instead of shoving the close button off the card.
+        // FlexShrink x baseMain sums above zero, so with no Shrink the deficit is silently discarded and the close column
+        // is arranged past the right edge of the plate. Shrink = 1 with MinWidth = 0 lets the row claw the overflow back
+        // out of this column, whose re-measure at the narrower width then stacks. Deliberately NOT Basis = 0 (that collapses
+        // a standalone InfoBar to its minimum) and deliberately not a ClipToBounds on the root (clipping hides an overflow
+        // instead of resolving it).
         return new BoxEl
         {
-            Direction = 0,                                          // horizontal
+            Direction = 0,
             Grow = 1f,
             Shrink = 1f,                                            // absorb row overflow (see the note above)
-            MinWidth = 0f,                                          // ...all the way down; the message wraps
-            Gap = 0f,
+            MinWidth = 0f,                                          // ...all the way down
             Margin = PanelMargin,                                   // InfoBarPanelMargin 0,0,16,0
             Padding = PanelHorizontalPadding,                       // 0,0,0,0
-            AlignItems = FlexAlign.Start,                           // children top-aligned (WinUI VerticalAlignment="Top")
-            Children = kids.ToArray(),
-        };
-    }
-
-    // VERTICAL InfoBarPanel: title, then message, then action STACKED. Panel padding is 0,14,0,18
-    // (InfoBarPanelVerticalOrientationPadding); per-child vertical orientation margins give the inter-line spacing
-    // (title 0,14,0,0; message 0,4,0,0; action 0,12,0,0) — the panel ignores the FIRST child's leading-TOP margin
-    // (WinUI "hasPreviousElement"), and the panel's own top padding (14) supplies the leading gap instead.
-    private static BoxEl BuildVerticalPanel(string title, string message, Element? actionButton, bool hasTitle, bool hasMessage, bool isHyperlinkAction, TemplateParts? parts, Style st)
-    {
-        var kids = new List<Element>(3);
-        bool first = true;
-        if (hasTitle)
-        {
-            // Title FontWeight = SemiBold — InfoBarTitleFontWeight (InfoBar_themeresources.xaml:63, bound at
-            // InfoBar.xaml:113); the numeric TextEl weight pipeline shapes 600 directly.
-            kids.Add(parts.Apply(PartTitle, new TextEl(title)
-            {
-                Size = st.TitleSize, Weight = (ushort)st.TitleWeight, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
-                Margin = new Edges4(0f, first ? 0f : TitleVMargin.Top, 0f, 0f),   // first child: ignore leading-top margin
-            }));
-            first = false;
-        }
-        if (hasMessage)
-        {
-            kids.Add(parts.Apply(PartMessage, new TextEl(message)
-            {
-                Size = st.MessageSize, Color = st.TextColor, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
-                Margin = new Edges4(0f, first ? 0f : MessageVMargin.Top, 0f, 0f), // 0,4,0,0 below the title
-
-            }));
-            first = false;
-        }
-        if (actionButton is not null)
-        {
-            kids.Add(new BoxEl
-            {
-                // A HyperlinkButton action adds its implicit-style own-margin (-12,0,0,0) on top of the orientation margin.
-                Margin = new Edges4(isHyperlinkAction ? HyperlinkActionMarginLeft : 0f, first ? 0f : ActionVMargin.Top, 0f, 0f), // 0,12,0,0 below the message
-                AlignSelf = FlexAlign.Start,                        // left-aligned action (WinUI HorizontalAlignment default)
-                Children = [actionButton.Value],
-            });
-        }
-        return new BoxEl
-        {
-            Direction = 1,                                          // vertical
-            Grow = 1f,
-            Shrink = 1f,                                            // same row-overflow contract as the horizontal panel
-            MinWidth = 0f,                                          // (this is still the "*" column of the icon|panel|close row)
-            Gap = 0f,
-            Margin = PanelMargin,                                   // InfoBarPanelMargin 0,0,16,0
-            Padding = PanelVerticalPadding,                         // 0,14,0,18
-            AlignItems = FlexAlign.Start,                           // children left-aligned in the stack
+            StackFallback = new StackFallback(PanelVerticalPadding, stacked.ToArray(), st.MinHeight),   // 0,14,0,18
             Children = kids.ToArray(),
         };
     }
