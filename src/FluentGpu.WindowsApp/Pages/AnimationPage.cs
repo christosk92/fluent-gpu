@@ -173,6 +173,7 @@ sealed class AnimationPage : Component
     // SizeMode.Reflow primitive, so collapsing a group reflows the whole page map. ──
     static Element SectionCard(Action<NodeHandle> capture, Signal<bool> open, string title, string blurb, Element[] items)
     {
+        Element content = ((Element)new BoxEl { Direction = 1, Children = items }).Freeze();   // PERF r3 MODEL M4b: read after this render
         return new BoxEl
         {
             Direction = 1,
@@ -202,7 +203,7 @@ sealed class AnimationPage : Component
                             new TextEl(blurb) { Size = 12.5f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
                         ],
                     },
-                    Content = new BoxEl { Direction = 1, Children = items },
+                    Content = content,
                 }),
             ],
         };

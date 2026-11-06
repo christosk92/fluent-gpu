@@ -229,12 +229,12 @@ internal sealed class MarkdownRenderer(MarkdownOptions options, MarkdownStyle st
         return new BoxEl { Direction = 1, Gap = tight ? 0f : _s.BlockGap, Children = kids.ToArray() };
     }
 
-    private static Element WithTopMargin(Element el, float top) => el switch
+    private static Element WithTopMargin(Element el, float top)
     {
-        SpanTextEl s => s with { Margin = new Edges4(s.Margin.Left, s.Margin.Top + top, s.Margin.Right, s.Margin.Bottom) },
-        BoxEl b => b with { Margin = new Edges4(b.Margin.Left, b.Margin.Top + top, b.Margin.Right, b.Margin.Bottom) },
-        _ => new BoxEl { Direction = 1, Margin = new Edges4(0, top, 0, 0), Children = [el] },
-    };
+        if (el.Is(out SpanTextEl s)) return s with { Margin = new Edges4(s.Margin.Left, s.Margin.Top + top, s.Margin.Right, s.Margin.Bottom) };
+        if (el.Is(out BoxEl b)) return b with { Margin = new Edges4(b.Margin.Left, b.Margin.Top + top, b.Margin.Right, b.Margin.Bottom) };
+        return new BoxEl { Direction = 1, Margin = new Edges4(0, top, 0, 0), Children = [el] };
+    }
 
     /// <summary>One block as the viewer draws it: the editor's islands.</summary>
     internal Element BlockElement(MarkdownBlock block) => Block(block, 0);

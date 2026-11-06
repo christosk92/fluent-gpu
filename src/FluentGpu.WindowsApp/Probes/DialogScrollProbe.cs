@@ -182,17 +182,19 @@ sealed class DialogScrollProbeScene : Component
             Children = [.. paras, preview, CheckBox.Create("Include the redacted report in the clipboard", isChecked: null, onChange: null)],
         };
 
+        Element bodyF = ((Element)body).Freeze();   // PERF r3 MODEL M4b: read after this render
         Element dialog = Embed.Comp(() => new ContentDialog
         {
             TriggerLabel = "Report a problem…",
             Title = "Report a problem",
-            Content = body,
+            Content = bodyF,
             PrimaryText = "Report on GitHub",
             CloseText = "Not now",
             DefaultButton = ContentDialog.DefaultBtn.Primary,
             OpenOnMount = true,
         });
 
-        return Embed.Comp(() => new OverlayHost { Child = new BoxEl { Grow = 1f, ZStack = true, ClipToBounds = true, Fill = ColorF.FromRgba(32, 32, 32), Children = [page, dialog] } });
+        Element pageF = ((Element)page).Freeze(), dialogF = dialog.Freeze();   // PERF r3 MODEL M4b: read after this render
+        return Embed.Comp(() => new OverlayHost { Child = new BoxEl { Grow = 1f, ZStack = true, ClipToBounds = true, Fill = ColorF.FromRgba(32, 32, 32), Children = [pageF, dialogF] } });
     }
 }

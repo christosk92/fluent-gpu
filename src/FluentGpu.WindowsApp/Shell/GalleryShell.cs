@@ -133,7 +133,7 @@ sealed class GalleryShell : Component
     static Element Page(string key)
     {
         var page = FluentGpu.Generated.GalleryRegistry.Create(key);
-        if (page is not null) return page;
+        if (page is not null) return page.Value;
         if (IsGroup(key)) return Embed.Comp(() => new OverviewPage { Category = key });
         return FluentGpu.Generated.GalleryRegistry.Create("welcome") ?? new BoxEl();
     }
@@ -269,7 +269,7 @@ sealed class GalleryShell : Component
             }
         ) with { Grow = 1 };
 
-        var content = ShowDiagnosticsHud ? ZStack(paletteLane, DiagnosticsOverlay()) with { Grow = 1 } : paletteLane;
+        Element content = ((Element)(ShowDiagnosticsHud ? ZStack(paletteLane, DiagnosticsOverlay()) with { Grow = 1 } : paletteLane)).Freeze();   // PERF r3 MODEL M4b: read after this render
         return Embed.Comp(() => new OverlayHost { Child = content });
     }
 

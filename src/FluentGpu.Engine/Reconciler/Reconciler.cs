@@ -5598,6 +5598,7 @@ public sealed partial class TreeReconciler
         bool hadGrid = false;
         GridSpec gridBefore = default;
         StackFallback? stackBefore = null;
+        bool stackChanged = false;   // set in the box branch (PERF r3 MODEL: no struct copy for a type test)
         if (!isMount)
         {
             layoutBefore = _scene.Layout(node);
@@ -5850,6 +5851,7 @@ public sealed partial class TreeReconciler
                 li.AlignItems = b.AlignItems;
                 li.Wrap = b.Wrap;
                 _scene.SetStackFallback(node, b.StackFallback);
+                stackChanged = !isMount && !Equals(stackBefore, b.StackFallback);
                 li.MeasureUnboundedWidth = b.MeasureUnboundedWidth;
                 li.AspectRatio = b.AspectRatio;   // CSS aspect-ratio: FlexLayout.Measure derives the missing extent (Ui.AspectRatio)
                 if (b.ZStack) _scene.Mark(node, NodeFlags.ZStack); else _scene.Unmark(node, NodeFlags.ZStack);
@@ -6618,7 +6620,6 @@ public sealed partial class TreeReconciler
                 bool hasGrid = _scene.TryGetGrid(node, out var gridAfter);
                 gridChanged = hadGrid != hasGrid || (hasGrid && !SameGridSpec(in gridBefore, in gridAfter));
             }
-            bool stackChanged = el is BoxEl stackBox && !Equals(stackBefore, stackBox.StackFallback);
             if (gridChanged || stackChanged || layoutFlagsBefore != layoutFlagsAfter || !SameLayoutInput(in layoutBefore, in layoutAfter))
             {
                 MarkLayoutShape(node);

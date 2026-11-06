@@ -144,7 +144,7 @@ sealed class AlbumLoadingDemo : Component
     static Element AlbumRowReal(AlbumTrack t) => Row(
         t.Number.ToString(),
         new TextEl(t.Title) { Size = 14f, Grow = 1f, Color = Tok.TextPrimary },
-        new TextEl("") { Text = t.Dur.Bind(), Size = 13f, Width = 44f, Color = Tok.TextTertiary }.Pending(t.Dur));
+        ((Element)new TextEl("") { Text = t.Dur.Bind(), Size = 13f, Width = 44f, Color = Tok.TextTertiary }).Pending(t.Dur));
 
     static Element AlbumRowSkeleton(AlbumTrack? t) => Row(
         "",

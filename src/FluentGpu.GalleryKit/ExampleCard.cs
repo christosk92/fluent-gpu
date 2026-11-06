@@ -79,12 +79,12 @@ public static class ExampleCard
     private static Element OptionsPanel(Element? options, Element? output)
     {
         var kids = new List<Element>();
-        if (output is not null) { kids.Add(Caption("Output").Tertiary()); kids.Add(output); }
+        if (output is not null) { kids.Add(Caption("Output").Tertiary()); kids.Add(output.Value); }
         if (options is not null)
         {
             if (output is not null) kids.Add(new BoxEl { Height = 4f });
             kids.Add(Caption("Options").Tertiary());
-            kids.Add(options);
+            kids.Add(options.Value);
         }
         return new BoxEl { Direction = 1, Gap = Spacing.StackM, Padding = Spacing.CardPad, MinWidth = 240, Children = kids.ToArray() };
     }

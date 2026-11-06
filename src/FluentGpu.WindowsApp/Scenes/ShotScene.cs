@@ -356,16 +356,20 @@ sealed class ShotScene : Component
         Children = [ new TextEl(label) { Size = 15f, Weight = 600, Color = ColorF.FromRgba(0xFF, 0xFF, 0xFF) } ],
     };
 
-    static Element OverlayShot(Element child) => Embed.Comp(() => new OverlayHost
+    static Element OverlayShot(Element child)
     {
-        Child = new BoxEl
+        Element frozen = child.Freeze();   // PERF r3 MODEL M4b: read after this render
+        return Embed.Comp(() => new OverlayHost
         {
-            Grow = 1,
-            Fill = PageBg,
-            Padding = new Edges4(48, 48, 48, 48),
-            Children = [child],
-        },
-    });
+            Child = new BoxEl
+            {
+                Grow = 1,
+                Fill = PageBg,
+                Padding = new Edges4(48, 48, 48, 48),
+                Children = [frozen],
+            },
+        });
+    }
 
     // The flyout presenter card as OverlayHost builds it (transparent fill + flyout acrylic + 1px stroke + corner 8),
     // rendered statically so the acrylic material can be diffed against WinUI without overlay/animation timing.
