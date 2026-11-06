@@ -72,6 +72,10 @@ public sealed class EditableText : Component
     /// <summary>The ✕ clear button (WinUI DeleteButton), mounted while focused ∧ non-empty. Owned: OnClick (the
     /// clear-keep-focus mechanics), TabStop (false — pointer focus must resolve to the field), Role.</summary>
     public const string PartDeleteButton = "DeleteButton";
+    /// <summary>The field's bottom lines: the themed resting underline and the focus bar (one of them shows at a time). Owned: Height, Fill and their place on the
+    /// bottom edge (the underline's AlignSelf, the bar's OffsetY). <c>Margin</c> IS stylable: a template whose field starts left of its column (a display title's
+    /// hang drawn inside the field) stands the lines back to the column while the text keeps the field's origin.</summary>
+    public const string PartLine = "Line";
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
     /// <see cref="TemplateParts"/> for the contract.</summary>
     public TemplateParts? Parts;
@@ -462,20 +466,26 @@ public sealed class EditableText : Component
         var children = new List<Element> { content };
         // A themed resting underline (none on the WinUI field) sits on the bottom edge under the focus bar.
         if (!Chromeless && fs.UnderlineThickness > 0f && !(focused && IsEnabled && fs.FocusBarThickness > 0f))
-            children.Add(new BoxEl
+            children.Add(Parts.Apply(PartLine, new BoxEl
+            {
+                Corners = CornerRadius4.All(0f), HitTestVisible = false,
+            }) with
             {
                 Height = fs.UnderlineThickness, AlignSelf = FlexAlign.End,   // laid out on the bottom edge
-                Fill = fs.Underline, Corners = CornerRadius4.All(0f), HitTestVisible = false,
+                Fill = fs.Underline,
             });
         // WinUI focus affordance is BorderThickness 1,1,1,2 — the 1px stroke stays all around (below) and a 2px accent
         // bar is pinned to the BOTTOM edge only (not a full 2px ring). See the class doc for the
         // TextControlElevationBorderFocusedBrush equivalence (TextBox_themeresources.xaml ~48–66 / ~295–304).
         // Chromeless suppresses it — the composer's outer box owns the focused underline (editable ComboBox).
         if (focused && IsEnabled && !Chromeless && fs.FocusBarThickness > 0f)
-            children.Add(new BoxEl
+            children.Add(Parts.Apply(PartLine, new BoxEl
+            {
+                Corners = CornerRadius4.All(0f),
+            }) with
             {
                 Height = fs.FocusBarThickness, OffsetY = Height - fs.FocusBarThickness,
-                Fill = fs.FocusBar, Corners = CornerRadius4.All(0f),
+                Fill = fs.FocusBar,
             });
 
         Action<NodeHandle> rootCapture = h => { _rootNode = h; if (Field is { } vf) vf.Node.Value = h; };
