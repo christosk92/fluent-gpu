@@ -114,6 +114,7 @@ public sealed partial class SceneStore : ISceneBackend
     private NodeFlags[] _flags;
     private byte[] _recordDirty;
     private byte[] _recordDirtySelf;
+    private bool[] _shapeHanded;   // the reconciler handed this text node's current text and style to the shaping workers
     private byte[] _recordDirtyDescendant;
     private int[] _recordDirtyWrote;
     private int _recordDirtyWroteCount;
@@ -159,6 +160,8 @@ public sealed partial class SceneStore : ISceneBackend
     private readonly Dictionary<int, ExtentTable> _extents = new();
     // Grid specs for grid-container nodes (O(grids)). Keyed by node index.
     private readonly ColdSlab<GridSpec> _grids = new();   // GEN-17 (wired)
+    private struct StackFallbackRow { public StackFallback Value; }
+    private readonly ColdSlab<StackFallbackRow> _stackFallbacks = new();   // BoxEl.StackFallback (FlexLayout.StackFallback.cs)
     // Optional rich-paint side-tables (O(decorated nodes), keyed by node index): eased interaction, shadow, gradient, acrylic.
     private readonly ColdSlab<InteractionAnim> _interact = new();   // GEN-17 (wired)
     private readonly ColdSlab<ShadowSpec> _shadows = new();   // GEN-17 (wired): dense slab, not Dictionary
@@ -339,6 +342,7 @@ public sealed partial class SceneStore : ISceneBackend
         _subtreeVersion = new uint[capacity];
         _recordDirty = new byte[capacity];
         _recordDirtySelf = new byte[capacity];
+        _shapeHanded = new bool[capacity];
         _recordDirtyDescendant = new byte[capacity];
         _recordDirtyWrote = new int[capacity];
         _recordDirtyStamp = new RecordDirtyStamps[capacity];
@@ -387,6 +391,10 @@ public sealed partial class SceneStore : ISceneBackend
     /// <summary>In-flight implicit brush transitions — O(1) census of the <c>_brushAnims</c> side-table.</summary>
     public int BrushAnimCount => _brushAnims.Count;
 
+    /// <summary>The reconciler handed this text node's CURRENT text and style to the shaping workers (Reconciler.TextPrefetch.cs): the
+    /// layout pass's own prefetch walk skips it. Set and cleared only by the reconciler's text writes.</summary>
+    public ref bool ShapeHanded(NodeHandle h) => ref _shapeHanded[h.Raw.Index];
+
     public bool IsLive(NodeHandle h)
         => h.Raw.Index > 0 && h.Raw.Index < (uint)_high && _gen[h.Raw.Index] == h.Raw.Gen;
 
@@ -412,6 +420,7 @@ public sealed partial class SceneStore : ISceneBackend
         _recordDirty[idx] = 0;
         _recordDirtySelf[idx] = 0;
         _recordDirtyDescendant[idx] = 0;
+        _shapeHanded[idx] = false;
         MarkRecordDirty(idx);
         _click[idx] = null;
         _boundsChanged[idx] = null;
@@ -507,6 +516,7 @@ public sealed partial class SceneStore : ISceneBackend
             _authoredHandles.Remove(idx);
         }
         _grids.Remove(idx);
+        _stackFallbacks.Remove(idx);
         // A viewport's measured row extents are keyed by its index like every side-table here: the next node to reuse the
         // slot must start from its own estimates, not the freed list's row heights (and the table must not outlive it).
         if (_extents.Count != 0) _extents.Remove(idx);
@@ -2093,6 +2103,19 @@ public sealed partial class SceneStore : ISceneBackend
     public bool HasGrid(NodeHandle h) => _grids.Contains((int)h.Raw.Index);
     public bool TryGetGrid(NodeHandle h, out GridSpec spec) => _grids.TryGet((int)h.Raw.Index, out spec);
 
+    public void SetStackFallback(NodeHandle h, StackFallback? fallback)
+    {
+        if (fallback is null) _stackFallbacks.Remove((int)h.Raw.Index);
+        else _stackFallbacks.GetOrAdd((int)h.Raw.Index).Value = fallback;
+    }
+    public bool HasStackFallback(NodeHandle h) => _stackFallbacks.Contains((int)h.Raw.Index);
+    public bool TryGetStackFallback(NodeHandle h, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out StackFallback? fallback)
+    {
+        bool has = _stackFallbacks.TryGet((int)h.Raw.Index, out var row);
+        fallback = row.Value;
+        return has;
+    }
+
     // ── rich-paint side-tables ──
     /// <summary>Get-or-create the eased-interaction row for a node (hover/press progress).</summary>
     public ref InteractionAnim InteractRef(NodeHandle h)
@@ -2785,6 +2808,7 @@ public sealed partial class SceneStore : ISceneBackend
         Array.Resize(ref _aux, n);
         Array.Resize(ref _subtreeVersion, n);   // P4 fix: per-node subtree-content version, parallel to _aux (SceneStore.Aux.cs)
         Array.Resize(ref _recordDirty, n); Array.Resize(ref _recordDirtySelf, n); Array.Resize(ref _recordDirtyDescendant, n);
+        Array.Resize(ref _shapeHanded, n);
         Array.Resize(ref _recordDirtyWrote, n); Array.Resize(ref _recordDirtyStamp, n);
         if (_recordDirtyWroteCount > n) _recordDirtyWroteCount = n;
         // P8 capture ledger: sized WITH the columns (like _recordDirtyWrote/_recordDirtyStamp) so a steady frame never

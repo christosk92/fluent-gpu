@@ -294,6 +294,7 @@ public sealed partial class FlexLayout
 
     private Size2 StoreMemo(NodeHandle node, float availW, Size2 size)
     {
+        if (_minContentProbe) return size;   // a probe result is not the node's measure for this pass
         uint i = node.Raw.Index;
         if (i < (uint)_memo.Length)
         {
@@ -353,7 +354,7 @@ public sealed partial class FlexLayout
         uint i = node.Raw.Index;
         if (i >= (uint)_memo.Length) return false;
         // Viewport/grid/z-stack measure paths return without StoreMemo, so they carry no record to compare against.
-        if (_scene.HasScroll(node) || _scene.HasGrid(node) || (_scene.Flags(node) & NodeFlags.ZStack) != 0) return false;
+        if (_scene.HasScroll(node) || _scene.HasGrid(node) || _scene.HasStackFallback(node) || (_scene.Flags(node) & NodeFlags.ZStack) != 0) return false;
         ref MeasureMemo rec = ref _memo[i];
         if (rec.PassGen == 0 || rec.NodeGen != node.Raw.Gen) return false;
         // Copy out BEFORE BeginMeasurePass: the probe measure re-writes this slot (and may resize the array).
@@ -416,7 +417,7 @@ public sealed partial class FlexLayout
         ref NodePaint paint = ref _scene.Paint(n);
         if (paint.VisualKind == VisualKind.Text)
         {
-            if (paint.Text.IsEmpty) return;
+            if (paint.Text.IsEmpty || _scene.ShapeHanded(n)) return;   // empty, or the reconciler handed it over already
             ref LayoutInput li = ref _scene.Layout(n);
             int epoch = FluentGpu.Text.FontRegistry.Shared.BodyVersion;
             if (_scene.TryGetMeasureCache(n, out var mc)
@@ -446,6 +447,10 @@ public sealed partial class FlexLayout
     // "parent offered availW" record (TryResolveSizeStable must keep seeing the REAL layout's offer), and a natural
     // virtual viewport answers from its last arranged box instead of re-seeding its layout/extent table at the probe width.
     private bool _naturalProbe;
+    /// <summary>The MIN-CONTENT probe (layout.md §7.2): while set, a wrapping text leaf measures as its longest word
+    /// (WrapWholeWords at width 0) and nothing is memoised, so a grid can learn the narrowest width a cell can take
+    /// without breaking inside a word. Set only around the cell measures in AutoTrackBounds.</summary>
+    private bool _minContentProbe;
     // The probe's own per-node text ring (index-keyed; the entry key is the full (text, style, maxW) pure-function input,
     // so a recycled index can only ever hit a correct answer). Grown in MeasureNatural only — cold, never per frame.
     private TextMeasureCache[] _probeText = System.Array.Empty<TextMeasureCache>();
@@ -455,10 +460,13 @@ public sealed partial class FlexLayout
     /// publish). Never writes the node's <see cref="TextMeasureCache"/>.</summary>
     private (float W, float H) MeasureTextProbe(NodeHandle node, in TextMeasureCache mc, StringId text, in TextStyle style, float maxW, int fontEpoch)
     {
-        if (mc.E0.Matches(text, in style, maxW, fontEpoch)) return (mc.E0.Size.Width, mc.E0.Size.Height);
-        if (mc.E1.Matches(text, in style, maxW, fontEpoch)) return (mc.E1.Size.Width, mc.E1.Size.Height);
+        if (!_minContentProbe)
+        {
+            if (mc.E0.Matches(text, in style, maxW, fontEpoch)) return (mc.E0.Size.Width, mc.E0.Size.Height);
+            if (mc.E1.Matches(text, in style, maxW, fontEpoch)) return (mc.E1.Size.Width, mc.E1.Size.Height);
+        }
         uint i = node.Raw.Index;
-        bool slot = i < (uint)_probeText.Length;
+        bool slot = i < (uint)_probeText.Length && !_minContentProbe;
         if (slot && _probeText[i].TryGet(text, in style, maxW, out var hit, fontEpoch)) return (hit.Size.Width, hit.Size.Height);
         TextStyle eff = style;
         // The same auto-fit gate as the real measure (a NoWrap run fits its one line; a wrapping run needs MaxLines).
@@ -469,6 +477,8 @@ public sealed partial class FlexLayout
             if (chosen < style.SizeDip) eff = style.AtFitSize(chosen);
         }
         var m = _fonts.Measure(text, in eff, maxW, publishArtifacts: false);
+        // The min-content probe wants the widest line a whole-word wrap laid, which Size.Width clamps to the (tiny) box.
+        if (_minContentProbe && !float.IsNaN(m.MaxLineWidth)) return (m.MaxLineWidth, m.Size.Height);
         if (slot)
             _probeText[i].Store(new TextMeasureEntry { Valid = true, Text = text, Style = style, MaxW = maxW, Size = m.Size, FontEpoch = fontEpoch });
         return (m.Size.Width, m.Size.Height);
@@ -758,7 +768,10 @@ public sealed partial class FlexLayout
         // Within-pass memo: same (node, availW) already solved this pass ⇒ reuse it, re-asserting the Bounds W/H so the
         // Arrange pass (which reads Bounds for base main/cross sizes) sees exactly what an unmemoized recompute would.
         uint mi = node.Raw.Index;
-        if (mi < (uint)_memo.Length)
+        // The grid's track-bounds pass asks for a cell's TRUE max-content (∞) and min-content (0) widths: a memo or a
+        // flat-range hit from this pass would hand back the width the cell was laid at (max == min == the track), so
+        // the probe reads nothing memoised (and StoreMemo writes nothing under it).
+        if (mi < (uint)_memo.Length && !_minContentProbe)
         {
             ref MeasureMemo hit = ref _memo[mi];
             if (hit.Gen == _measureGen && hit.AvailW == availW)
@@ -788,7 +801,7 @@ public sealed partial class FlexLayout
         // NOTE: the viewport/grid/zstack measure paths are NOT memoized (only the pure general flex path below is) — they
         // recompute every call. Their SUBTREES still benefit (the general-path nodes inside them memoize). Conservative:
         // the flex-row pre-pass/main-loop redundancy that compounds is entirely in the general path.
-        bool special = _scene.HasScroll(node) || _scene.HasGrid(node) || (_scene.Flags(node) & NodeFlags.ZStack) != 0;
+        bool special = _scene.HasScroll(node) || _scene.HasGrid(node) || _scene.HasStackFallback(node) || (_scene.Flags(node) & NodeFlags.ZStack) != 0;
 
         // P4 cross-pass ring: a hit means this exact (node, availW) was measured before, NOTHING in the subtree has
         // moved since (SceneStore.IsLayoutClean), the node index hasn't been recycled, and this node's own
@@ -801,7 +814,7 @@ public sealed partial class FlexLayout
             WriteMeasuredBounds(node, ringSize.Width, ringSize.Height);
             // C1: the slot's interval holds for this (unchanged) subtree in this pass too, so the parent can still be flat (only with
             // ring intervals on: it extends a ring answer to other offers, as sound as the ring's dirty marks - see MeasureFlatRingEnabled).
-            if (MeasureFlatEnabled && MeasureFlatRingEnabled && !_naturalProbe && !float.IsNaN(ringLo))
+            if (MeasureFlatEnabled && MeasureFlatRingEnabled && !_naturalProbe && !_minContentProbe && !float.IsNaN(ringLo))
             { ref MeasureMemo fm = ref _memo[mi]; fm.FlatGen = _measureGen; fm.FlatLo = ringLo; fm.FlatHi = ringHi; fm.FlatW = ringSize.Width; fm.FlatH = ringSize.Height; }
             return StoreMemo(node, availW, ringSize);
         }
@@ -818,6 +831,7 @@ public sealed partial class FlexLayout
         if (_scene.HasScroll(node)) return MeasureViewport(node, in li, availW);
         if (_scene.HasGrid(node)) return MeasureGrid(node, in li, availW);
         if ((_scene.Flags(node) & NodeFlags.ZStack) != 0) return MeasureZStack(node, in li, availW);
+        if (_scene.TryGetStackFallback(node, out var stackFallback)) return MeasureStackFallback(node, in li, stackFallback, availW);
 
         float w, h;
         // C1: what this measure's validity interval needs (FlexLayout.MeasureFlat.cs). Kind 0 = not flat, 1 = text, 2 = flex box.
@@ -841,7 +855,19 @@ public sealed partial class FlexLayout
             // arranged width, which thrashed a single slot into a miss on every single pass (Scene/Columns.cs).
             ref TextMeasureCache mc = ref _scene.MeasureCacheRef(node);
             int fontEpoch = FluentGpu.Text.FontRegistry.Shared.BodyVersion;   // E9: a body-font change evicts every cached measure
-            if (_naturalProbe)
+            if (_minContentProbe && !widthConstrained)
+            {
+                (w, h) = MeasureTextProbe(node, in mc, paint.Text, in li.TextStyle, maxW, fontEpoch);   // max-content, unmemoised
+            }
+            else if (_minContentProbe && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap)
+            {
+                // Min-content: the widest line when every break opportunity is taken but no word is split — the
+                // whole-word wrap at width 0 (DWRITE_WORD_WRAPPING_WHOLE_WORD) measures exactly that. Same pure probe
+                // path as the natural probe below: nothing stored into the node's ring.
+                var minStyle = li.TextStyle with { Wrap = Foundation.TextWrap.WrapWholeWords };
+                (w, h) = MeasureTextProbe(node, in mc, paint.Text, in minStyle, 2f, fontEpoch);
+            }
+            else if (_naturalProbe || _minContentProbe)
             {
                 // The SizeToContent probe must not touch text state: read the node's ring WITHOUT TryGet (a hit moves
                 // its "last used" slot — the recorder's fallback), never Store into it (the probe width would evict the
@@ -1152,6 +1178,7 @@ public sealed partial class FlexLayout
         if (_scene.HasScroll(node)) { ArrangeViewport(node, finalW, finalH, in li); return; }
         if (_scene.HasGrid(node)) { ArrangeGrid(node, finalW, finalH, in li); return; }
         if ((_scene.Flags(node) & NodeFlags.ZStack) != 0) { ArrangeZStack(node, finalW, finalH, in li); return; }
+        if (_scene.TryGetStackFallback(node, out var stackFallback)) { ArrangeStackFallback(node, finalW, in li, stackFallback); return; }
         if (_scene.FirstChild(node).IsNull) return;
         bool row = Row(li);
 
@@ -1339,12 +1366,22 @@ public sealed partial class FlexLayout
             // auto-height column (the cross axis is the column's MAIN axis, which neither cross-stretch nor Grow fills)
             // collapses to 0. The scroll axis is never touched here — it stays parent-assigned (never self-grows).
             if (sc.ItemCount == 0 && !content.IsNull && _scene.IsLive(content)
-                && (horizontal ? float.IsNaN(h) : float.IsNaN(w)))
+                && (horizontal ? float.IsNaN(h) || (sc.FitContentWidth && float.IsNaN(w)) : float.IsNaN(w)))
             {
-                float crossAvailW = horizontal ? float.PositiveInfinity
+                // FitContentWidth (a table frame): the content is measured AGAINST the viewport's width, not an infinite one, so
+                // wrapping content wraps to fit and only a min-content overflow (a grid at its longest-word floor) pans; the
+                // viewport itself hugs the content up to the available width (layout.md §7.2).
+                float outerFit = horizontal && sc.FitContentWidth ? DefiniteWidth(in li, availW) : float.PositiveInfinity;
+                float crossAvailW = horizontal
+                                  ? (sc.FitContentWidth && !float.IsInfinity(outerFit) ? MathF.Max(0f, outerFit - li.Padding.Horizontal) : float.PositiveInfinity)
                                   : (!float.IsNaN(w) ? MathF.Max(0f, w - li.Padding.Horizontal) : float.PositiveInfinity);
                 var cs = Measure(content, crossAvailW);
-                if (horizontal) h = cs.Height + li.Padding.Vertical;
+                if (horizontal)
+                {
+                    if (float.IsNaN(h)) h = cs.Height + li.Padding.Vertical;
+                    if (sc.FitContentWidth && float.IsNaN(w))
+                        w = float.IsInfinity(outerFit) ? cs.Width + li.Padding.Horizontal : MathF.Min(cs.Width + li.Padding.Horizontal, outerFit);
+                }
                 else w = cs.Width + li.Padding.Horizontal;
             }
             if (float.IsNaN(w)) w = 0f;
@@ -1426,7 +1463,7 @@ public sealed partial class FlexLayout
 
         (float contentW, float contentH) = sc0.ItemCount > 0
             ? ArrangeVirtual(node, in sc0, content, innerW, innerH, padL, padT, horizontal)
-            : ArrangePlainScroll(content, innerW, innerH, padL, padT, horizontal);
+            : ArrangePlainScroll(content, innerW, innerH, padL, padT, horizontal, sc0.FitContentWidth);
 
         // Publish ContentSize + viewport extent (Layout-owned fields) via a fresh ref (post-recursion).
         ref ScrollState sc = ref _scene.ScrollRef(node);
@@ -1479,13 +1516,15 @@ public sealed partial class FlexLayout
         }
     }
 
-    private (float w, float h) ArrangePlainScroll(NodeHandle content, float innerW, float innerH, float padL, float padT, bool horizontal)
+    private (float w, float h) ArrangePlainScroll(NodeHandle content, float innerW, float innerH, float padL, float padT, bool horizontal, bool fitContentWidth = false)
     {
         if (content.IsNull) return (0f, 0f);
         // Fill the cross axis to the viewport during ARRANGE; do not write LayoutInput.Width/Height here. LayoutInput is
         // the reconciled model, not mutable layout scratch. Mutating it poisoned content-sized popup lists: the first
         // arrange wrote the 96px menu minimum into the column, so the next measure clipped long menu labels to 96px.
-        var cs = Measure(content, horizontal ? float.PositiveInfinity : innerW);   // vertical scroll: wrap text to the viewport width
+        // A FitContentWidth viewport measures its content against the viewport width here too (as MeasureViewport did), so
+        // the fitted layout is what gets painted; it only overhangs at the content's min-content floor.
+        var cs = Measure(content, horizontal && !fitContentWidth ? float.PositiveInfinity : innerW);
         float contentW = horizontal ? cs.Width : innerW;
         float contentH = horizontal ? innerH : cs.Height;
         Arrange(content, padL, padT, contentW, contentH);   // content-box origin; the content translate adds WindowOrigin − Offset
@@ -1836,6 +1875,26 @@ public sealed partial class FlexLayout
         float w = Clamp(!float.IsNaN(li.Width) ? li.Width
                 : float.IsInfinity(availW) ? 0f
                 : MathF.Max(0f, availW), li.MinW, li.MaxW);
+        // A grid that OPTS OUT of the cross-axis stretch (AlignSelf Start/Center/End) and has only Pixel/Auto tracks (no
+        // star track needs the container width; no auto-fill) is an inline-sized box: it measures to its tracks + gaps +
+        // padding, clamped to availW (over-wide tracks still scale to fit through ResolveColumns' overflow guard), so a
+        // hugging parent — a table's frame — ends at the last column instead of framing empty space (layout.md §7.2).
+        if (float.IsNaN(li.Width) && li.AlignSelf is FlexAlign.Start or FlexAlign.Center or FlexAlign.End
+            && g.MinColWidth <= 0f && g.Columns is { Length: > 0 } && !HasStarTrack(in g))
+        {
+            int n = g.Columns.Length;
+            Span<float> maxW = n <= 64 ? stackalloc float[n] : new float[n];
+            Span<float> minW = n <= 64 ? stackalloc float[n] : new float[n];
+            AutoTrackBounds(node, in g, n, maxW, minW);
+            float gapsW = padH + (n > 1 ? (n - 1) * g.ColGap : 0f);
+            float natural = gapsW, floor = gapsW;
+            for (int j = 0; j < n; j++) { natural += maxW[j]; floor += minW[j]; }
+            // An unconstrained measure (availW = ∞, the row/column content pass) has no width to clamp to: the natural width IS
+            // the answer. A finite width clamps the natural width but NEVER below the min-content floor (a column is never
+            // narrower than its longest word): the grid then overflows its parent, which clips or scrolls it (a
+            // ScrollEl.FitContentWidth viewport pans it) — layout.md §7.2.
+            w = Clamp(float.IsInfinity(availW) ? natural : MathF.Max(MathF.Min(w, natural), floor), li.MinW, li.MaxW);
+        }
         int count = GridColCount(in g, w - padH);   // auto-fill resolves the count from the (now known) width
         float h;
         if (w > 0f && count > 0)
@@ -1899,6 +1958,51 @@ public sealed partial class FlexLayout
     // (CSS repeat(auto-fill, minmax(MinColWidth, 1fr))), capped at MaxColumns when > 0. Width unknown (0 / ∞) ⇒ assume
     // a single column. The formula is GridEl.AutoFillColumnCount — ONE definition shared with app-side form rules, so
     // a caller predicting the count (cells = 2·cols − 1) can never disagree with the tracks actually laid out.
+    /// <summary>Per Auto track: the widest cell's max-content width (an unconstrained measure) and its min-content width
+    /// (the min-content probe: the longest word of a wrapping cell). Returns false when the grid has no Auto track.</summary>
+    private bool AutoTrackBounds(NodeHandle node, in GridSpec g, int count, Span<float> autoMax, Span<float> autoMin)
+    {
+        bool anyAuto = false;
+        for (int j = 0; j < count; j++) { autoMax[j] = 0f; autoMin[j] = 0f; if (g.Columns[j].Kind == TrackKind.Auto) anyAuto = true; }
+        if (!anyAuto) return false;
+        int k = 0;
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), k++)
+        {
+            int col = k % count;
+            if (g.Columns[col].Kind != TrackKind.Auto) continue;
+            float margin = GridCellMargin(c).Horizontal;
+            _minContentProbe = true;   // bypasses the memo for BOTH probes; the text rule only changes at a finite width
+            try
+            {
+                var cs = Measure(c);        // ∞: max-content (a wrapping run measures unconstrained — one line)
+                var cm = Measure(c, 2f);    // ~0 + WrapWholeWords: min-content (the longest word); 2 clears the breaker's `> 1` wrap guard
+                autoMax[col] = MathF.Max(autoMax[col], cs.Width + margin);
+                autoMin[col] = MathF.Max(autoMin[col], MathF.Min(cm.Width, cs.Width) + margin);
+                }
+            finally { _minContentProbe = false; InvalidateMemoSubtree(c); }
+        }
+        return true;
+    }
+
+
+
+    /// <summary>A probe measure scribbles Bounds and the measured-pass stamp of every node it descends into; a later memo
+    /// HIT on an ancestor rewrites only that ancestor's bounds, so the descendants would be arranged at the probe's sizes
+    /// (a cell's text flow at its longest-word width). Clearing the subtree's memo entries makes the next real measure
+    /// descend the whole subtree again and rewrite every bound at the real width.</summary>
+    private void InvalidateMemoSubtree(NodeHandle n)
+    {
+        uint i = n.Raw.Index;
+        if (i < (uint)_memo.Length) { ref MeasureMemo m = ref _memo[i]; m.Gen = 0; m.FlatGen = 0; }
+        for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c)) InvalidateMemoSubtree(c);
+    }
+
+    private static bool HasStarTrack(in GridSpec g)
+    {
+        for (int j = 0; j < g.Columns.Length; j++) if (g.Columns[j].Kind == TrackKind.Star) return true;
+        return false;
+    }
+
     private static int GridColCount(in GridSpec g, float innerW)
     {
         if (g.MinColWidth > 0f)
@@ -1917,15 +2021,27 @@ public sealed partial class FlexLayout
         }
 
         Span<float> autoW = count <= 64 ? stackalloc float[count] : new float[count];
-        bool anyAuto = false;
-        for (int j = 0; j < count; j++) if (g.Columns[j].Kind == TrackKind.Auto) { anyAuto = true; break; }
-        if (anyAuto)
+        Span<float> autoMin = count <= 64 ? stackalloc float[count] : new float[count];
+        bool anyAuto = AutoTrackBounds(node, in g, count, autoW, autoMin);
+        if (anyAuto && !float.IsInfinity(availW))
         {
-            int k = 0;
-            for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), k++)
+            // The auto-table rule (CSS 2.1 §17.5.2.2, what every studied Markdown renderer's table does): Pixel tracks and
+            // gaps come first; the Auto tracks get their max-content widths when those fit, else each gets its MIN-content
+            // width (its longest word — never narrower, so no word ever breaks inside) plus a share of what is left in
+            // proportion to (max − min); when even the minimums do not fit, every Auto track is its minimum and the row
+            // overflows the box (the parent clips or pans it). Replaces the proportional scale-down, which shrank a
+            // narrow column to a glyph and broke its words letter by letter.
+            float pixels = 0f; for (int j = 0; j < count; j++) if (g.Columns[j].Kind == TrackKind.Pixel) pixels += g.Columns[j].Value;
+            float gapsA = count > 1 ? (count - 1) * g.ColGap : 0f;
+            float room = availW - gapsA - pixels;
+            float sumMax = 0f, sumMin = 0f;
+            for (int j = 0; j < count; j++) if (g.Columns[j].Kind == TrackKind.Auto) { sumMax += autoW[j]; sumMin += autoMin[j]; }
+            if (sumMax > room)
             {
-                int col = k % count;
-                if (g.Columns[col].Kind == TrackKind.Auto) { var cs = Measure(c); autoW[col] = MathF.Max(autoW[col], cs.Width + GridCellMargin(c).Horizontal); }
+                float spare = room - sumMin, flex = sumMax - sumMin;
+                for (int j = 0; j < count; j++)
+                    if (g.Columns[j].Kind == TrackKind.Auto)
+                        autoW[j] = spare <= 0f || flex <= 0f ? autoMin[j] : autoMin[j] + spare * (autoW[j] - autoMin[j]) / flex;
             }
         }
 
@@ -1943,7 +2059,7 @@ public sealed partial class FlexLayout
         // cells (Star tracks already resolve to 0). Grids don't scroll, so an over-wide fixed grid is a layout error we
         // degrade gracefully. No-op when it already fits (scale 1) or the width is unconstrained (the measure pass).
         float fixedScale = 1f;
-        if (!float.IsInfinity(availW) && fixedW > 0f && fixedW + gaps > availW)
+        if (!float.IsInfinity(availW) && fixedW > 0f && fixedW + gaps > availW && !anyAuto)   // Auto tracks are floored above, never scaled
             fixedScale = Math.Clamp((availW - gaps) / fixedW, 0f, 1f);
         float remaining = MathF.Max(0f, availW - fixedW * fixedScale - gaps);
         for (int j = 0; j < count; j++)

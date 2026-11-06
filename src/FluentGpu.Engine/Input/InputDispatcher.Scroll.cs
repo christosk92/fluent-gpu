@@ -106,6 +106,14 @@ public sealed partial class InputDispatcher : IScrollerQuery
         return h.Raw.Gen;
     }
 
+    bool IScrollerQuery.HasRange(int vp, bool horizontal)
+    {
+        var h = _scene.HandleAt(vp);
+        if (h.IsNull || !_scene.IsLive(h) || !_scene.HasScroll(h)) return false;
+        ref ScrollState sc = ref _scene.ScrollRef(h);
+        return (sc.Orientation == 1) == horizontal && sc.MaxOffset > 0.5;
+    }
+
     bool IScrollerQuery.CanMove(int vp, bool horizontal, int sign, double tNow)
     {
         var h = _scene.HandleAt(vp);

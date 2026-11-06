@@ -3151,6 +3151,7 @@ public sealed partial class TreeReconciler
         SetPaintText(ref paint, next);
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.LayoutDirty);
+        NoteTextWrite(node);
     }
 
     private void FireTextColor(Bind<ColorF> fx)
@@ -5543,11 +5544,13 @@ public sealed partial class TreeReconciler
         NodeFlags layoutFlagsBefore = 0;
         bool hadGrid = false;
         GridSpec gridBefore = default;
+        StackFallback? stackBefore = null;
         if (!isMount)
         {
             layoutBefore = _scene.Layout(node);
             layoutFlagsBefore = _scene.Flags(node) & (NodeFlags.ClipsToBounds | NodeFlags.LayoutBoundary | NodeFlags.ZStack);
             hadGrid = _scene.TryGetGrid(node, out gridBefore);
+            _scene.TryGetStackFallback(node, out stackBefore);
         }
 
         // Shared-element (connected-animation) tag: a node carrying MorphId is a Hero participant — its laid-out rect +
@@ -5793,6 +5796,7 @@ public sealed partial class TreeReconciler
                 li.Justify = b.Justify;
                 li.AlignItems = b.AlignItems;
                 li.Wrap = b.Wrap;
+                _scene.SetStackFallback(node, b.StackFallback);
                 li.MeasureUnboundedWidth = b.MeasureUnboundedWidth;
                 li.AspectRatio = b.AspectRatio;   // CSS aspect-ratio: FlexLayout.Measure derives the missing extent (Ui.AspectRatio)
                 if (b.ZStack) _scene.Mark(node, NodeFlags.ZStack); else _scene.Unmark(node, NodeFlags.ZStack);
@@ -6143,6 +6147,7 @@ public sealed partial class TreeReconciler
                 ref ScrollState ss = ref _scene.ScrollRef(node);
                 ss.Orientation = s.Horizontal ? (byte)1 : (byte)0;
                 ss.ContentSized = s.ContentSized;
+                ss.FitContentWidth = s.FitContentWidth;
                 ss.LineDip = s.ScrollLineDip > 0f ? s.ScrollLineDip : 0f;   // wheel line height hint (S6); 0 = viewport rule
                 // Pinch-zoom opt-in (Input owns the live ZoomFactor — re-reconciling the element must NOT reset a
                 // mid-gesture / committed zoom, so only the declared opt-in + clamp bounds are written here).
@@ -6478,10 +6483,11 @@ public sealed partial class TreeReconciler
                 paint.TextDecorations = (byte)((t.Underline ? NodePaint.UnderlineBit : 0)
                                              | (t.Strikethrough ? NodePaint.StrikethroughBit : 0));
                 _scene.SetDynamicText(node, t.DynamicText);
+                bool textWritten = isMount;
                 if (!t.Text.IsBound)
                 {
                     var newText = _strings.Intern(t.Text.Value);
-                    if (paint.Text != newText) { SetPaintText(ref paint, newText); MarkLayoutShape(node); }
+                    if (paint.Text != newText) { SetPaintText(ref paint, newText); MarkLayoutShape(node); textWritten = true; }
                 }
 
                 ref LayoutInput li = ref _scene.Layout(node);
@@ -6493,6 +6499,7 @@ public sealed partial class TreeReconciler
                     MinSizeDip: float.IsNaN(t.MinSize) ? 0f : t.MinSize, Case: t.Case,
                     Align: t.TextAlign, Features: t.FontFeatures, Fit: t.FitMode);
                 TextFitContract.Check(in prevStyle, in li.TextStyle, t.Text.IsBound ? "(bound)" : t.Text.Value);
+                if (textWritten || prevStyle != li.TextStyle) NoteTextWrite(node);   // the shaping workers start on it now
                 li.Margin = t.Margin;
                 li.Width = t.Width; li.Height = t.Height;
                 li.MinW = t.MinWidth; li.MinH = t.MinHeight; li.MaxW = t.MaxWidth; li.MaxH = t.MaxHeight;
@@ -6527,9 +6534,11 @@ public sealed partial class TreeReconciler
                 ref LayoutInput li = ref _scene.Layout(node);
                 var famId = _strings.Intern(st.FontFamily);
                 if (li.TextStyle.FontFamily != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.FontFamily); }
-                li.TextStyle = new TextStyle(famId, st.Size, st.Weight != 0 ? st.Weight : (ushort)400,
+                TextStyle prevSpanStyle = li.TextStyle;
+                li.TextStyle = new TextStyle(famId, st.Size, FontWeightWord.Make(st.Weight != 0 ? st.Weight : 400, st.Italic),
                     st.Wrap, st.Trim, st.MaxLines, st.CharSpacing, st.LineHeight, st.LineStacking, st.LineBounds, runId,
                     Align: st.TextAlign, Features: st.FontFeatures);
+                if (isMount || prevSpanStyle != li.TextStyle) NoteTextWrite(node);   // the shaping workers start on it now
                 li.Margin = st.Margin;
                 li.Width = st.Width; li.Height = st.Height;
                 li.MinW = st.MinWidth; li.MinH = st.MinHeight; li.MaxW = st.MaxWidth; li.MaxH = st.MaxHeight;
@@ -6556,7 +6565,8 @@ public sealed partial class TreeReconciler
                 bool hasGrid = _scene.TryGetGrid(node, out var gridAfter);
                 gridChanged = hadGrid != hasGrid || (hasGrid && !SameGridSpec(in gridBefore, in gridAfter));
             }
-            if (gridChanged || layoutFlagsBefore != layoutFlagsAfter || !SameLayoutInput(in layoutBefore, in layoutAfter))
+            bool stackChanged = el is BoxEl stackBox && !Equals(stackBefore, stackBox.StackFallback);
+            if (gridChanged || stackChanged || layoutFlagsBefore != layoutFlagsAfter || !SameLayoutInput(in layoutBefore, in layoutAfter))
             {
                 MarkLayoutShape(node);
                 if (!SameParentFacing(in layoutBefore, in layoutAfter)) MarkParentLayoutDirty(node);
@@ -6663,7 +6673,7 @@ public sealed partial class TreeReconciler
             if (!string.Equals(x.Text, y.Text, StringComparison.Ordinal) || x.Weight != y.Weight
                 || x.Color != y.Color || x.Underline != y.Underline || x.Strikethrough != y.Strikethrough
                 || !Nullable.Equals(x.Size, y.Size) || !string.Equals(x.FontFamily, y.FontFamily, StringComparison.Ordinal)
-                || x.IsHyperlink != y.IsHyperlink) return false;
+                || x.IsHyperlink != y.IsHyperlink || x.Italic != y.Italic || x.Background != y.Background) return false;
         }
         return true;
     }
@@ -6739,10 +6749,17 @@ public sealed partial class TreeReconciler
                 int len = sp.Text?.Length ?? 0;
                 byte flags = (byte)((sp.Underline ? SpanStyle.UnderlineBit : 0)
                                   | (sp.Strikethrough ? SpanStyle.StrikethroughBit : 0)
-                                  | (sp.IsHyperlink ? SpanStyle.LinkBit : 0));
+                                  | (sp.IsHyperlink ? SpanStyle.LinkBit : 0)
+                                  | (sp.Background.A > 0f ? SpanStyle.HighlightBit : 0));
                 var spanFam = _strings.Intern(sp.FontFamily);
                 _strings.AddRef(spanFam);   // released by SceneStore.ReleaseSpanRun with the run
-                styles[i] = new SpanStyle(pos, pos + len, sp.Weight, sp.Size ?? 0f, spanFam, sp.Color, flags);
+                // The span's weight WORD: an italic-only span inherits the paragraph's numeric weight (0 would mean
+                // "inherit the whole word" and lose the axis), so the base weight is folded in here.
+                int baseWeight = FontWeightWord.Weight(li.TextStyle.Weight);
+                ushort word = sp.Italic
+                    ? FontWeightWord.Make(sp.Weight != 0 ? sp.Weight : baseWeight != 0 ? baseWeight : 400, true)
+                    : sp.Weight;
+                styles[i] = new SpanStyle(pos, pos + len, word, sp.Size ?? 0f, spanFam, sp.Color, flags, sp.Background);
                 pos += len;
             }
             int newRunId = SpanRunTable.Shared.Create(styles, overflowSuffixStart);

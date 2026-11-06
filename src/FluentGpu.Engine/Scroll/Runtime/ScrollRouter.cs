@@ -15,6 +15,10 @@ public interface IScrollerQuery
     /// direction <paramref name="sign"/> (+1 toward the content end, -1 toward the start) at <paramref name="tNow"/>,
     /// i.e. its plan's displayed position is not already at that edge (and the axis is scrollable at all).</summary>
     bool CanMove(int vp, bool horizontal, int sign, double tNow);
+    /// <summary>True when <paramref name="vp"/> scrolls on <paramref name="horizontal"/>'s axis AT ALL: it is a scroller of
+    /// that orientation whose content exceeds its viewport. A scroller that fits (no range) is never a target — it must not
+    /// absorb a notch nor rubber-band — while one AT its edge (range, but no move in this direction) still is.</summary>
+    bool HasRange(int vp, bool horizontal);
 
     /// <summary>Who <paramref name="vp"/> is while it can take input: a nonzero identity (its node generation) while
     /// the scroller is mounted and on screen, 0 once it is gone (unmounted, parked by a navigation). A latch holds a
@@ -32,7 +36,9 @@ public readonly record struct RouteDecision(int Vp, bool Horizontal)
 /// <summary>
 /// Pure UI-thread routing (design §4): picks the scroller an input drives and latches it for the gesture.
 /// <list type="bullet">
-/// <item>Nearest scroller on the axis that can still move at <c>tNow</c>, walking up from the hit; else the outermost.</item>
+/// <item>Nearest scroller on the axis that can still move at <c>tNow</c>, walking up from the hit; else the nearest one
+/// that HAS a range on that axis (it absorbs the notch at its edge: the rubber band); a scroller whose content fits is
+/// never a target — a notch over it goes to an ancestor with range, or nowhere (a table that fits never moves).</item>
 /// <item>Latch: a wheel latch holds until <c>WheelLatchSilenceS</c> of notch silence; a contact latch holds
 /// <see cref="ScrollGesture.Begin"/> → <see cref="ScrollGesture.End"/>.</item>
 /// <item>Chain to the parent ONLY when the latched child is at its edge AND the gesture began at that edge (in that
@@ -141,7 +147,21 @@ public sealed class ScrollRouter
                 parent = _q.ParentScroller(parent);
             }
         }
-        return latched;
+        return NearestWithRange(latched, horizontal);
+    }
+
+    /// <summary>The fallback target when nothing can move: the nearest self-or-ancestor that has a range on the axis (it
+    /// absorbs the notch at its edge — the rubber band), else none. A scroller with no range on the axis (its content
+    /// fits, or it is the other orientation) never absorbs an input.</summary>
+    private int NearestWithRange(int from, bool horizontal)
+    {
+        int cur = from;
+        while (cur >= 0)
+        {
+            if (_q.HasRange(cur, horizontal)) return cur;
+            cur = _q.ParentScroller(cur);
+        }
+        return -1;
     }
 
     /// <summary>The nearest scroller from <paramref name="hit"/> upward that can move; else the outermost ancestor
@@ -156,7 +176,7 @@ public sealed class ScrollRouter
             outermost = cur;
             cur = _q.ParentScroller(cur);
         }
-        return outermost;
+        return _q.HasRange(outermost, horizontal) ? outermost : NearestWithRange(hit, horizontal);
     }
 
     private double WheelLatchSilenceS => _wheelLatchSilenceS ?? ScrollTunables.Current.WheelLatchSilenceS;

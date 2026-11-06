@@ -128,6 +128,16 @@ public sealed partial class FlexLayout
         return sb.ToString();
     }
 
+    /// <summary>The keys on <paramref name="n"/>'s ancestor chain, nearest first (at most four): which part of the tree a report is about.</summary>
+    private string KeyedPath(NodeHandle n)
+    {
+        var sb = new System.Text.StringBuilder(" at");
+        int found = 0;
+        for (var a = n; !a.IsNull && found < 4; a = _scene.Parent(a))
+            if (_scene.DebugKeyOf(a) is { } k) { sb.Append(' ').Append(k); found++; }
+        return found == 0 ? "" : sb.ToString();
+    }
+
     private string DescribeVerifyChange(NodeHandle n)
     {
         int i = (int)n.Raw.Index;
@@ -213,7 +223,7 @@ public sealed partial class FlexLayout
                     {
                         System.Console.Error.WriteLine(
                             $"[--fg layout-verify] unmarked LayoutInput write: n#{i} changed under a clean Arrange early-out " +
-                            $"rooted at n#{node.Raw.Index} (sig {_verifySig[i]:x} -> {now:x}). A writer skipped Mark(LayoutDirty).{DescribeVerifyChange(n)}");
+                            $"rooted at n#{node.Raw.Index} (sig {_verifySig[i]:x} -> {now:x}). A writer skipped Mark(LayoutDirty).{DescribeVerifyChange(n)}{KeyedPath(n)}");
                         NoteVerifyParts(n);
                     }
                     _verifySig[i] = now;   // report each divergence ONCE — a permanent mismatch must not spam every frame

@@ -1202,6 +1202,14 @@ public sealed partial class InputDispatcher
                         // PointerCancel still skips this (capture loss is not a commit), matching WinUI's cancel path.
                         // (Focus moved on the press edge, like every pointer gesture.)
                         InvokeActivation(_dragTarget, ContextRequestTrigger.Invoke);   // one commit path (a drag node is never a ContextBit invoker in practice)
+                        // A captor with no click still owns its release (WinUI PointerReleased goes to the capture): without this, a
+                        // press-and-drag gesture released off its node never hears the gesture end.
+                        if ((_scene.Interaction(_dragTarget).HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PressedBit)) == InteractionInfo.PressedBit)
+                            _scene.GetPointerReleased(_dragTarget)?.Invoke(new PointerEventArgs
+                            {
+                                Local = LocalPos(_dragTarget, e.PositionPx), ClickCount = _pressClickCount, Mods = _pressMods,
+                                Button = 0, Kind = _pressKind,
+                            });
                         handled++;
                     }
                     // Touch never reaches here (it routes through TouchUp, which clears its transient hover); this is the

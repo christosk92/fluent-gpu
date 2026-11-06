@@ -117,7 +117,8 @@ public sealed class SceneFramePublisher
     /// <summary>Copy a completed frame into a claimed write slot and publish. Zero steady allocation.</summary>
     public ulong Publish(ReadOnlySpan<byte> cmds, ReadOnlySpan<ulong> sort, in FrameInfo submit,
                          bool suppressVsync = false, bool settlePresent = false, FluentGpu.Media.VideoSurfaceRegistry? video = null,
-                         bool presentHeld = false, FreezeKind freeze = FreezeKind.None, float dissolveT = 0f)
+                         bool presentHeld = false, FreezeKind freeze = FreezeKind.None, float dissolveT = 0f, float dissolveMs = 0f,
+                         uint dissolveId = 0)
     {
         if (_reverse) ThreadGuard.AssertRender(); else ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
@@ -155,6 +156,8 @@ public sealed class SceneFramePublisher
             PresentHeld = presentHeld,
             Freeze = freeze,
             DissolveT = dissolveT,
+            DissolveMs = dissolveMs,
+            DissolveId = dissolveId,
             VideoIntentCount = videoCount,
         };
         Volatile.Write(ref _slotStates[free], ((long)seq << 2) | Published);
@@ -255,7 +258,7 @@ public sealed class SceneFramePublisher
         ReadOnlySpan<NodeHandle> skip, ReadOnlySpan<NodeHandle> reuseBlock, ReadOnlySpan<RectF> damage,
         DetachedAnimSlab detached, IReadOnlyList<PopupWindowSlot> popups, AnimEngine animation, in FrameInfo submit,
         bool suppressVsync, bool settlePresent = false, FluentGpu.Media.VideoSurfaceRegistry? video = null, bool presentHeld = false,
-        FreezeKind freeze = FreezeKind.None, float dissolveT = 0f, bool entranceHeld = false)
+        FreezeKind freeze = FreezeKind.None, float dissolveT = 0f, bool entranceHeld = false, float dissolveMs = 0f, uint dissolveId = 0)
     {
         ThreadGuard.AssertUi();
         ulong seq = _publishSeq + 1;
@@ -320,6 +323,8 @@ public sealed class SceneFramePublisher
             EntranceHeld = entranceHeld,
             Freeze = freeze,
             DissolveT = dissolveT,
+            DissolveMs = dissolveMs,
+            DissolveId = dissolveId,
             VideoIntentCount = videoCount,
         };
         _publishSeq = seq;

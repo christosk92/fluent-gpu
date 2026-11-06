@@ -595,6 +595,7 @@ public sealed partial class AppHost : IDisposable
                 ? _holdRetryOwed
                 : _renderAnimations.HasActive || _renderPoser.HasActive || RenderPlanUnposed
                     || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame))
+                    || RenderDissolveActive(in _activeRenderFrame)   // the theme dissolve runs on this thread's clock (AppHost.Freeze.cs)
                     || HasOwnLiveFeedback;   // a feedback trail (F6) advances with no scene change while it settles
         }
         Volatile.Write(ref _renderMotionActive, active ? 1 : 0);
@@ -2274,7 +2275,7 @@ public sealed partial class AppHost : IDisposable
                 // leaves no bookkeeping behind, and ChangedThisTick folds in Done transitions precisely because the
                 // feedback publish below is what completes UI lifecycles.
                 if (!fresh && !_renderAnimations.ChangedThisTick && !scrollPosed && !_holdRetryOwed
-                    && !sceneFrame.Images.HasCrossfades(RenderImageClock(rf, sceneFrame)))
+                    && !sceneFrame.Images.HasCrossfades(RenderImageClock(rf, sceneFrame)) && !RenderDissolveActive(in rf))
                 {
                     Interlocked.Increment(ref _framesSkippedSubmit);
                     _ledgerTurnOutcome = LedgerTurnOutcome.Elided;
@@ -2551,7 +2552,7 @@ public sealed partial class AppHost : IDisposable
     private bool PresentFrame(in Threading.RenderFrame rf, bool composited, bool hold = false)
     {
         // E2: the freeze directive acts here so the owed-present retry (which passes no hold) carries it too.
-        if (rf.Freeze != Threading.FreezeKind.None || _frozenSnapshot is not null) FreezeBeforePresent(in rf, ref hold);
+        if (rf.Freeze != Threading.FreezeKind.None || _frozenSnapshot is not null) FreezeBeforePresent(in rf, ref hold, renderClock: true);
         if (hold) _swapchain.HoldNextPresent();   // one-shot, consumed by the present below
         else if (!_isDetachedChild) RunBeforePresentWork(rf.PublishSeq);   // EP9: queued DWM writes land right before the present that shows their pixels
         if (UsesNonBlockingPresent(_isDetachedChild, _parentRenderThread is not null, EngineSwitches.NonBlockingSecondaryPresent))
@@ -5081,7 +5082,7 @@ public sealed partial class AppHost : IDisposable
             _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx, Composited: compositeSwapchain));
         }
         finally { parentRenderThread?.Resume(); }
-        _reconciler = new TreeReconciler(_scene, strings, _runtime);
+        _reconciler = new TreeReconciler(_scene, strings, _runtime) { Fonts = fonts };
         _reconciler.RegisterPendingEffectContext = RegisterPendingEffectContext;
         _layout = new FlexLayout(_scene, fonts);
         _invalidator = new LayoutInvalidator(_scene, _layout);
@@ -5230,6 +5231,9 @@ public sealed partial class AppHost : IDisposable
 
         // Text-editing seams for EditableText (clipboard / IME / caret blink / shared text metrics) — see InputHooks.
         _inputHooks.Clipboard = app.Clipboard;
+        // The dispatcher's own seam for Ctrl+C over a READ-ONLY selection (rtb-02, InputDispatcher.Clipboard) — the editor
+        // copies through InputHooks, a SpanTextEl/TextEl selection through this; both must point at the platform clipboard.
+        _dispatcher.Clipboard = app.Clipboard;
         _inputHooks.OpenUri = app.OpenUri;
         // Static factories (HyperlinkButton.Create) have no component scope → no UseContext: mirror the seam onto
         // the InputHooks.Current channel-default instance too (last-constructed host wins — matches the
@@ -6489,6 +6493,20 @@ public sealed partial class AppHost : IDisposable
             // rationale as the UI-post drain above). Skipped when nothing is armed → 0-alloc on every frame that uses no
             // timer, and 0-alloc on a quiet frame with an armed-but-not-due timer (Drain is one comparison then returns).
             if (_timers.Count > 0) _runtime.Batch(_drainTimers);
+            // An INTERVAL tick is not a state change for the capture above (capturing on every tick cost the seek rail a capture
+            // and a projection walk per playing frame — audited away), but a tick that RE-RENDERS a component is this frame's commit
+            // like any other write: without a "before", every layout transition and FlowReveal under that component lands at once
+            // (a streaming Markdown column stepped a line per tick, no spring). So open the capture now — after the drain queued
+            // the render, before the flush runs it — gated on a queued COMPONENT-RENDER row (Reconciler.RowKindComp): a tick that
+            // only wrote bound values (the seek rail's pixel stepper) queues bind rows, never a render row, and still captures nothing.
+            if (!capturedProjections && !_projectionCaptureOpen && _everLaidOut && !_scene.Root.IsNull && !resized
+                && _scene.BoundsAnimatedNodes.Count > 0 && _runtime.HasPendingRowOfKind(_runtime.Rows, TreeReconciler.RowKindComp))
+            {
+                _projectBefore.Clear();
+                CaptureProjections();
+                capturedProjections = _projectBefore.Count > 0;
+                _projectionCaptureOpen = true;
+            }
             // Frame clock: publish BEFORE the flush so per-frame pollers (FrameClock.Tick subscribers — the seek ticker,
             // overlay-close watchers) drain in THIS frame's flush and the runtime queue is EMPTY at frame end. Published
             // last it left one queued computation every single frame, so the RuntimePending wake reason fired on every
@@ -7177,7 +7195,8 @@ public sealed partial class AppHost : IDisposable
                         CollectionsMarshal.AsSpan(_popupSkipRoots), CollectionsMarshal.AsSpan(_reuseBlockRoots),
                         CollectionsMarshal.AsSpan(_anim.PendingStructuralDamage), _connected.Detached, _popupWindows, _anim,
                         submitInfo, suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld,
-                        freeze: freezeKind, dissolveT: dissolveT, entranceHeld: entranceHeld);
+                        freeze: freezeKind, dissolveT: dissolveT, entranceHeld: entranceHeld,
+                        dissolveMs: freezeKind == Threading.FreezeKind.Dissolve ? _fzDissolveMs : 0f, dissolveId: _fzDissolveId);
                     subCaptureMs = ElapsedMs(tCap0);
                     tCap0 = Stopwatch.GetTimestamp();
                     _lastPublishedSceneSeq = _framePublishSeq;
@@ -7209,7 +7228,8 @@ public sealed partial class AppHost : IDisposable
                 }
                 else _framePublishSeq = _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo,
                     suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld,
-                    freeze: freezeKind, dissolveT: dissolveT);
+                    freeze: freezeKind, dissolveT: dissolveT,
+                    dissolveMs: freezeKind == Threading.FreezeKind.Dissolve ? _fzDissolveMs : 0f, dissolveId: _fzDissolveId);
                 if (_renderThread is not null)
                 {
                     // A freeze CAPTURE frame waits for its turn even under async: the render side adopts only the newest publication, so the
@@ -7528,6 +7548,7 @@ public sealed partial class AppHost : IDisposable
     private void FlushToQuiescence()
     {
         var r = _runtime.Flush();
+        _reconciler.EndTextPrefetchPass();   // a flush is a text-prefetch pass (Reconciler.TextPrefetch.cs)
         NoteReactiveFlush(in r);
         if (r.HasPending) WakeFrame();
     }
@@ -7546,6 +7567,7 @@ public sealed partial class AppHost : IDisposable
         ReactiveFlushResult r;
         using (_reconciler.PushSuppressBoundTransitions())
             r = _runtime.Flush();
+        _reconciler.EndTextPrefetchPass();
         _rebindFlushAllocBytesThisFrame += GC.GetAllocatedBytesForCurrentThread() - before;
         NoteReactiveFlush(in r);
         if (r.HasPending) WakeFrame();   // only a throwing unit can leave work here

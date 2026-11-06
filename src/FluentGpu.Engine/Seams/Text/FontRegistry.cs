@@ -1,3 +1,4 @@
+using FluentGpu.Foundation;
 using System.Diagnostics;
 using FluentGpu.Hosting.Threading;
 using FluentGpu.Theming;
@@ -204,7 +205,14 @@ public sealed class FontRegistry : IDisposable
 
     // ── resolution ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-    private static int ClampWeight(int weight) => weight <= 0 ? 400 : weight > 999 ? 999 : weight;
+    // The weight WORD (FontWeightWord): the numeric weight is clamped, the style axis (bit 10) rides through untouched,
+    // so (spec, word) keys one face per style and the OS leaves decode it.
+    private static int ClampWeight(int word)
+    {
+        int weight = FontWeightWord.Weight(word);
+        weight = weight <= 0 ? 400 : weight > 999 ? 999 : weight;
+        return weight | (word & FontWeightWord.ItalicBit);
+    }
 
     /// <summary>Resolve (creating once) the face of <paramref name="spec"/> at <paramref name="weight"/>. <paramref name="spec"/>
     /// is a chain; empty = the body chain. Returns the handle (0 = no face at all - a source-less registry or nothing

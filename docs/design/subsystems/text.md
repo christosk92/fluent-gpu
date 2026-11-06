@@ -551,6 +551,24 @@ public static class Fonts { Task Preload(FontSet set); bool IsReady(FontSet set)
 and a `#Family` that was ignored (always face 0). Both now resolve through `FontRegistry.Shared`, so a (family, weight) is created
 and metered once. The registry owns every policy decision; the source is only the COM edge (a headless fake keeps the suites TerraFX-free).
 
+- **`WrapWholeWords` and `TextMetrics.MaxLineWidth` (as-built 2026-11-02).** The engine's own line breaker
+  (`TextLayoutEngine.WrapAndPosition`) treated `WrapWholeWords` like `Wrap`: a word wider than the budget broke
+  mid-word. It now honours WinUI's `TextWrapping.WrapWholeWords`: a line breaks only at a break opportunity, and a
+  word wider than the budget overhangs. `TextMetrics.Size.Width` stays clamped to the offer; the new
+  `TextMetrics.MaxLineWidth` reports the widest laid line unclamped (the overhang), which the layout's min-content
+  probe reads (layout.md §7.2). Consumers of `WrapWholeWords` today — `InfoBar` and `TeachingTip` messages — change only
+  for a single word wider than their whole line (it overhangs/clips instead of breaking), which is WinUI's behaviour.
+- **The weight WORD (as-built 2026-11-02, `Foundation/FontWeightWord.cs`).** Every `int weight` / `ushort Weight` the pipeline
+  carries — `TextStyle.Weight`, `SpanStyle.Weight`, the registry key, `GlyphKey.Weight`, the headless metrics — is a WORD: the
+  DWrite numeric weight in bits 0–9 plus the STYLE AXIS in bit 10 (`FontWeightWord.ItalicBit`). `TextEl.Italic`,
+  `SpanTextEl.Italic` and `TextSpan.Italic` set it (`TextEl.ResolvedWeight`, the reconciler's span-run build — an italic-only span
+  folds the paragraph's numeric weight in, since a 0 word would mean "inherit everything"). The registry's clamp keeps the bit
+  (`(spec, word)` keys one face per style, which is exactly the per-style invalidation the caches need); the two OS leaves decode
+  it: `DWriteFontFaceSource.CreateSystemFace` → `GetFirstMatchingFont(weight, stretch, ITALIC|NORMAL)` (nearest match: a family
+  without an italic face renders upright), `CreateFileFace` → `DWRITE_FONT_SIMULATIONS_OBLIQUE`, and the fallback
+  `MapCharacters` call passes the decoded pair. Anything that compares a weight numerically masks it first
+  (`FontWeightWord.Weight`). No column, opcode or seam changed; `TextStyle` equality (the measure-cache key) is unchanged in
+  shape and now distinguishes italic by construction.
 - **Chain.** A spec (a style's `FontFamily`, or `FontSet.Body`) is a comma-separated chain, primary first
   (`"Segoe UI Variable Display, Segoe UI"`). The first entry that exists supplies the face; falling back along the chain is the
   style's choice, not a wrong frame. An empty family is the theme's body chain (`Tok.Definition.Fonts.Body`).

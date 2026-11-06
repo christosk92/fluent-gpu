@@ -156,7 +156,6 @@ internal sealed class ToastController
     public int MaxVisible = 3;
     public float EdgeInset;   // extra DIP reserved on the docked edge (see ToastHostOptions.EdgeInset)
     public ToastLaneStyle Lane = ToastLaneStyle.Default;   // the lane's geometry (Toast.Lane)
-    public float LaneWidth = float.NaN;                    // the filled lane's width (FillWidth), NaN when the lane does not fill
     public IReadSignal<int> Version => _version;
     public IReadOnlyList<ToastItem> Items => _items;
     public bool Paused => _paused;
@@ -361,8 +360,6 @@ internal sealed class ToastController
         Element? action = o.ActionLabel is { Length: > 0 } lbl
             ? Button.Create(lbl, () => { o.OnAction?.Invoke(); it.Handle.Close(); }, ButtonAppearance.Standard, lane.ActionSize)
             : null;
-        // The width the InfoBar lays its row out against: the card's MaxWidth, or the filled lane's width.
-        float available = lane.FillWidth && float.IsFinite(LaneWidth) ? LaneWidth : lane.CardMaxWidth;
 
         Element body = o.CustomContent is { } custom
             ? BuildCustomBody(o.Severity, custom)
@@ -372,8 +369,7 @@ internal sealed class ToastController
                 it.Message,
                 onClose: o.Closable ? () => it.Handle.Close() : null,
                 isClosable: o.Closable,
-                actionButton: action,
-                availableWidth: available);   // the card's MaxWidth below — lets the InfoBar pick WinUI's vertical layout when the row would not fit
+                actionButton: action);
 
         // Column + default AlignItems=Stretch so the InfoBar/custom body fills the MinWidth frame. A row frame
         // (Direction default 0) only stretches children on the VERTICAL cross-axis — short messages then left a
@@ -450,10 +446,7 @@ public sealed class ToastHost : Component
         // The lane's geometry: the provided thunk (it may read signals: this render subscribes to them), else the shipped lane.
         // Precedence: the provided thunk, then the active theme's lane (ControlStyles.ToastLaneStyle, read now), then the shipped lane.
         var lane = UseContext(Toast.Lane)?.Invoke() ?? ControlStyles.Resolve(ControlStyles.ToastLaneStyle, static () => ToastLaneStyle.Default);
-        var viewport = UseContextSignal(Viewport.Size);
         ctl.Lane = lane;
-        // Only a filled lane with cards on it follows the window's width (a dormant or corner lane never re-renders on a resize).
-        ctl.LaneWidth = lane.FillWidth && ctl.Items.Count > 0 ? MathF.Max(0f, viewport.Value.Width - 2f * lane.SideMargin) : float.NaN;
         ctl.SetQueue(UseContext(HostTimers.Current));
 
         // Register as the process-default for the static Toast API — an idempotent render-body write (NOT a mount

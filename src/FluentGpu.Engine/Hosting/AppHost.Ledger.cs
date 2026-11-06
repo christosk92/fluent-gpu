@@ -63,6 +63,7 @@ public sealed partial class AppHost
 
     private FrameStats RunFrameLedgered()
     {
+        if (FrameTrace.Enabled) FrameTrace.ClaimHotThread();
         long allocStart = GC.GetAllocatedBytesForCurrentThread();
         long createdStart = _scene.NodesCreatedTotal, freedStart = _scene.NodesFreedTotal, mountedStart = _reconciler.ComponentsMountedTotal;
         ulong cyclesStart = ThreadCycles.Read();
@@ -124,6 +125,7 @@ public sealed partial class AppHost
         r.NodesFreed = (int)(_scene.NodesFreedTotal - freedStart);
         r.ComponentsMounted = (int)(_reconciler.ComponentsMountedTotal - mountedStart);
         FrameLedger.RecordUi(ref r);
+        if (FrameTrace.Enabled && r.ComponentsMounted > 0) FrameTrace.Mount(r.ComponentsMounted, r.NodesCreated, r.Measures, r.TextShapes, r.PublishSeq);
         _ledgerWaitStart = _ledgerWaitEnd = 0;
         _ledgerWaitMs = 0;
         return s;
@@ -200,6 +202,7 @@ public sealed partial class AppHost
             BuildMs = (float)(buildTicks * 1000.0 / Stopwatch.Frequency), Raster = raster,
         };
         FrameLedger.RecordRender(ref r);
+        if (FrameTrace.Enabled) TraceRenderTurn(in f, turnPresented && presented);
 
         if (!hasSample || g.Sequence == _ledgerGpuSampleSeq) return;
         ulong prevSeq = _ledgerGpuSampleSeq;
@@ -229,5 +232,24 @@ public sealed partial class AppHost
             }
         }
         FrameLedger.RecordGpu(ref gr);
+    }
+
+    private long _traceRefreshTicks;
+
+    /// <summary>RENDER THREAD, frame trace on: the turn's present row (the predicted photon time and DXGI's paired counters) and a
+    /// <c>meta refresh_ms</c> row whenever the display period changes. Zero allocation.</summary>
+    private void TraceRenderTurn(in Threading.LedgerTurnFacts f, bool presented)
+    {
+        FrameTrace.ClaimHotThread();
+        long period = RenderPeriodTicks();
+        if (period != _traceRefreshTicks)
+        {
+            _traceRefreshTicks = period;
+            FrameTrace.Meta("refresh_ms", (period * 1000.0 / Stopwatch.Frequency).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture));
+        }
+        if (!presented) return;
+        long photon = f.TickQpc != 0 ? f.TickQpc + (1 + Volatile.Read(ref _maxFrameLatency)) * period : 0;
+        FrameTrace.Present(f.TickSeq, f.TickQpc, f.DoneQpc, photon, f.PublishSeq,
+            _swapchain.PresentsDisplayed, _swapchain.PresentsDropped, _swapchain.VblanksRepeated, f.MissedTicks);
     }
 }

@@ -212,8 +212,10 @@ static class Program
         string shot = "menu";        // --shot <id> selects the ShotScene
         string page = "welcome";     // --page <id> deep-links a gallery page (perf/diagnosis automation)
         bool micaShot = false;       // --mica reproduces the composited path the live app uses
+        bool lightShot = false;      // --light renders the screenshot in the Light theme (the engine default is Dark)
         for (int i = 0; i < args.Length; i++)
         {
+            if (args[i] == "--light") lightShot = true;
             if (i < args.Length - 1 && args[i] == "--frames" && int.TryParse(args[i + 1], out int f)) frames = f;
             if (i < args.Length - 1 && args[i] == "--demo") demo = args[i + 1];
             if (i < args.Length - 1 && args[i] == "--screenshot") screenshot = args[i + 1];
@@ -427,6 +429,7 @@ static class Program
                 if (args[i] == "--w" && int.TryParse(args[i + 1], out int w)) sw = w;
                 if (args[i] == "--h" && int.TryParse(args[i + 1], out int h)) sh = h;
             }
+            if (lightShot) Theme.Dark = false;   // the gallery renders dark by default; --light flips the token table before mount
             FluentAppHarness.Run(() => new ShotScene(shot),
                 new AppOptions { Title = "FluentGpu — Shot", Width = sw, Height = sh, Mica = micaShot },
                 new HarnessOptions { Frames = sf, Screenshot = screenshot });

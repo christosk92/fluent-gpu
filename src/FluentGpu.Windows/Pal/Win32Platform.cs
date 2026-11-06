@@ -2347,6 +2347,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             }
             case WM_KEYDOWN:
             case WM_SYSKEYDOWN:
+                // `--fg frame-trace`: F8 drops a "felt wrong" mark in the trace at the moment it is pressed (the owner's recording sessions).
+                if ((int)(nuint)wParam == 0x77 /* VK_F8 */ && (lp & (1L << 30)) == 0 && FluentGpu.Hosting.FrameTrace.Enabled)
+                    FluentGpu.Hosting.FrameTrace.Mark("f8", "felt-wrong");
                 // lParam bit 30 = the key was already down (keyboard auto-repeat).
                 _queue.Enqueue(new InputEvent(InputKind.Key, default, 0, (int)(nuint)wParam,
                     Mods: Mods(), IsRepeat: (lp & (1L << 30)) != 0, TimestampMs: Now()));
