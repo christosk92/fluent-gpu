@@ -1022,7 +1022,14 @@ the mode for anything that opens and closes. It is appended after `Auto`, so no 
   tree rows and drawers. `SizeAnchor.Parallax` is for cards: the content trails the edge by
   `−min(24, 0.35·(contentExtent − P))` DIP.
 - **Host 6.3 (`AppHost.SeedFlowRevealsPostLayout`).** Runs after layout and BEFORE layout effects and the post-layout
-  scroll sync. It seeds this commit's resizes (from the FLIP capture of the laid-out height) and enters (present 0,
+  scroll sync. **Capture on a timer-tick frame (as-built 2026-11-02):** the FLIP "before" capture runs on frames the
+  host predicts will reconcile; an interval tick is not such a prediction (`HostTimerQueue.AnyDueStateChange` excludes
+  it — capturing on every tick cost the seek rail a capture and a projection walk per playing frame). A tick that
+  RE-RENDERS a component is still this frame's commit, so after the frame-clock drain `AppHost` opens the capture when
+  none is open, a component-render row is queued (`ReactiveRuntime.HasPendingRowOfKind(Rows, RowKindComp)`) and the
+  tree has bounds-animated nodes; a bind-only tick queues no render row and captures nothing. Without it a
+  `UseInterval`-driven re-render under a FlowReveal host (a streaming Markdown column) landed every resize at once.
+  It seeds this commit's resizes (from the FLIP capture of the laid-out height) and enters (present 0,
   then the laid-out height), then runs the flow pass once. While flow reveal work is pending, layout defers its
   scroll-offset clamp (`FlexLayout.DeferOffsetClamp`), and 6.3 clamps the offset against the PRESENTED content extent,
   so a collapse at the end of a scroller rides the max-offset edge down and the commit frame holds the offset. The

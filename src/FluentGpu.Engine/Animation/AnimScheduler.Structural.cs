@@ -56,7 +56,7 @@ public sealed partial class AnimEngine
         if (e.Sx != 1f) SeedChannel(node, AnimChannel.ScaleX, rest.ScaleX * e.Sx, in m, null, delayMs);
         if (e.Sy != 1f) SeedChannel(node, AnimChannel.ScaleY, rest.ScaleY * e.Sy, in m, null, delayMs);
         if (e.Blur != 0f) SeedChannel(node, AnimChannel.BlurSigma, rest.Blur + e.Blur, in m, null, delayMs);
-        MarkStartPending(node);
+        MarkStartPending(node, FluentGpu.Hosting.TraceAnimKind.Exit);
     }
 
     /// <summary>Enter/exit transitions are seeded during a COMMIT, and the frame that commits them is often the slowest
@@ -67,13 +67,60 @@ public sealed partial class AnimEngine
     /// (<see cref="AnimFlags.JustSeeded"/>) already shows t=0 on that frame; this marks the rows so the NEXT advance
     /// measures from its presentation (<see cref="PendingStartStep"/>, and RenderCompositorAnimations for render-owned
     /// rows). O(rows on the node), allocation-free; only this call's fresh rows carry JustSeeded.</summary>
-    private void MarkStartPending(NodeHandle node)
+    private void MarkStartPending(NodeHandle node, FluentGpu.Hosting.TraceAnimKind kind = FluentGpu.Hosting.TraceAnimKind.Enter)
     {
+        int rows = 0;
+        float delay = float.NaN, duration = float.NaN;
         for (int s = _slab.HeadOnNode((int)node.Raw.Index); s >= 0; s = _slab.At(s).NextOnNode)
         {
             ref AnimValue r = ref _slab.At(s);
-            if (r.Has(AnimFlags.JustSeeded) && !r.Has(AnimFlags.Driven)) r.Flags |= AnimFlags.StartPending;
+            if (r.Has(AnimFlags.JustSeeded) && !r.Has(AnimFlags.Driven))
+            {
+                r.Flags |= AnimFlags.StartPending;
+                if (rows++ == 0) { delay = r.DelayRemainingMs; duration = r.Kind == GenKind.Spring ? float.NaN : r.Gen.DurationMs; }
+            }
         }
+        // `--fg frame-trace`: one seed row per node (the first row's delay and duration) — the join key of its hold/start/done rows.
+        if (rows > 0 && FluentGpu.Hosting.FrameTrace.Enabled) TraceSeed(node, kind, delay, duration, rows);
+    }
+
+    /// <summary>The seed row (`--fg frame-trace`). The node's key is not known yet at its seed (the reconciler notes keys after the
+    /// mount), so the node is queued and its <c>name</c> row is written by the next tick (<see cref="TraceNames"/>).</summary>
+    private void TraceSeed(NodeHandle node, FluentGpu.Hosting.TraceAnimKind kind, float delay, float duration, int rows)
+    {
+        FluentGpu.Hosting.FrameTrace.Anim(FluentGpu.Hosting.TraceAnimPhase.Seed, kind, (int)node.Raw.Index, -1, render: false,
+            double.NaN, delay, duration, rows: rows);
+        if (_traceNameCount < _traceNames.Length) _traceNames[_traceNameCount++] = node;
+    }
+
+    private NodeHandle[] _traceNames = new NodeHandle[2048];
+    private int _traceNameCount;
+
+    /// <summary>UI thread, frame trace on: one <c>anim ph=name</c> row per node seeded since the last tick — its own key and its nearest
+    /// keyed ancestor's (≤ 16 levels up), so a reader can name the zone. A dictionary probe per level, no allocation.</summary>
+    private void TraceNames()
+    {
+        for (int i = 0; i < _traceNameCount; i++)
+        {
+            NodeHandle node = _traceNames[i];
+            if (!_scene.IsLive(node)) continue;
+            string? key = _scene.DebugKeyOf(node), anc = null;
+            NodeHandle p = node;
+            for (int depth = 0; depth < 16 && anc is null; depth++)
+            {
+                p = _scene.Parent(p);
+                if (p.IsNull || !_scene.IsLive(p)) break;
+                anc = _scene.DebugKeyOf(p);
+            }
+            var e = new FluentGpu.Hosting.TraceEvent
+            {
+                Kind = FluentGpu.Hosting.TraceKind.Anim, B0 = (byte)FluentGpu.Hosting.TraceAnimPhase.Name,
+                B1 = (byte)FluentGpu.Hosting.TraceAnimKind.Other, I0 = (int)node.Raw.Index, I1 = -1,
+                L0 = BitConverter.DoubleToInt64Bits(double.NaN), F0 = float.NaN, F1 = float.NaN, F2 = float.NaN, Ref0 = key, Ref1 = anc,
+            };
+            FluentGpu.Hosting.FrameTrace.Push(ref e);
+        }
+        _traceNameCount = 0;
     }
 
     /// <summary>Spring/ease the gesture channels toward a <see cref="MotionTarget"/> (WhileHover/WhilePressed/WhileFocus
@@ -254,7 +301,7 @@ public sealed partial class AnimEngine
         if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, rest.ScaleX * e.Sx, dyn, delayMs: delay);
         if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, rest.ScaleY * e.Sy, dyn, delayMs: delay);
         if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, rest.Blur + e.Blur, dyn, delayMs: delay);
-        MarkStartPending(node);
+        MarkStartPending(node, FluentGpu.Hosting.TraceAnimKind.Exit);
         // SizeMode.Reflow exit: ease THIS node's layout size to 0. SeedExit used to seed only opacity/transform, so a
         // DrawerReveal-style orphan kept its last full Bounds (and therefore its ClipToBounds window) while its
         // measured virtual row snapped closed — one unclipped flash over the rows that had already slid up. The Size

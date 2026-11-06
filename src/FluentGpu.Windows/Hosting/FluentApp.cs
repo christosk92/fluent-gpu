@@ -134,6 +134,11 @@ public static class FluentApp
     /// Works on a window that is not <see cref="AppOptions.Resizable"/>. UI-thread only.</summary>
     public static void ResizeWindow(float widthDip, float heightDip) => s_window?.SetClientSizeDip(widthDip, heightDip);
 
+    internal static void QueueInput(in InputEvent e)
+    {
+        if (s_window is { IsClosed: false } w) w.QueueInput(in e);
+    }
+
     // Seeded from AppOptions.SizeToContent at Run; the live value is the host's (the user resizing the frame flips it).
     private static SizeToContent s_sizeToContent;
 
@@ -577,6 +582,17 @@ public static class FluentApp
         // it records; `--fg ledger[=PATH]` turns it on from the first frame (FrameLedger.cs).
         Win32LedgerSampler.Install(gpuDev);
         if (EngineSwitches.Ledger) FrameLedger.Enable();
+        // `--fg frame-trace[=PATH]`: the frame/animation timeline (FrameTrace.cs) from the first frame on; it runs the ledger itself.
+        if (FrameTrace.RequestedPath is { } tracePath)
+        {
+            var szpx = window.ClientSizePx;
+            FrameTrace.Start(tracePath,
+            [
+                new("dpi", window.Scale.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)),
+                new("client_px", szpx.Width.ToString(System.Globalization.CultureInfo.InvariantCulture) + "x" + szpx.Height.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new("engine", typeof(FrameTrace).Assembly.GetName().Version?.ToString() ?? "-"),
+            ]);
+        }
 
         // StartHidden: the window exists (HWND, swapchain, host, the mounted tree) but is never shown, so the first frame
         // is already parked — the loop blocks on messages until SetWindowVisible(true), and that show edge paints.
@@ -847,6 +863,7 @@ public static class FluentApp
 
         if (allocTypes) AllocTypeProfiler.Stop();   // tear down the EventListener (no leak past the run)
         if (EngineSwitches.Ledger) FrameLedger.DumpIfRequested();   // `--fg ledger=PATH`: the binary + one CSV per stream
+        FrameTrace.Stop();   // `--fg frame-trace`: the last drain and the summary row (no-op when off)
         Win32LedgerSampler.Uninstall(gpuDev);
 
         // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.
@@ -1111,4 +1128,9 @@ public static class FluentAppHarness
     /// <paramref name="harness"/> controls.</summary>
     public static void Run(Func<Component> root, AppOptions? options = null, HarnessOptions? harness = null)
         => FluentApp.RunCore(root, options ?? new AppOptions(), harness ?? new HarnessOptions());
+
+    /// <summary>Inject an input event onto the queue the window's own message handler feeds, so an app can drive its
+    /// real input path in a check without moving the person's cursor or touching any other window. Positions are window
+    /// client px. UI-thread only.</summary>
+    public static void QueueInput(in InputEvent e) => FluentApp.QueueInput(in e);
 }

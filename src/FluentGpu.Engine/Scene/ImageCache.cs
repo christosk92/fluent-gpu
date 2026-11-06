@@ -1,3 +1,4 @@
+using System.Diagnostics;
 ﻿using System.Threading;
 using FluentGpu.Foundation;
 using FluentGpu.Hosting.Threading;
@@ -928,12 +929,14 @@ public sealed partial class ImageCache
                 $"enabled={(e.Transition.Enabled ? 1 : 0)} revealMs={e.Transition.DurationMs:0.#} " +
                 $"sinceRequestMs={(float.IsInfinity(e.RequestedMs) ? -1f : _clockMs - e.RequestedMs):0.#} " +
                 $"size={e.W}x{e.H} derived={(e.Derived ? 1 : 0)}");
+        long requestedTicks = e.RequestedTicks;
         if (e.RequestedTicks != 0) { Latency.NoteFetched(e.RequestedTicks); e.RequestedTicks = 0; }
         if (!e.Transition.Enabled || SnapReveals)   // SnapReveals: a SnapScope lands the picture instantly
         {
             e.TextureMs = float.NaN;
             e.RevealMs = 0f;
             Latency.NoteReveal(0f, 0f);
+            TraceReveal(id, e, cause, requestedTicks, 0f);
             return;
         }
         e.RevealMs = e.Transition.DurationMs;
@@ -951,7 +954,22 @@ public sealed partial class ImageCache
             e.RevealMs = MathF.Min(e.RevealMs, ShortRevealMs);
         }
         Latency.NoteReveal(e.RevealMs, e.Transition.DurationMs);
+        TraceReveal(id, e, cause, requestedTicks, e.RevealMs);
         NoteCrossfadeDeadline(id, e);
+    }
+
+    /// <summary>`--fg frame-trace`: one <c>img</c> row per reveal — the id, the decode size, the fade it got (0 = snapped in), and
+    /// how long since it was requested (F1, ms; NaN when not tracked).</summary>
+    private static void TraceReveal(int id, Entry e, string cause, long requestedTicks, float revealMs)
+    {
+        if (!FluentGpu.Hosting.FrameTrace.Enabled) return;
+        var ev = new FluentGpu.Hosting.TraceEvent
+        {
+            Kind = FluentGpu.Hosting.TraceKind.Img, I0 = id, I1 = e.W, I2 = e.H, F0 = revealMs,
+            F1 = requestedTicks != 0 ? (float)((Stopwatch.GetTimestamp() - requestedTicks) * 1000.0 / Stopwatch.Frequency) : float.NaN,
+            Ref0 = revealMs > 0f ? "reveal" : "snap", Ref1 = cause,
+        };
+        FluentGpu.Hosting.FrameTrace.Push(ref ev);
     }
 
     /// <summary>Placeholder→image reveal progress 0..1, eased by the image's <see cref="ImageTransition"/> from when its

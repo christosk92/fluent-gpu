@@ -808,6 +808,28 @@ public struct TrackDef                 // SlabAllocator<TrackDef> (unmanaged)
 
 ### 7.2 The track-sizing algorithm
 
+> **Auto tracks, min-content and the inline-sized grid (as-built 2026-11-02).** Every Auto track has two bounds per
+> column: its MAX-content width (the widest cell measured unconstrained) and its MIN-content width (the widest cell's
+> longest word — `FlexLayout`'s min-content probe measures each cell at a 2 px offer with `WrapWholeWords`, reading the
+> text seam's `TextMetrics.MaxLineWidth`, the widest laid line unclamped by the offer). `ResolveColumns` then follows
+> the CSS 2.1 §17.5.2.2 auto-table rule: Pixel tracks and gaps first; if the Auto maxima fit, each gets its maximum;
+> else each gets its minimum plus a share of the remaining room in proportion to (max − min); if even the minima do
+> not fit, every Auto track is its minimum and the row overflows the box — a column is NEVER narrower than its longest
+> word, so no word breaks letter by letter (the old proportional scale-down, which did exactly that, now applies only
+> to grids with no Auto track). Row heights follow the cells measured at the resolved widths. The probe leaves no
+> trace: it memoises nothing, writes no flat interval, and the cell subtree's memo is cleared after it, so the real
+> measure re-descends and rewrites every scribbled bound.
+>
+> A grid is block-level — it measures to the available inline size, which star tracks need — EXCEPT when it opts out
+> of the cross-axis stretch (`AlignSelf` Start/Center/End), sets no `Width`, is not auto-fill and has only Pixel/Auto
+> tracks: then it measures to `max(min(available, Σmax), Σmin)` + gaps + padding (an unconstrained measure reports
+> Σmax, never 0), so a hugging parent ends at the last column and an over-wide grid overhangs at its floor for the
+> parent to clip or pan. **`ScrollEl.FitContentWidth`** (horizontal viewports) is that parent: the content is
+> measured AGAINST the viewport's available width at measure AND at arrange (`MeasureViewport`, `ArrangePlainScroll`),
+> and the viewport sizes itself to `min(content, available)` — the CSS `overflow-x: auto` wrapper. Wrapping content
+> wraps to fit; only content at its min-content floor pans. The Markdown table frame (markdown.md §5.7) is a bordered
+> hugging box around such a viewport around such a grid.
+
 A faithful CSS-Grid-style track sizing (the "distinct true-tracks" algorithm the spec names):
 
 1. **Placement** — resolve each child's `(rowStart,rowSpan,colStart,colSpan)`; auto-placement cursor honoring

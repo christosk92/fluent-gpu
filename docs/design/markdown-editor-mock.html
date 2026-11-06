@@ -1,0 +1,1311 @@
+<title>FluentGpu Markdown Editor</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>[hidden]{display:none!important}</style>
+<style>
+/* Layout concept: a Windows 11 design review on the Mica base. Summary first, then a live editor, then the reasoning.
+   Colours are WinUI resources (Common_themeresources_any.xaml), written #RRGGBBAA. Type is the WinUI ramp in Segoe UI Variable. */
+:root{
+ --bg:#F3F3F3;--layer:#FFFFFF80;--card:#FFFFFFB3;--card2:#F6F6F680;--solid:#FFFFFF;--solid2:#EEEEEE;--solid3:#F9F9F9;
+ --stroke-card:#0000000F;--stroke-ctl:#0000000F;--stroke-ctl2:#00000029;--stroke-strong:#00000072;--divider:#0000000F;
+ --t1:#000000E4;--t2:#0000009E;--t3:#00000072;--t4:#0000005C;
+ --accent:#005FB8;--accent-h:#005FB8E6;--accent-text:#003E92;--on-accent:#FFFFFF;--sel:#0078D4;--on-sel:#FFFFFF;
+ --ctl:#FFFFFFB3;--ctl-h:#F9F9F980;--ctl-a:#FFFFFF;--subtle-h:#00000009;--subtle-p:#00000006;
+ --fly:#FCFCFCFC;--fly-stroke:#0000000F;--shadow:0 8px 16px #00000024;--shadow2:0 2px 4px #00000014;
+ --caution:#FFF4CE;--focus-o:#000000E4;--focus-i:#FFFFFFB3;
+ --desk1:#C9DCEF;--desk2:#E9E3F2;--code-bg:#F6F6F680;--chg:#FFF4CE;--ok:#0F7B0F;--warn:#9D5D00;--bad:#C42B1C;--info:#005FB8;
+ --font:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;--disp:"Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,sans-serif;--mono:"Cascadia Code","Cascadia Mono",Consolas,ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+ --bg:#202020;--layer:#3A3A3A4C;--card:#FFFFFF0D;--card2:#FFFFFF08;--solid:#2C2C2C;--solid2:#1C1C1C;--solid3:#282828;
+ --stroke-card:#00000019;--stroke-ctl:#FFFFFF12;--stroke-ctl2:#FFFFFF18;--stroke-strong:#FFFFFF8B;--divider:#FFFFFF15;
+ --t1:#FFFFFF;--t2:#FFFFFFC5;--t3:#FFFFFF87;--t4:#FFFFFF5D;
+ --accent:#60CDFF;--accent-h:#60CDFFE6;--accent-text:#99EBFF;--on-accent:#000000;--sel:#0078D4;--on-sel:#FFFFFF;
+ --ctl:#FFFFFF0F;--ctl-h:#FFFFFF15;--ctl-a:#1E1E1EB3;--subtle-h:#FFFFFF0F;--subtle-p:#FFFFFF0A;
+ --fly:#2C2C2CFC;--fly-stroke:#00000033;--shadow:0 8px 16px #00000042;--shadow2:0 2px 4px #00000033;
+ --caution:#433519;--focus-o:#FFFFFF;--focus-i:#000000B3;
+ --desk1:#1B2A3C;--desk2:#2B2338;--code-bg:#FFFFFF08;--chg:#433519;--ok:#6CCB5F;--warn:#FCE100;--bad:#FF99A4;--info:#60CDFF;color-scheme:dark}}
+:root[data-theme="dark"],.scope-dark{
+ --bg:#202020;--layer:#3A3A3A4C;--card:#FFFFFF0D;--card2:#FFFFFF08;--solid:#2C2C2C;--solid2:#1C1C1C;--solid3:#282828;
+ --stroke-card:#00000019;--stroke-ctl:#FFFFFF12;--stroke-ctl2:#FFFFFF18;--stroke-strong:#FFFFFF8B;--divider:#FFFFFF15;
+ --t1:#FFFFFF;--t2:#FFFFFFC5;--t3:#FFFFFF87;--t4:#FFFFFF5D;
+ --accent:#60CDFF;--accent-h:#60CDFFE6;--accent-text:#99EBFF;--on-accent:#000000;--sel:#0078D4;--on-sel:#FFFFFF;
+ --ctl:#FFFFFF0F;--ctl-h:#FFFFFF15;--ctl-a:#1E1E1EB3;--subtle-h:#FFFFFF0F;--subtle-p:#FFFFFF0A;
+ --fly:#2C2C2CFC;--fly-stroke:#00000033;--shadow:0 8px 16px #00000042;--shadow2:0 2px 4px #00000033;
+ --caution:#433519;--focus-o:#FFFFFF;--focus-i:#000000B3;
+ --desk1:#1B2A3C;--desk2:#2B2338;--code-bg:#FFFFFF08;--chg:#433519;--ok:#6CCB5F;--warn:#FCE100;--bad:#FF99A4;--info:#60CDFF;color-scheme:dark}
+.scope-light{
+ --bg:#F3F3F3;--layer:#FFFFFF80;--card:#FFFFFFB3;--card2:#F6F6F680;--solid:#FFFFFF;--solid2:#EEEEEE;--solid3:#F9F9F9;
+ --stroke-card:#0000000F;--stroke-ctl:#0000000F;--stroke-ctl2:#00000029;--stroke-strong:#00000072;--divider:#0000000F;
+ --t1:#000000E4;--t2:#0000009E;--t3:#00000072;--t4:#0000005C;
+ --accent:#005FB8;--accent-h:#005FB8E6;--accent-text:#003E92;--on-accent:#FFFFFF;--sel:#0078D4;--on-sel:#FFFFFF;
+ --ctl:#FFFFFFB3;--ctl-h:#F9F9F980;--ctl-a:#FFFFFF;--subtle-h:#00000009;--subtle-p:#00000006;
+ --fly:#FCFCFCFC;--fly-stroke:#0000000F;--shadow:0 8px 16px #00000024;--shadow2:0 2px 4px #00000014;
+ --caution:#FFF4CE;--focus-o:#000000E4;--focus-i:#FFFFFFB3;
+ --desk1:#C9DCEF;--desk2:#E9E3F2;--code-bg:#F6F6F680;--chg:#FFF4CE;--ok:#0F7B0F;--warn:#9D5D00;--bad:#C42B1C;--info:#005FB8;color-scheme:light}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:64px}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{background:var(--bg);color:var(--t1);font:14px/20px var(--font);-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+a{color:var(--accent-text);text-decoration:none}a:hover{text-decoration:underline}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus-o);outline-offset:1px;border-radius:4px}
+.page{max-width:1180px;margin:0 auto;padding-block:0 72px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--bg);border-bottom:1px solid var(--divider)}
+.top-in{max-width:1180px;margin:0 auto;display:flex;align-items:center;gap:16px;min-height:48px;flex-wrap:wrap;padding-block:6px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.top b{font-weight:600}
+.top nav{display:flex;gap:2px;flex-wrap:wrap;flex:1;min-width:0}
+.top nav a{padding:5px 10px;border-radius:4px;color:var(--t2)}
+.top nav a:hover{background:var(--subtle-h);text-decoration:none;color:var(--t1)}
+.seg{display:inline-flex;border:1px solid var(--stroke-ctl2);border-radius:4px;background:var(--ctl);padding:1px;gap:1px;flex-wrap:nowrap}
+.seg button{border:0;background:transparent;padding:4px 11px;border-radius:3px;cursor:pointer;white-space:nowrap;color:var(--t2);min-height:26px}
+.seg button:hover{background:var(--subtle-h)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+h1{font:600 28px/36px var(--disp);margin:0;text-wrap:balance;max-width:24em}
+h2{font:600 20px/28px var(--disp);margin:0;text-wrap:balance}
+h3{font:600 14px/20px var(--font);margin:0}
+p{margin:0}
+.lede{font-size:16px;line-height:24px;color:var(--t1);max-width:62ch}
+.mut{color:var(--t2)}
+.cap{font-size:12px;line-height:16px;color:var(--t2)}
+.mono,code{font-family:var(--mono);font-size:.93em}
+code{background:var(--card2);border:1px solid var(--stroke-card);padding:0 3px;border-radius:3px;overflow-wrap:anywhere}
+section{padding-top:48px;display:grid;gap:16px}
+section>header{display:grid;gap:4px;max-width:78ch}
+.hero{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:32px;padding-top:32px;align-items:start}
+.hero-l{display:grid;gap:14px;min-width:0}
+.eyebrow{font-size:12px;line-height:16px;color:var(--t2)}
+.glance{background:var(--card);border:1px solid var(--stroke-card);border-radius:8px;padding:4px 16px;min-width:0}
+.glance div{display:grid;grid-template-columns:84px minmax(0,1fr);gap:12px;padding:10px 0;border-bottom:1px solid var(--divider)}
+.glance div:last-child{border-bottom:0}
+.glance dt{color:var(--t2);font-size:12px;line-height:20px}
+.glance dd{margin:0}
+dl{margin:0}
+.risk-line{display:flex;gap:10px;align-items:flex-start;background:var(--caution);border-radius:4px;padding:10px 12px;max-width:62ch}
+.risk-line .ic{flex:none;margin-top:2px}
+.ic{width:16px;height:16px;display:inline-block;vertical-align:-3px;fill:none;stroke:currentColor;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* evidence chips */
+.ev{display:inline-flex;align-items:center;gap:5px;font-size:11px;line-height:16px;padding:0 6px;border-radius:9px;border:1px solid var(--stroke-ctl2);white-space:nowrap;color:var(--t2);vertical-align:1px}
+.ev::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.ev.c{color:var(--ok)}.ev.w{color:var(--info)}.ev.i{color:var(--warn)}.ev.m{color:var(--t3)}.ev.t{color:var(--bad)}
+.ev.m::before{background:transparent;border:1px solid currentColor}.ev.i::before{border-radius:1px}
+.legend{display:flex;gap:8px 14px;flex-wrap:wrap;align-items:center}
+
+/* mock controls */
+.mock-bar{display:flex;gap:10px 16px;flex-wrap:wrap;align-items:center}
+.mock-bar label,.grp-l{font-size:12px;color:var(--t2)}
+.grp{display:inline-flex;gap:8px;align-items:center}
+.btn{border:1px solid var(--stroke-ctl);border-bottom-color:var(--stroke-ctl2);background:var(--ctl);border-radius:4px;padding:4px 11px;min-height:28px;cursor:pointer;color:var(--t1)}
+.btn:hover{background:var(--ctl-h)}.btn:active{color:var(--t2)}
+.btn.accent{background:var(--accent);color:var(--on-accent);border-color:transparent}
+.btn.accent:hover{background:var(--accent-h)}
+.tries{display:flex;gap:6px;flex-wrap:wrap}
+.try{border:1px solid var(--stroke-ctl);background:var(--card);border-radius:4px;padding:3px 9px;font-size:12px;line-height:18px;cursor:pointer;color:var(--t1)}
+.try:hover{background:var(--subtle-h)}
+.try code{background:none;border:0;padding:0}
+.stage{display:grid;gap:16px;grid-template-columns:minmax(0,460px) minmax(0,1fr);align-items:start;background:linear-gradient(135deg,var(--desk1),var(--desk2));border-radius:8px;padding:20px;border:1px solid var(--stroke-card)}
+.stage[data-layout="wide"]{grid-template-columns:minmax(0,1.5fr) minmax(0,1fr)}
+.panel{position:relative;background:var(--solid3);border:1px solid var(--fly-stroke);border-radius:8px;box-shadow:var(--shadow);display:flex;flex-direction:column;height:620px;min-width:0;color:var(--t1)}
+.panel.kbf{outline:2px solid var(--focus-o);outline-offset:1px}
+.tb-row{display:flex;align-items:center;gap:8px;padding:8px 8px 8px 16px;min-height:40px;border-bottom:1px solid var(--divider);border-radius:8px 8px 0 0}
+.tb-row b{font-weight:600;flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.dot-btns{display:flex;gap:2px;color:var(--t2)}
+.dot-btns span{width:28px;height:24px;border-radius:4px;display:grid;place-items:center}
+.cbar{display:none;align-items:center;gap:2px;padding:4px 8px;border-bottom:1px solid var(--divider);flex-wrap:wrap}
+.stage[data-layout="wide"] .cbar{display:flex}
+.stage[data-layout="wide"] .pfoot-ins{display:none}
+.abb,.cb{width:36px;height:32px;border:0;background:transparent;border-radius:4px;display:inline-grid;place-items:center;cursor:pointer;color:var(--t1);padding:0;transition:background-color 83ms}
+.abb:hover,.cb:hover{background:var(--subtle-h)}.abb:active,.cb:active{background:var(--subtle-p);color:var(--t2)}
+.abb.on,.cb.on{background:var(--accent);color:var(--on-accent)}
+.cb-sep{width:1px;height:20px;background:var(--divider);margin:0 4px}
+.cb-style{min-width:112px;height:28px;border:1px solid var(--stroke-ctl);border-bottom-color:var(--stroke-ctl2);border-radius:4px;background:var(--ctl);display:inline-flex;align-items:center;justify-content:space-between;gap:8px;padding:0 8px 0 10px}
+.ed-scroll{flex:1;overflow:auto;min-height:0;position:relative;scrollbar-width:thin}
+.ed-doc{position:relative;padding:16px 20px 40px;cursor:text;outline:0;min-height:100%;display:flex;flex-direction:column;gap:8px}
+.stage[data-layout="wide"] .ed-doc{padding-inline:max(20px,calc((100% - 660px)/2))}
+.pfoot{display:flex;align-items:center;gap:4px;padding:4px 8px;border-top:1px solid var(--divider);min-height:40px}
+.pfoot .saved{margin-left:auto;font-size:12px;color:var(--t2);padding-right:8px}
+.textbtn{border:0;background:transparent;border-radius:4px;padding:4px 8px;display:inline-flex;gap:6px;align-items:center;cursor:pointer;color:var(--t1);min-height:32px}
+.textbtn:hover{background:var(--subtle-h)}.textbtn.on{color:var(--accent-text);background:var(--subtle-h)}
+#edInput{position:absolute;width:1px;height:20px;opacity:0;border:0;padding:0;resize:none;overflow:hidden;pointer-events:none;background:transparent;color:transparent;left:0;top:0}
+#edCaret{position:absolute;left:0;top:0;width:1px;background:var(--t1);pointer-events:none;will-change:transform}
+#edCaret.blink{animation:blink 1060ms steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){#edCaret.blink{animation:none}}
+
+/* document */
+.flow{white-space:pre-wrap;overflow-wrap:anywhere;min-height:20px}
+.flow.h{font-weight:600}
+.flow.h1{font:600 20px/28px var(--disp)}
+.flow.h2{font:600 18px/24px var(--disp)}
+.flow.h3{font:600 16px/22px var(--font)}
+.flow.h4,.flow.h5,.flow.h6{font:600 14px/20px var(--font)}
+.block+.flow.h,.block+.block.h{margin-top:4px}
+.strong{font-weight:700}.flow.h .strong{font-weight:700}
+.em{font-style:italic}
+.strike{text-decoration:line-through}
+.mark{background:var(--caution);border-radius:2px}
+.code{font-family:var(--mono);font-size:13px;background:var(--card2);border-radius:2px;box-shadow:0 0 0 1px var(--stroke-card)}
+.link,.wiki{color:var(--accent-text);cursor:pointer}
+.wiki.missing{color:var(--t2);text-decoration:underline dotted}
+.mk{color:var(--t3);font-weight:400;font-style:normal}
+.sel{background:var(--sel)!important;color:var(--on-sel)!important;box-shadow:none}
+.sel-tail{display:inline-block;width:6px;height:1.1em;vertical-align:-.15em;background:var(--sel)}
+.ime{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}
+.zw{user-select:none}
+.placeholder{position:absolute;left:20px;top:16px;color:var(--t2);pointer-events:none}
+.stage[data-layout="wide"] .placeholder{left:max(20px,calc((100% - 660px)/2))}
+.front{display:inline-flex;gap:6px;align-items:center;font-size:12px;line-height:16px;color:var(--t3);padding-bottom:4px}
+.front-src{font:13px/20px var(--mono);color:var(--t3);white-space:pre-wrap}
+.flow.raw{font:13px/20px var(--mono)}
+.flow.src{min-height:100%}
+.refdef{color:var(--t3)}
+.quote{border-left:3px solid var(--stroke-strong);padding-left:12px;border-radius:2px}
+.li{display:grid;grid-template-columns:20px minmax(0,1fr);gap:4px;margin-top:-6px}
+.block:first-child.li,.p+.li{margin-top:0}
+.marker{color:var(--t2);text-align:left;font-variant-numeric:tabular-nums;white-space:nowrap}
+.chk{width:18px;height:18px;margin:1px 0 0;border:1px solid var(--stroke-strong);background:var(--ctl);border-radius:4px;padding:0;display:grid;place-items:center;cursor:pointer;color:var(--on-accent)}
+.chk:hover{background:var(--ctl-h)}
+.chk.on{background:var(--accent);border-color:var(--accent)}
+.chk .ic{width:14px;height:14px}
+.codecard{border:1px solid var(--stroke-card);background:var(--code-bg);border-radius:4px;overflow:hidden}
+.cc-h{display:flex;justify-content:space-between;align-items:center;padding:4px 8px 4px 12px;font-size:12px;line-height:16px;color:var(--t2);border-bottom:1px solid var(--divider)}
+.cc-c{display:inline-flex;gap:4px;align-items:center;padding:2px 6px;border-radius:4px}
+.cc-c:hover{background:var(--subtle-h)}
+.cc-b{padding:8px 12px;overflow-x:auto}
+.code-raw{white-space:pre;overflow-wrap:normal;width:max-content;min-width:100%}
+.hr{height:1px;background:var(--divider);margin:8px 0}
+.island{position:relative;border-radius:4px;cursor:default}
+.island.picked{outline:2px solid var(--accent);outline-offset:1px}
+.isl-edit{position:absolute;right:6px;top:6px;display:none;align-items:center;gap:4px;font-size:12px;line-height:16px;padding:3px 8px;border:1px solid var(--stroke-ctl);background:var(--solid);border-radius:4px;cursor:pointer;color:var(--t1)}
+.island:hover .isl-edit,.island.picked .isl-edit{display:inline-flex}
+.tablebox{border:1px solid var(--stroke-card);border-radius:4px;background:var(--code-bg)}
+.tbl-scroll{overflow-x:auto;border-radius:4px}
+table{border-collapse:collapse;width:100%}
+th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--divider);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+th{font-weight:600;background:var(--card)}
+.imgbox{max-width:320px;width:100%}
+.imgph{aspect-ratio:4/3;background:linear-gradient(135deg,var(--desk1),var(--desk2));border-radius:4px;border:1px solid var(--stroke-card);color:var(--accent);overflow:hidden;display:grid}
+.imgph svg{width:100%;height:100%;display:block}
+.imgcap{font-size:12px;line-height:16px;color:var(--t2);padding-top:4px}
+.rawblock{border:1px solid var(--stroke-ctl2);border-radius:4px;padding:8px 10px;background:var(--code-bg)}
+.rb-h{font-size:12px;line-height:16px;color:var(--t2);padding-bottom:6px}
+
+/* flyouts: CommandBarFlyout, MenuFlyout, AutoSuggest list */
+.fly,.menu,.lcard{position:absolute;z-index:30;background:var(--fly);border:1px solid var(--fly-stroke);border-radius:8px;box-shadow:var(--shadow);backdrop-filter:blur(30px) saturate(1.2);-webkit-backdrop-filter:blur(30px) saturate(1.2);color:var(--t1)}
+.fly{padding:0;animation:fadein 83ms linear}
+@keyframes fadein{from{opacity:0}}
+@media (prefers-reduced-motion:reduce){.fly{animation:none}}
+.fly-row{display:flex}
+.fly .abb{width:40px;height:40px;background-clip:content-box;padding:2px;border-radius:6px}
+.fly .abb b{font-weight:700}.fly .abb i{font-family:Georgia,serif}
+.fly-over{border-top:1px solid var(--divider);padding:3px}
+.mi{display:flex;align-items:center;gap:10px;width:100%;min-height:32px;padding:4px 11px;border:0;background:transparent;border-radius:4px;cursor:pointer;text-align:left;color:var(--t1)}
+.mi:hover,.mi.cur{background:var(--subtle-h)}
+.mi-l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mi-k{font-size:12px;line-height:16px;color:var(--t2);white-space:nowrap}
+.menu{width:260px;max-width:calc(100% - 16px);max-height:280px;overflow:auto;padding:3px;scrollbar-width:thin}
+.menu-h{font-size:12px;line-height:16px;color:var(--t2);padding:6px 11px 4px}
+.lcard{width:300px;max-width:calc(100% - 16px);padding:12px;display:grid;gap:8px}
+.card-t{display:flex;gap:8px;align-items:center;font-weight:600}
+.card-s{font-size:12px;line-height:16px;color:var(--t2)}
+.card-l{font-size:12px;line-height:16px;color:var(--t2)}
+.card-a{display:flex;gap:6px;flex-wrap:wrap}
+.tb{width:100%;font:inherit;color:var(--t1);background:var(--ctl);border:1px solid var(--stroke-ctl);border-bottom-color:var(--stroke-strong);border-radius:4px;padding:5px 6px 6px 10px;min-height:32px;outline:0}
+.tb:hover{background:var(--ctl-h)}
+.tb:focus{background:var(--ctl-a);border-bottom:2px solid var(--accent);padding-bottom:5px}
+
+/* on disk */
+.disk{background:var(--solid3);border:1px solid var(--fly-stroke);border-radius:8px;box-shadow:var(--shadow2);display:flex;flex-direction:column;height:620px;min-width:0}
+.disk-h{padding:8px 12px;border-bottom:1px solid var(--divider);display:grid;gap:2px}
+.disk-h b{font-weight:600}
+.disk-b{flex:1;overflow:auto;min-height:0;position:relative;padding:8px 0;scrollbar-width:thin}
+.dl{display:grid;grid-template-columns:34px minmax(0,1fr);font:12px/18px var(--mono);border-left:2px solid transparent}
+.dl .ln{color:var(--t4);text-align:right;padding-right:10px;user-select:none}
+.dl .lt{white-space:pre-wrap;overflow-wrap:anywhere;min-height:18px;padding-right:8px}
+.dl.ch{background:var(--chg);border-left-color:var(--warn)}
+.dl.cl .ln{color:var(--t1)}
+.ws{color:var(--t3);font-style:normal}
+#edStatus{min-height:20px;font-size:12px;color:var(--t2)}
+
+/* decision rows */
+.rows{display:grid;background:var(--card);border:1px solid var(--stroke-card);border-radius:8px}
+.row{display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;padding:12px 16px;border-bottom:1px solid var(--divider)}
+.row:last-child{border-bottom:0}
+.row>h3{line-height:20px}
+.row .d{display:grid;gap:4px;min-width:0}
+.row .why{color:var(--t2)}
+.row .src{font-size:12px;line-height:18px;color:var(--t2);overflow-wrap:anywhere}
+.split{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--stroke-card);border-radius:8px;padding:14px 16px;display:grid;gap:8px;align-content:start;min-width:0}
+ul.tight{margin:0;padding-left:18px;display:grid;gap:4px}
+.tw{overflow-x:auto;border:1px solid var(--stroke-card);border-radius:8px;background:var(--card)}
+.tw table{min-width:680px}
+.tw th,.tw td{white-space:normal;vertical-align:top;font-size:13px;line-height:18px;padding:9px 12px}
+.tw th{font-size:12px;color:var(--t2);font-weight:600;background:transparent}
+.tw td:first-child{font-weight:600}
+.tw .src{font-weight:400;color:var(--t2);font-size:12px;overflow-wrap:anywhere}
+
+/* state board */
+.board{display:grid;gap:12px}
+.st{display:grid;grid-template-columns:minmax(0,230px) minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:stretch}
+.st-t{display:grid;gap:4px;align-content:start;padding:8px 0;min-width:0}
+.st-t p{font-size:12px;line-height:17px;color:var(--t2);overflow-wrap:anywhere}
+.pane{position:relative;background:var(--bg);color:var(--t1);border-radius:8px;padding:14px;border:1px solid var(--stroke-ctl2);min-width:0;display:grid;gap:8px;align-content:start;overflow:hidden}
+.pane-l{font-size:11px;line-height:14px;color:var(--t3)}
+.pane .fly,.pane .menu,.pane .lcard{position:static;animation:none;width:auto;max-width:100%;justify-self:start}
+.pane .menu{min-width:220px;max-height:none}
+.field{position:relative;background:var(--ctl);border:1px solid var(--stroke-ctl);border-bottom-color:var(--stroke-strong);border-radius:4px;padding:5px 6px 6px 10px;min-height:32px}
+.field.hov{background:var(--ctl-h)}
+.field.foc{background:var(--ctl-a);border-bottom:2px solid var(--accent);padding-bottom:5px}
+.fcaret{display:inline-block;width:1px;height:16px;background:var(--t1);vertical-align:-3px}
+.ring{outline:2px solid var(--focus-o);outline-offset:1px;box-shadow:0 0 0 1px var(--focus-i);border-radius:4px;padding:6px 8px}
+.two{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+/* architecture */
+.pipe{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px;position:relative}
+.node{position:relative;background:var(--card);border:1px solid var(--stroke-ctl2);border-radius:8px;padding:12px;display:grid;gap:4px;align-content:start;min-width:0}
+.node h3{display:flex;gap:6px;align-items:center}
+.node p{font-size:12px;line-height:17px;color:var(--t2)}
+.node.truth{border:2px solid var(--accent)}
+.node:not(:last-child)::after{content:"";position:absolute;right:-20px;top:24px;width:16px;height:1px;background:var(--t2)}
+.node:not(:last-child)::before{content:"";position:absolute;right:-20px;top:21px;border-left:6px solid var(--t2);border-top:3.5px solid transparent;border-bottom:3.5px solid transparent}
+.backarrow{display:flex;align-items:center;gap:10px;font-size:12px;line-height:16px;color:var(--t2)}
+.backarrow i{flex:1;height:1px;background:var(--t3);position:relative;min-width:20px}
+.backarrow i::before{content:"";position:absolute;left:0;top:-3px;border-right:6px solid var(--t3);border-top:3.5px solid transparent;border-bottom:3.5px solid transparent}
+.strip{overflow-x:auto;background:var(--card);border:1px solid var(--stroke-card);border-radius:8px;padding:12px 14px;display:grid;gap:6px}
+.strip .r{display:grid;grid-template-columns:62px max-content;gap:10px;align-items:baseline;font-size:12px}
+.strip .l{color:var(--t2)}
+.strip .t{font:13px/20px var(--mono);white-space:pre}
+.strip .h{background:repeating-linear-gradient(135deg,var(--subtle-h),var(--subtle-h) 3px,transparent 3px,transparent 6px);color:var(--t3);border-radius:2px}
+.rule{display:grid;grid-template-columns:34px minmax(0,1fr);gap:10px}
+.rule>b{font:600 12px/20px var(--mono);color:var(--accent-text)}
+pre.api{margin:0;font:12px/18px var(--mono);overflow-x:auto;background:var(--card);border:1px solid var(--stroke-card);border-radius:8px;padding:12px 14px}
+.risk{display:inline-block;font-size:11px;line-height:16px;padding:0 7px;border-radius:9px;font-weight:600;white-space:nowrap;border:1px solid currentColor}
+.risk.hi{color:var(--bad)}.risk.me{color:var(--warn)}.risk.lo{color:var(--ok)}
+.phase-n{font:600 12px/18px var(--mono);color:var(--accent-text)}
+.owner{counter-reset:o;display:grid;gap:0;background:var(--card);border:1px solid var(--stroke-card);border-radius:8px}
+.owner li{list-style:none;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);gap:4px 16px;padding:11px 16px;border-bottom:1px solid var(--divider)}
+.owner li:last-child{border-bottom:0}
+.owner ul,.owner{padding:0;margin:0}
+.owner .rec{font-size:12px;line-height:18px;color:var(--t2);grid-column:1/-1}
+.src-list{font-size:12px;line-height:18px;columns:2;column-gap:32px;margin:0;padding-left:16px;color:var(--t2)}
+.src-list li{break-inside:avoid;margin-bottom:6px;overflow-wrap:anywhere}
+
+@media (max-width:980px){
+ .hero{grid-template-columns:minmax(0,1fr)}
+ .stage,.stage[data-layout="wide"]{grid-template-columns:minmax(0,1fr);padding:12px}
+ .stage[data-layout="panel"] .panel{max-width:460px;width:100%}
+ .disk{height:320px}
+ .st{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.st-t{grid-column:1/-1}
+ .pipe{grid-template-columns:repeat(2,minmax(0,1fr))}.node:nth-child(2)::after,.node:nth-child(2)::before{display:none}
+ .split{grid-template-columns:minmax(0,1fr)}
+ .src-list{columns:1}
+}
+@media (max-width:620px){
+ h1{font-size:24px;line-height:32px}
+ .row{grid-template-columns:minmax(0,1fr);gap:4px}
+ .st{grid-template-columns:minmax(0,1fr)}
+ .pipe{grid-template-columns:minmax(0,1fr)}.node::after,.node::before{display:none}
+ .top nav{order:3;flex-basis:100%}
+ .panel{height:560px}
+}
+.quote+.quote{margin-top:-8px;padding-top:0}
+.dl,.flow.raw,.front-src,.mi-k.mono,.strip .t,pre.api,code{font-variant-ligatures:none;font-feature-settings:"calt" 0}
+@media (max-width:620px){.top{position:static}}
+.quote{border-radius:0}
+
+</style>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-code" viewBox="0 0 16 16"><path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5"/></symbol>
+<symbol id="i-mark" viewBox="0 0 16 16"><path d="M10.5 2.5l3 3-6.5 6.5H4v-3zM3 14h10"/></symbol>
+<symbol id="i-link" viewBox="0 0 16 16"><path d="M6.5 9.5l3-3M7 4.5l1-1a3 3 0 014.5 4.5l-1 1M9 11.5l-1 1A3 3 0 013.5 8l1-1"/></symbol>
+<symbol id="i-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".8" fill="currentColor"/><circle cx="8" cy="8" r=".8" fill="currentColor"/><circle cx="12.5" cy="8" r=".8" fill="currentColor"/></symbol>
+<symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+<symbol id="i-src" viewBox="0 0 16 16"><path d="M6 3c-2 0-2 1-2 2.5S3.5 8 2.5 8C3.5 8 4 9 4 10.5S4 13 6 13M10 3c2 0 2 1 2 2.5S12.5 8 13.5 8c-1 0-1.5 1-1.5 2.5S12 13 10 13"/></symbol>
+<symbol id="i-h" viewBox="0 0 16 16"><path d="M3.5 3v10M12.5 3v10M3.5 8h9"/></symbol>
+<symbol id="i-list" viewBox="0 0 16 16"><path d="M6 4.5h8M6 8h8M6 11.5h8"/><circle cx="2.8" cy="4.5" r=".8" fill="currentColor"/><circle cx="2.8" cy="8" r=".8" fill="currentColor"/><circle cx="2.8" cy="11.5" r=".8" fill="currentColor"/></symbol>
+<symbol id="i-num" viewBox="0 0 16 16"><path d="M6.5 4.5H14M6.5 8H14M6.5 11.5H14M2.5 3.5l1-.5v3.5"/><path d="M2.3 10c.5-.7 1.9-.5 1.7.5-.1.6-1.7 1.4-1.7 2h1.8"/></symbol>
+<symbol id="i-task" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M5 8.2l2 2 4-4.5"/></symbol>
+<symbol id="i-quote" viewBox="0 0 16 16"><path d="M3 4v8M6.5 5h7M6.5 8h7M6.5 11h4.5"/></symbol>
+<symbol id="i-table" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 6.5h12M2 10h12M6.5 6.5V13"/></symbol>
+<symbol id="i-image" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2.5 11.5l3-3 2.5 2.5 2-2 3.5 3"/><circle cx="10.5" cy="6" r="1"/></symbol>
+<symbol id="i-div" viewBox="0 0 16 16"><path d="M2 8h12"/></symbol>
+<symbol id="i-note" viewBox="0 0 16 16"><path d="M4 2.5h5.5L12.5 5.5V13.5H4zM9.5 2.5v3h3"/></symbol>
+<symbol id="i-lock" viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/></symbol>
+<symbol id="i-edit" viewBox="0 0 16 16"><path d="M10.5 3l2.5 2.5L6 12.5l-3.5 1 1-3.5z"/></symbol>
+<symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1"/><path d="M3.5 10.5h-1v-8h8v1"/></symbol>
+<symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2.5l6 11H2zM8 7v3M8 11.8v.1"/></symbol>
+</defs></svg>
+
+<div class="top"><div class="top-in">
+ <b>FluentGpu Markdown Editor</b>
+ <nav aria-label="Sections"><a href="#recommend">Recommendation</a><a href="#mock">Try it</a><a href="#interact">Interaction</a><a href="#visual">Visual</a><a href="#arch">Architecture</a><a href="#scope">Scope</a><a href="#owner">Decisions</a><a href="#sources">Sources</a></nav>
+ <div class="seg" role="group" aria-label="Theme" id="themeSeg"><button data-v="light" aria-pressed="false">Light</button><button data-v="dark" aria-pressed="false">Dark</button></div>
+</div></div>
+
+<main class="page">
+
+<div class="hero" id="recommend">
+ <div class="hero-l">
+  <div class="eyebrow">Design proposal, 2 November 2026. Nothing here is built. Engine read at fluent-gpu de5e6b24f.</div>
+  <h1>Keep the file as the document, and hide the syntax while people write.</h1>
+  <p class="lede">Build <code>MarkdownEditor</code> as a projection over the source text. The buffer holds the file's exact characters, the renderer conceals the markers, and every edit is one replace on that text. No tree is ever written back, so nothing the person did not touch can change.</p>
+  <p class="mut" style="max-width:62ch">Markers never appear when the caret arrives, because that reflows text on a caret move and breaks the no-layout-jumps rule. Raw source is one key away (Ctrl+/) at the same offset. The first version covers text, lists, tasks, inline marks, the selection flyout and undo. Tables, code and images start as safe islands.</p>
+  <div class="risk-line"><svg class="ic" aria-hidden="true"><use href="#i-warn"/></svg><span><b>High risk:</b> caret, selection and IME across many text flows have not been done on this engine. A short spike comes first, and there is a lower-risk plan B if it fails.</span></div>
+ </div>
+ <dl class="glance" aria-label="At a glance">
+  <div><dt>Document</dt><dd>The file's text, verbatim. No serializer exists to go wrong.</dd></div>
+  <div><dt>Markers</dt><dd>Hidden. Typed Markdown converts when the construct closes.</dd></div>
+  <div><dt>Commands</dt><dd>Shortcuts, typed syntax, a WinUI selection flyout, a <code>/</code> insert menu, <code>[[</code> completion from the consumer.</dd></div>
+  <div><dt>In 460 px</dt><dd>No toolbar. Flyout, footer Insert button, source toggle.</dd></div>
+  <div><dt>First useful</dt><dd>About 4 to 6 thousand lines (my estimate), after the spike.</dd></div>
+  <div><dt>Replaces</dt><dd>The source + preview choice in <code>markdown.md</code> §9. That reversal is the owner's call.</dd></div>
+ </dl>
+</div>
+
+<section id="mock" aria-labelledby="mock-h">
+ <header><h2 id="mock-h">Try it: the note on the left, the file on the right</h2>
+ <p class="mut">A working mock built the same way as the proposal: one source string, concealed markers, one replace per edit. Click into the note and type. The sample is deliberately untidy (<code>*</code> bullets, <code>__strong__</code>, a setext heading, <code>1)</code> numbers, a reference link, two blank lines, trailing spaces) so you can watch it stay that way.</p></header>
+ <div class="mock-bar">
+  <div class="grp"><span class="grp-l">Size</span><div class="seg" data-seg-group="layout"><button data-v="panel" aria-pressed="true">460 px panel</button><button data-v="wide" aria-pressed="false">Wide window</button></div></div>
+  <div class="grp"><span class="grp-l">Markers at caret</span><div class="seg" data-seg-group="reveal"><button data-v="never" aria-pressed="true">Never (proposed)</button><button data-v="caret" aria-pressed="false">Reveal (Obsidian, Typora)</button></div></div>
+  <div class="grp"><button class="btn" id="edReset">Reset sample</button><button class="btn" id="edEmpty">Empty note</button></div>
+ </div>
+ <div class="tries" aria-label="Run a scripted example">
+  <button class="try" data-demo="bold">Type <code>**Atlas**</code></button>
+  <button class="try" data-demo="head">Type <code>## Risks</code></button>
+  <button class="try" data-demo="list">Continue a task list</button>
+  <button class="try" data-demo="flyout">Selection flyout</button>
+  <button class="try" data-demo="slash">Insert menu <code>/ta</code></button>
+  <button class="try" data-demo="wiki">Link <code>[[Bul</code></button>
+  <button class="try" data-demo="source">Source view</button>
+  <button class="try" data-demo="undo">Undo twice</button>
+ </div>
+ <div class="stage" id="edStage" data-layout="panel">
+  <div class="panel" id="edWrap">
+   <div class="tb-row"><b>Atlas launch</b><div class="dot-btns" aria-hidden="true"><span><svg class="ic"><use href="#i-more"/></svg></span></div></div>
+   <div class="cbar" id="edBar" role="toolbar" aria-label="Formatting">
+    <span class="cb-style" aria-label="Block style"><span id="edStyle">Paragraph</span><svg class="ic" style="width:12px;height:12px" viewBox="0 0 16 16"><path d="M3.5 6l4.5 4.5L12.5 6"/></svg></span>
+    <span class="cb-sep"></span>
+    <button class="cb" data-mark="strong" title="Bold (Ctrl+B)" aria-label="Bold"><b>B</b></button>
+    <button class="cb" data-mark="em" title="Italic (Ctrl+I)" aria-label="Italic"><i style="font-family:Georgia,serif">I</i></button>
+    <button class="cb" data-mark="strike" title="Strikethrough (Ctrl+Shift+X)" aria-label="Strikethrough"><s>S</s></button>
+    <button class="cb" data-mark="code" title="Code (Ctrl+E)" aria-label="Code"><svg class="ic"><use href="#i-code"/></svg></button>
+    <button class="cb" data-mark="mark" title="Highlight (Ctrl+Shift+H)" aria-label="Highlight"><svg class="ic"><use href="#i-mark"/></svg></button>
+    <button class="cb" data-mark="link" title="Link (Ctrl+K)" aria-label="Link"><svg class="ic"><use href="#i-link"/></svg></button>
+    <span class="cb-sep"></span>
+    <button class="textbtn" data-ins="1"><svg class="ic"><use href="#i-plus"/></svg>Insert</button>
+    <span style="flex:1"></span>
+    <button class="textbtn" id="edSourceBtn2" title="Source (Ctrl+/)"><svg class="ic"><use href="#i-src"/></svg>Source</button>
+   </div>
+   <div class="ed-scroll" id="edScroll"><div class="ed-doc-host" style="position:relative"><div class="ed-doc" id="edDoc" role="textbox" aria-multiline="true" aria-label="Note"></div><div id="edCaret" hidden></div><textarea id="edInput" aria-label="Note editor input" spellcheck="false" autocomplete="off"></textarea></div></div>
+   
+   <div class="pfoot pfoot-ins">
+    <button class="textbtn" data-ins="1" title="Insert"><svg class="ic"><use href="#i-plus"/></svg>Insert</button>
+    <button class="textbtn" id="edSourceBtn" title="Source (Ctrl+/)"><svg class="ic"><use href="#i-src"/></svg>Source</button>
+    <span class="saved">Saved</span>
+   </div>
+   <div class="fly" id="edFly" hidden></div>
+   <div class="menu" id="edMenu" hidden></div>
+   <div class="lcard" id="edCard" hidden></div>
+  </div>
+  <div class="disk" aria-label="The file on disk">
+   <div class="disk-h"><b class="mono">atlas-launch.md</b><span class="cap" id="edStat"></span></div>
+   <div class="disk-b"><div id="edDisk"></div></div>
+  </div>
+ </div>
+ <div id="edStatus" role="status"></div>
+ <div class="split">
+  <div class="card"><h3>Worth trying by hand</h3>
+   <ul class="tight"><li>Type <code>**word**</code>, then keep typing: the text after the closer is plain. Ctrl+Z once takes back only the closer.</li>
+   <li>Select across a paragraph and a list, then press Ctrl+B or delete. The file stays balanced.</li>
+   <li>Click the task boxes. One character changes in the file.</li>
+   <li>Click a table. Enter opens only that block's source.</li>
+   <li>Switch markers to Reveal and arrow through the first paragraph. The lines below jump. That is the case against it.</li></ul></div>
+  <div class="card"><h3>What the mock is not</h3>
+   <ul class="tight"><li>It is browser text, not the engine. Nothing here was run on FluentGpu.</li>
+   <li>Its parser is about 100 lines and far looser than <code>MarkdownParser</code>.</li>
+   <li>Block changes snap here. The engine would ease heights (see the no-jump table).</li>
+   <li>Newlines are LF only here. The proposal keeps CRLF and mixed endings.</li>
+   <li>IME goes through a browser textarea, which says little about the engine's IME path.</li></ul></div>
+ </div>
+</section>
+
+<section id="interact" aria-labelledby="int-h">
+ <header><h2 id="int-h">Interaction model</h2>
+ <p class="mut">One decision per row, with the reason and where it comes from.</p></header>
+ <div class="legend cap"><span class="ev c">checked</span> read in source here <span class="ev w">web</span> found online, small sample <span class="ev m">memory</span> from memory, not verified <span class="ev i">inference</span> my reasoning, not tested</div>
+ <div class="rows">
+  <div class="row"><h3>Markers</h3><div class="d"><p>Hidden in the rendered view, and the caret never reveals them. Raw source is the way to see them.</p>
+   <p class="why">A reveal changes line widths when the caret merely moves, so wrapped lines and everything below shift. At 460 px that happens often. RichEditBox, the WinUI reference, also shows only formatted text.</p>
+   <p class="src"><span class="ev c">checked</span> owner rule in <code>MEMORY.md</code> "No layout jumps". <span class="ev i">inference</span> reflow cost, try the toggle above. Owner decision 1.</p></div></div>
+  <div class="row"><h3>Typed Markdown</h3><div class="d"><p><code>**</code> <code>*</code> <code>`</code> <code>~~</code> <code>==</code> and line starts <code># </code> <code>- </code> <code>1. </code> <code>&gt; </code> <code>- [ ] </code> <code>---</code> <code>```</code> take effect when the construct is complete. An opener with no closer stays visible and dimmed while the caret is after it. The file holds what was typed, so there is no conversion step that can guess wrong. Ctrl+Z removes only the closing delimiter.</p>
+   <p class="src"><span class="ev c">checked</span> Milkdown input rules (<code>preset-commonmark/src/mark/strong.ts</code>), undo seal semantics in <code>TextUndoStack</code>. <span class="ev w">web</span> Notion's typed shortcuts, via third-party guides.</p></div></div>
+  <div class="row"><h3>Shortcuts</h3><div class="d"><p>Ctrl+B, I, E (code), Shift+X (strike), Shift+H (highlight), K (link), L (task), 0 to 6 (block), / (source). Ctrl+U does nothing and says why: Markdown has no underline, so the WinUI Underline button is replaced.</p>
+   <p class="src"><span class="ev c">checked</span> <code>TextCommandBarFlyout.cpp:306-314</code>, <code>TextEditKeymap.Map</code> (Alt and Win stay out of editor chords). <span class="ev m">memory</span> Ctrl+/ for source is Typora's key.</p></div></div>
+  <div class="row"><h3>Selection flyout</h3><div class="d"><p>WinUI's CommandBarFlyout shape, placed top edge left over the selection. Primary row: Bold, Italic, Strikethrough, Code, Highlight, Link, then More for block styles. Opens after a mouse, pen or touch selection and never after a keyboard selection. It does not take focus, and with a mouse it closes when the pointer moves away. Checked primary commands use the accent pill.</p>
+   <p class="why">Cut, Copy and Paste live in the overflow for a mouse and in the primary row for touch or pen, as WinUI does. Right click or Shift+F10 opens the context flyout expanded.</p>
+   <p class="src"><span class="ev c">checked</span> <code>TextBoxBase.cpp:5382-5411</code>, <code>Common_themeresources.xaml:49-50</code>, <code>TextCommandBarFlyout.cpp:297-319</code>, <code>CommandBarFlyout_themeresources.xaml:24-30,107</code>.</p></div></div>
+  <div class="row"><h3>Insert menu</h3><div class="d"><p><code>/</code> at the start of an empty line opens a filtered list. Enter replaces <code>/query</code> with the block's syntax in one undo step. Escape leaves <code>/query</code> as text, so typing paths stays safe. The footer Insert button is the same menu for people who never learn <code>/</code>.</p>
+   <p class="src"><span class="ev c">checked</span> Crepe's slash menu groups (<code>crepe/src/feature/block-edit/menu/config.ts:61-344</code>), WinUI menu row metrics (<code>MenuFlyout_themeresources.xaml:255-261</code>). <span class="ev w">web</span> Notion's slash menu.</p></div></div>
+  <div class="row"><h3>Links</h3><div class="d"><p>A plain click puts the caret in the text and opens a small card: address, Open, Remove. Ctrl+click follows through <code>OnLinkClicked</code>, or the existing warning dialog. The link text edits in place. A reference link keeps its definition line, and the card says where the address lives. A pasted URL over a selection becomes a link.</p>
+   <p class="src"><span class="ev c">checked</span> <code>markdown.md</code> §6.1. <span class="ev w">web</span> Typora's export turns reference links into inline links, which this avoids.</p></div></div>
+  <div class="row"><h3><code>[[wikilink]]</code></h3><div class="d"><p>The engine knows only "a consumer inline syntax plus a completion source". Typing the trigger opens an AutoSuggest-style list from the consumer. Accepted, it writes <code>[[Name]]</code>. The whole link is one caret stop: arrows jump it, Backspace selects it first. An alias (<code>[[Name|label]]</code>) shows the label and is never rewritten.</p>
+   <p class="src"><span class="ev c">checked</span> <code>MarkdownInlineSyntax</code>, <code>MarkdownLink.Syntax</code>. <span class="ev i">inference</span> new <code>MarkdownCompletionSource</code> seam.</p></div></div>
+  <div class="row"><h3>Task lists</h3><div class="d"><p>Clicking the box changes one character at <code>MarkerOffset</code>, with no layout change since the box is the same size in both states. Enter continues with the sibling's bullet and an empty box. Enter on an empty item leaves the list.</p>
+   <p class="src"><span class="ev c">checked</span> <code>MarkdownTasks.Toggle</code>, <code>markdown.md</code> §5.6, §6.4; continuation shape in <code>lang-markdown/src/commands.ts:98,238</code>.</p></div></div>
+  <div class="row"><h3>Tables</h3><div class="d"><p>First version: rendered and selectable as one object, with its source opening in place on Enter or Edit. Later: cell editing that writes only the touched cell and leaves other rows' padding alone, Tab to move, with a toggle back to source. At 460 px the table pans inside its frame, which the viewer already does.</p>
+   <p class="why">Obsidian people ask for both: a rendered table, and a way out of the forced table editor.</p>
+   <p class="src"><span class="ev c">checked</span> <code>markdown.md</code> §5.7. <span class="ev w">web</span> <a href="https://forum.obsidian.md/t/add-toggle-for-plaintext-table-editing-source-mode-in-live-preview/73866?page=2">Obsidian forum, plaintext table toggle</a>; <a href="https://forum.obsidian.md/t/tables-exploding-into-plain-text-and-duplicating-characters-ime-rendering-bug/113212">tables exploding, IME</a>.</p></div></div>
+  <div class="row"><h3>Code blocks</h3><div class="d"><p>The <code>MarkdownCodeCard</code> look, with the body as a plain monospace flow that pans and never wraps. <code>```</code> plus Enter also writes the closing fence, so the rest of the note never flips to code mid-typing. Ctrl+Enter or Down on the last line leaves the block. Tab inserts the indent the block already uses.</p>
+   <p class="src"><span class="ev c">checked</span> <code>markdown.md</code> §5.4. <span class="ev i">inference</span> the fence rule.</p></div></div>
+  <div class="row"><h3>Images</h3><div class="d"><p>A block image is one object at the reserved 320 by 4:3 (full width in the panel), so loading never moves text. Click selects it, and a card edits alt text and path. Paste or drop goes through a consumer hook that stores the file and returns the text to insert. No resolver means alt text, as today.</p>
+   <p class="src"><span class="ev c">checked</span> <code>markdown.md</code> §5.8, §6.3. <span class="ev c">checked</span> gap: <code>IClipboard</code> has text only (<code>Seams/Pal/Clipboard.cs:8-18</code>).</p></div></div>
+  <div class="row"><h3>Paste and copy</h3><div class="d"><p>Pasted text goes in verbatim, one undo step. If it was Markdown, it now renders. Rich HTML paste comes later and can be dropped. Copy writes the source slice, closing any marker the selection cut through.</p>
+   <p class="src"><span class="ev c">checked</span> Zed's copy-as-Markdown idea (<code>markdown.md</code> §10.12); <code>IClipboard</code> as above.</p></div></div>
+  <div class="row"><h3>Undo</h3><div class="d"><p>One history of source edits for the whole note, restoring exact caret and selection. Typing bursts coalesce. Paste, block changes and closing delimiters seal their own step. Toggling a task is one step.</p>
+   <p class="src"><span class="ev c">checked</span> <code>TextUndoOp</code> and <code>TextUndoStack</code> are public and take plain offsets and strings. Cap 512 ops.</p></div></div>
+  <div class="row"><h3>IME</h3><div class="d"><p>Composition is a provisional span in the active flow, with clause underlines. While it lasts: no parse, no conversion, no menus, no signal write. Commit is one undo step. The candidate window follows the caret rect.</p>
+   <p class="why">High risk. No real IME has driven this design, and the viewer doc lists IME as not driven.</p>
+   <p class="src"><span class="ev c">checked</span> <code>EditableText.ImeSession</code> (<code>EditableText.cs:1276-1345</code>), <code>InputHooks.ImeSetCaretRect</code>, <code>markdown.md</code> §12. <span class="ev t">not tested</span></p></div></div>
+  <div class="row"><h3>Selection across blocks</h3><div class="d"><p>One anchor and one caret, both source offsets. Each flow paints its own part, and a short tail marks a selected paragraph break. Delete removes the source range, which merges blocks naturally, and re-emits a marker only when the cut leaves one unpaired. Dragging past the edge auto-scrolls.</p>
+   <p class="src"><span class="ev c">checked</span> <code>SceneStore.SetTextEditRects</code>, <code>ScrollHandle.AutoScroll</code>. The viewer clamps selection to one flow today (<code>markdown.md</code> §7.1). <span class="ev i">inference</span> the painting plan.</p></div></div>
+  <div class="row"><h3>Raw source</h3><div class="d"><p>Ctrl+/ swaps the same surface to plain monospace at the same offset, and keeps the caret line at the same height on screen. Front matter shows dimmed and read-only there by default (owner decision 3). This replaces the side-by-side pair at narrow width.</p>
+   <p class="src"><span class="ev i">inference</span> trivially cheap because caret and selection are already source offsets.</p></div></div>
+ </div>
+ <div class="split">
+  <div class="card"><h3>In the 460 px panel</h3><ul class="tight"><li>No toolbar. The flyout, shortcuts and footer carry everything.</li><li>Flyout primary row is 280 px, so it fits and clamps inside the panel.</li><li>Menus and cards are 260 to 300 px, flipping above the caret near the bottom.</li><li>Document type scale: H1 20/28 holds one line, per <code>markdown.md</code> §5.1.</li><li>Tables pan in their frame. Images fill the width up to 320.</li></ul></div>
+  <div class="card"><h3>In a wide window</h3><ul class="tight"><li>A top command bar, in the shape of WinUI Gallery's RichEditBox page (<code>RichEditBoxPage.xaml:60-100</code>): style, inline marks, Insert, Source.</li><li>Text column capped near 660 px for reading, centred.</li><li>The flyout still appears: it stays closer to the pointer.</li><li>Everything else behaves the same, so one control serves both.</li></ul></div>
+ </div>
+ <div class="tw"><table>
+  <thead><tr><th style="width:130px">Editor</th><th>What people like</th><th>What they complain about</th><th>What this takes</th></tr></thead>
+  <tbody>
+  <tr><td>Typora</td><td>One surface with no visible syntax after it closes. <span class="ev m">memory</span></td><td>Its own docs warn of small reformatting on save, per a <a href="https://support.typora.com.cn/media/export/Markdown-Reference.pdf">docs mirror</a>. A <a href="https://github.com/typora/typora-issues/issues/6074">save changed text in a code block's info line</a> (fixed in 1.9.4). <a href="https://support.typora.io/Markdown-Export">Export</a> goes through an internal form and turns reference links inline. <span class="ev w">web</span></td><td>The feel. Not the internal form.</td></tr>
+  <tr><td>Obsidian Live Preview</td><td>The source stays the file, on CodeMirror 6. My search found requests to extend rendering rather than clear praise. <span class="ev w">web</span></td><td><a href="https://forum.obsidian.md/t/tables-exploding-into-plain-text-and-duplicating-characters-ime-rendering-bug/113212">Tables breaking into text with IME</a>, a <a href="https://forum.obsidian.md/t/cursor-disappears-when-switching-to-source-mode-in-a-table/97475">caret lost switching to source in a table</a>, a report of <a href="https://forum.obsidian.md/tag/live-preview"><code>&lt;br&gt;</code> tags removed while typing</a>. Sample is small. <span class="ev w">web</span></td><td>Source as truth, plus decorations. Not the reveal.</td></tr>
+  <tr><td>Notion</td><td><code>/</code> menu and typed shortcuts. <span class="ev w">web</span> third-party guides</td><td><a href="https://obsidian.md/bn/help/import/notion">Obsidian's importer docs</a> and a <a href="https://unmarkdown.com/blog/notion-export-broken">vendor post</a> call its Markdown export lossy, since its model is richer than Markdown. <span class="ev w">web</span></td><td>The menu. Not a private block model.</td></tr>
+  <tr><td>Milkdown</td><td>WYSIWYG that stays Markdown (remark and ProseMirror). <span class="ev c">checked</span> README</td><td>Fidelity needs patches: the strong schema stores which marker was used (<code>mark/strong.ts</code>), and a plugin folds a serializer <code>&lt;br /&gt;</code> placeholder back into empty paragraphs (<code>plugin/remark-preserve-empty-line.ts</code>). <span class="ev c">checked</span></td><td>Input rule list, menu groups. Evidence against a serializer.</td></tr>
+  <tr><td>Tiptap Markdown</td><td>Headless, extensible. <span class="ev c">checked</span> <code>markdown.md</code> §10.11</td><td>Its changelog is a run of round-trip fixes: blank lines dropped (line 58), bracket text swallowed (151), entities (266), empty paragraphs (319), mark whitespace (429). <span class="ev c">checked</span> A <a href="https://code.overheid.nl/robbertbos/waggle/pulls/271">third-party report</a> on tildes. <span class="ev w">web</span></td><td>"Headless" as a test. Mark whitespace rule: markers hug text.</td></tr>
+  <tr><td>CodeMirror lang-markdown</td><td>List continuation commands, keymap, source is the document. <span class="ev c">checked</span> <code>commands.ts:98,238</code></td><td>Writing live-preview decorations is hard (<code>markdown.md</code> §10.9). <span class="ev m">memory</span></td><td>Enter and Backspace behaviour, and the whole architecture family.</td></tr>
+  <tr><td>Markdig trivia</td><td>Round trip by recording every piece of whitespace. <span class="ev c">checked</span> <code>Roundtrip.md</code></td><td>Proves parse then render, and says nothing about editing the tree. <span class="ev i">inference</span></td><td>Reference only.</td></tr>
+  </tbody></table></div>
+</section>
+
+<section id="visual" aria-labelledby="vis-h">
+ <header><h2 id="vis-h">Visual design</h2>
+ <p class="mut">Each state in dark and light together, in the same CSS as the mock. Values are WinUI resources; the engine exposes them as <code>Tok.*</code>, read at render and never cached. Accent shown is the Windows default blue.</p></header>
+ <div class="board" id="board"></div>
+</section>
+
+<section id="arch" aria-labelledby="arch-h">
+ <header><h2 id="arch-h">Architecture on this engine</h2>
+ <p class="mut">Type names are real unless marked new. Line numbers are at the commit above.</p></header>
+ <div class="pipe" aria-label="Data flow">
+  <div class="node truth"><h3>SourceBuffer <span class="ev i">new</span></h3><p>The file's characters including its newlines, BOM and final-newline state. The only document. Holds offsets, anchor, caret, <code>TextUndoStack</code>.</p></div>
+  <div class="node"><h3>MarkdownParser</h3><p>Exists, cold path. Gives blocks with <code>SourceStart</code>/<code>SourceEnd</code>. Gains an inline source map and front matter. Re-parses the edited block range.</p></div>
+  <div class="node"><h3>Projection <span class="ev i">new</span></h3><p>Per leaf block: display string, display-to-source map, <code>TextSpans</code>. A pure function of the source, independent of the caret, so moving the caret costs nothing.</p></div>
+  <div class="node"><h3>Scene</h3><p><code>SpanTextEl</code> flow per leaf, bound through <code>Prop&lt;TextSpans&gt;</code>. <code>TextEditState</code> and <code>SetTextEditRects</code> paint caret and selection.</p></div>
+ </div>
+ <div class="backarrow"><i></i><span>Keys, characters, IME and pointer enter at one focus root (the <code>EditableText</code> handler set), become a command, then one <code>(start, removed, inserted)</code> replace on the buffer.</span></div>
+ <div class="strip" aria-label="Example of concealment"><div class="r"><span class="l">File</span><span class="t"><span class="h">* [ ] </span>Send the <span class="h">==</span>first draft<span class="h">==</span> to <span class="h">[[Bulletin list|</span>the list<span class="h">]]</span></span></div>
+ <div class="r"><span class="l">On screen</span><span class="t">☐ Send the <span class="mark">first draft</span> to <span class="wiki">the list</span></span></div>
+ <div class="r"><span class="l">Caret stops</span><span class="t" style="font-family:var(--font);font-size:12px;color:var(--t2)">One per visible grapheme. The hatched characters have none. <code>the list</code> is one stop, because a consumer syntax is atomic.</span></div></div>
+
+ <div class="split">
+  <div class="card"><h3>Round-trip rules, the hardest requirement</h3>
+   <div class="rule"><b>R1</b><span>Nothing is serialized. A save writes the buffer. The only way a byte changes is a replace that a command asked for.</span></div>
+   <div class="rule"><b>R2</b><span>A command touches its own range and nothing else. Bold writes two markers. A task toggle writes one character.</span></div>
+   <div class="rule"><b>R3</b><span>New syntax copies its neighbours: the sibling's bullet and number style, the note's emphasis marker. Defaults apply only when there is no neighbour.</span></div>
+   <div class="rule"><b>R4</b><span>Inserted newlines use the note's dominant ending. Mixed endings stay mixed. BOM and final newline are never added or removed.</span></div>
+   <div class="rule"><b>R5</b><span>Front matter is a protected range: rendered as a slot, no caret stops, excluded from Ctrl+A, and it survives any body edit because no edit range reaches it.</span></div>
+   <div class="rule"><b>R6</b><span>Syntax the parser does not model stays literal text or an island. <code>%%comments%%</code>, callouts and footnotes display plainly and stay intact. Display can differ from Obsidian, and the bytes cannot.</span></div>
+   <div class="rule"><b>R7</b><span>A marker is written only if the result still parses as that mark: markers hug non-space text, and a cut that orphans a marker re-emits it in the same edit.</span></div>
+   <p class="cap">No tests, per the workspace rule. Debug builds assert after each edit that the bytes outside the replace are unchanged. A corpus of untidy notes goes through a throwaway driver, as <code>markdown.md</code> §12 did, and the driver is not committed. <span class="ev i">inference</span></p></div>
+  <div class="card"><h3>Findings from reading the code</h3>
+   <ul class="tight">
+    <li><b>The low level is closer than §9 suggests.</b> Read-only selection already drives <code>HitTestText</code>, <code>GetRangeRects</code> and <code>SetTextEditRects</code> on span flows (<code>InputDispatcher.cs:3488-3491</code>), the recorder paints caret and selection from the node's <code>TextEditState</code> (<code>SceneRecorder.cs:2610,2767</code>), and DirectWrite queries honour <code>SpanRunId</code> (<code>Text.cs:12</code>). <span class="ev c">checked</span> A caret on a span flow is not tried. <span class="ev i">inference</span></li>
+    <li><b>A display map already exists.</b> <code>EditableText</code> maps display to document for masked text (<code>:1087-1105</code>). Concealment is the same idea with gaps. <span class="ev c">checked</span></li>
+    <li><b><code>ITextDocument</code> does not exist in code.</b> <code>text.md</code> §16 specifies it and §9 of the Markdown doc leans on it. The real thing is <code>EditDocument</code> plus <code>TextEditCore</code>, one buffer per field. <span class="ev c">checked</span></li>
+    <li><b><code>EditDocument</code> cannot hold a file as written.</b> It stores <code>\r</code> only and forbids <code>\n</code> (<code>EditDocument.cs:16-18</code>). <span class="ev c">checked</span> By my reading, today's TextBox path writes that <code>\r</code> text back through the signal on an edit, so a source + preview consumer should check its newlines now. Not run, and the consumer not read. <span class="ev i">inference</span></li>
+    <li><b>Front matter parses as content today.</b> Leading <code>---</code> is a thematic break, and <code>title: x</code> then <code>---</code> is a setext heading (<code>MarkdownParser.cs:336,405</code>). <span class="ev c">checked</span> by reading, not executed.</li>
+    <li><b>Inline positions are harder than block ones.</b> Lines have tabs expanded before parsing (<code>:178</code>) and container prefixes stripped per level, so a map must undo both. Entities and escapes are many source characters per glyph. <span class="ev c">checked</span></li>
+    <li><b>Incremental parse is append-only.</b> It reuses blocks only when the new text extends the old (<code>:39-52</code>). Mid-note edits need a new window. <span class="ev c">checked</span></li>
+    <li><b>Flyouts are nearly there.</b> <code>IOverlayService.OpenAt(Func&lt;RectF&gt;)</code> follows a live rect, and <code>CommandBarFlyout.BuildBody</code> is internal to the same assembly. Dismiss on pointer move away is an open item (<code>OverlayHost.cs:153</code>). <span class="ev c">checked</span></li>
+   </ul></div>
+ </div>
+
+ <div class="tw"><table>
+  <thead><tr><th style="width:170px">Concern</th><th>Design</th><th style="width:230px">Builds on</th></tr></thead>
+  <tbody>
+  <tr><td>Input path</td><td>One focusable root owns <code>OnKeyDown</code>, <code>OnCharInput</code>, <code>OnPointerPressed</code>, <code>OnDrag</code>, <code>OnFocusChanged</code>. <code>TextEditKeymap.Map(multiLine: true)</code> first, editor commands in a preview step. One IME sink for the root. <span class="ev i">inference</span></td><td class="src"><code>EditableText.Render</code>, <code>HandleKey</code>, <code>ImeSession</code>, <code>PreviewKeyDown</code></td></tr>
+  <tr><td>Caret and selection</td><td>Anchor and caret are source offsets. The caret lives on one flow at a time: <code>CaretBlur</code> old, <code>CaretFocus</code> new. Two offsets can share a screen position (inside or outside a closer), which is how text after <code>**x**</code> stays plain. A click lands on the left side, the RichEdit habit. <span class="ev i">inference</span></td><td class="src"><code>TextEditState</code>, <code>SetTextEditRects</code>, <code>InputHooks.CaretFocus</code>, spec'd <code>Affinity</code> in <code>text.md</code> §14</td></tr>
+  <tr><td>Hit testing</td><td>Pointer to flow by absolute rects, flow-local point to display index through <code>HitTestText</code>, then the map to a source offset. Up and Down keep a goal X and hit the next flow's line. <span class="ev i">inference</span></td><td class="src"><code>IFontSystem.HitTestText</code>, <code>GetCaret</code>, <code>EditableText.MoveVertical</code>, <code>ToTextLocal</code></td></tr>
+  <tr><td>Long notes</td><td>A keystroke does: buffer edit, re-parse of the edited block range, one flow's spans, <code>SyncVisual</code>. Full parse only if the reference count changes. Signal writes coalesce to idle and blur, with a transaction stream for saving, since a string per key is costly at 1 MB. Target 4 ms per key at 100 KB, unmeasured. Steady frames stay zero allocation because nothing runs per frame. <span class="ev i">inference</span></td><td class="src"><code>markdown.md</code> §3.3, §8; <code>SpanBuffer</code>; ref-counted <code>StringTable</code> means per-key strings are reclaimed (<code>StringTable.cs:24</code>)</td></tr>
+  <tr><td>Virtualization</td><td>Eager mount first, which <code>markdown.md</code> §8 calls right for hundreds of blocks. Later <code>Virtual.Measured</code> over top-level blocks, with caret and selection kept as offsets so unmounted flows lose nothing. <span class="ev i">inference</span></td><td class="src"><code>IMeasuredVirtualLayout</code>, <code>virtualization.md</code></td></tr>
+  <tr><td>External changes</td><td>A signal write from outside (another app saved) becomes one minimal replace by common prefix and suffix, the caret mapped through it. A conflict with unsaved typing is the consumer's. <span class="ev i">inference</span></td><td class="src"><code>EditableText.SyncFromSignal</code> is the shape</td></tr>
+  </tbody></table></div>
+
+ <div class="tw"><table>
+  <thead><tr><th style="width:190px">No layout jumps: event</th><th>What moves</th><th>How</th></tr></thead>
+  <tbody>
+  <tr><td>Caret moves</td><td>Nothing</td><td>No reveal. This is the reason for the decision.</td></tr>
+  <tr><td><code>**</code> closes</td><td>The line shortens by the marker width. Only the person's own gesture causes it.</td><td>If the line count changes, flow height uses <code>SizeMode.FlowReveal</code>.</td></tr>
+  <tr><td><code># </code> converts</td><td>Text size changes at once, height eases, blocks below glide</td><td><code>Layout</code> with a <code>LayoutTransition</code> (<code>SizeMode.Reflow</code>). Reduced motion snaps by policy.</td></tr>
+  <tr><td>Task toggled</td><td>Fill only</td><td>Box size is fixed (<code>markdown.md</code> §5.6)</td></tr>
+  <tr><td>Island opens</td><td>Height eases</td><td><code>SizeMode.FlowReveal</code>, the Expander's path</td></tr>
+  <tr><td>Image loads</td><td>Nothing</td><td>Reserved 4:3 box</td></tr>
+  <tr><td>Source toggle</td><td>Everything but the caret line</td><td>Anchored on the caret line with <code>ScrollHandle.ShiftFrame</code>-style offset, plus a short crossfade. <span class="ev i">inference</span></td></tr>
+  <tr><td>Flyouts and menus</td><td>Nothing</td><td>Overlays, 83 ms fade (<code>CommandBarFlyout</code>)</td></tr>
+  </tbody></table></div>
+ <p class="cap">Motion cannot be proved in this page. On the engine it would be traced with real frames, as <code>markdown.md</code> §11.1 did for streaming. <span class="ev t">not tested</span></p>
+
+ <div class="tw"><table>
+  <thead><tr><th style="width:230px">Missing from the engine</th><th style="width:70px">Size</th><th style="width:76px">Risk</th><th>Note</th></tr></thead>
+  <tbody>
+  <tr><td>Multi-flow editor core and control</td><td>L</td><td><span class="risk hi">High</span></td><td>Focus root, caret manager, selection, vertical navigation, commands.</td></tr>
+  <tr><td>Editable span flow with concealment</td><td>S to M</td><td><span class="risk hi">High</span></td><td>The spike's question. Seams look ready and none of it has been tried.</td></tr>
+  <tr><td>IME over the projection</td><td>M</td><td><span class="risk hi">High</span></td><td>Needs real IMEs by hand, since the harness cannot supply them.</td></tr>
+  <tr><td>Inline source map in the parser</td><td>M</td><td><span class="risk me">Medium</span></td><td>Tabs, containers, lazy continuation, entities. Listed as <em>later</em> in <code>markdown.md</code> §2.</td></tr>
+  <tr><td>Mid-note incremental parse</td><td>M</td><td><span class="risk me">Medium</span></td><td>Offsets shift, so blocks need relative positions or a shift on reuse. Can start as a full parse under a size limit.</td></tr>
+  <tr><td><code>SourceBuffer</code></td><td>S</td><td><span class="risk lo">Low</span></td><td>Newline-preserving buffer. Reuses <code>TextUndoStack</code>.</td></tr>
+  <tr><td>Front matter flag</td><td>S</td><td><span class="risk lo">Low</span></td><td><code>MarkdownExtensions</code> has room (a byte with 5 bits used). Generic: many tools use it.</td></tr>
+  <tr><td>In-paragraph newline in span flows</td><td>M</td><td><span class="risk me">Medium</span></td><td>Hard breaks split into stacked flows today (<code>MarkdownTextBlock.cs:275</code>). The editor can treat those as one logical flow first. Needed if soft breaks render as breaks.</td></tr>
+  <tr><td>Flyout dismiss on pointer away</td><td>S</td><td><span class="risk lo">Low</span></td><td>Open engine item 31.</td></tr>
+  <tr><td>Clipboard formats (image, HTML)</td><td>M</td><td><span class="risk lo">Low</span></td><td>Can be dropped from early phases.</td></tr>
+  <tr><td>UIA text pattern, heading and list roles</td><td>L</td><td><span class="risk hi">High</span></td><td><code>Uia/Placeholder.cs</code> is a scaffold, and <code>AutomationRole</code> has only <code>Text</code>. As proposed the editor is close to invisible to a screen reader. Owner decision 6.</td></tr>
+  </tbody></table></div>
+
+ <pre class="api" aria-label="API sketch">// Proposed, not built. Generic: nothing here names a vault or a note.
+MarkdownEditor.Create(Signal&lt;string&gt; source, MarkdownEditorOptions? options = null)
+
+public sealed record MarkdownEditorOptions {
+    public MarkdownOptions Markdown { get; init; }                     // InlineSyntaxes, ImageResolver, OnLinkClicked, Style
+    public Prop&lt;string&gt; Placeholder { get; init; }
+    public IReadOnlyList&lt;MarkdownCompletionSource&gt;? Completions { get; init; }
+    public IReadOnlyList&lt;MarkdownInsertCommand&gt;? InsertCommands { get; init; }   // extends the / menu
+    public Func&lt;PastedContent, string?&gt;? OnPasteContent { get; init; }   // store a file, return the text to insert
+    public Action&lt;int, string, string&gt;? OnEdit { get; init; }          // start, removed, inserted
+    public Func&lt;MarkdownFrontMatter, Element?&gt;? FrontMatterSlot { get; init; }
+    public MarkdownEditorChrome Chrome { get; init; }                  // Surface (panel) or Field (RichEditBox look)
+    public MarkerReveal Reveal { get; init; } = MarkerReveal.Never;
+}
+public sealed record MarkdownCompletionSource(string Trigger, string Close, Func&lt;string, IReadOnlyList&lt;Completion&gt;&gt; Query);
+
+// The consumer's wikilink is two registrations, in the consumer:
+//   new MarkdownInlineSyntax("wikilink", "[[", "]]", Build)
+//   new MarkdownCompletionSource("[[", "]]", q =&gt; myNotes.Search(q))</pre>
+</section>
+
+<section id="scope" aria-labelledby="scope-h">
+ <header><h2 id="scope-h">Honest scope</h2>
+ <p class="mut">Sizes are my estimates, in new lines, and could be off by half. For scale, measured today: <code>EditableText.cs</code> 1,347 lines, <code>MarkdownParser.cs</code> 1,192, <code>TextEditCore.cs</code> 401. Calling §9's option an editor-sized project was right.</p></header>
+ <div class="tw"><table>
+  <thead><tr><th style="width:150px">Phase</th><th>Gets you</th><th style="width:90px">Size</th><th style="width:80px">Risk</th><th style="width:170px">Can it drop?</th></tr></thead>
+  <tbody>
+  <tr><td>Spike</td><td>Gallery page, throwaway: one span flow with a caret and hidden markers, hit testing through a map, caret across two flows, a real IME by hand. <b>Go or no-go for the rest.</b></td><td>300 to 500, not kept</td><td><span class="risk hi">High</span></td><td>No. It is the point.</td></tr>
+  <tr><td>1. Writing</td><td><b>First useful version.</b> Paragraphs, headings, lists, tasks, quotes, inline marks, wikilinks as atoms, typed Markdown, shortcuts, flyout, undo, cross-block selection, source toggle, front matter. Tables, code, images as islands that open their source. Thoughts can replace its TextBox here.</td><td>4,000 to 6,000</td><td><span class="risk hi">High</span></td><td>No</td></tr>
+  <tr><td>2. Inserting</td><td>Insert menu, <code>[[</code> completion, link card, code block editing, image card, paste rules.</td><td>1,500 to 2,000</td><td><span class="risk me">Medium</span></td><td>Image card and paste hook can wait</td></tr>
+  <tr><td>3. Tables</td><td>Cell editing, Tab, add row and column.</td><td>1,000 to 1,500</td><td><span class="risk me">Medium</span></td><td>Yes. Islands remain.</td></tr>
+  <tr><td>4. Long notes, access</td><td>Block virtualization, mid-note incremental parse if not done, UIA text pattern and roles (engine wide).</td><td>2,000 to 4,000</td><td><span class="risk hi">High</span></td><td>Virtualization yes. Access is decision 6.</td></tr>
+  <tr><td>5. Extras</td><td>Reveal mode, HTML paste, drag to reorder, block handles, footnotes and callouts.</td><td>each small to medium</td><td><span class="risk lo">Low</span></td><td>All of it</td></tr>
+  </tbody></table></div>
+ <div class="tw"><table>
+  <thead><tr><th style="width:230px">Rejected alternative</th><th>Why not</th></tr></thead>
+  <tbody>
+  <tr><td>Tree plus serializer (ProseMirror, Milkdown, Tiptap)</td><td>The serializer is where fidelity dies, as Milkdown's patches and Tiptap's changelog show. A viewer tree is fine for reading and wrong as the source of bytes.</td></tr>
+  <tr><td>Tree with trivia (Markdig <code>trackTrivia</code>)</td><td>Round-trips an unedited tree, and an edited node still needs rules. First NuGet in the portable kit (<code>markdown.md</code> §3.1).</td></tr>
+  <tr><td>Reveal at caret as the default</td><td>Same architecture, one flag, and it moves text on every caret move. Kept as a later option in case the owner prefers Obsidian's feel.</td></tr>
+  <tr><td>One giant text flow</td><td>No cards, tables or images inside, and one wrap pass over the whole note.</td></tr>
+  <tr><td>A web view with an existing editor</td><td>Pulls a browser runtime into a NativeAOT GPU engine, with no shared tokens, input or text stack.</td></tr>
+  <tr><td>Stay on source + preview</td><td>Works today, and the owner has said it is not enough.</td></tr>
+  <tr><td><b>Plan B if the spike fails:</b> block swap</td><td>The block under the caret swaps to a plain <code>EditableText</code> showing its source, with a height animation. Uses what exists and keeps every round-trip rule. It jumps on every block entry and has no cross-block selection, so it is a fallback only.</td></tr>
+  </tbody></table></div>
+</section>
+
+<section id="owner" aria-labelledby="own-h">
+ <header><h2 id="own-h">Decisions for the owner</h2></header>
+ <ol class="owner">
+  <li><div><b>1. Markers: never revealed, or revealed at the caret?</b></div><span class="rec">Recommend never. Try the toggle in the mock at 460 px. If Obsidian's feel matters more than the jump rule, that changes a default and little else.</span></li>
+  <li><div><b>2. Reverse the 2026-11-02 choice of source + preview?</b></div><span class="rec">Recommend yes, keeping raw source as the toggle. The earlier two-pane stays until phase 1 lands.</span></li>
+  <li><div><b>3. Front matter in the raw view: read-only or editable?</b></div><span class="rec">Recommend read-only by default with an option, since the brief says an editor must never disturb it.</span></li>
+  <li><div><b>4. How does a single newline in a paragraph render?</b></div><span class="rec">CommonMark says a space, and that is what the viewer and this design do. From forum posts, Obsidian renders a break when strict line breaks are off. Rendering breaks needs the in-paragraph newline. <span class="ev w">web</span></span></li>
+  <li><div><b>5. Is phase 1 with tables, code and images as islands acceptable?</b></div><span class="rec">Recommend yes. It is what keeps phase 1 finite. Code editing follows in phase 2.</span></li>
+  <li><div><b>6. Accessibility: fund the UIA text pattern before calling this done?</b></div><span class="rec">It is engine wide and has no home yet. Recommend deciding before phase 1 ships, since a note editor that a screen reader cannot read is a real limit.</span></li>
+  <li><div><b>7. Click on a link: caret and card, or open at once?</b></div><span class="rec">Recommend caret and card, with Ctrl+click to follow. Some Obsidian users will expect the other.</span></li>
+  <li><div><b>8. Where does it ship?</b></div><span class="rec">In <code>FluentGpu.Controls</code> beside the viewer, or as a separate package so apps without an editor do not carry it. No recommendation: this depends on the package plan.</span></li>
+ </ol>
+</section>
+
+<section id="sources" aria-labelledby="src-h">
+ <header><h2 id="src-h">Sources, and what was not done</h2></header>
+ <div class="split">
+  <div class="card"><h3>Not done or not verified</h3><ul class="tight">
+   <li>No engine or app code was built, run or changed. Nothing in the proposal has run on FluentGpu.</li>
+   <li>Typora, Obsidian and Notion were not opened. Their behaviour here comes from web pages and memory, and those samples are small and uneven. Several Notion sources are third-party guides or a vendor blog.</li>
+   <li>Reference repositories were searched and read in part, never built. No code was copied.</li>
+   <li>Parser conclusions about front matter and tabs come from reading code, not running it.</li>
+   <li>The accent ramp values for the default blue are from memory of the Windows defaults.</li>
+   <li>Sizes and the 4 ms target are estimates.</li>
+  </ul></div>
+  <div class="card"><h3>Path shorthand</h3><ul class="tight">
+   <li>WinUI themes are in <code>microsoft-ui-xaml\controls\dev\CommonStyles</code> and <code>...\CommandBarFlyout</code>. <code>TextBoxBase.cpp</code> is in <code>dxaml\xcp\core\native\text\Controls</code>.</li>
+   </ul></div>
+ </div>
+ <ul class="src-list">
+  <li><b>Engine, read:</b> EditableText.cs, TextBox.cs, CommandBarFlyout.cs, OverlayHost.cs, Markdown/*.cs, Seams/Text/{TextEditCore, TextUndoStack, EditDocument, TextEditKeymap, Text}.cs, Seams/Pal/{Clipboard, TextInput}.cs, Input/InputDispatcher.cs, Render/SceneRecorder.cs, Foundation/StringTable.cs, Uia/Placeholder.cs; docs markdown.md, text.md §8.4, §14, §16.</li>
+  <li><b>WinUI, read:</b> RichEditBox_themeresources.xaml, TextBox_themeresources.xaml, Common_themeresources.xaml, Common_themeresources_any.xaml, CornerRadius_themeresources.xaml, MenuFlyout_themeresources.xaml, CommandBarFlyout_themeresources.xaml, TextCommandBarFlyout.cpp, TextBoxBase.cpp, TextControlFlyoutHelper.cpp.</li>
+  <li><b>WinUI Gallery, read:</b> Samples/RichEditBox/RichEditBoxPage.xaml(.cs), CustomizingRicheditboxCommandbarflyoutAdding.txt.</li>
+  <li><b>Reference editors, read in part:</b> milkdown (preset-commonmark, crepe block-edit menu, plugin list), tiptap (packages/markdown CHANGELOG, MarkdownManager), codemirror-lang-markdown (commands.ts, index.ts), markdig (Roundtrip.md).</li>
+  <li><b>Typora:</b> <a href="https://support.typora.io/Markdown-Export">Convert and Reformat Markdown</a>, <a href="https://github.com/typora/typora-issues/issues/6074">issue 6074</a>, <a href="https://support.typora.com.cn/media/export/Markdown-Reference.pdf">Markdown Reference mirror</a>.</li>
+  <li><b>Obsidian forum:</b> <a href="https://forum.obsidian.md/t/add-toggle-for-plaintext-table-editing-source-mode-in-live-preview/73866?page=2">plaintext table toggle</a>, <a href="https://forum.obsidian.md/t/tables-exploding-into-plain-text-and-duplicating-characters-ime-rendering-bug/113212">tables exploding</a>, <a href="https://forum.obsidian.md/t/cursor-disappears-when-switching-to-source-mode-in-a-table/97475">caret lost in table</a>, <a href="https://forum.obsidian.md/t/strict-line-breaks-in-live-preview/109696">strict line breaks</a>.</li>
+  <li><b>Notion:</b> <a href="https://obsidian.md/bn/help/import/notion">Obsidian Notion import help</a>, <a href="https://unmarkdown.com/blog/notion-export-broken">Unmarkdown blog (vendor)</a>, <a href="https://thomasjfrank.com/a-guide-to-editing-and-formatting-text-in-notion-notion-fundamentals/">formatting guide</a>.</li>
+  <li><b>Tiptap, third party:</b> <a href="https://code.overheid.nl/robbertbos/waggle/pulls/271">waggle PR 271</a>, <a href="https://sourceforge.net/projects/tiptap.mirror/files/v3.22.0">v3.22.0 notes mirror</a>.</li>
+ </ul>
+</section>
+</main>
+
+<template id="tpl-states">
+ <div data-st="Resting" data-note="Surface chrome for a panel: no fill, no border, text on the host's layer. Body 14/20, <code>Tok.TextPrimary</code>. Heading scale from <code>MarkdownStyle</code> Document.">
+  <div class="flow h h2" style="font-size:16px;line-height:22px">This week</div><div class="flow p">Draft for the <span class="strong">Atlas</span> launch. See <span class="wiki">the schedule</span> and the <span class="link">rollout guide</span>, with <span class="mark">first draft</span> and <span class="code">dry-run</span>.</div></div>
+ <div data-st="Field chrome: rest, hover, focused" data-note="For forms. Same as RichEditBox: <code>ControlFillColorDefault</code>, secondary on hover, <code>ControlFillColorInputActive</code> focused, 1,1,1,2 border with the accent bottom, radius 4, padding 10,5,6,6. <code>RichEditBox_themeresources.xaml:66-81</code>, <code>Common_themeresources.xaml:10-12</code>.">
+  <div class="field">Rest</div><div class="field hov">Pointer over</div><div class="field foc">Focused<span class="fcaret"></span></div></div>
+ <div data-st="Hover" data-note="Text never changes on hover. Links stay accent with no underline (<code>HyperlinkUnderlineVisible</code> false, <code>markdown.md</code> §5.3). Objects gain Edit source; checkboxes lighten. Subtle fill for buttons.">
+  <div class="two"><span class="chk" style="background:var(--ctl-h)"></span><span>Task box, pointer over</span></div>
+  <div class="island tablebox" style="padding:8px 12px"><span>Table</span><button class="isl-edit" style="display:inline-flex" tabindex="-1"><svg class="ic"><use href="#i-edit"/></svg> Edit source</button></div>
+  <div class="two"><span class="textbtn" style="background:var(--subtle-h)"><svg class="ic"><use href="#i-plus"/></svg>Insert</span></div></div>
+ <div data-st="Keyboard focus" data-note="Mouse focus shows the caret only. Tab focus adds the WinUI focus visual: 2 px outer, 1 px inner, on the panel or on an object such as a code card. <code>FocusStrokeColorOuter</code>, <code>FocusStrokeColorInner</code>.">
+  <div class="ring"><div class="flow p">Keep the first release small.<span class="fcaret"></span></div></div></div>
+ <div data-st="Selection, across blocks" data-note="<code>TextControlSelectionHighlightColor</code> = system accent, white text in both themes (<code>TextBox_themeresources.xaml:39</code>). Glyphs re-emit on-accent, as the recorder already does. A tail marks the paragraph break.">
+  <div class="flow p">Draft for the <span class="sel">Atlas launch.</span><span class="sel-tail"></span></div><div class="li"><div class="marker">•</div><div class="flow p"><span class="sel">Freeze</span> the copy</div></div></div>
+ <div data-st="Selection flyout" data-note="<code>CommandBarFlyout</code>: 40 wide buttons with inner margin 2, 16 px icons, subtle ramp, 83 ms brush. Checked is the accent pill. Radius 8, acrylic, flyout stroke and shadow from <code>OverlayHost</code>'s <code>FlyoutSurface</code>.">
+  <div class="fly"><div class="fly-row"><button class="abb on" tabindex="-1" aria-label="Bold"><b>B</b></button><button class="abb" tabindex="-1" aria-label="Italic"><i>I</i></button><button class="abb" tabindex="-1" aria-label="Strikethrough"><s>S</s></button><button class="abb" tabindex="-1" aria-label="Code"><svg class="ic"><use href="#i-code"/></svg></button><button class="abb" tabindex="-1" aria-label="Highlight"><svg class="ic"><use href="#i-mark"/></svg></button><button class="abb" tabindex="-1" aria-label="Link"><svg class="ic"><use href="#i-link"/></svg></button><button class="abb" tabindex="-1" aria-label="More"><svg class="ic"><use href="#i-more"/></svg></button></div>
+  <div class="fly-over"><div class="mi"><span class="mi-l">Heading 1</span><span class="mi-k">Ctrl+1</span></div><div class="mi cur"><span class="mi-l">Heading 2</span><span class="mi-k">Ctrl+2</span></div><div class="mi"><span class="mi-l">Task</span><span class="mi-k">Ctrl+L</span></div></div></div></div>
+ <div data-st="Insert menu" data-note="<code>MenuFlyout</code> rows: min height 32, padding 11,8,11,9, hint in Caption and <code>TextFillColorSecondary</code>. Current row uses the subtle fill. Hints show the Markdown it writes, which teaches the syntax.">
+  <div class="menu"><div class="menu-h">Insert</div><div class="mi cur"><svg class="ic"><use href="#i-task"/></svg><span class="mi-l">Task</span><span class="mi-k mono">- [ ] </span></div><div class="mi"><svg class="ic"><use href="#i-table"/></svg><span class="mi-l">Table</span><span class="mi-k mono">| |</span></div><div class="mi"><svg class="ic"><use href="#i-code"/></svg><span class="mi-l">Code block</span><span class="mi-k mono">```</span></div></div></div>
+ <div data-st="Wikilink completion and link card" data-note="List styled as AutoSuggestBox's. Card is a plain flyout with a TextBox. A link the consumer reports missing shows secondary colour with a dotted underline.">
+  <div class="menu"><div class="mi cur"><svg class="ic"><use href="#i-note"/></svg><span class="mi-l">Bulletin draft</span></div><div class="mi"><svg class="ic"><use href="#i-note"/></svg><span class="mi-l">Bulletin schedule</span></div><div class="mi"><svg class="ic"><use href="#i-plus"/></svg><span class="mi-l">Link to new note "Bul"</span></div></div>
+  <div class="lcard"><span class="card-l">Address</span><div class="field foc" style="overflow-wrap:anywhere">docs/rollout.md<span class="fcaret"></span></div><div class="card-a"><span class="btn accent">Apply</span><span class="btn">Open</span><span class="btn">Remove link</span></div></div>
+  <div class="flow p">Missing: <span class="wiki missing">Old plan</span></div></div>
+ <div data-st="Placeholder" data-note="<code>TextControlPlaceholderForeground</code> = <code>TextFillColorSecondary</code> (<code>TextBox_themeresources.xaml:35</code>). One line for an empty note only. No hint on every empty block.">
+  <div class="flow p" style="color:var(--t2)"><span class="fcaret" style="margin-right:1px"></span>Write a note, or type / to insert</div></div>
+ <div data-st="Tasks, code, table, image" data-note="All from the viewer's tokens (<code>markdown.md</code> §5.4 to §5.8): task box 18 px, code card radius 4 with a header strip, table on a bordered card. A selected object gets a 2 px accent outline.">
+  <div class="li"><div class="marker"><span class="chk on"><svg viewBox="0 0 16 16" class="ic"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span></div><div class="flow p">Confirm the pilot group</div></div>
+  <div class="li"><div class="marker"><span class="chk"></span></div><div class="flow p">Review risks</div></div>
+  <div class="codecard"><div class="cc-h"><span>sh</span><span class="cc-c"><svg class="ic"><use href="#i-copy"/></svg> Copy</span></div><div class="cc-b"><div class="flow raw code-raw">atlas release --dry-run</div></div></div>
+  <div class="island tablebox picked"><div class="tbl-scroll"><table><tr><th>Item</th><th>Due</th></tr><tr><td>Copy</td><td>Mon</td></tr></table></div></div></div>
+</template>
+<script>
+(function(){
+ /* theme switch */
+ var seg=document.getElementById("themeSeg"),root=document.documentElement;
+ function cur(){var t=root.getAttribute("data-theme");if(t)return t;return window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}
+ function paint(){var c=cur();seg.querySelectorAll("button").forEach(function(b){b.setAttribute("aria-pressed",b.dataset.v===c)})}
+ try{var saved=localStorage.getItem("md-ed-theme");if(saved)root.setAttribute("data-theme",saved)}catch(e){}
+ seg.querySelectorAll("button").forEach(function(b){b.addEventListener("click",function(){root.setAttribute("data-theme",b.dataset.v);try{localStorage.setItem("md-ed-theme",b.dataset.v)}catch(e){}paint()})});
+ paint();
+ /* state board: every state in both themes */
+ var tpl=document.getElementById("tpl-states"),board=document.getElementById("board");
+ tpl.content.querySelectorAll("[data-st]").forEach(function(s){
+  var row=document.createElement("div");row.className="st";
+  var t=document.createElement("div");t.className="st-t";t.innerHTML="<h3>"+s.getAttribute("data-st")+"</h3><p>"+s.getAttribute("data-note")+"</p>";row.appendChild(t);
+  ["dark","light"].forEach(function(n){var p=document.createElement("div");p.className="pane scope-"+n;p.innerHTML='<div class="pane-l">'+(n==="dark"?"Dark":"Light")+"</div>"+s.innerHTML;row.appendChild(p)});
+  board.appendChild(row);
+ });
+})();
+</script>
+
+<script>
+/* Working mock. Same shape as the proposed engine design: the source string is the only document.
+   Rendering conceals markers; every edit is one replace on the source. Nothing is ever re-serialized. */
+(function(){
+"use strict";
+var inited=false;
+var SAMPLE=[
+"---","title: Atlas launch","status: draft","tags: [atlas, planning]","---","",
+"Launch notes","============","",
+"Draft for the __Atlas__ launch. See [[Bulletin schedule|the schedule]] and the",
+"[rollout guide][guide] before Friday.","","",
+"## This week","",
+"* [x] Confirm the *pilot* group",
+"* [ ] Send the ==first draft== to the Bulletin list",
+"* [ ] Review [[Atlas risks]]","",
+"1) Freeze the copy","2) Run the `dry-run` command","",
+"> Keep the first release small.  ","> Everything else can wait.","",
+"| Item | Owner | Due |","|------|-------|:---:|","| Copy | Writer | Mon |","| Demo | Support | Wed |","",
+"```sh","atlas release --dry-run","```","",
+"![Release timeline](assets/timeline.png)","",
+"[guide]: docs/rollout.md \"Rollout guide\"",""].join("\n");
+var NOTES=["Atlas launch","Atlas risks","Bulletin draft","Bulletin schedule","Weekly review"];
+var INSERT=[
+ {k:"Heading 1",h:"# ",i:"i-h",act:"# "},{k:"Heading 2",h:"## ",i:"i-h",act:"## "},{k:"Heading 3",h:"### ",i:"i-h",act:"### "},
+ {k:"Bulleted list",h:"- ",i:"i-list",act:"bullet"},{k:"Numbered list",h:"1. ",i:"i-num",act:"1. "},{k:"Task",h:"- [ ] ",i:"i-task",act:"task"},
+ {k:"Quote",h:"> ",i:"i-quote",act:"> "},{k:"Code block",h:"```",i:"i-code",act:"code"},{k:"Table",h:"| |",i:"i-table",act:"table"},
+ {k:"Image",h:"![]()",i:"i-image",act:"image"},{k:"Divider",h:"---",i:"i-div",act:"hr"}];
+var S={src:SAMPLE,base:SAMPLE,a:0,c:0,mode:"rendered",reveal:"never",pending:null,undo:[],redo:[],sealed:false,sticky:null,
+ blocks:[],flows:[],spans:[],island:false,comp:"",layout:"panel",selObj:null,menu:null,noMenu:-1,fly:null,card:null,focused:false,drag:false,demo:false};
+var $=function(id){return document.getElementById(id)};
+var wrap,root,caretEl,ta,scroller,flyEl,menuEl,cardEl,diskEl,statEl,statusEl,stage;
+function icon(n){return '<svg class="ic" aria-hidden="true"><use href="#'+n+'"/></svg>'}
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+
+/* ---------- block parse (line based, small on purpose) ---------- */
+function splitLines(src){var out=[],s=0;for(var i=0;i<=src.length;i++){if(i===src.length||src[i]==="\n"){out.push({s:s,e:i,t:src.slice(s,i)});s=i+1}}return out}
+var RX={h:/^(#{1,6})( +)(.*)$/,li:/^(\s*)([-*+]|\d+[.)])( +)(\[( |x|X)\] )?(.*)$/,q:/^( {0,3}> ?)(.*)$/,hr:/^(---+|\*\*\*+|___+)\s*$/,fence:/^```(\S*)\s*$/,
+ delim:/^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/,img:/^!\[([^\]]*)\]\(([^)]*)\)\s*$/,ref:/^\[[^\]]+\]:\s/,setext:/^(=+|-+)\s*$/};
+function parseBlocks(src,caret,mode){
+ var L=splitLines(src),B=[],i=0,on=function(l){return caret>=l.s&&caret<=l.e};
+ if(L[0]&&L[0].t==="---"){var j=1;while(j<L.length&&L[j].t!=="---")j++;if(j<L.length){B.push({type:"front",s:0,e:L[j].e,fields:j-1});i=j+1}}
+ if(mode==="source"){var bs=i<L.length?L[i].s:src.length;B.push({type:"raw",s:bs,e:src.length,cs:bs,ce:src.length});return B}
+ function startsBlock(t,l){return RX.h.test(t)||RX.fence.test(t)||RX.li.test(t)||RX.q.test(t)||(RX.hr.test(t)&&!on(l))}
+ while(i<L.length){
+  var l=L[i],t=l.t,m;
+  if(/^\s*$/.test(t)){if(on(l)||i===L.length-1)B.push({type:"p",s:l.s,e:l.e,cs:l.s,ce:l.e,empty:true});i++;continue}
+  if((m=RX.fence.exec(t))){var c=-1;for(var k=i+1;k<L.length;k++){if(/^```\s*$/.test(L[k].t)){c=k;break}}
+   if(c>0){var cs=L[i+1].s,ce=c>i+1?L[c-1].e:L[i+1].s;B.push({type:"code",lang:m[1],s:l.s,e:L[c].e,cs:cs,ce:ce});i=c+1;continue}}
+  if(t.indexOf("|")>=0&&L[i+1]&&L[i+1].t.indexOf("-")>=0&&RX.delim.test(L[i+1].t)&&L[i+1].t.indexOf("|")>=0){
+   var k2=i+2;while(k2<L.length&&L[k2].t.indexOf("|")>=0)k2++;var e=L[k2-1].e;
+   if(S.island&&caret>=l.s&&caret<=e){B.push({type:"rawblock",s:l.s,e:e,cs:l.s,ce:e})}
+   else B.push({type:"table",s:l.s,e:e,rows:L.slice(i,k2).filter(function(_,n){return n!==1})});
+   i=k2;continue}
+  if((m=RX.img.exec(t))){if(S.island&&on(l))B.push({type:"rawblock",s:l.s,e:l.e,cs:l.s,ce:l.e});else B.push({type:"img",s:l.s,e:l.e,alt:m[1],url:m[2]});i++;continue}
+  if(RX.ref.test(t)){B.push({type:"ref",s:l.s,e:l.e,cs:l.s,ce:l.e});i++;continue}
+  if(RX.hr.test(t)&&!on(l)){B.push({type:"hr",s:l.s,e:l.e});i++;continue}
+  if((m=RX.h.exec(t))){var p=m[1].length+m[2].length;B.push({type:"h",level:m[1].length,s:l.s,e:l.e,cs:l.s+p,ce:l.e});i++;continue}
+  if((m=RX.li.exec(t))){var p2=m[1].length+m[2].length+m[3].length,task=m[4]?m[5]!==" ":null;
+   B.push({type:"li",indent:m[1],marker:m[2],gap:m[3],task:task,mo:m[4]?l.s+p2+1:-1,s:l.s,e:l.e,cs:l.s+p2+(m[4]?m[4].length:0),ce:l.e});i++;continue}
+  if((m=RX.q.exec(t))){B.push({type:"q",prefix:m[1],s:l.s,e:l.e,cs:l.s+m[1].length,ce:l.e});i++;continue}
+  var j2=i;while(j2+1<L.length&&!/^\s*$/.test(L[j2+1].t)&&!startsBlock(L[j2+1].t,L[j2+1])&&!(RX.setext.test(L[j2+1].t)&&!on(L[j2+1]))&&!RX.ref.test(L[j2+1].t)&&!(L[j2+1].t.indexOf("|")>=0&&L[j2+2]&&RX.delim.test(L[j2+2].t)))j2++;
+  var nx=L[j2+1];
+  if(nx&&RX.setext.test(nx.t)&&!on(nx)){B.push({type:"h",level:nx.t[0]==="="?1:2,s:l.s,e:nx.e,cs:l.s,ce:L[j2].e,setext:true});i=j2+2;continue}
+  B.push({type:"p",s:l.s,e:L[j2].e,cs:l.s,ce:L[j2].e});i=j2+1;
+ }
+ return B;
+}
+
+/* ---------- inline parse: segs are what shows, markers simply do not appear ---------- */
+var D=[["**","strong"],["__","strong"],["~~","strike"],["==","mark"],["*","em"],["_","em"]];
+function parseInline(src,s,e,caret,reveal){
+ var out=[],spans=[];
+ function show(sp){return reveal==="caret"&&caret>=sp.s&&caret<=sp.e}
+ function mk(a,b,st,sp){if(show(sp))out.push({s:a,e:b,t:src.slice(a,b),st:st.concat("mk")})}
+ function txt(a,b,st,lnk){if(a<b)out.push({s:a,e:b,t:src.slice(a,b).replace(/\n/g," "),st:st.slice(),lnk:lnk})}
+ function nsp(c){return c!==undefined&&!/\s/.test(c)}
+ function walk(a,end,st,lnk){
+  var p=a,tx=a;
+  function flush(){txt(tx,p,st,lnk)}
+  while(p<end){var ch=src[p];
+   if(ch==="\\"&&p+1<end&&/[!-\/:-@\[-`{-~]/.test(src[p+1])){flush();var es={s:p,e:p+2};mk(p,p+1,st,es);out.push({s:p+1,e:p+2,t:src[p+1],st:st.slice(),lnk:lnk});p+=2;tx=p;continue}
+   if(src[p]===" "&&src[p+1]===" "&&src[p+2]==="\n"&&p+3<=end){flush();out.push({s:p+2,e:p+3,t:"\n",st:st.slice()});p+=3;tx=p;continue}
+   if(ch==="`"){var q=src.indexOf("`",p+1);if(q>0&&q<end){flush();var sp={type:"code",s:p,e:q+1,ol:1,cl:1,d:"`"};spans.push(sp);mk(p,p+1,st,sp);txt(p+1,q,st.concat("code"),lnk);mk(q,q+1,st,sp);p=q+1;tx=p;continue}}
+   if(src.startsWith("[[",p)){var q2=src.indexOf("]]",p+2);if(q2>0&&q2<end&&src.slice(p,q2).indexOf("\n")<0){flush();var inner=src.slice(p+2,q2),pipe=inner.indexOf("|"),label=pipe>=0?inner.slice(pipe+1):inner,target=pipe>=0?inner.slice(0,pipe):inner;
+     var sw={type:"wiki",s:p,e:q2+2,ol:2,cl:2,target:target};spans.push(sw);
+     if(show(sw)){mk(p,p+2,st,sw);txt(p+2,q2,st.concat("wiki"));mk(q2,q2+2,st,sw)}
+     else out.push({s:p,e:q2+2,t:label,st:st.concat("wiki"),atomic:true,wiki:sw});
+     p=q2+2;tx=p;continue}
+    /* open wikilink under the caret: dim the brackets */
+    if(caret>p&&caret<=end){flush();out.push({s:p,e:p+2,t:"[[",st:st.concat("mk")});p+=2;tx=p;continue}}
+   if(ch==="["){var cb=src.indexOf("]",p+1);if(cb>0&&cb<end&&src.slice(p,cb).indexOf("\n")<0){var nc=src[cb+1],close=-1;
+     if(nc==="(")close=src.indexOf(")",cb+2);else if(nc==="[")close=src.indexOf("]",cb+2);
+     if(close>0&&close<end){flush();var sl={type:"link",s:p,e:close+1,ol:1,cl:close+1-cb,inner:cb,ref:nc==="[",url:src.slice(cb+2,close)};spans.push(sl);mk(p,p+1,st,sl);walk(p+1,cb,st.concat("link"),sl);mk(cb,close+1,st,sl);p=close+1;tx=p;continue}}}
+   var hit=false;
+   for(var di=0;di<D.length&&!hit;di++){var d=D[di][0],cls=D[di][1];if(!src.startsWith(d,p))continue;var dl=d.length;
+    if(!nsp(src[p+dl]))continue;
+    if(d[0]==="_"&&p>0&&/\w/.test(src[p-1]))continue;
+    var q3=-1;for(var z=p+dl;z<end;z++){if(src[z]==="\\"){z++;continue}
+     if(src.startsWith(d,z)&&z>p+dl&&nsp(src[z-1])){if(dl===1&&(src[z+1]===d||src[z-1]===d))continue;if(d[0]==="_"&&/\w/.test(src[z+dl]||""))continue;q3=z;break}}
+    if(q3<0||q3+dl>end){
+     /* an opener with no closer yet stays visible, dimmed, while the caret is after it */
+     if(caret>p&&caret<=end&&src.slice(p,caret).indexOf("\n")<0){flush();out.push({s:p,e:p+dl,t:d,st:st.concat("mk"),lnk:lnk});p+=dl;tx=p;hit=true}
+     break}
+    flush();var sd={type:cls,s:p,e:q3+dl,ol:dl,cl:dl,d:d};spans.push(sd);mk(p,p+dl,st,sd);walk(p+dl,q3,st.concat(cls),lnk);mk(q3,q3+dl,st,sd);p=q3+dl;tx=p;hit=true}
+   if(hit)continue;
+   p++;
+  }
+  flush();
+ }
+ walk(s,e,[],null);
+ return {segs:out,spans:spans};
+}
+function finishFlow(f){
+ var u=[];f.segs.forEach(function(g){if(g.atomic){u.push({s:g.s,e:g.e,ch:g.t,atomic:true})}else{for(var i=0;i<g.t.length;i++){var cc=g.t.charCodeAt(i),n=(cc>=0xD800&&cc<0xDC00&&i+1<g.t.length)?2:1;u.push({s:g.s+i,e:g.s+i+n,ch:g.t.substr(i,n)});i+=n-1}}});
+ f.units=u;f.stops=u.length?[u[0].s].concat(u.map(function(x){return x.e})):[f.cs];
+}
+function build(){
+ for(var pass=0;pass<2;pass++){
+  S.blocks=parseBlocks(S.src,S.c,S.mode);S.flows=[];S.spans=[];
+  S.blocks.forEach(function(b){
+   if(b.cs===undefined)return;
+   var f={cs:b.cs,ce:b.ce,block:b,raw:b.type==="code"||b.type==="raw"||b.type==="rawblock"||b.type==="ref"};
+   if(f.raw){f.segs=b.cs<b.ce?[{s:b.cs,e:b.ce,t:S.src.slice(b.cs,b.ce),st:[]}]:[]}
+   else{var r=parseInline(S.src,b.cs,b.ce,S.c,S.reveal);f.segs=r.segs;S.spans=S.spans.concat(r.spans)}
+   finishFlow(f);b.flow=f;S.flows.push(f);
+  });
+  var c0=S.c,a0=S.a;S.c=snap(S.c);S.a=snap(S.a);
+  if(c0===S.c&&a0===S.a)break;
+ }
+}
+function flowAt(o){var best=null,bd=1e9;for(var i=0;i<S.flows.length;i++){var f=S.flows[i];if(o>=f.cs&&o<=f.ce)return f;var d=o<f.cs?f.cs-o:o-f.ce;if(d<bd){bd=d;best=f}}return best}
+function snap(o){var f=flowAt(o);if(!f)return 0;if(o<f.cs)return f.stops[0];if(o>f.ce)return f.stops[f.stops.length-1];
+ for(var i=0;i<f.units.length;i++){var u=f.units[i];if(o>u.s&&o<u.e)return (o-u.s<u.e-o)?u.s:u.e}return o}
+function dispIndex(f,o){var n=0;for(var i=0;i<f.units.length;i++){if(f.units[i].e<=o)n++;else break}return n}
+function canon(o){var f=flowAt(o);if(!f)return 0;return f.stops[dispIndex(f,o)]}
+function selRange(){return S.a<S.c?[S.a,S.c]:[S.c,S.a]}
+function hasSel(){return S.a!==S.c}
+
+/* ---------- render ---------- */
+function segEl(g,s,e,sel){
+ var el=document.createElement("span");el.setAttribute("data-seg","");
+ var t=g.atomic?g.t:g.t.slice(s-g.s,e-g.s);el.textContent=t;
+ el._seg=g.atomic?{s:g.s,e:g.e,atomic:true,g:g}:{s:s,e:e,g:g};
+ var cl=g.st.slice();if(sel)cl.push("sel");if(cl.length)el.className=cl.join(" ");return el}
+function paintFlow(fe,f){
+ var sr=selRange(),A=sr[0],B=sr[1],c=S.c,comp=S.comp;fe.textContent="";
+ function addComp(){var im=document.createElement("span");im.className="ime";im.textContent=comp;fe.appendChild(im);comp=""}
+ var compHere=S.comp&&flowAt(c)===f;
+ if(compHere&&c<=(f.units[0]?f.units[0].s:f.cs))addComp();
+ f.segs.forEach(function(g){
+  if(g.atomic){fe.appendChild(segEl(g,g.s,g.e,A<B&&A<=g.s&&B>=g.e));if(compHere&&comp&&g.e===c)addComp();return}
+  var cuts=[g.s,g.e];[A,B].concat(compHere?[c]:[]).forEach(function(x){if(x>g.s&&x<g.e)cuts.push(x)});cuts=cuts.sort(function(p,q){return p-q});
+  for(var i=0;i<cuts.length-1;i++){var s=cuts[i],e=cuts[i+1];if(s===e)continue;fe.appendChild(segEl(g,s,e,A<B&&s>=A&&e<=B));if(compHere&&comp&&e===c)addComp()}
+ });
+ if(compHere&&comp)addComp();
+ if(A<B&&A<=f.ce&&B>f.ce){var tail=document.createElement("span");tail.className="sel-tail";fe.appendChild(tail)}
+ var zw=document.createElement("span");zw.className="zw";zw.textContent="\u200b";fe.appendChild(zw);
+}
+function flowEl(f,cls){var d=document.createElement("div");d.className="flow "+(cls||"");d._flow=f;f.el=d;paintFlow(d,f);return d}
+function inlineStatic(txt){var r=parseInline(txt,0,txt.length,-1,"never"),h="";r.segs.forEach(function(g){h+='<span class="'+g.st.join(" ")+'">'+esc(g.t)+"</span>"});return h}
+function render(){
+ build();root.textContent="";
+ S.blocks.forEach(function(b){var el;
+  switch(b.type){
+   case "front":el=document.createElement("div");el.className=S.mode==="source"?"front-src":"front";
+    if(S.mode==="source"){el.textContent=S.src.slice(b.s,b.e)}else el.innerHTML=icon("i-lock")+"<span>Properties, "+b.fields+" fields, left untouched</span>";break;
+   case "raw":el=flowEl(b.flow,"raw src");break;
+   case "h":el=flowEl(b.flow,"h h"+b.level);break;
+   case "p":el=flowEl(b.flow,"p");break;
+   case "ref":el=flowEl(b.flow,"raw refdef");break;
+   case "rawblock":el=document.createElement("div");el.className="rawblock";el.innerHTML='<div class="rb-h">Source of this block. Move the caret away to render it.</div>';el.appendChild(flowEl(b.flow,"raw"));break;
+   case "q":el=document.createElement("div");el.className="quote";el.appendChild(flowEl(b.flow,"p"));break;
+   case "li":el=document.createElement("div");el.className="li";el.style.marginLeft=(b.indent.length*8)+"px";
+    var m=document.createElement("div");m.className="marker";
+    if(b.task!==null){m.innerHTML='<button class="chk'+(b.task?" on":"")+'" tabindex="-1" aria-label="Toggle task" aria-pressed="'+(b.task?"true":"false")+'">'+(b.task?'<svg viewBox="0 0 16 16" class="ic"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>':"")+"</button>";m.firstChild._block=b}
+    else m.textContent=/\d/.test(b.marker)?b.marker:"\u2022";
+    el.appendChild(m);el.appendChild(flowEl(b.flow,"p"));break;
+   case "code":el=document.createElement("div");el.className="codecard";el.innerHTML='<div class="cc-h"><span>'+esc(b.lang||"text")+'</span><span class="cc-c">'+icon("i-copy")+" Copy</span></div>";var bd=document.createElement("div");bd.className="cc-b";bd.appendChild(flowEl(b.flow,"raw code-raw"));el.appendChild(bd);break;
+   case "hr":el=document.createElement("div");el.className="hr";break;
+   case "table":el=document.createElement("div");el.className="island tablebox"+(S.selObj===b.s?" picked":"");el._island=b;
+    var h='<div class="tbl-scroll"><table>';b.rows.forEach(function(r,ri){var cells=r.t.replace(/^\s*\|/,"").replace(/\|\s*$/,"").split("|");h+="<tr>"+cells.map(function(c){var tag=ri?"td":"th";return "<"+tag+">"+inlineStatic(c.trim())+"</"+tag+">"}).join("")+"</tr>"});h+="</table></div>";
+    el.innerHTML=h+'<button class="isl-edit" tabindex="-1">'+icon("i-edit")+" Edit source</button>";break;
+   case "img":el=document.createElement("div");el.className="island imgbox"+(S.selObj===b.s?" picked":"");el._island=b;
+    el.innerHTML='<div class="imgph" role="img" aria-label="'+esc(b.alt)+'"><svg viewBox="0 0 320 120" preserveAspectRatio="none"><path d="M0 95 L60 60 L120 80 L190 35 L250 62 L320 25" fill="none" stroke="currentColor" stroke-width="2" vector-effect="non-scaling-stroke"/></svg></div><div class="imgcap">'+esc(b.alt)+'</div><button class="isl-edit" tabindex="-1">'+icon("i-edit")+" Edit source</button>";break;
+  }
+  if(el){el.classList.add("block");root.appendChild(el)}
+ });
+ if(S.src===""||/^\s*$/.test(S.src)){var ph=document.createElement("div");ph.className="placeholder";ph.textContent="Write a note, or type / to insert";root.appendChild(ph)}
+ placeCaret();updateChrome();queueDisk();
+}
+function caretRect(){
+ var c=S.c,f=flowAt(c);if(!f||!f.el)return null;
+ var im=f.el.querySelector(".ime");if(im){var ir=im.getBoundingClientRect();return {left:ir.right,top:ir.top,height:ir.height}}
+ var els=f.el.querySelectorAll("[data-seg]"),pick=null,off=0;
+ for(var i=0;i<els.length;i++){var g=els[i]._seg;
+  if(g.atomic){if(c===g.s&&!pick){pick=els[i];off=0;break}if(c===g.e){pick=els[i];off=els[i].textContent.length;break}if(c>g.e){pick=els[i];off=els[i].textContent.length}continue}
+  if(c>=g.s&&c<=g.e){pick=els[i];off=c-g.s;break}
+  if(c>g.e){pick=els[i];off=els[i].textContent.length}}
+ var r=document.createRange();
+ function rr(){var a=r.getClientRects();return a.length?a:null}
+ if(pick&&pick.firstChild){var tn=pick.firstChild,tx=tn.nodeValue;
+  if(off>0&&tx[off-1]!=="\n"){r.setStart(tn,off-1);r.setEnd(tn,off);var a=rr();if(a){var q=a[a.length-1];return {left:q.right,top:q.top,height:q.height}}}
+  if(off<tx.length&&tx[off]!=="\n"){r.setStart(tn,off);r.setEnd(tn,off+1);var b=rr();if(b){return {left:b[0].left,top:b[0].top,height:b[0].height}}}
+ }
+ /* after a newline, or empty flow: the zero width tail */
+ var z=f.el.querySelector(".zw"),zr=z.getBoundingClientRect();return {left:zr.left,top:zr.top,height:zr.height||20};
+}
+function placeCaret(){
+ var r=caretRect();if(!r){caretEl.hidden=true;return}
+ var w=root.getBoundingClientRect(),x=r.left-w.left,y=r.top-w.top;
+ caretEl.style.transform="translate("+Math.round(x)+"px,"+Math.round(y)+"px)";caretEl.style.height=r.height+"px";
+ caretEl.hidden=!S.focused||hasSel();caretEl.classList.remove("blink");void caretEl.offsetWidth;caretEl.classList.add("blink");
+ ta.style.left=x+"px";ta.style.top=y+"px";
+}
+function reveal(){var r=caretRect();if(!r)return;var v=scroller.getBoundingClientRect(),pad=24;
+ if(r.top<v.top+pad)scroller.scrollTop-=(v.top+pad-r.top);else if(r.top+r.height>v.bottom-pad)scroller.scrollTop+=(r.top+r.height-v.bottom+pad);placeCaret()}
+
+/* ---------- edits: one replace on the source, nothing else ---------- */
+function apply(a,b,ins,c,kind,keepSel){
+ var rem=S.src.slice(a,b),bf={a:S.a,c:S.c},last=S.undo[S.undo.length-1];
+ S.src=S.src.slice(0,a)+ins+S.src.slice(b);
+ if(!keepSel){S.a=S.c=c}
+ var af={a:S.a,c:S.c};
+ var merge=last&&!S.sealed&&kind&&last.kind===kind&&(((kind==="type"||kind==="delim")&&rem===""&&last.start+last.ins.length===a)||(kind==="bs"&&ins===""&&last.ins===""&&b===last.start));
+ if(merge){if(kind==="bs"){last.start=a;last.rem=rem+last.rem}else{last.ins+=ins}last.af=af}
+ else S.undo.push({start:a,rem:rem,ins:ins,bf:bf,af:af,kind:kind});
+ S.redo=[];S.sealed=false;S.pending=null;S.sticky=null;closeFly();S.selObj=null;
+ render();reveal();triggers();
+}
+function undo(){var o=S.undo.pop();if(!o)return;S.src=S.src.slice(0,o.start)+o.rem+S.src.slice(o.start+o.ins.length);S.a=o.bf.a;S.c=o.bf.c;S.redo.push(o);S.sealed=true;closeAll();render();reveal()}
+function redo(){var o=S.redo.pop();if(!o)return;S.src=S.src.slice(0,o.start)+o.ins+S.src.slice(o.start+o.rem.length);S.a=o.af.a;S.c=o.af.c;S.undo.push(o);S.sealed=true;closeAll();render();reveal()}
+function balance(a,b){var fix="";S.spans.forEach(function(sp){if(!sp.d)return;var o=a<=sp.s&&b>=sp.s+sp.ol,c=a<=sp.e-sp.cl&&b>=sp.e;if(c&&!o&&a>=sp.s+sp.ol)fix+=sp.d;if(o&&!c&&b<=sp.e-sp.cl)fix+=sp.d});return fix}
+function insertText(t){
+ t=t.replace(/\r\n?/g,"\n");
+ var r=selRange(),a=r[0],b=r[1],ins=t,c;
+ if(S.mode==="source"&&a<bodyStart())return;
+ if(a!==b){var fx=balance(a,b);ins=t+fx;c=a+t.length}
+ else if(S.pending){var d=S.pending;ins=d+t+d;c=a+d.length+t.length}
+ else c=a+t.length;
+ var delimOnly=/^[*_~=`\])]+$/.test(t),prev=S.src.slice(S.src.lastIndexOf("\n",a-1)+1,a)+t,isPrefix=t===" "&&/^\s*(#{1,6}|[-*+]|\d+[.)]|>|- \[[ x]\])\s$/.test(prev);
+ var last=S.undo[S.undo.length-1];
+ if(delimOnly&&last&&last.kind==="type")S.sealed=true;
+ if(!delimOnly&&last&&last.kind==="delim")S.sealed=true;
+ apply(a,b,ins,c,delimOnly?"delim":"type");
+ if(isPrefix)S.sealed=true;
+}
+function bodyStart(){var f=S.blocks[0];return f&&f.type==="front"?f.e+1:0}
+function islandBetween(x,y){return S.blocks.some(function(b){return (b.type==="table"||b.type==="img"||b.type==="hr"||b.type==="front"||b.type==="code")&&b.s>=x&&b.e<=y})}
+function backspace(ctrl){
+ if(S.selObj!==null){var ob=S.blocks.filter(function(b){return b.s===S.selObj})[0];if(ob){apply(ob.s,ob.e,"",ob.s,"other")}return}
+ if(hasSel()){var r=selRange();apply(r[0],r[1],balance(r[0],r[1]),r[0],"other");return}
+ var f=flowAt(S.c),i=dispIndex(f,S.c);
+ if(i===0){
+  var b=f.block,ls=b.s;
+  if((b.type==="li"||b.type==="q"||(b.type==="h"&&!b.setext))&&b.cs>ls){apply(ls,b.cs,"",ls,"other");S.sealed=true;return}
+  var pf=S.flows[S.flows.indexOf(f)-1];if(!pf)return;
+  if(islandBetween(pf.ce,f.cs)){var isl=S.blocks.filter(function(x){return (x.type==="table"||x.type==="img")&&x.s>=pf.ce&&x.e<=f.cs})[0];if(isl){S.selObj=isl.s;render()}return}
+  if(f.block.type==="code"||pf.block.type==="code")return;
+  apply(pf.ce,f.cs,"",pf.ce,"other");return}
+ var u=f.units[i-1];
+ if(u.atomic){S.a=u.s;S.c=u.e;render();return}
+ var from=u.s,to=u.e;
+ if(ctrl){while(i>1&&/\s/.test(f.units[i-1].ch))i--;while(i>1&&!/\s/.test(f.units[i-2].ch)&&!f.units[i-2].atomic)i--;from=f.units[i-1].s;to=S.c;var fix=balance(from,to);apply(from,to,fix,from,"other");return}
+ /* a marker pair left empty goes with its last character, in the same edit */
+ var before=S.src.slice(0,from)+S.src.slice(to),d=null;var ds=["**","__","~~","==","*","_","`"];
+ for(var k=0;k<ds.length;k++){var x=ds[k];if(before.slice(from-x.length,from)===x&&before.slice(from,from+x.length)===x){d=x;break}}
+ if(d){apply(from-d.length,to+d.length,"",from-d.length,"bs");return}
+ apply(from,to,"",from,"bs");
+}
+function del(){
+ if(hasSel()){backspace();return}
+ var f=flowAt(S.c),i=dispIndex(f,S.c);
+ if(i>=f.units.length){var nf=S.flows[S.flows.indexOf(f)+1];if(!nf||islandBetween(f.ce,nf.cs)||nf.block.type==="code"||f.block.type==="code")return;apply(f.ce,nf.cs,"",f.ce,"other");return}
+ var u=f.units[i];if(u.atomic){S.a=u.s;S.c=u.e;render();return}
+ apply(u.s,u.e,"",u.s,"other");
+}
+function enter(shift,ctrl){
+ if(hasSel()){var r=selRange();apply(r[0],r[1],balance(r[0],r[1]),r[0],"other")}
+ var c=S.c,f=flowAt(c),b=f.block;
+ if(ctrl&&b.type==="code"){var after=b.e;if(S.src[after+1]===undefined)apply(after,after,"\n\n",after+2,"other");else{S.a=S.c=after+1;render()}return}
+ if(f.raw){apply(c,c,"\n",c+1,"type");S.sealed=true;return}
+ var ls=b.s,txt=S.src.slice(f.cs,f.ce);
+ if(b.type==="p"&&/^```\S*$/.test(S.src.slice(ls,c))&&c===f.ce){apply(c,c,"\n\n```",c+1,"other");S.sealed=true;return}
+ if(b.type==="li"){
+  if(txt===""){apply(ls,f.ce,"",ls,"other");S.sealed=true;return}
+  var mk=b.marker,mm=/^(\d+)([.)])$/.exec(mk);if(mm)mk=(parseInt(mm[1],10)+1)+mm[2];
+  var ins="\n"+b.indent+mk+b.gap+(b.task!==null?"[ ] ":"");apply(c,c,ins,c+ins.length,"other");S.sealed=true;return}
+ if(b.type==="q"){if(txt===""){apply(ls,f.ce,"",ls,"other");return}var q="\n"+b.prefix;apply(c,c,q,c+q.length,"other");S.sealed=true;return}
+ if(b.type==="p"&&shift){apply(c,c,"  \n",c+3,"other");S.sealed=true;return}
+ apply(c,c,"\n\n",c+2,"other");S.sealed=true;
+}
+function tabKey(shift){
+ var f=flowAt(S.c),b=f.block;
+ if(b.type==="li"){if(shift){if(b.indent.length){var n=Math.min(2,b.indent.length);apply(b.s,b.s+n,"",S.c-n,"other")}}else apply(b.s,b.s,"  ",S.c+2,"other");return}
+ if(f.raw){apply(S.c,S.c,"    ",S.c+4,"type")}
+}
+function sniff(a,b,dflt){var ca=S.src.split(a).length,cb=S.src.split(b).length;return ca>cb?a:cb>ca?b:dflt}
+function delimFor(t){return t==="strong"?sniff("__","**","**"):t==="em"?"*":t==="strike"?"~~":t==="mark"?"==":"`"}
+function spanAround(t,a,b){for(var i=0;i<S.spans.length;i++){var s=S.spans[i];if(s.type===t&&a>=s.s&&b<=s.e)return s}return null}
+function toggleMark(t){
+ if(S.mode==="source")return;
+ if(hasSel()){
+  var r=selRange(),a=r[0],b=r[1];
+  while(a<b&&/\s/.test(S.src[a]))a++;while(b>a&&/\s/.test(S.src[b-1]))b--;
+  var sp=spanAround(t,a,b);
+  if(sp){var inner=S.src.slice(sp.s+sp.ol,sp.e-sp.cl);apply(sp.s,sp.e,inner,sp.s,"other");S.a=sp.s;S.c=sp.s+inner.length;render();showFly();return}
+  var d=delimFor(t),fl=S.flows.filter(function(f){return f.ce>=a&&f.cs<=b&&!f.raw}),out=S.src.slice(a,b),shift=0;
+  fl.forEach(function(f){var x=Math.max(a,f.cs),y=Math.min(b,f.ce);while(x<y&&/\s/.test(S.src[x]))x++;while(y>x&&/\s/.test(S.src[y-1]))y--;if(x>=y)return;out=out.slice(0,x-a+shift)+d+out.slice(x-a+shift,y-a+shift)+d+out.slice(y-a+shift);shift+=2*d.length});
+  apply(a,b,out,a,"other");S.sealed=true;S.a=a+d.length;S.c=a+out.length-d.length;render();showFly();return}
+ var around=spanAround(t,S.c,S.c);
+ if(around){if(S.c>=around.e-around.cl){S.a=S.c=around.e;S.pending=null;render();say("Caret left the run. The next character is plain.");return}}
+ S.pending=S.pending?null:delimFor(t);updateChrome();say(S.pending?"The next character starts the run. The file changes only when you type it.":"");
+}
+function setBlock(act){
+ if(S.mode==="source")return;
+ var f=flowAt(S.c),b=f.block,c=S.c,ls=b.s,cs=f.cs,p="";
+ if(b.setext)return;
+ if(act==="bullet")p=bullet()+" ";else if(act==="task")p=bullet()+" [ ] ";else if(act==="p")p="";else p=act;
+ apply(ls,cs,p,c-(cs-ls)+p.length,"other");S.sealed=true;
+}
+function bullet(){var m=/^\s*([-*+]) /m.exec(S.src);return m?m[1]:"-"}
+function toggleTask(b){apply(b.mo,b.mo+1,b.task?" ":"x",0,"other",true);S.sealed=true}
+function setSource(on){
+ var before=caretRect(),vt=scroller.getBoundingClientRect().top,dy=before?before.top-vt:0;
+ S.mode=on?"source":"rendered";S.island=false;closeAll();render();
+ var a=caretRect();if(a)scroller.scrollTop+=(a.top-vt)-dy;placeCaret();focusEd();
+}
+
+/* ---------- caret motion ---------- */
+function setC(o,ext){if(ext){S.c=o}else{S.a=S.c=o}S.pending=null;S.sticky=null;S.selObj=null;if(S.island){var ib=S.blocks.filter(function(b){return b.type==="rawblock"})[0];if(ib&&(o<ib.s||o>ib.e))S.island=false}closeFly();closeMenu();render();reveal();triggers()}
+function moveH(dir,ext,word){
+ if(hasSel()&&!ext){var r=selRange();setC(dir<0?r[0]:r[1]);return}
+ var f=flowAt(S.c),idx=S.flows.indexOf(f),i=dispIndex(f,S.c);
+ if(word){var u=f.units;
+  if(dir<0){if(i===0){if(idx>0){var pf=S.flows[idx-1];setC(pf.stops[pf.stops.length-1],ext)}return}while(i>0&&/\s/.test(u[i-1].ch))i--;while(i>0&&!/\s/.test(u[i-1].ch))i--;setC(f.stops[i],ext);return}
+  if(i>=u.length){if(idx<S.flows.length-1)setC(S.flows[idx+1].stops[0],ext);return}while(i<u.length&&/\s/.test(u[i].ch))i++;while(i<u.length&&!/\s/.test(u[i].ch))i++;setC(f.stops[i],ext);return}
+ if(dir<0){if(i>0)setC(f.stops[i-1],ext);else if(idx>0){var p=S.flows[idx-1];setC(p.stops[p.stops.length-1],ext)}}
+ else{if(i<f.units.length)setC(f.stops[i+1],ext);else if(idx<S.flows.length-1)setC(S.flows[idx+1].stops[0],ext)}
+}
+function moveV(dir,ext){
+ var r=caretRect();if(!r)return;var x=S.sticky===null?r.left:S.sticky,y=dir<0?r.top-3:r.top+r.height+3,lim=root.getBoundingClientRect();
+ var v=scroller.getBoundingClientRect();
+ if(y<v.top+8){var s0=scroller.scrollTop;scroller.scrollTop-=r.height*3;y+=s0-scroller.scrollTop}else if(y>v.bottom-8){var st=scroller.scrollTop;scroller.scrollTop+=r.height*3;y-=scroller.scrollTop-st}
+ lim=root.getBoundingClientRect();
+ for(var n=0;n<40;n++){var hit=hitSeg(x,y);if(hit!==null){var keep=x;setC(canon(hit),ext);S.sticky=keep;return}y+=dir*8;if(y<lim.top||y>lim.bottom)break}
+ var last=S.flows[dir<0?0:S.flows.length-1];setC(dir<0?last.stops[0]:last.stops[last.stops.length-1],ext);
+}
+function fromPoint(x,y){if(document.caretRangeFromPoint){var r=document.caretRangeFromPoint(x,y);return r?{n:r.startContainer,o:r.startOffset}:null}if(document.caretPositionFromPoint){var p=document.caretPositionFromPoint(x,y);return p?{n:p.offsetNode,o:p.offset}:null}return null}
+function hitSeg(x,y){var r=fromPoint(x,y);if(!r)return null;var el=r.n.nodeType===3?r.n.parentElement:r.n;if(!el||!root.contains(el))return null;var sg=el.closest("[data-seg]");
+ if(sg){var g=sg._seg;if(g.atomic)return r.o<sg.textContent.length/2?g.s:g.e;return g.s+r.o}
+ var fe=el.closest(".flow");if(fe){return fe._flow.stops[fe._flow.stops.length-1]}return null}
+function pointTo(x,y){var h=hitSeg(x,y);if(h!==null)return h;
+ var best=null,bd=1e9;S.flows.forEach(function(f){if(!f.el)return;var q=f.el.getBoundingClientRect(),d=y<q.top?q.top-y:y>q.bottom?y-q.bottom:0;if(d<bd){bd=d;best={f:f,q:q}}});
+ if(!best)return S.c;var cy=Math.min(Math.max(y,best.q.top+2),best.q.bottom-2),cx=Math.min(Math.max(x,best.q.left+1),best.q.right-1),h2=hitSeg(cx,cy);
+ return h2!==null?h2:(y<best.q.top?best.f.stops[0]:best.f.stops[best.f.stops.length-1])}
+function lineEdge(dir,ext){var r=caretRect(),f=flowAt(S.c);if(!r||!f.el)return;var q=f.el.getBoundingClientRect();var h=hitSeg(dir<0?q.left+1:q.right-1,r.top+r.height/2);setC(h===null?(dir<0?f.stops[0]:f.stops[f.stops.length-1]):canon(h),ext)}
+function selectWord(o){var f=flowAt(o),i=dispIndex(f,o),u=f.units,a=i,b=i;while(a>0&&!/\s/.test(u[a-1].ch))a--;while(b<u.length&&!/\s/.test(u[b].ch))b++;S.a=f.stops[a];S.c=f.stops[b];render()}
+
+/* ---------- flyout, menus, card ---------- */
+function activeMarks(){var r=selRange(),o={};["strong","em","strike","code","mark","link"].forEach(function(t){if(spanAround(t,r[0],r[1]))o[t]=1});return o}
+var PRIMARY=[["strong","Bold","Ctrl+B",'<b>B</b>'],["em","Italic","Ctrl+I",'<i>I</i>'],["strike","Strikethrough","Ctrl+Shift+X",'<s>S</s>'],["code","Code","Ctrl+E",icon("i-code")],["mark","Highlight","Ctrl+Shift+H",icon("i-mark")],["link","Link","Ctrl+K",icon("i-link")]];
+var SECOND=[["# ","Heading 1","Ctrl+1"],["## ","Heading 2","Ctrl+2"],["### ","Heading 3","Ctrl+3"],["p","Paragraph","Ctrl+0"],["bullet","Bulleted list",""],["task","Task","Ctrl+L"],["> ","Quote",""]];
+function flyHTML(active,expanded){
+ var h='<div class="fly-row" role="toolbar" aria-label="Format selection">';
+ PRIMARY.forEach(function(p){h+='<button class="abb'+(active[p[0]]?" on":"")+'" data-mark="'+p[0]+'" title="'+p[1]+" ("+p[2]+')" aria-label="'+p[1]+'" tabindex="-1">'+p[3]+"</button>"});
+ h+='<button class="abb more" data-more="1" title="More" aria-label="More" tabindex="-1">'+icon("i-more")+"</button></div>";
+ if(expanded){h+='<div class="fly-over">';SECOND.forEach(function(s){h+='<button class="mi" data-block="'+s[0]+'" tabindex="-1"><span class="mi-l">'+s[1]+'</span><span class="mi-k">'+s[2]+"</span></button>"});h+="</div>"}
+ return h}
+function posOverlay(el,left,top,below){
+ var w=wrap.getBoundingClientRect(),ew=el.offsetWidth,eh=el.offsetHeight;
+ var x=Math.max(8,Math.min(left-w.left,w.width-ew-8)),y=below?top-w.top:top-w.top-eh-4;
+ if(below&&y+eh>w.height-4)y=Math.max(4,y-eh-28);if(!below&&y<4)y=Math.min(w.height-eh-4,top-w.top+28);
+ el.style.left=x+"px";el.style.top=y+"px"}
+function selTopRect(){var sel=root.querySelector(".sel");if(!sel)return null;return sel.getClientRects()[0]}
+function showFly(){if(!hasSel()||S.mode==="source")return;S.fly={exp:false};flyEl.hidden=false;flyEl.innerHTML=flyHTML(activeMarks(),false);var r=selTopRect();if(r)posOverlay(flyEl,r.left,r.top,false)}
+function closeFly(){S.fly=null;if(flyEl)flyEl.hidden=true}
+function triggers(){
+ if(hasSel()||S.comp){closeMenu();return}
+ var f=flowAt(S.c);if(!f){closeMenu();return}var before=S.src.slice(f.cs,S.c),m;
+ if(!f.raw&&f.block.type==="p"&&(m=/^\/([^\s]*)$/.exec(before))&&S.noMenu!==f.cs){openMenu("insert",f.cs,m[1]);return}
+ if((m=/\[\[([^\]\n]*)$/.exec(before))&&f.block.type!=="code"){var st=f.cs+m.index;if(S.noMenu!==st){openMenu("wiki",st,m[1]);return}}
+ closeMenu();if(!m)S.noMenu=-1;
+}
+function openMenu(kind,start,q){
+ var items;
+ if(kind==="insert"){var ql=q.toLowerCase();items=INSERT.filter(function(i){return i.k.toLowerCase().indexOf(ql)>=0})}
+ else{var q2=q.toLowerCase();items=NOTES.filter(function(n){return n.toLowerCase().indexOf(q2)>=0}).map(function(n){return {k:n,i:"i-note",note:n}});if(q&&!NOTES.some(function(n){return n.toLowerCase()===q2}))items.push({k:'Link to new note "'+q+'"',i:"i-plus",note:q})}
+ if(!items.length){closeMenu();return}
+ var sel=S.menu&&S.menu.kind===kind?Math.min(S.menu.sel,items.length-1):0;
+ S.menu={kind:kind,start:start,q:q,items:items,sel:sel};drawMenu();
+}
+function drawMenu(){var m=S.menu;menuEl.hidden=false;menuEl.className="menu "+(m.kind==="wiki"?"suggest":"");
+ var h=m.kind==="insert"?'<div class="menu-h">Insert</div>':'<div class="menu-h">Notes</div>';
+ m.items.forEach(function(it,i){h+='<button class="mi'+(i===m.sel?" cur":"")+'" data-i="'+i+'" tabindex="-1">'+icon(it.i)+'<span class="mi-l">'+esc(it.k)+"</span>"+(it.h?'<span class="mi-k mono">'+esc(it.h)+"</span>":"")+"</button>"});
+ menuEl.innerHTML=h;var r=caretRect();if(r)posOverlay(menuEl,r.left,r.top+r.height+4,true);
+ var cur=menuEl.querySelector(".cur");if(cur&&menuEl.scrollHeight>menuEl.clientHeight){var t=cur.offsetTop,b=t+cur.offsetHeight;if(t<menuEl.scrollTop)menuEl.scrollTop=t;else if(b>menuEl.scrollTop+menuEl.clientHeight)menuEl.scrollTop=b-menuEl.clientHeight}}
+function closeMenu(){S.menu=null;if(menuEl)menuEl.hidden=true}
+function chooseMenu(i){var m=S.menu,it=m.items[i],c=S.c;closeMenu();
+ if(m.kind==="wiki"){var close=S.src.slice(c,c+2)==="]]",ins="[["+it.note+"]]";apply(m.start,close?c+2:c,ins,m.start+ins.length,"other");S.sealed=true;return}
+ var a=it.act,ins2,pos;
+ if(a==="code"){ins2="```\n\n```";pos=m.start+4}
+ else if(a==="table"){ins2="| Column | Column |\n| --- | --- |\n|  |  |";pos=m.start+2;S.island=true}
+ else if(a==="image"){ins2="![Alt text](assets/image.png)";pos=m.start+2;S.island=true}
+ else if(a==="hr"){ins2="---\n\n";pos=m.start+5}
+ else{ins2=a==="bullet"?bullet()+" ":a==="task"?bullet()+" [ ] ":a;pos=m.start+ins2.length}
+ apply(m.start,c,ins2,pos,"other");S.sealed=true;say(it.k+" written to the file. One undo step.");
+}
+function openCard(sp){
+ S.card=sp;cardEl.hidden=false;var h="";
+ if(sp.type==="wiki"){h='<div class="card-t">'+icon("i-note")+"<span>"+esc(sp.target)+'</span></div><div class="card-s">Consumer syntax. Ctrl+click follows it.</div><div class="card-a"><button class="btn" data-card="open">Open</button><button class="btn" data-card="unlink">Remove link</button></div>'}
+ else if(sp.ref){h='<div class="card-t">'+icon("i-link")+"<span>Reference link</span></div><div class=\"card-s\">Its address lives on the definition line at the end of the note. That line stays as written.</div>"+'<div class="card-a"><button class="btn" data-card="open">Open</button><button class="btn" data-card="close">Close</button></div>'}
+ else{h='<label class="card-l" for="edLinkUrl">Address</label><input class="tb" id="edLinkUrl" value="'+esc(sp.url||"")+'" spellcheck="false" placeholder="https://example.com"><div class="card-a"><button class="btn accent" data-card="apply">Apply</button><button class="btn" data-card="open">Open</button>'+(sp.s>=0?'<button class="btn" data-card="unlink">Remove link</button>':"")+"</div>"}
+ cardEl.innerHTML=h;var r=caretRect()||selTopRect();if(r)posOverlay(cardEl,r.left,r.top+(r.height||20)+6,true);
+ var inp=cardEl.querySelector("input");if(inp&&sp.s<0)inp.focus();
+}
+function closeCard(){S.card=null;if(cardEl)cardEl.hidden=true}
+function closeAll(){closeFly();closeMenu();closeCard()}
+function linkCmd(){
+ var r=selRange(),sp=spanAround("link",r[0],r[1]);if(sp){openCard(sp);return}
+ var w=spanAround("wiki",r[0],r[1]);if(w){openCard(w);return}
+ if(!hasSel()){say("Select text first, or type [text](address).");return}
+ closeFly();openCard({type:"link",s:-1,a:r[0],b:r[1],url:""});
+}
+function cardAct(a){
+ var sp=S.card;if(!sp)return;
+ if(a==="close"){closeCard();focusEd();return}
+ if(a==="open"){say("Opens through OnLinkClicked. Without a handler, the warning dialog shows the real address first.");closeCard();focusEd();return}
+ if(a==="apply"){var u=$("edLinkUrl").value.trim();closeCard();
+  if(sp.s<0){var t=S.src.slice(sp.a,sp.b);var ins="["+t+"]("+u+")";apply(sp.a,sp.b,ins,sp.a+ins.length,"other")}
+  else{var cu=sp.inner+2;apply(cu,sp.e-1,u,cu+u.length+1,"other")}
+  S.sealed=true;focusEd();return}
+ if(a==="unlink"){closeCard();var inner=sp.type==="wiki"?S.src.slice(sp.s+2,sp.e-2).replace(/^.*\|/,""):S.src.slice(sp.s+1,sp.inner);apply(sp.s,sp.e,inner,sp.s+inner.length,"other");S.sealed=true;focusEd()}
+}
+
+/* ---------- on disk view ---------- */
+var diskQueued=false;
+function queueDisk(){if(diskQueued)return;diskQueued=true;requestAnimationFrame(function(){diskQueued=false;drawDisk()})}
+function lcsMark(a,b){var n=a.length,m=b.length,t=[],i,j;for(i=0;i<=n;i++){t[i]=new Array(m+1).fill(0)}
+ for(i=n-1;i>=0;i--)for(j=m-1;j>=0;j--)t[i][j]=a[i]===b[j]?t[i+1][j+1]+1:Math.max(t[i+1][j],t[i][j+1]);
+ var keep=new Array(m).fill(false),x=0,y=0,same=0;while(x<n&&y<m){if(a[x]===b[y]){keep[y]=true;x++;y++;same++}else if(t[x+1][y]>=t[x][y+1])x++;else y++}
+ return {keep:keep,same:same}}
+function drawDisk(){
+ if(!diskEl)return;var a=S.base.split("\n"),b=S.src.split("\n"),r=lcsMark(a,b),caretLine=S.src.slice(0,S.c).split("\n").length-1,h="";
+ b.forEach(function(l,i){var tr=/( +)$/.exec(l),body=tr?l.slice(0,l.length-tr[1].length):l,trail=tr?'<i class="ws">'+tr[1].replace(/ /g,"\u00b7")+"</i>":"";
+  h+='<div class="dl'+(r.keep[i]?"":" ch")+(i===caretLine&&S.focused?" cl":"")+'"><span class="ln">'+(i+1)+'</span><span class="lt">'+esc(body)+trail+"</span></div>"});
+ diskEl.innerHTML=h;
+ var chg=b.length-r.same,del=a.length-r.same;
+ statEl.innerHTML=S.src===S.base?'<b>No changes.</b> The file is exactly what was opened.':'<b>'+chg+" line"+(chg===1?"":"s")+" new or changed"+(del>0?", "+del+" replaced or removed":"")+".</b> "+r.same+" of "+a.length+" original lines are unchanged, byte for byte.";
+ var cl=diskEl.querySelector(".cl");if(cl){var box=diskEl.parentElement,t=cl.offsetTop;if(t<box.scrollTop||t>box.scrollTop+box.clientHeight-40)box.scrollTop=t-box.clientHeight/2}
+}
+function say(t){if(statusEl)statusEl.textContent=t||""}
+function updateChrome(){
+ document.querySelectorAll("#edSourceBtn,#edSourceBtn2").forEach(function(b){b.classList.toggle("on",S.mode==="source");b.setAttribute("aria-pressed",S.mode==="source")});
+ var active=hasSel()?activeMarks():{};if(S.pending){var map={"**":"strong","__":"strong","*":"em","~~":"strike","==":"mark","`":"code"};active[map[S.pending]]=1}
+ document.querySelectorAll("#edBar [data-mark]").forEach(function(b){var on=active[b.dataset.mark]||(!hasSel()&&S.focused&&spanAround(b.dataset.mark,S.c,S.c));b.classList.toggle("on",!!on)});
+ var st=$("edStyle");if(st){var fb=flowAt(S.c),bk=fb&&fb.block;st.textContent=!bk?"Paragraph":bk.type==="h"?"Heading "+bk.level:bk.type==="li"?(bk.task!==null?"Task":/\d/.test(bk.marker)?"Numbered list":"Bulleted list"):bk.type==="q"?"Quote":bk.type==="code"?"Code block":"Paragraph"}
+}
+
+/* ---------- input ---------- */
+function focusEd(){ta.focus({preventScroll:true})}
+function onKey(e){
+ if(S.comp||e.isComposing)return;
+ var ctrl=e.ctrlKey||e.metaKey,k=e.key;
+ if(S.menu){
+  if(k==="ArrowDown"){S.menu.sel=(S.menu.sel+1)%S.menu.items.length;drawMenu();e.preventDefault();return}
+  if(k==="ArrowUp"){S.menu.sel=(S.menu.sel-1+S.menu.items.length)%S.menu.items.length;drawMenu();e.preventDefault();return}
+  if(k==="Enter"||k==="Tab"){chooseMenu(S.menu.sel);e.preventDefault();return}
+  if(k==="Escape"){S.noMenu=S.menu.start;closeMenu();e.preventDefault();e.stopPropagation();return}
+ }
+ if(S.selObj!==null){
+  if(k==="Enter"){openIsland();e.preventDefault();return}
+  if(k==="Escape"){S.selObj=null;render();e.preventDefault();return}
+ }
+ var handled=true;
+ if(ctrl){var lk=k.toLowerCase();
+  if(lk==="b")toggleMark("strong");else if(lk==="i")toggleMark("em");else if(lk==="e")toggleMark("code");
+  else if(lk==="x"&&e.shiftKey)toggleMark("strike");else if(lk==="h"&&e.shiftKey)toggleMark("mark");
+  else if(lk==="k")linkCmd();else if(lk==="z"&&e.shiftKey)redo();else if(lk==="z")undo();else if(lk==="y")redo();
+  else if(lk==="a"){var fs=S.flows[0],ls=S.flows[S.flows.length-1];S.a=fs.stops[0];S.c=ls.stops[ls.stops.length-1];closeAll();render()}
+  else if(k==="/"){setSource(S.mode!=="source")}
+  else if(lk==="l"){var bk=flowAt(S.c).block;if(bk.type==="li"&&bk.task!==null)toggleTask(bk);else setBlock("task")}
+  else if(/^[0-3]$/.test(k)){setBlock(k==="0"?"p":"#".repeat(+k)+" ")}
+  else if(lk==="u"){say("Markdown has no underline, so the editor does not write one.")}
+  else if(k==="Enter"){enter(false,true)}
+  else if(k==="Backspace"){backspace(true)}
+  else if(k==="ArrowLeft"){moveH(-1,e.shiftKey,true)}else if(k==="ArrowRight"){moveH(1,e.shiftKey,true)}
+  else if(k==="Home"){setC(S.flows[0].stops[0],e.shiftKey)}else if(k==="End"){var lf=S.flows[S.flows.length-1];setC(lf.stops[lf.stops.length-1],e.shiftKey)}
+  else handled=false;
+  if(handled)e.preventDefault();return}
+ switch(k){
+  case "ArrowLeft":moveH(-1,e.shiftKey);break;case "ArrowRight":moveH(1,e.shiftKey);break;
+  case "ArrowUp":moveV(-1,e.shiftKey);break;case "ArrowDown":moveV(1,e.shiftKey);break;
+  case "Home":lineEdge(-1,e.shiftKey);break;case "End":lineEdge(1,e.shiftKey);break;
+  case "Enter":enter(e.shiftKey,false);break;case "Backspace":backspace(false);break;case "Delete":del();break;
+  case "Tab":{var f=flowAt(S.c);if(f&&(f.block.type==="li"||f.raw))tabKey(e.shiftKey);else return;break}
+  case "Escape":closeAll();if(S.island){S.island=false;render()}break;
+  default:return}
+ e.preventDefault();
+}
+function openIsland(){var b=S.blocks.filter(function(x){return x.s===S.selObj})[0];if(!b)return;S.island=true;S.selObj=null;S.a=S.c=b.s;render();reveal();say("Source of this block is open. It stays exactly as written.")}
+function initInput(){
+ ta.addEventListener("keydown",onKey);
+ ta.addEventListener("input",function(e){if(e.isComposing||S.comp)return;var v=ta.value;ta.value="";if(v)insertText(v)});
+ ta.addEventListener("compositionstart",function(){S.comp="\u200b";closeAll()});
+ ta.addEventListener("compositionupdate",function(e){S.comp=e.data||"\u200b";render()});
+ ta.addEventListener("compositionend",function(e){S.comp="";ta.value="";if(e.data)insertText(e.data);else render()});
+ ta.addEventListener("focus",function(){S.focused=true;wrap.classList.add("focused");if(window.__kb)wrap.classList.add("kbf");render()});
+ ta.addEventListener("blur",function(){S.focused=false;wrap.classList.remove("focused","kbf");caretEl.hidden=true;queueDisk()});
+ ta.addEventListener("paste",function(e){e.preventDefault();var t=e.clipboardData.getData("text/plain");if(!t)return;
+  if(hasSel()&&/^https?:\/\/\S+$/.test(t.trim())){var r=selRange(),inner=S.src.slice(r[0],r[1]),ins="["+inner+"]("+t.trim()+")";apply(r[0],r[1],ins,r[0]+ins.length,"other");S.sealed=true;say("Pasted address became a link on the selection.");return}
+  S.sealed=true;insertText(t);S.sealed=true});
+ ta.addEventListener("copy",function(e){if(!hasSel())return;e.preventDefault();e.clipboardData.setData("text/plain",sliceBalanced())});
+ ta.addEventListener("cut",function(e){if(!hasSel())return;e.preventDefault();e.clipboardData.setData("text/plain",sliceBalanced());backspace(false)});
+ root.addEventListener("mousedown",function(e){
+  var t=e.target,chk=t.closest&&t.closest(".chk");
+  if(chk){e.preventDefault();toggleTask(chk._block);focusEd();return}
+  var edit=t.closest&&t.closest(".isl-edit");
+  if(edit){e.preventDefault();var ib=t.closest(".island")._island;S.selObj=ib.s;openIsland();focusEd();return}
+  var isl=t.closest&&t.closest(".island");
+  if(isl&&!e.shiftKey){e.preventDefault();closeAll();S.island=false;S.selObj=isl._island.s;render();focusEd();return}
+  e.preventDefault();closeCard();closeFly();
+  var pos=pointTo(e.clientX,e.clientY);focusEd();
+  var sgEl=t.closest&&t.closest("[data-seg]"),g=sgEl&&sgEl._seg&&sgEl._seg.g;
+  if(e.detail===2){selectWord(pos);S.drag=false;showFly();return}
+  if(e.detail>=3){var f=flowAt(pos);S.a=f.stops[0];S.c=f.stops[f.stops.length-1];render();showFly();return}
+  S.selObj=null;
+  if(S.island){var rb=S.blocks.filter(function(b){return b.type==="rawblock"})[0];if(rb&&(pos<rb.s||pos>rb.e))S.island=false}
+  if(e.shiftKey){S.c=canon(pos)}else{S.a=S.c=canon(pos)}
+  S.pending=null;S.sticky=null;S.drag=true;S.clickSeg=(g&&(g.wiki||g.lnk))||null;S.clickCtrl=e.ctrlKey;
+  render();triggers();
+ });
+ document.addEventListener("mousemove",function(e){
+  if(S.drag){var p=canon(pointTo(e.clientX,e.clientY));if(p!==S.c){S.c=p;render()}return}
+  if(S.fly&&!flyEl.hidden&&!S.fly.exp){var q=flyEl.getBoundingClientRect(),dx=Math.max(q.left-e.clientX,0,e.clientX-q.right),dy=Math.max(q.top-e.clientY,0,e.clientY-q.bottom);if(Math.max(dx,dy)>80&&!S.demo){closeFly()}}
+ });
+ document.addEventListener("mouseup",function(){
+  if(!S.drag)return;S.drag=false;
+  if(hasSel()){showFly();return}
+  if(S.clickSeg){if(S.clickCtrl){say("Ctrl+click: opens through OnLinkClicked, or the warning dialog when no handler is set.")}else openCard(S.clickSeg)}
+ });
+ [flyEl,menuEl].forEach(function(el){el.addEventListener("mousedown",function(e){e.preventDefault();e.stopPropagation()})});
+ flyEl.addEventListener("click",function(e){var b=e.target.closest("button");if(!b)return;
+  if(b.dataset.mark){if(b.dataset.mark==="link")linkCmd();else toggleMark(b.dataset.mark);return}
+  if(b.dataset.more){S.fly.exp=!S.fly.exp;flyEl.innerHTML=flyHTML(activeMarks(),S.fly.exp);var r=selTopRect();if(r)posOverlay(flyEl,r.left,r.top,false);return}
+  if(b.dataset.block){var a=S.a,c=S.c;S.a=S.c=Math.min(a,c);setBlock(b.dataset.block);closeFly()}});
+ menuEl.addEventListener("click",function(e){var b=e.target.closest("button");if(b)chooseMenu(+b.dataset.i)});
+ cardEl.addEventListener("click",function(e){var b=e.target.closest("button");if(b)cardAct(b.dataset.card)});
+ cardEl.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();cardAct("apply")}if(e.key==="Escape"){closeCard();focusEd()}});
+ window.addEventListener("resize",function(){if(wrap){closeAll();render()}});
+ scroller.addEventListener("scroll",function(){if(S.fly&&!S.demo||S.card){closeFly();closeCard()}if(S.menu)drawMenu()});
+ document.addEventListener("keydown",function(e){if(e.key==="Tab")window.__kb=true});document.addEventListener("mousedown",function(){window.__kb=false},true);
+}
+function sliceBalanced(){var r=selRange(),out=S.src.slice(r[0],r[1]);S.spans.forEach(function(sp){if(!sp.d)return;var inO=r[0]>=sp.s+sp.ol&&r[0]<sp.e-sp.cl,inC=r[1]>sp.s+sp.ol&&r[1]<=sp.e-sp.cl;if(inO&&inC)out=sp.d+out+sp.d;else if(inO&&r[1]>=sp.e)out=sp.d+out;else if(inC&&r[0]<=sp.s)out=out+sp.d});return out}
+
+/* ---------- chrome and scripted demos ---------- */
+function setLayout(l){S.layout=l;stage.setAttribute("data-layout",l);document.querySelectorAll("[data-seg-group=layout] button").forEach(function(b){b.setAttribute("aria-pressed",b.dataset.v===l)});closeAll();render()}
+function setReveal(v){S.reveal=v;document.querySelectorAll("[data-seg-group=reveal] button").forEach(function(b){b.setAttribute("aria-pressed",b.dataset.v===v)});render();focusEd();say(v==="caret"?"Move the caret with the arrow keys through the bold or highlighted words. Watch the lines below them shift.":"")}
+function reset(src){S.src=src;S.base=src;S.undo=[];S.redo=[];S.mode="rendered";S.island=false;S.pending=null;S.selObj=null;closeAll();var e=src.length;S.a=S.c=e;render();scroller.scrollTop=0;say("")}
+var fast=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+function typeSeq(str,done){var i=0;S.demo=true;(function step(){if(i>=str.length){S.demo=false;if(done)done();return}var ch=str[i++];if(ch==="\n")enter(false,false);else insertText(ch);setTimeout(step,fast?0:42)})()}
+function at(needle,end){var i=S.src.indexOf(needle);return i<0?S.src.length:(end?i+needle.length:i)}
+function goEnd(needle){focusEd();if(S.mode==="source")setSource(false);closeAll();S.a=S.c=at(needle,true);render();reveal()}
+var DEMOS={
+ bold:function(){goEnd("before Friday.");typeSeq("\nShip **Atlas** on Friday, then *rest*.")},
+ head:function(){goEnd("before Friday.");typeSeq("\n## Risks")},
+ list:function(){goEnd("Review [[Atlas risks]]");typeSeq("\nBook the review\nDraft the note")},
+ flyout:function(){goEnd("before Friday.");S.demo=true;var i=at("Draft for the"),j=i+"Draft".length;S.a=i;S.c=j;render();reveal();showFly();setTimeout(function(){S.demo=false},300)},
+ slash:function(){goEnd("before Friday.");typeSeq("\n/ta")},
+ wiki:function(){goEnd("before Friday.");typeSeq("\nSee [[Bul")},
+ source:function(){goEnd("before Friday.");setSource(S.mode!=="source")},
+ undo:function(){focusEd();undo();undo()}
+};
+function init(){
+ if(inited)return;inited=true;
+ stage=$("edStage");if(!stage)return;wrap=$("edWrap");root=$("edDoc");caretEl=$("edCaret");ta=$("edInput");scroller=$("edScroll");flyEl=$("edFly");menuEl=$("edMenu");cardEl=$("edCard");diskEl=$("edDisk");statEl=$("edStat");statusEl=$("edStatus");
+ initInput();
+ document.querySelectorAll("[data-seg-group=layout] button").forEach(function(b){b.addEventListener("click",function(){setLayout(b.dataset.v)})});
+ document.querySelectorAll("[data-seg-group=reveal] button").forEach(function(b){b.addEventListener("click",function(){setReveal(b.dataset.v)})});
+ document.querySelectorAll("[data-demo]").forEach(function(b){b.addEventListener("mousedown",function(e){e.preventDefault()});b.addEventListener("click",function(){if(!S.demo)DEMOS[b.dataset.demo]()})});
+ $("edReset").addEventListener("click",function(){reset(SAMPLE);S.a=S.c=at("before Friday.",true);render();focusEd()});
+ $("edEmpty").addEventListener("click",function(){reset("");focusEd()});
+ document.querySelectorAll("#edBar [data-mark]").forEach(function(b){b.addEventListener("mousedown",function(e){e.preventDefault()});b.addEventListener("click",function(){if(b.dataset.mark==="link")linkCmd();else toggleMark(b.dataset.mark)})});
+ document.querySelectorAll("[data-ins]").forEach(function(b){b.addEventListener("mousedown",function(e){e.preventDefault()});b.addEventListener("click",function(){focusEd();
+   if(S.mode==="source")setSource(false);
+   var f=flowAt(S.c);if(f&&f.block.type==="p"&&f.units.length===0){insertText("/")}else{S.a=S.c=flowAt(S.c).ce;enter(false,false);insertText("/")}})});
+ document.querySelectorAll("#edSourceBtn,#edSourceBtn2").forEach(function(b){b.addEventListener("mousedown",function(e){e.preventDefault()});b.addEventListener("click",function(){setSource(S.mode!=="source")})});
+ S.a=S.c=at("before Friday.",true);render();
+}
+if(document.readyState==="loading")window.addEventListener("DOMContentLoaded",init);else init();
+/* small hook used to check the mock */
+window.__edMock={state:S,type:typeSeq,demos:DEMOS,setReveal:setReveal};
+})();
+
+</script>

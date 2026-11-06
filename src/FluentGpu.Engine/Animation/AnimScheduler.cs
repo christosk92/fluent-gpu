@@ -78,6 +78,7 @@ public sealed partial class AnimEngine
     // ── the tick: advance (Generators) → fold (FromPaint) → compose → free ───────────────────────────
     public void Tick(in AnimClock clock)
     {
+        if (_traceNameCount > 0) TraceNames();         // `--fg frame-trace`: name the nodes seeded since the last tick
         if (_slab.Count == 0) return;                  // steady frame: zero work
         float step = clock.DeltaMs;
         double nowMs = clock.NowMs;                    // the cadence domain (same clock _lastAdvanceMs/_minDueAtMs use)
@@ -134,8 +135,15 @@ public sealed partial class AnimEngine
                 if (!justSeeded && r.Has(AnimFlags.StartPending))
                 {
                     r.Flags &= ~AnimFlags.StartPending;
+                    float rawStep = stepMs;
                     if (periodMs == 0) stepMs = PendingStartStep(stepMs, _prevTickStepMs);
+                    if (FluentGpu.Hosting.FrameTrace.Enabled)
+                        FluentGpu.Hosting.FrameTrace.Anim(FluentGpu.Hosting.TraceAnimPhase.Start, FluentGpu.Hosting.TraceAnimKind.Other,
+                            (int)r.Node.Raw.Index, (int)r.Channel, render: false, double.NaN, rawStep, stepMs);
                 }
+                else if (justSeeded && r.Has(AnimFlags.StartPending) && FluentGpu.Hosting.FrameTrace.Enabled)
+                    FluentGpu.Hosting.FrameTrace.Anim(FluentGpu.Hosting.TraceAnimPhase.Hold, FluentGpu.Hosting.TraceAnimKind.Other,
+                        (int)r.Node.Raw.Index, (int)r.Channel, render: false, double.NaN, _prevTickStepMs);
                 if (r.DelayRemainingMs > 0f && stepMs > 0f && !justSeeded)
                 {
                     float consume = MathF.Min(r.DelayRemainingMs, stepMs);

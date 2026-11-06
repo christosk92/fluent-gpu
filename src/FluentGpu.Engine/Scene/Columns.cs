@@ -318,8 +318,8 @@ public struct NodePaintCold : IEquatable<NodePaintCold>
 {
     // Hover/press reveal opacity (BoxEl.HoverOpacity/PressedOpacity). NaN = none. Eased with the interaction progress.
     public float HoverOpacity, PressedOpacity;
-    public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover
-    public ColorF PressedFill;    // A==0 ⇒ recorder auto-darkens Fill on press
+    public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover (SceneRecorder.AutoTints says which boxes)
+    public ColorF PressedFill;    // A==0 ⇒ recorder auto-darkens Fill on press (SceneRecorder.AutoTints says which boxes)
     public ColorF HoverBorderColor;    // A==0 ⇒ recorder auto-lightens BorderColor on hover (else eases to this exact token)
     public ColorF PressedBorderColor;  // A==0 ⇒ recorder auto-darkens BorderColor on press (else eases to this exact token)
     // Validation error border (form-validation.md): the theme-resolved invalid color, written by the reconciler from the
@@ -472,6 +472,7 @@ public record struct ScrollState
     public float ViewportW, ViewportH;    // Layout-published viewport inner size (for clamp + window math)
     public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
     public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
+    public bool  FitContentWidth;         // horizontal: content measured against the viewport width; viewport hugs min(content, avail)
     /// <summary>The scroller's row pitch in DIP (a <c>Virtual.List</c> stamps its item extent; 0 = no hint). Written
     /// by the reconciler from <c>Element.ScrollLineDip</c>; a config column.</summary>
     public float LineDip;

@@ -109,6 +109,8 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
     private int _spanEllCount;
 
     public float Width { get; private set; }
+    /// <summary>The widest laid line, unclamped by the measure width (a whole-word overhang included).</summary>
+    public float MaxLineWidth { get; private set; }
     public float Height { get; private set; }
     public float Baseline { get; private set; }
     public int LineCount { get; private set; }
@@ -548,6 +550,10 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
                 bool hang = c >= 0 && c < _breaks.Count && _breaks[c].IsWhitespace;
                 if (doWrap && !hang && pen + adv > maxWidth + WrapSlack && i > lineStart)
                 {
+                    // WrapWholeWords (wrap == 2, WinUI TextWrapping.WrapWholeWords): a line breaks ONLY at a break opportunity;
+                    // a word wider than the budget overhangs instead of breaking mid-word (Wrap's emergency break). The
+                    // overhang is what the layout's min-content probe reads back through MaxLineWidth.
+                    if (lastBreak <= lineStart && wrap == 2) { pen += adv; continue; }
                     int br = lastBreak > lineStart ? lastBreak : i;
                     if (line + 1 >= maxL)
                     {
@@ -599,6 +605,7 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
 
         LineCount = Math.Max(1, line);
         Width = float.IsInfinity(maxWidth) ? maxLineW : MathF.Min(maxLineW, maxWidth);
+        MaxLineWidth = maxLineW;
         Height = LineCount * lineHeight;
 
         // Seal the retained line table: each line ends where the next begins; the last line runs to the text length.
@@ -1198,7 +1205,9 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
         int hr;
         fixed (char* fn = fam)
             hr = (int)_fallback->MapCharacters((IDWriteTextAnalysisSource*)_fsrc, (uint)pos, (uint)remaining, _sysColl, fn,
-                (DWRITE_FONT_WEIGHT)weight, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, &mappedLen, &mappedFont, &sc);
+                (DWRITE_FONT_WEIGHT)FontWeightWord.Weight(weight),
+                FontWeightWord.IsItalic(weight) ? DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, &mappedLen, &mappedFont, &sc);
         if (hr < 0 || mappedLen == 0) { if (mappedFont != null) mappedFont->Release(); return; }
         subLen = (int)mappedLen;
         if (mappedFont != null)

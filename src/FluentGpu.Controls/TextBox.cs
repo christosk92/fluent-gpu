@@ -46,6 +46,8 @@ public static class TextBox
         /// blurs does NOT commit, and an Enter that already committed is not re-published on the following blur; see
         /// <see cref="EditableText.CommitOnLostFocus"/> for the two double-commit cases and how they are settled.</summary>
         public bool CommitOnLostFocus { get; init; }
+        /// <summary>OPT-IN: Escape fires <see cref="OnCancel"/> and blurs but keeps the text; see <see cref="EditableText.KeepTextOnEscape"/>.</summary>
+        public bool KeepTextOnEscape { get; init; }
         public Field<string>? Field { get; init; }
     }
 
@@ -77,6 +79,7 @@ public static class TextBox
         var onCommit = o.OnCommit;
         var onCancel = o.OnCancel;
         bool commitOnLostFocus = o.CommitOnLostFocus;
+        bool keepTextOnEscape = o.KeepTextOnEscape;
         var field = o.Field;
         float w = Math.Max(o.Width, MinWidth);
         float h = Math.Max(o.Height, 32f);       // TextControlThemeMinHeight = 32 (generic.xaml:96)
@@ -97,6 +100,7 @@ public static class TextBox
             OnCommit = onCommit,
             OnCancel = onCancel,
             CommitOnLostFocus = commitOnLostFocus,
+            KeepTextOnEscape = keepTextOnEscape,
             // form-validation.md: the editor owns the invalid-border + touched-on-blur; TextBox owns the message row.
             Field = field?.Binding,
         });

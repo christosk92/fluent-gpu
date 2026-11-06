@@ -11,8 +11,9 @@ namespace FluentGpu.Foundation;
 /// resolves the Hand cursor over the span's laid-out rects and fires the action on click/tap — WinUI's inline
 /// Hyperlink (SetCursor(MouseCursorHand) on hyperlink hover, RichTextBlock.cpp:2995 / TextBlock.cpp:3488). Accent
 /// foreground + underline styling is the CALLER's job (HyperlinkForeground theming, generic.xaml:1120-1122).</para>
-/// <para>No italic axis: the shaper resolves faces by (family, weight) only — DWRITE_FONT_STYLE_NORMAL is fixed
-/// (TextLayoutEngine face resolution); FontStyle arrives with the italics workstream (plan §Text display).</para>
+/// <para><see cref="Italic"/> selects the family's italic face through the weight word's style axis
+/// (<see cref="FontWeightWord"/>, text.md §4); <see cref="Background"/> (A&gt;0) paints a line-band highlight behind the
+/// span (the inline-code pill, <c>==mark==</c>).</para>
 /// </summary>
 /// <para><see cref="IsLink"/> marks this span as a hyperlink WITHOUT itself carrying a per-span closure: a bound
 /// row template mints its <see cref="TextSpan"/>s once per recycle from a reused <see cref="SpanBuffer"/> (P2, "bound
@@ -30,7 +31,9 @@ public readonly record struct TextSpan(
     float? Size = null,
     string? FontFamily = null,
     Action? OnClick = null,
-    bool IsLink = false)
+    bool IsLink = false,
+    bool Italic = false,
+    ColorF Background = default)
 {
     /// <summary>True when this span is hit-testable as a hyperlink (Hand cursor, click resolution) — either it
     /// carries its own <see cref="OnClick"/> or it is marked <see cref="TextSpan.IsLink"/> for index-resolved
@@ -103,8 +106,12 @@ public sealed class SpanBuffer
 /// reconciler from <see cref="TextSpan"/>s; resolved by both text backends and the glyph renderer through
 /// <see cref="SpanRunTable.Shared"/>, so measure ≡ hit-test ≡ render for span runs too.
 /// </summary>
-public readonly record struct SpanStyle(int Start, int End, ushort Weight, float SizeDip, StringId FontFamily, ColorF Color, byte Flags)
+public readonly record struct SpanStyle(int Start, int End, ushort Weight, float SizeDip, StringId FontFamily, ColorF Color, byte Flags, ColorF Background = default)
 {
+    /// <summary>Paint <see cref="Background"/> as a line-band behind this span (the text seams publish a
+    /// <see cref="HighlightBit"/> <see cref="SpanRect"/> per wrapped line fragment, the same geometry as a link band;
+    /// the recorder fills it before the glyph run). The inline-code pill / <c>==mark==</c> primitive.</summary>
+    public const byte HighlightBit = 8;
     /// <summary>Draw the face-metric underline bar under this span (WinUI TextDecorations.Underline, per wrapped line).</summary>
     public const byte UnderlineBit = 1;
     /// <summary>Draw the face-metric strikethrough bar through this span.</summary>

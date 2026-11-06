@@ -60,7 +60,8 @@ public partial struct BoxEl : IElementKind<BoxEl>, IEquatable<BoxEl>
     public Prop<ColorF> Fill { get; init; } = ColorF.Transparent;
     /// <summary>Bindable like <see cref="Fill"/>: a bound hover/press fill re-fires on RethemeAll (theme/palette
     /// switch) and can read recycle-varying state (e.g. a virtual list's slot index for zebra-aware hover depth)
-    /// without remounting the slot. A==0 ⇒ the recorder auto-lightens/darkens <see cref="Fill"/> instead.</summary>
+    /// without remounting the slot. A==0 ⇒ the recorder auto-lightens/darkens <see cref="Fill"/> instead on a click target;
+    /// a box that takes pointer input with no <see cref="OnClick"/> (a canvas, a scrim, a hover zone) stays as it is.</summary>
     public Prop<ColorF> HoverFill { readonly get => _cHover.Value.HoverFill; init { if (!EqualityComparer<Prop<ColorF>>.Default.Equals(_cHover.Value.HoverFill, value)) { var c = _cHover.Value; c.HoverFill = value; _cHover = ColdRef<BoxColdHover>.Of(in c); } } }
     public Prop<ColorF> PressedFill { readonly get => _cHover.Value.PressedFill; init { if (!EqualityComparer<Prop<ColorF>>.Default.Equals(_cHover.Value.PressedFill, value)) { var c = _cHover.Value; c.PressedFill = value; _cHover = ColdRef<BoxColdHover>.Of(in c); } } }
     /// <summary>Bindable like <see cref="Fill"/> so retained shell/card borders can follow a live theme switch.</summary>
@@ -512,6 +513,9 @@ public partial struct BoxEl : IElementKind<BoxEl>, IEquatable<BoxEl>
     public FlexJustify Justify { get; init; } = FlexJustify.Start;
     public FlexAlign AlignItems { get; init; } = FlexAlign.Stretch;
     public bool Wrap { get; init; }
+    /// <summary>Lay the children in a row (<c>Direction</c> is ignored) while they fit, and otherwise stack them with these
+    /// spacings. See <see cref="Foundation.StackFallback"/>.</summary>
+    public StackFallback? StackFallback { get; init; }
     /// <summary>ZStack-only measure opt-out (A3): this child ignores the stack's own constrained width and measures
     /// at PositiveInfinity instead, reporting its NATURAL content width — for a layer that must overflow its ZStack
     /// parent's bounds (a rail tooltip whose stack pins a fixed narrow width) rather than being squeezed to it.
@@ -1005,8 +1009,12 @@ public partial struct TextEl : IElementKind<TextEl>, IEquatable<TextEl>
     /// SemiBold 600, BaseTextBlockStyle FontWeight, TextBlock_themeresources.xaml:13). 0 = unset → resolves from
     /// <see cref="Bold"/> (700) or Normal (400); see <see cref="ResolvedWeight"/>.</summary>
     public ushort Weight { get; init; }
-    /// <summary>The weight the text pipeline shapes with: <see cref="Weight"/> when set, else Bold→700 / 400.</summary>
-    public readonly ushort ResolvedWeight => Weight != 0 ? Weight : Bold ? (ushort)700 : (ushort)400;
+    /// <summary>WinUI <c>FontStyle=Italic</c>: the family's italic face (nearest match through the registry; a family
+    /// without one renders upright). Rides the weight word's style axis (<see cref="FontWeightWord"/>).</summary>
+    public bool Italic { get; init; }
+    /// <summary>The weight WORD the text pipeline shapes with: <see cref="Weight"/> when set, else Bold→700 / 400, plus
+    /// the <see cref="Italic"/> axis bit.</summary>
+    public readonly ushort ResolvedWeight => FontWeightWord.Make(Weight != 0 ? Weight : Bold ? 700 : 400, Italic);
     /// <summary>WinUI <c>TextElement.CharacterSpacing</c>: tracking in 1/1000 em (negative = tighter), applied as a
     /// per-glyph trailing advance adjustment after shaping (e.g. Pivot headers use −25).</summary>
     public float CharSpacing { readonly get => _cold.Value.CharSpacing; init { if (!EqualityComparer<float>.Default.Equals(_cold.Value.CharSpacing, value)) { var c = _cold.Value; c.CharSpacing = value; _cold = ColdRef<TextCold>.Of(in c); } } }
@@ -1161,8 +1169,9 @@ public partial struct TextEl : IElementKind<TextEl>, IEquatable<TextEl>
 /// re-flows independently of its sentence). Per-span weight/size/family/color/underline/strikethrough overlay the
 /// base style here; a span with <c>OnClick</c> is a HYPERLINK — the engine resolves the Hand cursor over its laid
 /// rects and fires the action on click (RichTextBlock.cpp:2995 / TextBlock.cpp:3488 SetCursor(MouseCursorHand));
-/// accent foreground + underline are the CALLER's styling (HyperlinkForeground, generic.xaml:1120-1122).
-/// No per-span italic: the shaper has no style axis yet (faces resolve by family+weight only).
+/// accent foreground + underline are the CALLER's styling (HyperlinkForeground, generic.xaml:1120-1122). Per-span
+/// italic rides the weight word's style axis (<see cref="FontWeightWord"/>); a span <see cref="TextSpan.Background"/>
+/// paints a line-band highlight behind it.
 /// </summary>
 public partial struct SpanTextEl : IElementKind<SpanTextEl>, IEquatable<SpanTextEl>
 {
@@ -1219,6 +1228,8 @@ public partial struct SpanTextEl : IElementKind<SpanTextEl>, IEquatable<SpanText
     public float Size { get; init; } = 14f;
     /// <summary>Base numeric font weight (0 = Normal 400); spans override per range.</summary>
     public ushort Weight { get; init; }
+    /// <summary>Base italic (the family's italic face); a span's <see cref="TextSpan.Italic"/> adds it per range.</summary>
+    public bool Italic { get; init; }
     /// <summary>Defaults to the live theme's <c>TextFillColorPrimary</c> (the TextEl default), resolved at construction.</summary>
     public ColorF Color { get; init; } = Tok.TextPrimary;
     public string? FontFamily { get; init; }
@@ -1542,6 +1553,11 @@ public partial struct ScrollEl : IElementKind<ScrollEl>, IEquatable<ScrollEl>
     /// size to their rows and tall lists scroll after MaxHeight.
     /// </summary>
     public bool ContentSized { get; init; }
+    /// <summary>Horizontal viewports only: measure the content AGAINST this viewport's available width (not an infinite
+    /// one) and size the viewport to the content up to that width — the CSS <c>overflow-x: auto</c> wrapper. Wrapping
+    /// content wraps to fit; only content that cannot go narrower (a grid at its min-content floor) pans. The Markdown
+    /// table frame (layout.md §7.2).</summary>
+    public bool FitContentWidth { get; init; }
 
     /// <summary>Opt into pinch-zoom (WinUI <c>ScrollingZoomMode.Enabled</c> — default off, mirroring
     /// ScrollPresenter's <c>s_defaultZoomMode = Disabled</c>). When set, a SECOND touch contact over the viewport scales
