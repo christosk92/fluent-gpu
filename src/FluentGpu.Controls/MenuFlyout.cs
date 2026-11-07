@@ -11,8 +11,9 @@ public enum CheckState : byte { Unchecked = 0, Checked = 1, Indeterminate = 2 }
 
 /// <summary>The kind of a <see cref="MenuFlyoutItem"/> row: a plain command, a divider, a checkable
 /// <c>ToggleMenuFlyoutItem</c> (E73E check), a mutually-exclusive <c>RadioMenuFlyoutItem</c> (E915 bullet), or a
-/// cascading <c>MenuFlyoutSubItem</c> (E974 chevron + nested popup).</summary>
-public enum MenuItemKind : byte { Command = 0, Separator = 1, Toggle = 2, Radio = 3, SubMenu = 4 }
+/// cascading <c>MenuFlyoutSubItem</c> (E974 chevron + nested popup), or a group <c>Header</c> (a caption the rows under it
+/// share, never a stop: the WinUI flyout pattern of a <c>TextBlock</c> in CaptionTextBlockStyle over a radio group).</summary>
+public enum MenuItemKind : byte { Command = 0, Separator = 1, Toggle = 2, Radio = 3, SubMenu = 4, Header = 5 }
 
 /// <summary>A single row in a <see cref="MenuFlyout"/>: a label, an optional leading <see cref="Icon"/> (icon column), an
 /// enabled flag, the action to run when chosen, and an optional trailing keyboard-accelerator hint (e.g. "Ctrl+S"). The
@@ -35,6 +36,10 @@ public readonly record struct MenuFlyoutItem(string Label, IconRef Icon = defaul
 
     public bool IsSeparator => Kind == MenuItemKind.Separator;
     public static MenuFlyoutItem Separator => new("") { Kind = MenuItemKind.Separator };
+
+    /// <summary>A group header ("Sort by", "View"): caption text (12/16) in the tertiary ink over the rows it names, inset to the
+    /// check column. Not focusable, never invoked, skipped by the keyboard cursor and the first-letter jump (it is disabled).</summary>
+    public static MenuFlyoutItem Header(string label) => new(label, default, false) { Kind = MenuItemKind.Header };
 
     /// <summary>A checkable command (WinUI ToggleMenuFlyoutItem): an E73E check column whose glyph paints only when on.</summary>
     public static MenuFlyoutItem Toggle(string label, bool isChecked, Action? invoke = null, IconRef icon = default, bool enabled = true)
@@ -172,6 +177,18 @@ public static class MenuFlyout
 
     // ── Separator: a 1px DividerStrokeColorDefault line; SeparatorThemePadding -4,1,-4,1 bleeds it past the item
     //    inset to full presenter width (we model the -4 bleed with a negative horizontal margin on the line). ────────
+    /// <summary>A group header row: CaptionTextBlockStyle (12/16) in TextFillColorTertiary, on the rows' margin and their left padding,
+    /// 8 above and 4 below the line (a 32 row), so the caption's first letter sits over the check column's glyph.</summary>
+    internal static Element HeaderRow(MenuFlyoutItem it, Style st) => new BoxEl
+    {
+        Direction = 0, AlignItems = FlexAlign.Center, Margin = st.ItemMargin,
+        Padding = new Edges4(st.ItemPadding.Left, HeaderPadTop, st.ItemPadding.Right, HeaderPadBottom),
+        Role = AutomationRole.Text,
+        Children = [new TextEl(it.Label) { Size = HeaderSize, LineHeight = HeaderLine, Color = Tok.TextTertiary, MaxLines = 1, Case = it.Literal ? TextCase.AsWritten : st.LabelCase }],
+    };
+
+    internal const float HeaderSize = 12f, HeaderLine = 16f, HeaderPadTop = 8f, HeaderPadBottom = 4f;
+
     internal static Element Separator(Style st, TemplateParts? parts = null) => parts.Apply(PartSeparator, new BoxEl
     {
         Direction = 1,
@@ -358,7 +375,7 @@ internal sealed class MenuFlyoutPresenter : Component
         for (int i = 0; i < Items.Count; i++)
         {
             var it = Items[i];
-            if (it.IsSeparator) continue;
+            if (it.IsSeparator || it.Kind == MenuItemKind.Header) continue;
             if (it.Kind is MenuItemKind.Toggle or MenuItemKind.Radio) checkColumn = true;
             if (it.Icon.HasContent && st.ShowIcons) iconColumn = true;
         }
@@ -576,6 +593,11 @@ internal sealed class MenuFlyoutPresenter : Component
             if (it.IsSeparator)
             {
                 rows[i] = MenuFlyout.Separator(st, Parts);
+                continue;
+            }
+            if (it.Kind == MenuItemKind.Header)
+            {
+                rows[i] = MenuFlyout.HeaderRow(it, st);
                 continue;
             }
             // Activation: a sub-menu row OPENS its cascade (WinUI MenuFlyoutSubItem click); other rows invoke + close.
