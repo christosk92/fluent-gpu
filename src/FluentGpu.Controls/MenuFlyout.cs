@@ -16,6 +16,16 @@ public enum CheckState : byte { Unchecked = 0, Checked = 1, Indeterminate = 2 }
 /// share, never a stop: the WinUI flyout pattern of a <c>TextBlock</c> in CaptionTextBlockStyle over a radio group).</summary>
 public enum MenuItemKind : byte { Command = 0, Separator = 1, Toggle = 2, Radio = 3, SubMenu = 4, Header = 5 }
 
+/// <summary>How a menu style marks a radio row (<see cref="MenuFlyout.Style.RadioMark"/>).</summary>
+public enum MenuRadioMark : byte
+{
+    /// <summary>WinUI's RadioMenuFlyoutItem: the style's <see cref="MenuFlyout.Style.RadioGlyph"/> (E915, a small bullet) on the chosen row, nothing on the others.</summary>
+    Glyph = 0,
+    /// <summary>A drawn disc of <see cref="MenuFlyout.Style.DotSize"/> in the mark ink on the chosen row; with <see cref="MenuFlyout.Style.RingAtRest"/>
+    /// a ring of the same size on every other radio row. Exact at any size (no glyph's side bearings), so a theme can match its board.</summary>
+    Dot = 1,
+}
+
 /// <summary>A single row in a <see cref="MenuFlyout"/>: a label, an optional leading <see cref="Icon"/> (icon column), an
 /// enabled flag, the action to run when chosen, and an optional trailing keyboard-accelerator hint (e.g. "Ctrl+S"). The
 /// <see cref="Icon"/> is a polymorphic <see cref="IconRef"/> — a plain glyph string converts implicitly (existing call
@@ -145,8 +155,55 @@ public static class MenuFlyout
         public Edges4 SeparatorPadding { get; init; } = new(0, 1, 0, 1);
         /// <summary>Whether a row's icon is drawn (and its 28 column reserved). False: the menu is words only. Default true.</summary>
         public bool ShowIcons { get; init; } = true;
-        /// <summary>The case transform of a row's label, applied at shaping (the stored label is never rewritten). Default <see cref="TextCase.AsWritten"/>.</summary>
+        /// <summary>The case transform of a row's label and its trailing accelerator text, applied at shaping (the stored label is never
+        /// rewritten). Default <see cref="TextCase.AsWritten"/>.</summary>
         public TextCase LabelCase { get; init; } = TextCase.AsWritten;
+
+        // ── The selection state: how a checked ToggleMenuFlyoutItem and the chosen RadioMenuFlyoutItem read, at rest. Each design
+        //    language marks a choice its own way, so this is the theme's, never a call site's. The defaults are WinUI 3's
+        //    (MenuFlyout_themeresources.xaml ToggleMenuFlyoutItem CheckGlyph E73E; RadioMenuFlyoutItem_themeresources.xaml CheckGlyph
+        //    E915): a 12px glyph in TextFillColorSecondary in the 28 check column, lifted to TextFillColorPrimary under the pointer
+        //    (MenuFlyoutItemForegroundPointerOver) and while pressed (MenuFlyoutSubItemForegroundPressed); no row fill, no label tint.
+        /// <summary>The check column's width (MenuFlyoutItemPlaceholderThemeThickness 28): the label starts this far past the row padding.</summary>
+        public float MarkColumnWidth { get; init; } = PlaceholderWidth;
+        /// <summary>A checked toggle row's glyph (ToggleMenuFlyoutItem CheckGlyph E73E).</summary>
+        public string CheckGlyph { get; init; } = MenuFlyout.CheckGlyph;
+        /// <summary>How a radio row is marked: the <see cref="RadioGlyph"/> on the chosen row (WinUI), or a drawn <see cref="MenuRadioMark.Dot"/>.</summary>
+        public MenuRadioMark RadioMark { get; init; } = MenuRadioMark.Glyph;
+        /// <summary>The chosen radio row's glyph under <see cref="MenuRadioMark.Glyph"/> (RadioMenuFlyoutItem CheckGlyph E915).</summary>
+        public string RadioGlyph { get; init; } = MenuFlyout.RadioGlyph;
+        /// <summary>The check and radio glyphs' size (CheckGlyph FontSize 12).</summary>
+        public float MarkGlyphSize { get; init; } = CheckGlyphSize;
+        /// <summary>The mark's ink at rest (MenuFlyoutSubItemChevron = TextFillColorSecondary).</summary>
+        public ColorF MarkColor { get; init; } = Tok.TextSecondary;
+        /// <summary>The mark's ink under the pointer (MenuFlyoutItemForegroundPointerOver = TextFillColorPrimary).</summary>
+        public ColorF MarkHoverColor { get; init; } = Tok.TextPrimary;
+        /// <summary>The mark's ink while pressed (MenuFlyoutSubItemForegroundPressed = TextFillColorPrimary).</summary>
+        public ColorF MarkPressedColor { get; init; } = Tok.TextPrimary;
+        /// <summary>The disc's diameter under <see cref="MenuRadioMark.Dot"/> (and the ring's, with <see cref="RingAtRest"/>).</summary>
+        public float DotSize { get; init; } = 6f;
+        /// <summary>Under <see cref="MenuRadioMark.Dot"/>: every radio row that is not chosen draws a ring of <see cref="DotSize"/>, so the group
+        /// reads as a choice at rest (the Metro radio). Default false (WinUI marks only the chosen row).</summary>
+        public bool RingAtRest { get; init; }
+        /// <summary>The ring's stroke under <see cref="RingAtRest"/>.</summary>
+        public float RingWidth { get; init; } = 1f;
+        /// <summary>The ring's ink under <see cref="RingAtRest"/>.</summary>
+        public ColorF RingColor { get; init; } = Tok.TextTertiary;
+        /// <summary>The label (and accelerator) ink of a checked toggle or the chosen radio row; null keeps the row's ink (WinUI). A Metro menu
+        /// writes the choice in the accent.</summary>
+        public ColorF? SelectedLabelColor { get; init; }
+        /// <summary>The chosen radio row's fill at rest; transparent in WinUI (the glyph alone marks it).</summary>
+        public ColorF SelectedFill { get; init; } = Tok.FillSubtleTransparent;
+        /// <summary>The chosen radio row's fill under the pointer and the keyboard cursor; null = <see cref="ItemHoverFill"/>.</summary>
+        public ColorF? SelectedHoverFill { get; init; }
+        /// <summary>The chosen radio row's fill while pressed; null = <see cref="ItemPressedFill"/>.</summary>
+        public ColorF? SelectedPressedFill { get; init; }
+        /// <summary>A sub-menu row's trailing glyph (SubItemChevron E974).</summary>
+        public string SubMenuGlyph { get; init; } = Icons.ChevronRightMed;
+        /// <summary>The sub-menu glyph's size (SubItemChevron FontSize 12).</summary>
+        public float SubMenuGlyphSize { get; init; } = ChevronGlyphSize;
+        /// <summary>The sub-menu glyph's ink at rest (MenuFlyoutSubItemChevron = TextFillColorSecondary; pressed TextFillColorTertiary).</summary>
+        public ColorF SubMenuGlyphColor { get; init; } = Tok.TextSecondary;
     }
 
     /// <summary>The menu style now: the active theme's (<see cref="ControlStyles.MenuFlyoutStyle"/>), else <see cref="FluentStyle"/>.</summary>
@@ -207,22 +264,39 @@ public static class MenuFlyout
         Style st, bool subOpen = false, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
     {
         bool enabled = it.Enabled;
+        // The selection state (the style's, so each theme marks a choice in its own language): a checked toggle or the chosen radio.
+        bool marked = it.IsChecked && it.Kind is MenuItemKind.Toggle or MenuItemKind.Radio;
+        bool chosenRadio = enabled && marked && it.Kind == MenuItemKind.Radio;
         // MenuFlyoutItemForeground = TextPrimary; Disabled = TextDisabled. PointerOver/Pressed foreground stay Primary
-        // (the WinUI MenuFlyoutItem hover/pressed states do NOT recolor the label — they only change the row fill).
-        ColorF fg = enabled ? Tok.TextPrimary : Tok.TextDisabled;
-        // CheckGlyph (toggle E73E / radio E915) + SubItemChevron foreground = MenuFlyoutSubItemChevron = TextSecondary;
-        // Pressed = TextTertiary (MenuFlyoutSubItemChevronPressed); Disabled = TextDisabled (themeresources:26-30).
-        ColorF checkFg = enabled ? Tok.TextSecondary : Tok.TextDisabled;
+        // (the WinUI MenuFlyoutItem hover/pressed states do NOT recolor the label — they only change the row fill). A style may write
+        // the chosen row's label in its own ink (SelectedLabelColor: the Metro accent).
+        ColorF fg = !enabled ? Tok.TextDisabled : marked && st.SelectedLabelColor is { } selInk ? selInk : Tok.TextPrimary;
+        // SubItemChevron foreground = MenuFlyoutSubItemChevron = TextSecondary; Pressed = TextTertiary (MenuFlyoutSubItemChevronPressed);
+        // Disabled = TextDisabled (themeresources:26-30).
+        ColorF chevronFg = enabled ? st.SubMenuGlyphColor : Tok.TextDisabled;
 
         var children = new List<Element>(5);
 
-        // Column 0: check/radio glyph (28-wide), painted only when this toggle/radio is on (CheckGlyph.Opacity 0→1).
+        // Column 0: the check column (MarkColumnWidth): the toggle's check or the radio's mark, painted when on (CheckGlyph.Opacity 0→1),
+        // or the style's ring on a radio row that is not chosen. Every row of a checkable menu keeps the column, so a change of choice
+        // moves nothing.
         if (checkColumn)
         {
-            Element glyph = (it.Kind is MenuItemKind.Toggle or MenuItemKind.Radio) && it.IsChecked
-                ? new TextEl(it.Kind == MenuItemKind.Radio ? RadioGlyph : CheckGlyph) { Size = CheckGlyphSize, Color = checkFg, PressedColor = enabled ? Tok.TextTertiary : checkFg, FontFamily = Tok.Definition.Fonts.Icon }
-                : new BoxEl();
-            children.Add(new BoxEl { Width = PlaceholderWidth, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [glyph] });
+            Element mark = new BoxEl();
+            if (it.Kind == MenuItemKind.Radio && st.RadioMark == MenuRadioMark.Dot)
+            {
+                if (marked || st.RingAtRest) mark = Dot(marked, enabled, st);
+            }
+            else if (marked)
+            {
+                mark = new TextEl(it.Kind == MenuItemKind.Radio ? st.RadioGlyph : st.CheckGlyph)
+                {
+                    Size = st.MarkGlyphSize, FontFamily = Tok.Definition.Fonts.Icon,
+                    Color = enabled ? st.MarkColor : Tok.TextDisabled,
+                    HoverColor = enabled ? st.MarkHoverColor : default, PressedColor = enabled ? st.MarkPressedColor : default,
+                };
+            }
+            children.Add(new BoxEl { Width = st.MarkColumnWidth, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [mark] });
         }
 
         // Column 1: 16×16 icon (IconRoot Viewbox), painted when this row carries an icon. Glyph vs layered-vector is
@@ -241,20 +315,29 @@ public static class MenuFlyout
         // Column 3: optional keyboard-accelerator hint, right-aligned (HorizontalAlignment=Right),
         // CaptionTextBlock (12px), MenuFlyoutItemKeyboardAcceleratorTextForeground = TextSecondary / Disabled.
         if (it.AcceleratorText is { Length: > 0 } acc)
-            children.Add(new TextEl(acc) { Size = 12f, Color = enabled ? Tok.TextSecondary : Tok.TextDisabled, Margin = new Edges4(24, 4, 0, 0) });
-
-        // Column 4 (sub-menu rows): the cascade chevron — E974 @12, MenuFlyoutItemChevronMargin 24,0,0,-1, foreground
-        // MenuFlyoutSubItemChevron ramp (MenuFlyout_themeresources.xaml:26-30 + :720 SubItemChevron).
-        if (it.Kind == MenuItemKind.SubMenu)
-            children.Add(new TextEl(Icons.ChevronRightMed)
+            children.Add(new TextEl(acc)
             {
-                Size = ChevronGlyphSize, FontFamily = Tok.Definition.Fonts.Icon, Margin = ChevronMargin,
-                Color = checkFg, PressedColor = enabled ? Tok.TextTertiary : checkFg, DisabledColor = Tok.TextDisabled,
+                Size = 12f, Margin = new Edges4(24, 4, 0, 0), Case = it.Literal ? TextCase.AsWritten : st.LabelCase,
+                Color = !enabled ? Tok.TextDisabled : marked && st.SelectedLabelColor is { } accInk ? accInk : Tok.TextSecondary,
+            });
+
+        // Column 4 (sub-menu rows): the cascade glyph — WinUI E974 @12, MenuFlyoutItemChevronMargin 24,0,0,-1, foreground
+        // MenuFlyoutSubItemChevron ramp (MenuFlyout_themeresources.xaml:26-30 + :720 SubItemChevron); the style's glyph and ink.
+        if (it.Kind == MenuItemKind.SubMenu)
+            children.Add(new TextEl(st.SubMenuGlyph)
+            {
+                Size = st.SubMenuGlyphSize, FontFamily = Tok.Definition.Fonts.Icon, Margin = ChevronMargin,
+                Color = chevronFg, PressedColor = enabled ? Tok.TextTertiary : chevronFg, DisabledColor = Tok.TextDisabled,
             });
 
         // The keyboard cursor (highlight) and the SubMenuOpened state render the same brush as PointerOver
-        // (MenuFlyoutSubItemBackgroundSubMenuOpened = SubtleFillColorSecondary) so they read identically to a hover.
-        ColorF rest = enabled && (highlighted || subOpen) ? st.ItemHoverFill : Tok.FillSubtleTransparent;
+        // (MenuFlyoutSubItemBackgroundSubMenuOpened = SubtleFillColorSecondary) so they read identically to a hover. The chosen radio row
+        // rests on the style's SelectedFill (transparent in WinUI) and takes its own hover/press ramp when the style gives one.
+        ColorF hoverFill = chosenRadio && st.SelectedHoverFill is { } sh ? sh : st.ItemHoverFill;
+        ColorF pressedFill = chosenRadio && st.SelectedPressedFill is { } sp ? sp : st.ItemPressedFill;
+        ColorF rest = !enabled ? Tok.FillSubtleTransparent
+            : highlighted || subOpen ? hoverFill
+            : chosenRadio ? st.SelectedFill : Tok.FillSubtleTransparent;
 
         var row = new BoxEl
         {
@@ -270,8 +353,8 @@ public static class MenuFlyout
             Role = it.Kind switch { MenuItemKind.Toggle => AutomationRole.CheckBox, MenuItemKind.Radio => AutomationRole.RadioButton, _ => AutomationRole.MenuItem },
             // MenuFlyoutItemBackground (explicit rest) / ...PointerOver / ...Pressed. Disabled = transparent (no hover/press).
             Fill = rest,
-            HoverFill = enabled ? st.ItemHoverFill : Tok.FillSubtleTransparent,       // SubtleFillColorSecondary
-            PressedFill = enabled ? st.ItemPressedFill : Tok.FillSubtleTransparent,   // SubtleFillColorTertiary
+            HoverFill = enabled ? hoverFill : Tok.FillSubtleTransparent,       // SubtleFillColorSecondary
+            PressedFill = enabled ? pressedFill : Tok.FillSubtleTransparent,   // SubtleFillColorTertiary
 
             IsEnabled = enabled,                                   // engine gate: disabled = no hit-test/focus/keyboard/click
             Focusable = enabled,                                   // roving target (focus trap Tab/Shift-Tab + Enter/Space activation)
@@ -312,6 +395,16 @@ public static class MenuFlyout
         }
         return row;
     }
+
+    /// <summary>The <see cref="MenuRadioMark.Dot"/> mark: a disc in the mark ink when chosen, else the style's ring (<see cref="Style.RingAtRest"/>).
+    /// Both are the same box, so choosing another row recolours it in place.</summary>
+    static BoxEl Dot(bool chosen, bool enabled, Style st) => new()
+    {
+        Width = st.DotSize, Height = st.DotSize, Shrink = 0f, Corners = CornerRadius4.All(st.DotSize * 0.5f),
+        Fill = chosen ? (enabled ? st.MarkColor : Tok.TextDisabled) : ColorF.Transparent,
+        BorderWidth = chosen ? 0f : st.RingWidth, BorderColor = enabled ? st.RingColor : Tok.TextDisabled,
+        HitTestVisible = false,
+    };
 }
 
 /// <summary>The MenuFlyoutPresenter body: a vertical list of <see cref="MenuFlyout.Row"/>s with a keyboard-cursor
