@@ -2389,6 +2389,9 @@ public sealed partial class AppHost : IDisposable
                 {
                     _renderSubmissionContinuity.Elided(rf.PublishSeq);
                     presented = false;
+                    // An identical publication owes no present: rebase the missed-vsync baseline, or the next present charges this
+                    // gap as missed vsyncs that were never owed (the render-thread elision _lastNoPresentQpc's doc names).
+                    NoteNoPresentTurn();
                     Interlocked.Increment(ref _framesSkippedSubmit);
                     if (fresh) Interlocked.Increment(ref _freshIdentical);
                     // E5: this turn skips the submit (no command list, no present) but the staging pass at the top of
@@ -8834,11 +8837,11 @@ public sealed partial class AppHost : IDisposable
     /// and it is, because between two consecutive PRESENTING turns no RunFrame/Paint turn can return without either
     /// presenting or hitting one of the enumerated no-present stamps above; there is no third kind of turn. So
     /// `_lastNoPresentQpc <= prev` holds in that case and NotePresented's gap math below runs unmodified, charging
-    /// the real miss. NOT covered by this field (out of scope for this fix, flagged rather than silently ignored):
-    /// a present-thread-owned elision inside <see cref="SubmitPresentOnRenderThread"/> itself (its own
-    /// <c>ShouldSkipRenderSubmit</c> skip, and the clock-driven re-record early-out) — those are render-thread
-    /// turns, not UI-thread RunFrame/Paint turns, and can still under-stamp a gap that contains only render-thread-
-    /// side elisions with no UI-thread no-present turn in it.</para></summary>
+    /// the real miss. The present-thread-owned <c>ShouldSkipRenderSubmit</c> skip inside
+    /// <see cref="SubmitPresentOnRenderThread"/> stamps it too (2026-11-07: a stage whose only motion was a composited video
+    /// published identical frames, skipped their submits, and read 2-5 "missed" vsyncs a second that no frame owed). NOT
+    /// covered (flagged rather than silently ignored): the clock-driven re-record early-out, a render-thread turn that can
+    /// still under-stamp a gap with no other no-present turn in it.</para></summary>
     private long _lastNoPresentQpc;
 
     /// <summary>One-liner for every RunFrame/Paint exit that ran this turn but did not submit a present — see
