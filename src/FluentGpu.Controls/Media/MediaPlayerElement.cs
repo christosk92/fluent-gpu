@@ -1326,6 +1326,7 @@ public sealed class MediaPlayerElement : Component
         if (!active)
         {
             b.SetVisible(false);
+            NoteInView(false);
             if (IsDecorative) return;
             Player.PumpVideo(default, default, s);
             return;
@@ -1340,6 +1341,7 @@ public sealed class MediaPlayerElement : Component
         {
             if (!IsDecorative) Player.PumpVideo(b, default, s);
             b.SetVisible(false);    // no laid-out area ⇒ empty viewport
+            NoteInView(false);
             return;
         }
         // The TRANSFORMED rect (full affine walk), not the translation-only AbsoluteRect: under a scaled ancestor the hole is
@@ -1349,6 +1351,7 @@ public sealed class MediaPlayerElement : Component
         {
             if (!IsDecorative) Player.PumpVideo(b, default, s);
             b.SetVisible(false);
+            NoteInView(false);
             return;
         }
         SizeI natural = Player.NaturalSize.Peek();
@@ -1412,7 +1415,8 @@ public sealed class MediaPlayerElement : Component
         // viewport of the element's own rect keeps presenting at full size while the element scrolls out of its
         // scroller. That is how a video in a list ended up painted across the tab strip and the title bar.
         RectF viewport = ClipToAncestors(scene, h, area);
-        if (viewport.W <= 0.5f || viewport.H <= 0.5f) { b.SetVisible(false); return; }
+        if (viewport.W <= 0.5f || viewport.H <= 0.5f) { b.SetVisible(false); NoteInView(false); return; }
+        NoteInView(true);
         b.SetViewport(viewport);
         // Clamped so a caller asking for "fully round" on a non-square element still gets a clean capsule rather than
         // radii that overlap and degenerate. CornerRadius freezes at mount, so this is a constant per element.
@@ -2644,6 +2648,27 @@ public sealed class MediaPlayerElement : Component
 
     private bool _surfacePresentedRaised;
     private int _surfaceProbePumps;
+
+    // ── the in-view report (a host that pauses a decorative loop it cannot see) ─────────────────────────────────────
+
+    /// <summary>Raised on the UI thread, from the pump, each time the element's PLACEABILITY flips: true when it is active
+    /// (not KeepAlive-parked, not minimized) and its area, clipped to every clipping ancestor, is non-empty — the element
+    /// could show a frame right now; false when it is parked, minimized, collapsed or scrolled out of its scroller.
+    /// Independent of whether a frame exists yet, so a host can open a source paused and start it on the first true.
+    /// The element only HIDES its surface when it cannot be seen; it never pauses the player (a player may have other
+    /// presenters). A host that owns a decorative loop (an ambient clip) pauses on false and resumes on true, so no
+    /// decoder runs for pixels nobody sees. Value-gated: one call per flip. Frozen at mount like every init prop.</summary>
+    public Action<bool>? InViewChanged { get; init; }
+
+    private int _inView = -1;   // -1 unknown, 0 out, 1 in
+
+    private void NoteInView(bool inView)
+    {
+        int v = inView ? 1 : 0;
+        if (_inView == v) return;
+        _inView = v;
+        InViewChanged?.Invoke(inView);
+    }
     private const int MaxSurfaceProbePumps = 120;   // about two seconds of frames; past it only a native pump re-checks
 
     /// <summary>Pump-side half of <see cref="SurfacePresented"/>. The presenter drain that creates the child visual runs on
