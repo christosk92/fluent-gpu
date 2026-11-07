@@ -63,7 +63,7 @@ namespace FluentGpu.WindowsApi.Media;
 /// by the AOT spike — the showcase verifies a real <c>https</c> album-art URL renders in the flyout.
 /// </para>
 /// <para>
-/// <b>AOT/CA1416.</b> The csproj targets a bare <c>net10.0</c> TFM, so the WinRT SMTC types (annotated
+/// <b>AOT/CA1416.</b> The csproj targets a bare <c>net11.0</c> TFM, so the WinRT SMTC types (annotated
 /// <c>[SupportedOSPlatform("windows8.0")]</c>) would warn under <c>TreatWarningsAsErrors</c>; this type is annotated
 /// to match, keeping the analyzer silent without per-call suppression.
 /// </para>

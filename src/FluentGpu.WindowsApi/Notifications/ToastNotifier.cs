@@ -50,7 +50,7 @@ namespace FluentGpu.WindowsApi.Notifications;
 /// than <c>REGCLS_SINGLEUSE</c> (<c>AppNotificationManager.cpp:197</c>).
 /// </para>
 /// <para>
-/// <b>AOT/CA1416.</b> The csproj targets a bare <c>net10.0</c> TFM, so the WinRT toast types (which carry
+/// <b>AOT/CA1416.</b> The csproj targets a bare <c>net11.0</c> TFM, so the WinRT toast types (which carry
 /// <c>[SupportedOSPlatform("windows6.1")]</c>) would warn under <c>TreatWarningsAsErrors</c>; this type is annotated
 /// <c>[SupportedOSPlatform("windows10.0.10240.0")]</c> (toast notifications shipped in Windows 10 1507) to keep the
 /// analyzer silent, per the spike's TFM guidance.

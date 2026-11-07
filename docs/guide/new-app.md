@@ -23,7 +23,7 @@ dotnet run
 |---|---|---|
 | `-n` / `--name` | the folder name | project, assembly and namespace name |
 | `--EnginePath` | `..\fluent-gpu` | the engine checkout (the folder that holds `FluentGpu.App.props`). Absolute, or relative to the new project folder |
-| `--GlobalJson` | `true` | add a `global.json` pinning the SDK band the engine builds with (10.0.300, `latestFeature`). Pass `false` inside a repo that already has one |
+| `--GlobalJson` | `true` | add a `global.json` pinning the SDK band the engine builds with (11.0.100-rc.3.26522.148, `latestFeature`). Pass `false` inside a repo that already has one |
 
 What you get:
 
@@ -72,7 +72,7 @@ wins):
 
 | Setting | Value | Why |
 |---|---|---|
-| `TargetFramework`, `LangVersion`, `Nullable`, `ImplicitUsings`, `AllowUnsafeBlocks`, `InvariantGlobalization` | `net10.0`, `14`, on, on, on, on | the engine's language baseline |
+| `TargetFramework`, `LangVersion`, `Nullable`, `ImplicitUsings`, `AllowUnsafeBlocks`, `InvariantGlobalization` | `net11.0`, `15`, on, on, on, on | the engine's language baseline |
 | `Deterministic`, `ServerGarbageCollection`, `ConcurrentGarbageCollection` | `true`, `false`, `true` | the engine's GC posture (workstation + background GC, the frame loop's assumption) |
 | `ShouldUnsetParentConfigurationAndPlatform` | `false` | a solution build otherwise builds the out-of-tree engine references as Debug and copies Debug DLLs into a Release app |
 | `NoWarn` | `+CA1416` | the app is a Windows composition root; the Win32 paths are intentional |
@@ -123,7 +123,7 @@ dotnet publish -c Release -r win-x64          # an explicit target
 dotnet publish -c Release -r win-arm64
 ```
 
-The result is one self-contained native `.exe` in `bin\Release\net10.0\<rid>\publish\`. `dotnet build`/`dotnet run`
+The result is one self-contained native `.exe` in `bin\Release\net11.0\<rid>\publish\`. `dotnet build`/`dotnet run`
 stay JIT; ILC runs only at publish.
 
 NativeAOT links with MSVC: install Visual Studio or the Build Tools with **Desktop development with C++**. For the

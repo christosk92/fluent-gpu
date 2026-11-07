@@ -16,7 +16,7 @@ FluentGpu ships as **one package**. Add it, write a component, call `FluentApp.R
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>   <!-- WinExe = no console window; use Exe if you want one -->
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
@@ -71,7 +71,7 @@ accent, the font + image systems, and the frame loop.
 
 ## Requirements
 
-- **.NET 10 SDK.** The package targets `net10.0`; consumers need the .NET 10 toolchain.
+- **.NET 11 SDK.** The package targets `net11.0`; consumers need the .NET 11 toolchain.
 - **Windows 10 21H2 or later**, **x64** or **arm64** — Direct3D 12 (WDDM 2.0) and the OS HLSL compiler (`d3dcompiler.dll`)
   must be present. There is no Windows 7/8.1 path.
 - Nothing else to deploy: the renderer compiles its shaders at runtime via the OS, so there are no native binaries,

@@ -84,4 +84,4 @@ A console-style gallery mode (`src/FluentGpu.WindowsApp/PackagingProbe.cs`, rout
   `win-x64` (x64 cross-link) and `win-arm64` (native link), confirming it is the VS/MSVC
   preview, not the target arch. It should work unchanged once a stable MSVC toolset is present.
 - **SDK determinism:** publish from a CWD under `src/` (or add a repo-root `global.json`)
-  so the pinned `10.0.300` SDK is used rather than the machine default.
+  so the pinned `11.0.100-rc.3.26522.148` SDK is used rather than the machine default.

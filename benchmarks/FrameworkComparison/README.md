@@ -110,7 +110,7 @@ Capture mutation → desktop-visible latency with the frame-ID color probe (pref
 
 ```powershell
 .\benchmarks\FrameworkComparison\scripts\capture-frame-id.ps1 `
-  -Executable .\benchmarks\FrameworkComparison\FluentGpuBench\bin\Release\net10.0\win-arm64\FluentGpuBench.exe `
+  -Executable .\benchmarks\FrameworkComparison\FluentGpuBench\bin\Release\net11.0\win-arm64\FluentGpuBench.exe `
   -Framework FluentGpu -Scenario virtual-scroll-10k `
   -OutputDirectory .\benchmarks\FrameworkComparison\results\frame-id
 ```
