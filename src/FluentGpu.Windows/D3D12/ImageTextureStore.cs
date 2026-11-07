@@ -148,7 +148,8 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     //       the shared UploadArena already relies on for buffers.
     //   I4  a re-stage of an already-resident id acquires a FRESH placement and retires the old one (the `reroute` rule
     //       below, unchanged on UMA) ⇒ a published cell is immutable; the CPU never rewrites live texels.
-    // ROW_MAJOR TEXTURE2D creation is driver-optional, so it is PROBED at the first page create: if the create fails the
+    // ROW_MAJOR TEXTURE2D creation is restricted: Init checks the runtime's rule for the page first (RowMajorPageLegal; when it
+    // fails no page is ever tried), and the first page create is still a probe: if the create fails the
     // store sets _umaPagesDisabled and every thumbnail falls back to the proven private-texture path (today's shipped
     // behaviour). The discrete/non-UMA staging path is untouched throughout.
     private bool _uma;
@@ -341,12 +342,40 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         // here before CreateCommittedResource. In that case no pages are admitted; the packer's positive placeholder
         // is unreachable bookkeeping, never a measured allocation or a live census contribution.
         bool cpuWrittenPages = _uma && !_atlasGpuCopy;
+        // Check the runtime's rule for a ROW_MAJOR TEXTURE2D before the first page create tries one: a page it refuses was
+        // created and refused on every device creation (debug-layer ERROR #724, E_INVALIDARG) and only then fell back. Take
+        // that fallback (private textures) here instead, with the same one log line.
+        if (cpuWrittenPages && !_umaPagesDisabled && !RowMajorPageLegal(device, UmaPageHeapFlags, out bool cap))
+        {
+            _umaPagesDisabled = true;
+            Diag.Line($"[d3d12] UMA atlas pages unavailable stage=cap CrossAdapterRowMajorTextureSupported={(cap ? 1 : 0)} " +
+                      $"sharedCrossAdapterHeap={((UmaPageHeapFlags & D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER) != 0 ? 1 : 0)}" +
+                      " (ROW_MAJOR CPU-writable TEXTURE2D) — thumbnails fall back to private textures");
+        }
         var pageDesc = DescribeTexture(_pageSize, _pageSize, cpuWrittenPages, simultaneous: !cpuWrittenPages);
         ulong pageBytes = AllocationBytes(&pageDesc);
         _atlasAllocationKnown = pageBytes != 0;
         _packer = new ImageAtlasPacker(_pageSize, _atlasAllocationKnown ? (long)pageBytes : 1,
             cpuWrittenPages ? ImageAtlasUpload.CpuWrite : ImageAtlasUpload.GpuCopy,
             maxPackedBucket: experiment == FluentGpu.Hosting.ImageAtlasExperiment.GpuCopy256 && _atlasGpuCopy ? 256 : ImageAtlasPacker.MaxPackedBucket);
+    }
+
+    /// <summary>The heap flags the UMA atlas page is created with (<see cref="CreatePageTexture"/>), which
+    /// <see cref="RowMajorPageLegal"/> checks.</summary>
+    private const D3D12_HEAP_FLAGS UmaPageHeapFlags = D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE;
+
+    /// <summary>Whether the runtime takes a ROW_MAJOR TEXTURE2D created on a heap with <paramref name="heapFlags"/>. It takes one
+    /// only on a <c>SHARED_CROSS_ADAPTER</c> heap (otherwise ERROR #724, E_INVALIDARG, before any driver sees it) and only
+    /// where the device reports <c>D3D12_OPTIONS.CrossAdapterRowMajorTextureSupported</c> (<paramref name="cap"/>; false when
+    /// the options query fails). Measured 2026-11-07 on an Adreno X1 (UMA, cap = 1): every ROW_MAJOR page variant, the
+    /// cross-adapter one included, was refused with E_INVALIDARG (<c>--fg img-atlas=rowmajor-probe</c>).</summary>
+    private static bool RowMajorPageLegal(ID3D12Device* device, D3D12_HEAP_FLAGS heapFlags, out bool cap)
+    {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS opts = default;
+        cap = (int)device->CheckFeatureSupport(D3D12_FEATURE.D3D12_FEATURE_D3D12_OPTIONS, &opts,
+                  (uint)sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS)) >= 0
+              && opts.CrossAdapterRowMajorTextureSupported != 0;
+        return cap && (heapFlags & D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER) != 0;
     }
 
     /// <summary>The compute queue baked derivatives are written on (its fences gate their readiness).</summary>
@@ -1346,11 +1375,11 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         up.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY.D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
         up.MemoryPoolPreference = D3D12_MEMORY_POOL.D3D12_MEMORY_POOL_L0;
         up.CreationNodeMask = 0; up.VisibleNodeMask = 0;   // 0 ≡ single-adapter node 1
-        // NOT NoteResourceFault: this is a CAPABILITY PROBE, and a ROW_MAJOR CPU-writable TEXTURE2D is driver-optional
-        // with no cap bit to ask first. Counting a refused probe as a resource fault made it indistinguishable from
+        // NOT NoteResourceFault: this is a CAPABILITY PROBE. Init checked the runtime's rule (RowMajorPageLegal), but a legal
+        // desc can still be refused by the driver. Counting a refused probe as a resource fault made it indistinguishable from
         // device removal at DrainImageJobs, whose fault DELTA calls NoteIfDeviceLost. The HRESULT and the stage are
         // recorded instead, and AcquireCell logs them once.
-        int hr = (int)_device->CreateCommittedResource(&up, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
+        int hr = (int)_device->CreateCommittedResource(&up, UmaPageHeapFlags, &td,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON, null, __uuidof<ID3D12Resource>(), (void**)&tex);
         if (hr < 0) { _umaPageFaultHr = hr; _umaPageFaultStage = "create"; return null; }
 
