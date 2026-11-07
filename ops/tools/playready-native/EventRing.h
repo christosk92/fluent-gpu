@@ -22,7 +22,7 @@
 //     the notifier itself) drops the undelivered backlog instead: events queued for the old callback context never reach the
 //     context a later Start installs, and the abandoned thread can no longer mark that later run done.
 //
-// Standalone on purpose (std only, no Windows, no FgPlayReady.h): tests\FeedTests.cpp includes it directly.
+// Standalone on purpose (std only, no Windows, no FgPlayReady.h): it compiles on its own.
 #pragma once
 
 #include <atomic>

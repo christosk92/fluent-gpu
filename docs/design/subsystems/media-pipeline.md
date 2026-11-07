@@ -393,7 +393,7 @@ transition, so the hang path is removed **by construction** rather than avoided 
 **Re-validation (2026-10-06): what the evidence does and does not say.** The recorded cause is "a vendor-acknowledged UMD defect in
 the UBWC / layout-transition path, triggered by the texture-upload-then-sample cadence", amplified by a (since disproved, F251) 128 MB
 budget premise. So the risk to re-test is any UBWC layout transition on a compressed texture, implicit (copy-queue promotion and decay)
-or explicit, not "any barrier": the UMA build already records explicit barriers on the COMPUTE queue for baked blurs
+or explicit, not "any barrier": the UMA build already records explicit barriers in its bake batches for baked blurs (on the COMPUTE queue until 2026-11-07, on the frame's DIRECT queue since)
 (`BakedBlurCompositor`, `LevelBarrier`) and the DIRECT queue samples the COMMON-decayed derivatives, daily, on the Adreno. The
 discrete `GpuCopy` **pages** are `ALLOW_SIMULTANEOUS_ACCESS`, which on most drivers precludes compressed layouts; that, not an absence of
 barriers, is the argument for why `GpuCopy` might be safe on UMA. The discrete **pool** textures are not simultaneous-access, so the

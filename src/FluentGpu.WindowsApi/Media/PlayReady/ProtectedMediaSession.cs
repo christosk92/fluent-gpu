@@ -29,7 +29,7 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 /// a typed failure (Drm while the license is pending or the topology is being built, Network while the store is still
 /// empty). It is armed once at connect and disarmed by the first frame; it is a deadline, not a poll.</para>
 /// </summary>
-public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource
+public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource, IMediaClockSource
 {
     private readonly IProtectedVideoPlayer _player;
     private readonly ProtectedVideoRequest _request;
@@ -209,6 +209,23 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         if (!_qualitySelection.IsAuto && _qualitySelection.VariantId is { } initialPin)
             RequestRepresentation(initialPin, PinRetainMs, Environment.TickCount64);
         RequestPump();
+    }
+
+    /// <summary>The native clock's latest sample (<see cref="IMediaClockSource"/>), between pumps. While a seek is published
+    /// the clock reads its target, stopped, exactly as <see cref="PumpState"/> holds the published position until the seek
+    /// lands. Any thread; no allocation.</summary>
+    public bool TryReadClock(out MediaClockSample sample)
+    {
+        sample = default;
+        if (_disposed) return false;
+        if (Volatile.Read(ref _seekPublished))
+        {
+            sample = new MediaClockSample(TimeSpan.FromMilliseconds(Volatile.Read(ref _seekTargetMs)), Stopwatch.GetTimestamp(), _rate, running: false);
+            return true;
+        }
+        if (!_player.TryReadClock(out long ms, out long qpc, out bool running)) return false;
+        sample = new MediaClockSample(TimeSpan.FromMilliseconds(ms), qpc, _rate, running);
+        return true;
     }
 
     private void OnPlayerPumpRequested() => RequestPump();

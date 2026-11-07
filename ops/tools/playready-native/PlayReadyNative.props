@@ -1,13 +1,13 @@
 <Project>
   <!-- Where FluentGpu.PlayReady.Native.dll lives for THIS build, shared by every project that ships or loads it
-       (FluentGpu.WindowsApp builds + copies it; FluentGpu.Windows.Tests copies it for the demuxer gate).
+       (FluentGpu.WindowsApp and Wavee build + copy it).
 
        The architecture is the one the managed process will RUN as, which is not what the shell says:
          1. an explicit RuntimeIdentifier (a publish) wins;
          2. otherwise the SDK's own RID - `dotnet build` gives the exe an apphost of the SDK's architecture and
             `dotnet test` / `dotnet run` start it under that same muxer.
        PROCESSOR_ARCHITECTURE is NOT used: an x64-emulated shell on an ARM64 box reports AMD64 while the native arm64
-       dotnet builds and runs an arm64 process, which then cannot load an x64 DLL (the demuxer tests silently skipped). -->
+       dotnet builds and runs an arm64 process, which then cannot load an x64 DLL. -->
   <PropertyGroup>
     <_PlayReadyNativeRid>$(RuntimeIdentifier)</_PlayReadyNativeRid>
     <_PlayReadyNativeRid Condition="'$(_PlayReadyNativeRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</_PlayReadyNativeRid>
@@ -22,7 +22,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <_PlayReadyNativeCacheInputs Include="$(_PlayReadyNativeDir)\*.cpp;$(_PlayReadyNativeDir)\*.h;$(_PlayReadyNativeDir)\build.cmd;$(_PlayReadyNativeDir)\tests\*.cpp;$(_PlayReadyNativeDir)\tests\*.h" />
+    <_PlayReadyNativeCacheInputs Include="$(_PlayReadyNativeDir)\*.cpp;$(_PlayReadyNativeDir)\*.h;$(_PlayReadyNativeDir)\build.cmd" />
   </ItemGroup>
 
   <!-- The cache key: SHA-256 over "name hash" lines of every source (names, not paths, so every worktree agrees). -->

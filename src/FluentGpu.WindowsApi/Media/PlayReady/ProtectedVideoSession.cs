@@ -95,6 +95,10 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     private long _seekIssuedTimestamp;
     private long _attachTimestamp;
     private long _bytes, _bytesMs;
+    // The QPC of the native clock sample that last asked for a state pump (0 = none yet): the position sample asks at most once
+    // per PositionPumpTicks (OnNativeEvent, EvPosition).
+    private long _positionPumpQpc;
+    private static readonly long PositionPumpTicks = Stopwatch.Frequency;
 
     // ── F216: the switch budget's stamps (Stopwatch timestamps = QPC ticks, 0 = not yet), written from native threads, read when the
     // first frame lands. Native's own clock is the same QPC, so a native stamp (FirstFrame's b) joins these without conversion.
@@ -313,6 +317,23 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     }
     /// <inheritdoc/>
     public long PositionQpc => _positionQpc;
+    /// <inheritdoc/>
+    public bool TryReadClock(out long positionMs, out long positionQpc, out bool running)
+    {
+        positionMs = 0; positionQpc = 0; running = false;
+        ulong s = _s;
+        if (_disposed || s == 0 || _startupError is not null) return false;
+        // The native snapshot is a handful of atomic loads behind the runtime's handle table (a stale handle answers E_HANDLE),
+        // the same read the media census makes from any thread.
+        PrNative.Snapshot n = default;
+        if (_native.SessionSnapshot(_rt.Handle, s, ref n) < 0 || n.PositionQpc == 0) return false;
+        positionMs = Math.Max(0, n.PositionMs);
+        positionQpc = n.PositionQpc;
+        int epoch = Volatile.Read(ref _attachEpoch);
+        bool waiting = epoch != 0 && Volatile.Read(ref _waitingAttachEpoch) == epoch;
+        running = n.State == PrNative.StatePlaying && n.Seeking == 0 && !waiting && Volatile.Read(ref _attached) != 0;
+        return true;
+    }
     /// <inheritdoc/>
     public bool IsSeeking => Volatile.Read(ref _seekPending) != 0;
     /// <inheritdoc/>
@@ -943,9 +964,22 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         switch (ev)
         {
             case PrNative.EvPosition:
+            {
+                // The native clock sample (a = ms, b = the QPC it was read at; ≤ 4 Hz while the engine clock runs). Any thread reads
+                // it between pumps through TryReadClock; the state pump is asked for at most once per PositionPumpTicks, so the
+                // published Position (and MediaPlayer's "a playing session raises at least once a second") never waits for the
+                // next segment-buffered or transport event, which in steady state is ~4 s away.
+                long at = b > 0 ? b : Stopwatch.GetTimestamp();
+                long last = Volatile.Read(ref _positionPumpQpc);
+                if (last != 0 && at - last < PositionPumpTicks) return;
+                Volatile.Write(ref _positionPumpQpc, at);
+                break;
+            }
+
             case PrNative.EvBytes:
-                if (ev == PrNative.EvBytes) { Volatile.Write(ref _bytes, a); Volatile.Write(ref _bytesMs, b); }
-                return;   // never a pump trigger — the snapshot carries the timestamped sample
+                Volatile.Write(ref _bytes, a);
+                Volatile.Write(ref _bytesMs, b);
+                return;   // never a pump trigger: the next pump reads the counters
 
             case PrNative.EvBuffered:
                 Volatile.Write(ref _forwardBufferedMs, Math.Max(0, a));

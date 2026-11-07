@@ -51,7 +51,8 @@ public interface IProtectedVideoPlayer : IDisposable
     bool HasFirstFrame { get; }
 
     /// <summary>Raised from ANY thread when native state changed and one coalesced UI-thread pump is due. Never raised
-    /// per video frame; position-only samples do not raise it.</summary>
+    /// per video frame; a position sample raises it at most once a second (the clock between pumps is
+    /// <see cref="TryReadClock"/>).</summary>
     event Action? PumpRequested;
 
     /// <summary>Where the switch is (the poster/spinner discriminator), as of the last <see cref="Pump()"/>.</summary>
@@ -62,6 +63,15 @@ public interface IProtectedVideoPlayer : IDisposable
     /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> value at which <see cref="PositionMs"/> was
     /// sampled natively (0 = unknown). The UI extrapolates <c>pos + Δt·rate</c> while playing.</summary>
     long PositionQpc { get; }
+    /// <summary>The native engine's LATEST clock sample, read now rather than as of the last <see cref="Pump()"/>: the position in
+    /// ms, the QPC it was sampled at, and whether the clock was running then (playing, not seeking, not waiting). Any thread,
+    /// never blocks, never allocates. False while there is no sample (not created, disposed, the runtime lost). Default false: a
+    /// player with no native clock.</summary>
+    bool TryReadClock(out long positionMs, out long positionQpc, out bool running)
+    {
+        positionMs = 0; positionQpc = 0; running = false;
+        return false;
+    }
     /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> (QPC) value at which the engine reported this attach's
     /// FIRSTFRAMEREADY, as the native runtime stamped it (F215), or 0 until it lands. Unlike the moment a UI observer notices
     /// <see cref="FirstFrameEpoch"/> change (which a stage that unmounted the pump can delay by seconds), it is when the frame was

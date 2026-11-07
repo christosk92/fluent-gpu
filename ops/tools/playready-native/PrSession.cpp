@@ -339,6 +339,7 @@ static void PostToRuntime(Session& s, std::function<void(Runtime&)> fn)
 
 static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp);
 static void ApplyPendingSeek(Runtime& rt, const std::shared_ptr<Session>& sp, uint64_t seq);
+static void RunSeek(Runtime& rt, Session& s, int64_t targetMs, int32_t mode, int64_t keyframeMs, int64_t postedQpc);
 static void DetachInternal(Runtime& rt, Session& s, bool releaseSource = true);
 
 /// Fail the session from the feeder: the state, the error, and one Error event.
@@ -357,12 +358,20 @@ static void FailSession(const std::shared_ptr<Session>& sp, HRESULT hr, int32_t 
     });
 }
 
-/// Wire the feeder's wake-up into a freshly built source's streams.
+/// Wire the feeder's wake-up and the key gate into a freshly built source's streams.
 static void InstallDemandHooks(Session& s, CencMediaSource* source)
 {
     std::shared_ptr<fgpr::FeederSignal> signal = s.signal;
+    const uint64_t runtime = s.runtime;
     for (auto const& stream : source->m_streams)
-        if (stream) stream->m_demand = [signal] { signal->Kick(); };
+    {
+        if (!stream) continue;
+        stream->m_demand = [signal] { signal->Kick(); };
+        // The key gate asks the licence table by the stream's own KID (the init's tenc default_KID), not by the licence
+        // this session was attached with: the handle may be 0 (a key usable through another session's licence) or a
+        // stale pending licence a fresh acquisition replaced. Runs under the stream's lock; the table's lock is a leaf.
+        stream->m_keyPending = [runtime](const uint8_t* kid) { return fgpr::LicensePendingForKid(runtime, kid); };
+    }
     // The video stream announces a representation when DELIVERY reaches its first sample (the picture changes then, not
     // when the splice was queued). It publishes the index itself (SegmentStore); this only raises the event. The hook
     // runs under the stream's lock and holds nothing but the session handle.
@@ -1352,6 +1361,14 @@ static bool IsLive(Runtime& rt, Session& s)
     return rt.attached.load(std::memory_order_acquire) == s.handle && !s.attachPending;
 }
 
+/// Will the engine run the seek algorithm for a SetCurrentTime issued now, ending in a SEEKED? Only once it has metadata:
+/// before that (HTML5 readyState HAVE_NOTHING) a new current time only becomes the default start position, and no
+/// SEEKING / SEEKED ever follows.
+static bool EngineRunsSeek(Runtime& rt)
+{
+    return rt.engine && rt.engine->GetReadyState() != MF_MEDIA_ENGINE_READY_HAVE_NOTHING;
+}
+
 static void ApplySeekToEngine(Runtime& rt, Session& s)
 {
     int64_t target = 0, keyframe = -1;
@@ -1371,6 +1388,7 @@ static void ApplySeekToEngine(Runtime& rt, Session& s)
     // From here the next SEEKED is the USER seek's: a native-issued seek still in flight is aborted by this one (HTML5
     // seeking semantics), and its tag must not swallow the SEEKED that is coming.
     s.internalSeek.Cancel();
+    const bool runsSeek = EngineRunsSeek(rt);
     HRESULT hr = approximate
         ? rt.engineEx->SetCurrentTimeEx((double)landMs / 1000.0, MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE)
         : rt.engine->SetCurrentTime((double)landMs / 1000.0);
@@ -1378,6 +1396,7 @@ static void ApplySeekToEngine(Runtime& rt, Session& s)
                              (approximate ? " mode=approximate" : " mode=exact") + " hr=" + fgpr::Hex(hr));
     if (SUCCEEDED(hr))
     {
+        s.engineSeekInFlight = runsSeek;   // FgPrSessionSeek defers every later seek until this one's SEEKED
         // At rate 0 the MF video renderer does not pre-roll, so a seek issued while PAUSED decodes nothing and the
         // surface keeps showing the pre-seek frame forever. One frame step forces the new frame out (Chromium's
         // shipped workaround for the same renderer behaviour).
@@ -1577,6 +1596,14 @@ static void DetachInternal(Runtime& rt, Session& s, bool releaseSource)
     s.appliedStreamW.store(0, std::memory_order_release);
     s.appliedStreamH.store(0, std::memory_order_release);
     s.seeking.store(0, std::memory_order_release);
+    s.engineSeekInFlight = false;   // the engine's seek dies with the detach: no SEEKED of it will ever reach this session
+    if (s.deferredSeek.valid)
+    {
+        // Not live any more: the seek that waited for it moves the start position a re-attach opens at (and lands now).
+        const Session::DeferredSeek d = s.deferredSeek;
+        s.deferredSeek = Session::DeferredSeek{};
+        RunSeek(rt, s, d.targetMs, d.mode, d.keyframeMs, d.postedQpc);
+    }
     s.firstFrameQpc.store(0, std::memory_order_release);
     if (s.state.load(std::memory_order_acquire) != FgPrState_Error) s.state.store(FgPrState_Stopped, std::memory_order_release);
     Raise(s.handle, FgPrEvent_Detached);
@@ -1750,10 +1777,12 @@ static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
     if (carriedStartMs > 0)
     {
         s.internalSeek.Issue(s.seekSeq.load(std::memory_order_acquire));
+        const bool runsSeek = EngineRunsSeek(rt);   // false right after SetSource: it only becomes the default start position
         const HRESULT hst = rt.engine->SetCurrentTime((double)carriedStartMs / 1000.0);
         fgpr::RaiseLog(s.handle, "[cenc] carried start " + std::to_string((long long)carriedStartMs) +
                                  "ms -> engine timeline SetCurrentTime hr=" + fgpr::Hex(hst));
         if (FAILED(hst)) s.internalSeek.Cancel();
+        else s.engineSeekInFlight = runsSeek;
     }
     if (s.wantPlay)
     {
@@ -1965,11 +1994,12 @@ void fgpr::SessionOnCanPlay(Runtime& rt, Session& s)
     if (start > 0 && nowMs + s.SegLenMs() < start)
     {
         s.internalSeek.Issue(s.seekSeq.load(std::memory_order_acquire));
+        const bool runsSeek = EngineRunsSeek(rt);
         HRESULT hr = rt.engine->SetCurrentTime((double)start / 1000.0);
         fgpr::RaiseLog(s.handle, "[cenc] start position correction (fallback): engine at " + std::to_string((long long)nowMs) +
                                  "ms, carried start " + std::to_string((long long)start) + "ms -> SetCurrentTime hr=" + fgpr::Hex(hr));
         if (FAILED(hr)) s.internalSeek.Cancel();
-        else s.startCorrectionMs = start - nowMs;
+        else { s.startCorrectionMs = start - nowMs; s.engineSeekInFlight = runsSeek; }
     }
     if (!s.wantPlay)
     {
@@ -1997,6 +2027,32 @@ void fgpr::SessionsShutdown(Runtime& rt)
     // The join point for the feeders just stopped: nothing may still be building a Media Foundation source when the
     // runtime shuts Media Foundation down. They are cancelled and kicked above, so this waits out one GET's cancellation.
     rt.reaper.Drain();
+}
+
+/// A licence of this runtime left Pending - usable, failed, killed or expired (PrLicense.cpp PostKeySettled). Every live
+/// source's streams re-ask their key gate: the requests it parked go to delivery when their KID's key settled, and park
+/// again when it was another KID's. The source is copied out under feedMx and the streams are called with no session
+/// lock held (each takes only its own lock, and the gate the licence table's leaf lock). A destroyed session's source
+/// that Media Foundation shut down refuses on its own (ReleaseKeyParked checks m_shutdown).
+void fgpr::SessionsKeySettled(Runtime& rt)
+{
+    std::vector<std::shared_ptr<Session>> mine;
+    {
+        std::lock_guard<std::mutex> g(Reg().mx);
+        for (auto const& kv : Reg().sessions)
+            if (kv.second && kv.second->runtime == rt.handle) mine.push_back(kv.second);
+    }
+    for (auto const& sp : mine)
+    {
+        winrt::com_ptr<CencMediaSource> source;
+        {
+            std::lock_guard<std::mutex> g(sp->feedMx);
+            source = sp->source;
+        }
+        if (!source) continue;
+        for (auto const& stream : source->m_streams)
+            if (stream) stream->ReleaseKeyParked();
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -2177,10 +2233,11 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionAttach(FgPrRuntime rtHandle, 
         if (lic) fgpr::LicenseBind(lic, +1);
         // F217: this session's own licence is NOT started here any more. CreateSession + GenerateRequest are a PMP round trip
         // (37-126 ms) and ran inline ahead of CompleteAttach, so SetSource queued behind licence work; it now follows the
-        // attach below as its own Engine-lane item (still ahead of other rows' Maintenance work). The engine waits for the
-        // key on its own (the licence state / key status), never for queue position. FG_PLAYREADY_LICENSE_BEFORE_ATTACH=1 keeps
-        // the old order (the key session exists before CreateTrustedInput) as a kill switch.
-        if (lic && rt.licenseBeforeAttach) fgpr::LicenseStartIfPending(rt, lic);
+        // attach below as its own Engine-lane item (still ahead of other rows' Maintenance work). The ENGINE does not wait for
+        // the key: an encrypted sample that reaches the PlayReady decryptor before the key is usable fails the topology with
+        // MSPR_E_NO_DECRYPTOR_AVAILABLE (0x8004B896). The SOURCE waits instead - CencMediaStream's key gate parks every request
+        // for an encrypted sample while the KID's licence is Pending and SessionsKeySettled releases them when it settles - so
+        // SetSource, the topology and the first Start all overlap the licence round trip and the first sample follows the key.
         rt.attachGen.fetch_add(1, std::memory_order_acq_rel);   // before `attached` names the session: see Runtime::attachGen
         rt.attached.store(s.handle, std::memory_order_release);
         s.attachPending = true;
@@ -2190,6 +2247,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionAttach(FgPrRuntime rtHandle, 
         s.startCorrectionDone = false;
         s.startCorrectionMs = 0;
         s.internalSeek.Cancel();
+        s.engineSeekInFlight = false;
         s.handleTries = 0;
         RetireSwapchainHandle(rt, s.swapchainHandle.exchange(0, std::memory_order_acq_rel));   // F198
         s.appliedStreamW.store(0, std::memory_order_release);
@@ -2219,7 +2277,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionAttach(FgPrRuntime rtHandle, 
         // switch whose inits are still on the wire starts it now, overlapping the GET). `s.license` is 0 when CompleteAttach
         // just detached a failed attach, and the item is a no-op for a licence another path already started or closed. If
         // nothing here runs it, the Maintenance item FgPrLicenseAcquire posted still starts it.
-        if (s.license != 0 && !rt.licenseBeforeAttach)
+        if (s.license != 0)
         {
             const uint64_t ownLicense = s.license;
             PostToRuntime(s, [ownLicense](Runtime& r) { fgpr::LicenseStartIfPending(r, ownLicense); });
@@ -2280,6 +2338,147 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionPause(FgPrRuntime rtHandle, F
     });
 }
 
+/// One user seek against the CURRENT buffer and engine (runtime thread). FgPrSessionSeek runs it at once, or - while the
+/// engine still runs an earlier seek - SessionSeekLanded runs the latest deferred one when that seek lands.
+static void RunSeek(Runtime& rt, Session& s, int64_t targetMs, int32_t mode, int64_t keyframeMs, int64_t postedQpc)
+{
+    const uint64_t seq = s.seekSeq.fetch_add(1, std::memory_order_acq_rel) + 1;   // latest-wins
+    s.seekPostedQpc = postedQpc;
+    const int64_t kf = keyframeMs >= 0 && keyframeMs <= targetMs ? keyframeMs : -1;
+    {
+        std::lock_guard<std::mutex> g(s.feedMx);
+        s.seekTargetMs = targetMs;
+        s.seekMode = mode;
+        s.seekKeyframeMs = kf;
+    }
+    s.seeking.store(1, std::memory_order_release);
+    Raise(s.handle, FgPrEvent_Seeking, targetMs);
+
+    if (!IsLive(rt, s))
+    {
+        // Not on the engine: the seek MOVES the start position the next attach opens at, and the store fetches around
+        // it. There is no engine seek to wait for, so it lands now.
+        s.startPositionMs.store(targetMs, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> g(s.feedMx);
+            s.seekNeedsFetch = false;
+            if (s.source && !s.source->m_handedToEngine.load(std::memory_order_acquire))
+                s.source->SetStartPosition100ns((LONGLONG)targetMs * 10000LL);
+            s.prefetchAroundMs = targetMs;
+            if (s.prefetchSegments <= 0) s.prefetchSegments = 2;
+        }
+        s.positionMs.store(targetMs, std::memory_order_release);
+        s.positionQpc.store(fgpr::QpcNow(), std::memory_order_release);
+        s.seeking.store(0, std::memory_order_release);
+        Raise(s.handle, FgPrEvent_Seeked, targetMs, fgpr::MsSinceQpc(postedQpc));
+        s.Kick();
+        return;
+    }
+
+    if (!s.metadataSeen)
+    {
+        // Attached but not loaded yet: the source's first Start (and the CANPLAY fallback correction) must land on the
+        // NEW target, not on the start position the attach carried.
+        s.startPositionMs.store(targetMs, std::memory_order_release);
+        std::lock_guard<std::mutex> g(s.feedMx);
+        if (s.source) s.source->SetStartPosition100ns((LONGLONG)targetMs * 10000LL);
+    }
+
+    // The gate, evaluated against the CURRENT buffer (never a range sampled when the seek was issued). If the target
+    // already lies in both tracks' buffers the engine is repositioned NOW with no download at all — video from a
+    // keyframe at or before the target, audio from any sample, with contiguous coverage past it.
+    bool buffered = false;
+    std::shared_ptr<fgpr::HttpFetch> cancelVideo, cancelAudio;
+    std::vector<std::shared_ptr<fgpr::HttpFetch>> cancelExtra;   // F041: a job's pipelined second GETs are read-ahead of the OLD position
+    int32_t targetSegment = SegmentOfUnclamped(s, kf >= 0 ? kf : targetMs);
+    {
+        std::lock_guard<std::mutex> g(s.feedMx);
+        auto video = VideoStreamLocked(s);
+        auto audio = s.haveAudio ? AudioStreamLocked(s) : nullptr;
+        buffered = video && video->CanSeekTo(kf >= 0 ? kf : targetMs, true) && video->CanSeekTo(targetMs, false) &&
+                   (!audio || audio->CanSeekTo(targetMs, false));
+        if (buffered)
+        {
+            s.seekNeedsFetch = false;
+        }
+        else
+        {
+            // Register the target as the feeder's NEXT fetch. The GET on the wire is cancelled with its token —
+            // unless it already IS the target segment, which a rapid scrub over one segment would otherwise cancel
+            // over and over without ever letting it land.
+            s.seekNeedsFetch = true;
+            if (s.inflightVideoIndex != targetSegment && s.inflightVideoIndex != -2)
+            {
+                cancelVideo = s.inflightVideo;
+                cancelAudio = s.inflightAudio;
+            }
+            if (s.inflightVideoIndex != -2) cancelExtra = s.inflightExtra;   // (-2 = the init GETs, which carry none)
+            if (video) video->MarkIncomplete();
+            if (audio) audio->MarkIncomplete();
+            // FLUSH, in this same critical section (the feeder plans under feedMx, so it never sees a half-flushed
+            // store): the target segment must land in an EMPTY buffer. Left in place, the run inserted behind the
+            // delivery cursor was erased by the very append that landed it, and Start() fell back to sample 0.
+            // Lock order feedMx -> stream m_mx, as everywhere else.
+            s.flushSeq = seq;
+            if (video) video->FlushForSeek();
+            if (audio) audio->FlushForSeek();
+        }
+    }
+    if (buffered)
+    {
+        int64_t bufStart = 0, bufEnd = 0;
+        {
+            std::lock_guard<std::mutex> g(s.feedMx);
+            auto video = VideoStreamLocked(s);
+            if (video) video->BufferedRangeMs(bufStart, bufEnd);
+        }
+        fgpr::RaiseLog(s.handle, "[cenc-feed] seek ms=" + std::to_string((long long)targetMs) +
+                                 " served from buffer [" + std::to_string((long long)bufStart) + ".." +
+                                 std::to_string((long long)bufEnd) + "]ms - no fetch (seq=" + std::to_string(seq) + ")");
+        ApplySeekToEngine(rt, s);
+        return;
+    }
+    if (cancelVideo) cancelVideo->Cancel();
+    if (cancelAudio) cancelAudio->Cancel();
+    for (auto const& extra : cancelExtra) if (extra) extra->Cancel();
+    fgpr::RaiseLog(s.handle, "[cenc-feed] seek prefetch requested ms=" + std::to_string((long long)targetMs) +
+                             " at segment index " + std::to_string(targetSegment) + " (seq=" + std::to_string(seq) + ")");
+    s.Kick();
+}
+
+/// The engine's SEEKED (PrRuntime.cpp): the seek in flight is over. A user seek deferred behind it runs now, and its own
+/// SEEKED is the one the managed side waits for - so true tells the caller to raise nothing for this one.
+bool fgpr::SessionSeekLanded(Runtime& rt, Session& s)
+{
+    s.engineSeekInFlight = false;
+    if (!s.deferredSeek.valid)
+    {
+        // A seek the engine completed WITHOUT restarting the source (it already stood at the target - a preview seek to the
+        // keyframe it just landed on, a seek while paused at that spot): the unbuffered seek's flush still holds delivery
+        // for a Start(reposition) that will never come, and the picture froze there. The stream holds the landed target,
+        // so lift the hold. (A Start(reposition) clears it itself, so after a normal seek this does nothing.)
+        winrt::com_ptr<CencMediaStream> video, audio;
+        {
+            std::lock_guard<std::mutex> g(s.feedMx);
+            if (!s.seekNeedsFetch && s.flushSeq != 0 && s.flushSeq == s.seekSeq.load(std::memory_order_acquire))
+            {
+                video = VideoStreamLocked(s);
+                audio = s.haveAudio ? AudioStreamLocked(s) : nullptr;
+            }
+        }
+        if (video) video->ReleaseReposition();
+        if (audio) audio->ReleaseReposition();
+        return false;
+    }
+    const Session::DeferredSeek d = s.deferredSeek;
+    s.deferredSeek = Session::DeferredSeek{};
+    fgpr::RaiseLog(s.handle, "[transport] SEEKED ms=" + std::to_string((long long)s.positionMs.load(std::memory_order_acquire)) +
+                             " -> the deferred seek to " + std::to_string((long long)d.targetMs) + "ms runs now (waited " +
+                             std::to_string((long long)fgpr::MsSinceQpc(d.postedQpc)) + "ms)");
+    RunSeek(rt, s, d.targetMs, d.mode, d.keyframeMs, d.postedQpc);
+    return true;
+}
+
 __declspec(dllexport) int32_t __stdcall FgPrSessionSeek(FgPrRuntime rtHandle, FgPrSession sh, int64_t targetMs, int32_t mode,
                                                         int64_t keyframeMs)
 {
@@ -2288,108 +2487,20 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSeek(FgPrRuntime rtHandle, Fg
     const int64_t postedQpc = fgpr::QpcNow();
     return PostVerb(rtHandle, sh, [targetMs, mode, keyframeMs, postedQpc](Runtime& rt, const std::shared_ptr<Session>& sp) {
         Session& s = *sp;
-        const uint64_t seq = s.seekSeq.fetch_add(1, std::memory_order_acq_rel) + 1;   // latest-wins
-        s.seekPostedQpc = postedQpc;
-        const int64_t kf = keyframeMs >= 0 && keyframeMs <= targetMs ? keyframeMs : -1;
+        if (IsLive(rt, s) && s.engineSeekInFlight)
         {
-            std::lock_guard<std::mutex> g(s.feedMx);
-            s.seekTargetMs = targetMs;
-            s.seekMode = mode;
-            s.seekKeyframeMs = kf;
-        }
-        s.seeking.store(1, std::memory_order_release);
-        Raise(s.handle, FgPrEvent_Seeking, targetMs);
-
-        if (!IsLive(rt, s))
-        {
-            // Not on the engine: the seek MOVES the start position the next attach opens at, and the store fetches around
-            // it. There is no engine seek to wait for, so it lands now.
-            s.startPositionMs.store(targetMs, std::memory_order_release);
-            {
-                std::lock_guard<std::mutex> g(s.feedMx);
-                s.seekNeedsFetch = false;
-                if (s.source && !s.source->m_handedToEngine.load(std::memory_order_acquire))
-                    s.source->SetStartPosition100ns((LONGLONG)targetMs * 10000LL);
-                s.prefetchAroundMs = targetMs;
-                if (s.prefetchSegments <= 0) s.prefetchSegments = 2;
-            }
-            s.positionMs.store(targetMs, std::memory_order_release);
-            s.positionQpc.store(fgpr::QpcNow(), std::memory_order_release);
-            s.seeking.store(0, std::memory_order_release);
-            Raise(s.handle, FgPrEvent_Seeked, targetMs, fgpr::MsSinceQpc(postedQpc));
-            s.Kick();
+            // ONE ENGINE SEEK AT A TIME, latest wins. The engine runs a seek it is given while another is in flight only
+            // after that one completes, and the one in flight completes only once its preroll samples arrive - but an
+            // unbuffered seek FLUSHES the streams and holds delivery for its own Start(reposition): the earlier seek
+            // never prerolls, the later Start never comes, and playback wedged for good (a seek-bar drag: preview seeks
+            // every ~125 ms, 2026-11-07). So the seek waits here, untouched, and only the newest one survives; the SEEKED
+            // of the seek in flight runs it (SessionSeekLanded). The transport already shows the target (Seeking).
+            s.deferredSeek = Session::DeferredSeek{ true, targetMs, mode, keyframeMs, postedQpc };
+            s.seeking.store(1, std::memory_order_release);
+            Raise(s.handle, FgPrEvent_Seeking, targetMs);
             return;
         }
-
-        if (!s.metadataSeen)
-        {
-            // Attached but not loaded yet: the source's first Start (and the CANPLAY fallback correction) must land on the
-            // NEW target, not on the start position the attach carried.
-            s.startPositionMs.store(targetMs, std::memory_order_release);
-            std::lock_guard<std::mutex> g(s.feedMx);
-            if (s.source) s.source->SetStartPosition100ns((LONGLONG)targetMs * 10000LL);
-        }
-
-        // The gate, evaluated against the CURRENT buffer (never a range sampled when the seek was issued). If the target
-        // already lies in both tracks' buffers the engine is repositioned NOW with no download at all — video from a
-        // keyframe at or before the target, audio from any sample, with contiguous coverage past it.
-        bool buffered = false;
-        std::shared_ptr<fgpr::HttpFetch> cancelVideo, cancelAudio;
-        std::vector<std::shared_ptr<fgpr::HttpFetch>> cancelExtra;   // F041: a job's pipelined second GETs are read-ahead of the OLD position
-        int32_t targetSegment = SegmentOfUnclamped(s, kf >= 0 ? kf : targetMs);
-        {
-            std::lock_guard<std::mutex> g(s.feedMx);
-            auto video = VideoStreamLocked(s);
-            auto audio = s.haveAudio ? AudioStreamLocked(s) : nullptr;
-            buffered = video && video->CanSeekTo(kf >= 0 ? kf : targetMs, true) && video->CanSeekTo(targetMs, false) &&
-                       (!audio || audio->CanSeekTo(targetMs, false));
-            if (buffered)
-            {
-                s.seekNeedsFetch = false;
-            }
-            else
-            {
-                // Register the target as the feeder's NEXT fetch. The GET on the wire is cancelled with its token —
-                // unless it already IS the target segment, which a rapid scrub over one segment would otherwise cancel
-                // over and over without ever letting it land.
-                s.seekNeedsFetch = true;
-                if (s.inflightVideoIndex != targetSegment && s.inflightVideoIndex != -2)
-                {
-                    cancelVideo = s.inflightVideo;
-                    cancelAudio = s.inflightAudio;
-                }
-                if (s.inflightVideoIndex != -2) cancelExtra = s.inflightExtra;   // (-2 = the init GETs, which carry none)
-                if (video) video->MarkIncomplete();
-                if (audio) audio->MarkIncomplete();
-                // FLUSH, in this same critical section (the feeder plans under feedMx, so it never sees a half-flushed
-                // store): the target segment must land in an EMPTY buffer. Left in place, the run inserted behind the
-                // delivery cursor was erased by the very append that landed it, and Start() fell back to sample 0.
-                // Lock order feedMx -> stream m_mx, as everywhere else.
-                s.flushSeq = seq;
-                if (video) video->FlushForSeek();
-                if (audio) audio->FlushForSeek();
-            }
-        }
-        if (buffered)
-        {
-            int64_t bufStart = 0, bufEnd = 0;
-            {
-                std::lock_guard<std::mutex> g(s.feedMx);
-                auto video = VideoStreamLocked(s);
-                if (video) video->BufferedRangeMs(bufStart, bufEnd);
-            }
-            fgpr::RaiseLog(s.handle, "[cenc-feed] seek ms=" + std::to_string((long long)targetMs) +
-                                     " served from buffer [" + std::to_string((long long)bufStart) + ".." +
-                                     std::to_string((long long)bufEnd) + "]ms - no fetch (seq=" + std::to_string(seq) + ")");
-            ApplySeekToEngine(rt, s);
-            return;
-        }
-        if (cancelVideo) cancelVideo->Cancel();
-        if (cancelAudio) cancelAudio->Cancel();
-        for (auto const& extra : cancelExtra) if (extra) extra->Cancel();
-        fgpr::RaiseLog(s.handle, "[cenc-feed] seek prefetch requested ms=" + std::to_string((long long)targetMs) +
-                                 " at segment index " + std::to_string(targetSegment) + " (seq=" + std::to_string(seq) + ")");
-        s.Kick();
+        RunSeek(rt, s, targetMs, mode, keyframeMs, postedQpc);
     });
 }
 

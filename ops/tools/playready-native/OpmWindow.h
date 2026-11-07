@@ -17,7 +17,7 @@
 // on the pump thread, the UI thread never waits) re-derives the screen rect from the host Place last recorded and moves the
 // window when it changed. Without it the OPM would keep attesting against the monitor the video was on before the move.
 //
-// No Media Foundation, COM or WinRT in here: the geometry is a pure function (OpmScreenRect) tests/FeedTests.cpp pins.
+// No Media Foundation, COM or WinRT in here: the geometry is a pure function (OpmScreenRect).
 #pragma once
 
 #ifndef NOMINMAX
