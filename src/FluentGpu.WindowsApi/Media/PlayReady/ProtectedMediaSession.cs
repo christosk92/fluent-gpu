@@ -94,6 +94,10 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     // keeps only ViewportUpswitchRetainMs of the old representation's buffer instead of appending after all of it.
     private bool _viewportRaised;
     private long _viewportRaiseTicks;
+    // The user turned a pin back to Auto: ABR's first pick is the user's choice taking effect and shows the way a pin does
+    // (PinRetainMs), not after the whole buffer the pinned rung filled (a minute of 240p after "Auto", 2026-11-08).
+    private bool _autoRestored;
+    private long _autoRestoredTicks;
     private long _lastBytesDownloaded;
     private long _lastDownloadElapsedMs;
     private long _lastGrowthTicks;
@@ -386,6 +390,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _qualitySelection = selection;
         if (_abr is not null) _abr.Selection = selection;
         _sink?.QualitySelection(selection, _activeQuality);
+        if (selection.IsAuto && !previous.IsAuto) { _autoRestored = true; _autoRestoredTicks = Environment.TickCount64; }
+        else if (!selection.IsAuto) _autoRestored = false;
         if (!selection.IsAuto && selection.VariantId is { } id)
         {
             _pendingRepresentationId = id;
@@ -855,6 +861,11 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             if (!isDecrease && now - _viewportRaiseTicks <= ViewportRaiseRetainWindowMs) retainMs = ViewportUpswitchRetainMs;
             if (!isDecrease) _viewportRaised = false;
         }
+        if (_autoRestored)
+        {
+            if (now - _autoRestoredTicks <= AutoRestoreWindowMs) retainMs = PinRetainMs;
+            _autoRestored = false;
+        }
         // Always-on, and only on an actual rung change: the sample that fed the estimate, both EWMAs, the buffer,
         // the cap and WHY — the one line that explains an "Auto · 240p" from a field log with no repro.
         _player.LogDiagnostic(
@@ -879,6 +890,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     /// <summary>The forward buffer an upswitch keeps after a viewport raise, and how long after the raise it applies.</summary>
     private const int ViewportUpswitchRetainMs = 25_000;
     private const long ViewportRaiseRetainWindowMs = 15_000;
+
+    /// <summary>How long after a pin is turned back to Auto ABR's first rung change still counts as the user's choice.</summary>
+    private const long AutoRestoreWindowMs = 15_000;
 
     /// <summary>A manual pin lands at the boundary right after the playhead: the user asked for that rung NOW.</summary>
     private const int PinRetainMs = 0;
