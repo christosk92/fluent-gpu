@@ -2,26 +2,26 @@
 
   <!-- ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
        The single shippable package. This project carries no code of its own; it assembles ONE NuGet package named
-       `FluentGpu` whose payload is the four FluentGpu.* assemblies (lib/net10.0) + the source generator
+       `FluentGpu` whose payload is the four FluentGpu.* assemblies (lib/net11.0) + the source generator
        (analyzers/dotnet/cs), with TerraFX.Interop.Windows as the lone declared dependency. Consumers add one
        <PackageReference Include="FluentGpu" /> and call FluentApp.Run(() => new App()).
        ──────────────────────────────────────────────────────────────────────────────────────────────────────────────── -->
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
 
     <IsPackable>true</IsPackable>
     <!-- This project ships no assembly of its own; the package payload is added explicitly below. -->
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <!-- NU5128: NuGet's "no lib/ref for the declared TFM" heuristic mis-fires here because we populate lib/net10.0
+    <!-- NU5128: NuGet's "no lib/ref for the declared TFM" heuristic mis-fires here because we populate lib/net11.0
          from a target (None items) rather than from this project's own build output. The package IS complete. -->
     <NoWarn>$(NoWarn);NU5128</NoWarn>
 
     <PackageId>FluentGpu</PackageId>
     <VersionPrefix>0.1.0</VersionPrefix>
     <Title>FluentGpu</Title>
-    <Description>A near-zero-allocation, NativeAOT, GPU-rendered (Direct3D 12) UI engine for .NET 10, with a React/Reactor + signals-first programming model. One package: the engine, the control kit, the Windows backend (including the batteries-included FluentApp.Run), the Windows OS-services surface, and opt-in source generators. Requires the .NET 10 SDK and Windows 10 21H2+ (x64/arm64).</Description>
+    <Description>A near-zero-allocation, NativeAOT, GPU-rendered (Direct3D 12) UI engine for .NET 11, with a React/Reactor + signals-first programming model. One package: the engine, the control kit, the Windows backend (including the batteries-included FluentApp.Run), the Windows OS-services surface, and opt-in source generators. Requires the .NET 11 SDK and Windows 10 21H2+ (x64/arm64).</Description>
     <Authors>Christos Karapasias</Authors>
     <Company>MarTeco</Company>
     <Copyright>Copyright (c) 2026 Christos Karapasias</Copyright>
@@ -36,7 +36,7 @@
 
   <!-- Build + bundle these; PrivateAssets="all" keeps them from leaking as package *dependencies* (their DLLs travel
        inside the package instead). The generator is referenced as an analyzer so its netstandard2.0 DLL is built but
-       never copied next to the net10.0 output. -->
+       never copied next to the net11.0 output. -->
   <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" PrivateAssets="all" />
     <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" PrivateAssets="all" />
@@ -67,7 +67,7 @@
   </ItemGroup>
 
   <!-- Assemble the payload after Build (so $(OutputPath) holds the copied FluentGpu.* DLLs + XML docs):
-       the four runtime assemblies → lib/net10.0, the generator → analyzers/dotnet/cs (path resolved via the
+       the four runtime assemblies → lib/net11.0, the generator → analyzers/dotnet/cs (path resolved via the
        SourceGen project's own GetTargetPath, no hardcoded bin path). -->
   <Target Name="_BundleFluentGpuAssemblies" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
     <ItemGroup>

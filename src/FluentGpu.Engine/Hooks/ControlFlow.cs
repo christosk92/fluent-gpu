@@ -118,7 +118,7 @@ internal sealed record IndexForEl(Func<int> Count, Func<int, Element> ItemAt, Fu
 /// same-key token change, and a boundary's FIRST activation once the window has presented a frame (a boundary mounted
 /// into a live UI — a freshly opened tab whose first route is the destination). The first activation passes
 /// <see cref="FirstActivation"/> as the old token; return null there to mount without an entrance. The very first
-/// frame's mount (the app's launch page) never asks.</para>
+/// frame's mount (the app's launch page) never asks. <see cref="CascadeFor"/> is asked on the same edges, after it.</para>
 /// </summary>
 public sealed record KeepAliveOptions(
     int MaxEntries = 5,
@@ -126,8 +126,18 @@ public sealed record KeepAliveOptions(
     Func<object, bool>? ShouldCache = null,
     Func<object, object, LayoutTransition?>? TransitionFor = null,
     bool SuppressLayoutTransitionsOnActivation = false,
-    bool CompositeTransitions = false)
+    bool CompositeTransitions = false,
+    Func<object, object, EntranceCascade?>? CascadeFor = null,
+    bool RecipeOwnsReducedMotion = false)
 {
+    // CascadeFor(oldToken, newToken): asked on the same activation edges as TransitionFor, right after it. A cascade staggers the
+    // incoming entry's on-screen EntranceGroup children (FluentGpu.Foundation.EntranceCascade), resolved after the frame's layout.
+    // Null (the default, or a null answer) = the entry enters as the one block TransitionFor describes.
+    //
+    // RecipeOwnsReducedMotion: by default reduced motion CUTS every swap (neither leg is seeded, whatever TransitionFor answers).
+    // True hands that decision to TransitionFor/CascadeFor: what they answer under reduced motion is seeded, with the engine's
+    // KeepFade rule (transforms land, opacity still fades). A TransitionFor that answers null under reduced motion keeps the cut.
+
     // CompositeTransitions: every entry root is a composited transition layer (NodePaint.CompositeLayer) — its enter /
     // exit translate and fade are composite parameters, so a transition re-records nothing below the page root. The fade
     // composites as a group (WinUI Visual.Opacity semantics) instead of multiplying each draw's alpha. Off by default.

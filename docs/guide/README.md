@@ -2,7 +2,7 @@
 
 > **✅ Animation engine — signals-first rework landed + verified.** The animation engine is one signals-first model: one POD `AnimValue` slab + one `AnimScheduler`/`CadenceClass` + an analytical closed-form spring + a declarative orchestration layer (`Transition`/`While*`/`Enter`/`Exit`/`Stagger`/`Layout` + `UseSpringValue`/`UseAnimatedValue`; reduced-motion-as-a-value). The scheduler class is still named `AnimEngine`, so `AnimEngine` references in this guide stay valid; the old `AnimTrack`/sub-stepped-Euler engine is gone. Verified: the gallery renders end-to-end. Design, now implemented: [`../plans/animation-engine-rework-design.md`](../plans/animation-engine-rework-design.md) (research: [`../plans/animation-engine-research-dossier.md`](../plans/animation-engine-research-dossier.md)).
 
-A from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI framework for .NET 10. React/Reactor
+A from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI framework for .NET 11. React/Reactor
 programming model (immutable `Element` records + `Component` + hooks) on a **signals-first** reactive core, over a
 custom Direct3D 12 + DirectWrite renderer behind a swappable seam (headless backends for tests/CI).
 

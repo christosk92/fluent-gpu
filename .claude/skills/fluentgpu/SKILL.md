@@ -5,7 +5,7 @@ description: Use when building UI with, or editing, the FluentGpu framework (thi
 
 # Working with FluentGpu
 
-FluentGpu is a near-zero-alloc, NativeAOT, D3D12-rendered .NET 10 UI engine. React/Reactor authoring surface
+FluentGpu is a near-zero-alloc, NativeAOT, D3D12-rendered .NET 11 UI engine. React/Reactor authoring surface
 (`Element` records + `Component` + hooks) on a **signals-first (Solid-style) reactive core**. Full guide:
 `docs/guide/` (start at `docs/guide/README.md`). This skill is the fast path + the rules that prevent most bugs.
 

@@ -1,11 +1,11 @@
 # fluent-gpu
 
-**A from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI framework for .NET 10 — fluent C# markup, React-style hooks, a signals-first reactive core, and a control kit with one consistent contract.**
+**A from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI framework for .NET 11 — fluent C# markup, React-style hooks, a signals-first reactive core, and a control kit with one consistent contract.**
 
 <p align="center">
   <a href="https://github.com/christosk92/fluent-gpu/actions/workflows/msix.yml"><img src="https://github.com/christosk92/fluent-gpu/actions/workflows/msix.yml/badge.svg" alt="MSIX build" /></a>
   <a href="https://github.com/christosk92/fluent-gpu/releases/latest"><img src="https://img.shields.io/github/v/release/christosk92/fluent-gpu?include_prereleases&label=release&color=512BD4" alt="Latest release" /></a>
-  <img src="https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet" alt=".NET 10" />
+  <img src="https://img.shields.io/badge/.NET-11.0-512BD4?logo=dotnet" alt=".NET 11" />
   <img src="https://img.shields.io/badge/NativeAOT-~7MB%20MSIX-0078D4?logo=windows" alt="NativeAOT MSIX" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License" /></a>
 </p>
@@ -175,7 +175,7 @@ using static FluentGpu.Dsl.Ui;   // VStack, Text, Button…
 FluentApp.Run<App>(new AppOptions { Title = "My app", CustomFrame = true });
 ```
 
-Needs the **.NET 10 SDK** and **Windows 10 21H2+** (x64/arm64). Publish a single self-contained native exe with `dotnet publish -c Release -r win-x64 -p:PublishAot=true`. Full walkthrough: [`docs/guide/consuming-via-nuget.md`](./docs/guide/consuming-via-nuget.md).
+Needs the **.NET 11 SDK** and **Windows 10 21H2+** (x64/arm64). Publish a single self-contained native exe with `dotnet publish -c Release -r win-x64 -p:PublishAot=true`. Full walkthrough: [`docs/guide/consuming-via-nuget.md`](./docs/guide/consuming-via-nuget.md).
 
 ## Running it
 

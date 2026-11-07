@@ -5,7 +5,7 @@
 
     Every build-time generator lives behind THIS one analyzer project (loaded by a consumer via an
     OutputItemType=Analyzer ProjectReference with ReferenceOutputAssembly=false, so the netstandard2.0
-    analyzer asm is never linked into the net10.0 app). Each generator is DORMANT unless its trigger is
+    analyzer asm is never linked into the net11.0 app). Each generator is DORMANT unless its trigger is
     present in the consuming compilation, so referencing this assembly never activates a generator a
     project does not opt into:
       Localization/  LocalizationKeysGenerator — fires only when an AdditionalFiles item carries
@@ -22,7 +22,7 @@
   -->
 
   <PropertyGroup>
-    <!-- Analyzers/generators MUST target netstandard2.0 (override the net10.0 solution baseline). -->
+    <!-- Analyzers/generators MUST target netstandard2.0 (override the net11.0 solution baseline). -->
     <TargetFramework>netstandard2.0</TargetFramework>
     <!-- An analyzer loads into WHATEVER compiler host runs the build: an arm64 csc for an x64 cross-pack, so it must stay
          AnyCPU even when a consumer passes Platform=x64 down the reference (a PE32+ AMD64 analyzer is CS8034 on arm64). -->
@@ -37,7 +37,7 @@
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
 
     <!-- Override the solution Directory.Build.props (which forces these on for DocFX). A generator
-         needs neither an XML doc file nor the net10.0/LangVersion-14 baseline. -->
+         needs neither an XML doc file nor the net11.0/LangVersion-15 baseline. -->
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
 
     <!-- RS2008 (analyzer release tracking) is advisory; these generators ship in-repo, not as a NuGet analyzer. -->
@@ -45,7 +45,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Roslyn. Pinned to 4.14.0 (present in the offline nuget cache; ships with the .NET 10/11 SDK).
+    <!-- Roslyn. Pinned to 4.14.0 (present in the offline nuget cache; ships with the .NET 10 and 11 SDKs).
          PrivateAssets=all keeps the Roslyn dependency from flowing to consumers of this analyzer. -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" PrivateAssets="all" />
   </ItemGroup>

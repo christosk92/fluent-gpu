@@ -1,6 +1,6 @@
 # Pack and publish the single `FluentGpu` NuGet package (managed libraries bundled into one package).
 #
-#   * one package: FluentGpu.Engine/Controls/Windows/WindowsApi DLLs in lib/net10.0 + the source generator in
+#   * one package: FluentGpu.Engine/Controls/Windows/WindowsApi DLLs in lib/net11.0 + the source generator in
 #     analyzers/dotnet/cs, with TerraFX.Interop.Windows as the lone declared dependency (see FluentGpu.Package.csproj)
 #   * version comes from the git tag (vX.Y.Z → X.Y.Z; preserves a -preview suffix)
 #   * publishing uses nuget.org TRUSTED PUBLISHING (OIDC): the job exchanges a short-lived GitHub OIDC token for a
@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '11.0.x'   # repo targets net10.0 but builds on the 11.x preview SDK (matches msix.yml)
+          dotnet-version: '11.0.x'   # repo targets net11.0 but builds on the 11.x preview SDK (matches msix.yml)
           dotnet-quality: preview
       - name: Resolve version
         id: v

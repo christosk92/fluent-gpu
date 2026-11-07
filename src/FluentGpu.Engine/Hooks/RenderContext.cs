@@ -630,6 +630,10 @@ public sealed partial class RenderContext
     /// For a component that MOUNTS a page's content after the keep-alive switch itself (a deferred cold mount): the content's first layouts must
     /// land, not animate in from zero as a keep-alive activation's would not.</summary>
     public Action? SuppressLayoutTransitions;
+    /// <summary>Reconciler-injected: stagger the on-screen <see cref="FluentGpu.Dsl.Element.EntranceGroup"/> children under a node (and
+    /// any group inside it) in, after this frame's layout (<see cref="FluentGpu.Foundation.EntranceCascade"/>). For a component that
+    /// re-presents part of its own tree (a pivot that brings a section in) the way a keep-alive page swap presents a page.</summary>
+    public Action<NodeHandle, EntranceCascade>? EntranceCascade;
     public ImageCache? Images;                  // host-injected; backs UseImage / PrefetchImage
     public SceneStore? Scene;                   // reconciler-injected; for measuring nodes (AbsoluteRect) + overlay positioning
     /// <summary>Reconciler-injected bound-list removal seam: detach realized logical indices into the exit-orphan layer,

@@ -4,7 +4,7 @@ This is the entry point for **engine contributors** — you're changing FluentGp
 the scene store, the renderer, the reactive core), not building an app *with* it. If you're here to ship a UI, start at
 [Building apps with FluentGpu](../app-authors/index.md) instead.
 
-FluentGpu is a from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10: a React/Reactor
+FluentGpu is a from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 11: a React/Reactor
 authoring surface (immutable `Element` records + `Component` + hooks) over a **signals-first** (Solid-style) reactive
 core, patching a retained struct-of-arrays scene that a recorder walks into a GPU command list each frame. Before you
 touch anything, internalize the single mechanism the whole engine is built on — it is the same rule app authors learn,

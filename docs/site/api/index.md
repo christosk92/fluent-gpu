@@ -9,7 +9,7 @@ exhaustive *what*. If you arrived here looking for "how do I…", the conceptual
 docfx metadata docs/site/docfx.json     # regenerate api/*.yml before building the site
 ```
 
-The set of projects this reference covers, and the `net10.0` target it builds against, is pinned in
+The set of projects this reference covers, and the `net11.0` target it builds against, is pinned in
 [`docs/site/docfx.json`](../docfx.json) (the `metadata.src.files` list). Adding a project to that list is what makes it
 appear here.
 

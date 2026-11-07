@@ -5,7 +5,7 @@
 # process this script started). Every step is timed and followed by a PrintWindow screenshot into <OutRoot>\<timestamp>\.
 # Layout constants are base (100 percent) pixels of the 1600x940 window on the Liked Songs page.
 param(
-  [string]$Exe = 'C:/wavee/vfix/int/WaveeMusic/src/apps/Wavee/bin/Release/net10.0/Wavee.exe',
+  [string]$Exe = 'C:/wavee/vfix/int/WaveeMusic/src/apps/Wavee/bin/Release/net11.0/Wavee.exe',
   [string]$Clip = 'C:/wavee/vfix/e2e/testpattern-1080p.mp4',
   [string]$OutRoot = 'C:/wavee/vfix/e2e/runs',
   [int]$Attach = 0,

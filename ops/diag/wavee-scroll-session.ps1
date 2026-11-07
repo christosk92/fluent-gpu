@@ -128,7 +128,7 @@ if (-not $SkipPublish) {
 }
 if (-not $ExePath) {
   if ($Diag) { $ExePath = Join-Path $root "src\apps\Wavee\bin\publish-aot-diag\win-$Arch\Wavee.exe" }
-  else { $ExePath = Join-Path $root "src\apps\Wavee\bin\Release\net10.0\win-$Arch\publish\Wavee.exe" }
+  else { $ExePath = Join-Path $root "src\apps\Wavee\bin\Release\net11.0\win-$Arch\publish\Wavee.exe" }
 }
 if (-not (Test-Path $ExePath)) { throw "Wavee.exe not found: $ExePath (publish first, or pass -ExePath)" }
 $exeInfo = Get-Item $ExePath

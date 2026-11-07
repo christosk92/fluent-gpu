@@ -4,7 +4,7 @@ This is the entry point for **app authors** — you're building a UI *with* Flue
 internals. If you're here to modify the framework itself, start at the developer guide's
 [file & ownership map](../../guide/README.md#-agent--file--ownership-map-where-to-change-what) instead.
 
-FluentGpu is a from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI framework for .NET 10. You write a
+FluentGpu is a from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI framework for .NET 11. You write a
 **React/Reactor** authoring surface — immutable `Element` records + `Component` + hooks — over a **signals-first**
 (Solid-style) reactive core. The payoff of that core is the thing to internalize on day one:
 

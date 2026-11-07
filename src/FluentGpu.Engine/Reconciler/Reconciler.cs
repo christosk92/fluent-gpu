@@ -974,6 +974,7 @@ public sealed partial class TreeReconciler
         ctx.Runtime = Runtime;
         ctx.Anim = Anim;
         ctx.SuppressLayoutTransitions = _armSuppressionSeam ??= ArmKeepAliveLayoutSuppression;
+        ctx.EntranceCascade = _cascadeSeam ??= RequestEntranceCascade;
         ctx.Images = Images;
         ctx.Scene = _scene;
         ctx.RequestFrame = RequestFrame;
@@ -2008,7 +2009,10 @@ public sealed partial class TreeReconciler
         state.Options = options;
 
         LayoutTransition? transition = null;
+        object? fromToken = null;   // the old token TransitionFor was asked with: CascadeFor gets the same edge
         bool activationChanged = state.ActiveKey != key;
+        // Reduced motion cuts every swap unless the options hand that decision to the recipes (RecipeOwnsReducedMotion).
+        bool swapMotion = Anim is not null && !SnapMotion && (options.RecipeOwnsReducedMotion || !Motion.ReducedMotion);
 
         if (state.ActiveKey is { } activeKey && state.Entries.TryGetValue(activeKey, out var activeEntry)
             && activeKey == key && !Equals(activeEntry.Token, token))
@@ -2018,6 +2022,7 @@ public sealed partial class TreeReconciler
             // edge so the in-place update receives its directional entrance. There is no outgoing root in this case:
             // Update below preserves the mounted component/state, then the normal enter seed animates that same root.
             transition = options.TransitionFor?.Invoke(activeEntry.Token, token);
+            fromToken = activeEntry.Token;
             activationChanged = true;
         }
 
@@ -2030,7 +2035,8 @@ public sealed partial class TreeReconciler
         if (state.ActiveKey is { } oldKey && oldKey != key && state.Entries.TryGetValue(oldKey, out var oldActive))
         {
             transition = options.TransitionFor?.Invoke(oldActive.Token, token);
-            if (transition is { } spec && spec.Exit.Active && Anim is not null && !Motion.ReducedMotion && !SnapMotion)
+            fromToken = oldActive.Token;
+            if (transition is { } spec && spec.Exit.Active && swapMotion)
                 BeginKeepAliveExit(state, oldActive, options, spec);
             else
             {
@@ -2050,6 +2056,7 @@ public sealed partial class TreeReconciler
             // screen to transition from, mounts without one (Flutter's Navigator likewise never animates its initial
             // route; host-less reconcilers never tick FrameEpoch and keep the plain mount).
             transition = options.TransitionFor?.Invoke(KeepAliveOptions.FirstActivation, token);
+            fromToken = KeepAliveOptions.FirstActivation;
         }
 
         if (!state.Entries.TryGetValue(key, out var entry))
@@ -2113,11 +2120,14 @@ public sealed partial class TreeReconciler
         state.ActiveKey = key;
         MirrorParticipation(node, entry.Root);
         RemirrorAncestors(node);   // a component/provider anchor above mirrors THIS anchor and did not re-render
-        if (transition is { } enter && enter.Enter.Active && Anim is { } anim && !Motion.ReducedMotion && !SnapMotion)
+        if (transition is { } enter && enter.Enter.Active && Anim is { } anim && swapMotion)
         {
             anim.CancelAll(entry.Root);
             anim.SeedEnterOver(entry.Root, enter.Enter, enter, EnterRestOf(entry.El));
         }
+        // The staggered half of the entrance: resolved after this frame's layout (RunEntranceCascades), over the entry's root.
+        if (fromToken is not null && swapMotion && options.CascadeFor?.Invoke(fromToken, token) is { } cascade)
+            RequestEntranceCascade(entry.Root, cascade);
         EvictInactiveKeepAliveEntries(state, options);
     }
 
@@ -5000,6 +5010,7 @@ public sealed partial class TreeReconciler
         // Element.Stagger / RelativeTo rows are node-indexed like the rest: a freed index must not hand its stagger or its
         // FLIP anchor to the next node that reuses it (WriteColumns' own remove only covers a node that is re-written).
         _childStagger.Remove(idx);
+        _entranceGroups.Remove(idx);
         _relativeKey.Remove(idx);
         _providerSig.Remove(idx);
         _mirroredChild.Remove(idx);
@@ -5108,6 +5119,7 @@ public sealed partial class TreeReconciler
         // Per-child entrance stagger (this anchor delaying its OWN Enter — the child-side stagger read is
         // StaggerDelayMs walking the PARENT's row, unaffected by this node's own entry here).
         if (ce.Stagger > 0f) _childStagger[nodeIdx] = ce.Stagger; else _childStagger.Remove(nodeIdx);
+        NoteEntranceGroup(node, ce.EntranceGroup);
 
         // P1 presence: static (unbound) Visible write — a bound channel is instead owned by its BindNode effect (wired
         // at mount, re-wired bound→bound on reuse below — the same contract every other element type gets).
@@ -5634,6 +5646,7 @@ public sealed partial class TreeReconciler
         // it + the child's sibling index to delay that child's Enter (a staggered list/shelf reveal). Reconciler-local;
         // cleared when Stagger drops to 0. Set for every element type (any container can stagger its children).
         if (el.Stagger > 0f) _childStagger[(int)node.Raw.Index] = el.Stagger; else _childStagger.Remove((int)node.Raw.Index);
+        NoteEntranceGroup(node, el.EntranceGroup);
 
         // P1 presence (layout.md §4.7): static (unbound) Visible write, every element type. A bound channel is owned
         // by its BindPresence effect (Reconciler.Presence.cs) — the static write must not clobber it, same guard

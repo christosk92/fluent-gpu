@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '11.0.x'       # repo targets net10.0 but builds on the 11.x preview SDK
+          dotnet-version: '11.0.x'       # repo targets net11.0 on the 11.0 RC SDK pinned in src/global.json
           dotnet-quality: preview
       # Build the signed-with-dev-cert-free MSIX. CI leaves it UNSIGNED (-NoSign); the sign job re-signs if secrets exist.
       - name: Pack MSIX (NativeAOT)

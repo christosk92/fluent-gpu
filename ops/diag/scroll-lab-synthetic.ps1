@@ -18,7 +18,7 @@
   powershell -File ops\diag\scroll-lab-synthetic.ps1 -ExePath C:\publish\lab\FluentGpu.ScrollLab.exe
 #>
 param(
-  [string]$ExePath = (Join-Path $PSScriptRoot '..\..\src\FluentGpu.ScrollLab\bin\Debug\net10.0\FluentGpu.ScrollLab.exe')
+  [string]$ExePath = (Join-Path $PSScriptRoot '..\..\src\FluentGpu.ScrollLab\bin\Debug\net11.0\FluentGpu.ScrollLab.exe')
 )
 $ErrorActionPreference = 'Stop'
 $exe = (Resolve-Path $ExePath).Path
