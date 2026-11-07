@@ -3,6 +3,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Hosting;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 
@@ -322,8 +323,24 @@ internal sealed class CommandBarFlyoutBody : Component
 
     public override Element Render()
     {
-        lastService = UseContext(Overlay.Service);          // cascading sub-flyouts open through the same service
         var hk = UseContext(InputHooks.Current);            // focus moves: arrow roving + the Standard initial focus
+        // The overflow rows' cascades (AppBarButton.Flyout in the overflow: WinUI drives them with the same
+        // CascadingMenuHelper as MenuFlyoutSubItem, AppBarButton_Partial.cpp m_menuHelper) — one MenuCascade, the
+        // MenuFlyout one, so hover-open, the delays, submenu aim, Right/Left and tap-to-open match every other menu.
+        if (!_cascadeWired)
+        {
+            _cascadeWired = true;
+            _cascade.Scene = () => Context.Scene;
+            _cascade.SelfNode = () => _rootNode;
+            _cascade.RowNode = i => (uint)i < (uint)_secondaryNodes.Length ? _secondaryNodes[i] : default;
+            _cascade.CascadeOf = i => (uint)i < (uint)Secondary.Count && Secondary[i] is { Enabled: true, Flyout: { Count: > 0 } sub } ? sub : null;
+            _cascade.CloseAll = () => _requestClose?.Invoke();   // a sub item closes the WHOLE chain (through the 83ms fade)
+        }
+        _cascade.Overlay = UseContext(Overlay.Service);
+        _cascade.Hooks = hk;
+        _cascade.Timers = UseContext(HostTimers.Current);
+        var cascade = _cascade;
+        UseEffect(() => (Action?)(() => cascade.Dispose()), DepKey.Empty);   // unmount: no timer outlives the body
         var placement = UseContext(Overlay.Placement);
 
         bool hasSecondary = Secondary.Count > 0;
@@ -391,7 +408,7 @@ internal sealed class CommandBarFlyoutBody : Component
             anim.Animate(_rootNode, AnimChannel.Opacity, 0f, 1f, Motion.ControlFaster, Easing.Linear);
         }, DepKey.Empty);   // mount-once
 
-        void CloseSubFlyout() { if (subHandleLive is { IsOpen: true } s) s.Close(); subHandleLive = null; }
+        void CloseSubFlyout() => _cascade.CloseChild();
 
         // ClosingOpacityStoryboard: Opacity 1→0 over 83ms linear (themeresources:659-662), then hide. Every
         // command/toggle close (and the trigger toggle, via FadeCloseSlot) routes through here.
@@ -606,8 +623,10 @@ internal sealed class CommandBarFlyoutBody : Component
             {
                 case Keys.Down: VerticalMove(v, +1); a.Handled = true; break;
                 case Keys.Up: VerticalMove(v, -1); a.Handled = true; break;
-                // Consumed but move nothing — the horizontal list holds only primary commands + the MoreButton
-                // (cpp:1215, :1286-1290).
+                // Right on a row with a Flyout opens its cascade with the first item focused (CascadingMenuHelper
+                // OnKeyDown); otherwise Left/Right are consumed but move nothing — the horizontal list holds only primary
+                // commands + the MoreButton (cpp:1215, :1286-1290).
+                case Keys.Right when Secondary[j].Flyout is { Count: > 0 }: _cascade.Open(j, focusFirst: true); a.Handled = true; break;
                 case Keys.Left or Keys.Right: a.Handled = true; break;
             }
         }
@@ -916,10 +935,16 @@ internal sealed class CommandBarFlyoutBody : Component
                 : OverflowRow(cmd, j, hasIconColumn, hasCheckColumn, onRowKey));
         }
 
+        var cascade = _cascade;
         var column = new BoxEl
         {
             Direction = 1,
             Padding = new Edges4(3, 3, 3, 3),   // ItemsPresenter Margin="3" (:556)
+            // Every move over the rows and the gaps between them feeds the cascade's submenu aim; a press on a gap
+            // moves no focus.
+            OnPointerMoveWithin = _ => cascade.Sample(),
+            OnPointerExit = cascade.LevelExit,   // left the gaps: maybe the whole menu
+            AllowFocusOnInteraction = false,
             Children = rows.ToArray(),
         };
 
@@ -1031,6 +1056,7 @@ internal sealed class CommandBarFlyoutBody : Component
             });
 
         int j = idx;
+        var cascade = _cascade;
         return new BoxEl
         {
             Direction = 0,
@@ -1040,8 +1066,12 @@ internal sealed class CommandBarFlyoutBody : Component
             Corners = Radii.ControlAll,
             Role = isToggle ? AutomationRole.ToggleButton : AutomationRole.MenuItem,
             // Subtle ramp only — checked rows reveal the glyph, never an accent plate (OverflowChecked :434-438;
-            // OverflowCheckedPointerOver/Pressed reuse BackgroundPointerOver/Pressed :443/:453).
-            Fill = ColorF.Transparent,
+            // OverflowCheckedPointerOver/Pressed reuse BackgroundPointerOver/Pressed :443/:453). A row whose cascade
+            // is open holds the PointerOver fill (the SubMenuOpened state): a bound fill, so opening and closing the
+            // cascade repaints the row without re-rendering the body.
+            Fill = hasSub && enabled
+                ? Prop.Of(() => cascade.OpenIndex.Value == j ? Tok.FillSubtleSecondary : ColorF.Transparent)
+                : ColorF.Transparent,
             HoverFill = enabled ? Tok.FillSubtleSecondary : ColorF.Transparent,
             PressedFill = enabled ? Tok.FillSubtleTertiary : ColorF.Transparent,
             BrushTransitionMs = Motion.ControlFaster,   // 83ms BrushTransition on the row background (:282)
@@ -1050,6 +1080,8 @@ internal sealed class CommandBarFlyoutBody : Component
             Accelerator = cmd.Accelerator,
             OnClick = enabled ? () => RunSecondary(cmd, j) : null,
             OnKeyDown = enabled ? a => onRowKey(j, a) : null,
+            OnHoverMove = enabled ? _ => cascade.RowHover(j) : null,   // cascade hover intent (open delay, close delay, aim)
+            OnPointerExit = enabled ? () => cascade.RowExit(j) : null,
             HitTestVisible = enabled,
             IsEnabled = enabled,
             Focusable = enabled,
@@ -1058,23 +1090,14 @@ internal sealed class CommandBarFlyoutBody : Component
         };
     }
 
-    // Secondary rows: a command WITH a Flyout opens its cascading sub-menu and must NOT close the parent
-    // (CommandBarFlyout.cpp:95-108 — the Hide() call is gated on !button.Flyout()); plain buttons AND toggles close —
-    // closeFlyoutFunc = Hide() is hooked on Click, Checked AND Unchecked alike (cpp:97/:104-105, :414-419).
+    // Secondary rows: a command WITH a Flyout opens its cascading sub-menu (a click, a touch or pen tap) and must NOT
+    // close the parent (CommandBarFlyout.cpp:95-108 — the Hide() call is gated on !button.Flyout()); plain buttons AND
+    // toggles close — closeFlyoutFunc = Hide() is hooked on Click, Checked AND Unchecked alike (cpp:97/:104-105, :414-419).
     void RunSecondary(AppBarCommand cmd, int idx)
     {
-        if (cmd.Flyout is { Count: > 0 } subItems)
+        if (cmd.Flyout is { Count: > 0 })
         {
-            if (subHandleLive is { IsOpen: true } s) { s.Close(); subHandleLive = null; }
-            var svc2 = lastService;
-            if (svc2 is null) return;
-            int j = idx;
-            subHandleLive = svc2.Open(
-                () => (uint)j < (uint)_secondaryNodes.Length ? _secondaryNodes[j] : default,
-                // invoking a sub item closes the WHOLE chain (through the 83ms closing fade)
-                () => MenuFlyout.Build(subItems, () => _requestClose?.Invoke()),
-                FlyoutPlacement.RightEdgeAlignedTop,
-                new PopupOptions(Chrome: PopupChrome.Flyout) { ConstrainToRootBounds = false });
+            _cascade.Open(idx, focusFirst: false);
             return;
         }
         cmd.Invoke?.Invoke();
@@ -1083,8 +1106,8 @@ internal sealed class CommandBarFlyoutBody : Component
 
     // Cascading sub-flyout plumbing + node captures: UseContext/UseRef are render-scoped; instance fields let the
     // row builders — instance methods — reach them.
-    IOverlayService? lastService;
-    OverlayHandle? subHandleLive;
+    readonly MenuCascade _cascade = new();
+    bool _cascadeWired;
     Ref<NodeHandle>? _overflowNode;
     NodeHandle[] _primaryNodes = [];
     NodeHandle[] _secondaryNodes = [];

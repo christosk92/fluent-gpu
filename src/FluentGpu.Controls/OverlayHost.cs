@@ -270,6 +270,7 @@ internal sealed class NullOverlayService : IOverlayService
 
 internal sealed class OverlayEntry
 {
+    public OverlayServiceImpl? Service;   // the service that opened it (a press inside its surface reports back to it)
     public int Id;
     public required Func<NodeHandle> Anchor;
     public Func<RectF>? AnchorRect;   // rect-anchored open (derived/pointer rect, live-followed) — wins over Anchor when set
@@ -408,6 +409,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
         var handle = new OverlayHandle { IsOpen = true };
         var entry = new OverlayEntry
         {
+            Service = this,
             Id = _nextId++, Anchor = anchor, AnchorRect = anchorRect, Content = content, Placement = placement, Handle = handle,
             FocusTrap = options.FocusTrap,
             PreserveFocusOnOpen = options.PreserveFocusOnOpen,
@@ -516,6 +518,21 @@ internal sealed class OverlayServiceImpl : IOverlayService
     {
         for (int i = Entries.Count - 1; i >= 0; i--)
             if (Entries[i].Phase != OverlayPhase.Closing) { BeginClose(Entries[i], cause); return; }
+    }
+
+    /// <summary>A press landed inside <paramref name="e"/>'s own bounds on nothing interactive (FlyoutSurface.OwnPresses):
+    /// <paramref name="e"/> stays open. The topmost input-blocking popup ABOVE it, if any, is outside the press: a
+    /// light-dismiss one closes (its cascade with it), the scrim's old outside-press rule; a modal one keeps it.</summary>
+    internal void PressInside(OverlayEntry e)
+    {
+        for (int i = Entries.Count - 1; i >= 0; i--)
+        {
+            var top = Entries[i];
+            if (ReferenceEquals(top, e)) return;
+            if (top.Phase == OverlayPhase.Closing || top.DismissBehavior == DismissBehavior.None) continue;
+            if (top.DismissBehavior == DismissBehavior.LightDismiss) BeginClose(top, OverlayCloseCause.LightDismiss);
+            return;
+        }
     }
 
     internal void CloseTopInputBlocking(OverlayCloseCause cause)
@@ -819,10 +836,14 @@ internal sealed class OverlayServiceImpl : IOverlayService
             bool windowed = e.PopupWindowToken >= 0;
             bool viewportResized = !windowed
                 && (MathF.Abs(ViewportRect.W - e.LastViewport.W) >= 0.5f || MathF.Abs(ViewportRect.H - e.LastViewport.H) >= 0.5f);
-            if (!resized && !viewportResized
-                && MathF.Abs(aRect.X - e.LastAnchorRect.X) < 0.5f && MathF.Abs(aRect.Y - e.LastAnchorRect.Y) < 0.5f
-                && MathF.Abs(aRect.W - e.LastAnchorRect.W) < 0.5f && MathF.Abs(aRect.H - e.LastAnchorRect.H) < 0.5f)
+            bool anchorStill = MathF.Abs(aRect.X - e.LastAnchorRect.X) < 0.5f && MathF.Abs(aRect.Y - e.LastAnchorRect.Y) < 0.5f
+                && MathF.Abs(aRect.W - e.LastAnchorRect.W) < 0.5f && MathF.Abs(aRect.H - e.LastAnchorRect.H) < 0.5f;
+            if (!resized && !viewportResized && anchorStill)
                 continue;
+            // A popup whose CONTENT grew or shrank under a still anchor and viewport keeps the side it opened on (its effective placement
+            // leads the fallback): re-running the requested placement let a flyout that had fallen back to Left jump below its anchor
+            // the moment a shorter body fitted there. It still moves when that side no longer fits (the fallback runs from it).
+            var request = resized && !viewportResized && anchorStill ? e.EffectivePlacement : e.Placement;
 
             e.LastAnchorRect = aRect;
             e.LastViewport = ViewportRect;
@@ -833,7 +854,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
                 container = workArea(new Point2(aRect.X + aRect.W * 0.5f, aRect.Y + aRect.H * 0.5f));
 
             var place = OverlayHost.ApplyAnchorOffsetX(
-                FlyoutPositioner.Place(in aRect, in popupSize, in container, e.Placement, isWindowed: windowed),
+                FlyoutPositioner.Place(in aRect, in popupSize, in container, request, isWindowed: windowed),
                 e.AnchorOffsetX, in aRect);
             if (windowed)
                 Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, e.MeasuredW, e.MeasuredH), place.OpensUp,
@@ -1672,6 +1693,11 @@ public sealed class OverlayHost : Component
 
     static BoxEl Positioned(OverlayEntry e) => e.Chrome == PopupChrome.Modal ? PositionedModal(e) : PositionedAnchored(e);
 
+    // An input-blocking entry's surface owns the presses inside its bounds (FlyoutSurface.OnPressInside); a caller-owned
+    // one (ToolTip, DismissBehavior.None) owns none. The service is the entry's own (OverlayEntry.Service).
+    static Action<Point2>? PressInsideFor(OverlayEntry e)
+        => e.DismissBehavior == DismissBehavior.None || e.Service is not { } svc ? null : _ => svc.PressInside(e);
+
     // BOTH positioning hosts are full-bleed layers above the scrim and the page: they must gate their SUBTREE with
     // HitTestVisible (a closing popup goes inert) but must never take a hit THEMSELVES (HitTestPassThrough = self
     // yields, children keep). A handler-less full-bleed wrapper is invisible to the interaction-gated Hit walk, but
@@ -1698,6 +1724,7 @@ public sealed class OverlayHost : Component
                 Body = e.Content,
                 Chrome = e.Chrome,
                 Plate = e.Plate,
+                OnPressInside = PressInsideFor(e),
                 OnSurface = h => e.SurfaceNode = h,
                 OnPlateStyle = p => e.PlateStyle = p,
             }),
@@ -1731,6 +1758,7 @@ public sealed class OverlayHost : Component
                         Body = () => Ctx.Provide(Overlay.Placement, e.PlacementInfo, e.Content()),
                         Chrome = e.Chrome,
                         Plate = e.Plate,
+                        OnPressInside = PressInsideFor(e),
                         OnSurface = h => e.SurfaceNode = h,
                         OnPlateStyle = p => e.PlateStyle = p,
                         OnPlate = h => e.PlateNode = h,
@@ -1759,6 +1787,24 @@ internal sealed class FlyoutSurface : Component
     /// <summary>Reports the <see cref="PopupPlate"/> this render built the card from (frosted chromes only), so the host's
     /// per-frame backdrop sync and its corner squaring read the same card without resolving the style table every frame.</summary>
     public Action<PopupPlate>? OnPlateStyle;
+    /// <summary>Set for an input-blocking entry (light-dismiss or modal): a press that lands inside this popup's bounds and
+    /// that nothing inside it takes. See <see cref="OwnPresses"/>.</summary>
+    public Action<Point2>? OnPressInside;
+
+    /// <summary>WinUI light dismiss is a question of BOUNDS: the light-dismiss layer only receives a press the popup's
+    /// visual tree did not hit-test, and a presenter with a background hit-tests across its whole card
+    /// (CPopupRoot::OnPointerPressed closes only for a press the popup did not take). The engine's click walk is
+    /// INTERACTION-gated instead (InputDispatcher.Hit: a handler-less box is no hit target), so a press on a popup's
+    /// padding, a section header, a gap between rows, a caption or a disabled row found nothing inside the popup and fell
+    /// through to the full-bleed light-dismiss scrim beneath it, which closed the flyout. The surface therefore takes the
+    /// press itself wherever no row inside it does (a pointer handler makes it a hit target; it is never auto-tinted, see
+    /// SceneRecorder.AutoTints) and never moves focus off the row the keyboard is on (AllowFocusOnInteraction = false).
+    /// The popup stays; a popup opened ABOVE it (its cascade, a dropdown opened from it) is outside that press and light
+    /// dismisses exactly as the scrim used to (<see cref="OverlayServiceImpl.PressInside"/>). A caller-owned entry (a
+    /// ToolTip, DismissBehavior.None) keeps the pass-through: it never swallows input meant for the page beneath it.</summary>
+    BoxEl OwnPresses(BoxEl surface) => OnPressInside is { } pressInside
+        ? surface with { HitTestPassThrough = false, OnPointerDown = pressInside, AllowFocusOnInteraction = false }
+        : surface;
 
     /// <summary>The corners of a card of radius <paramref name="radius"/> whose <paramref name="join"/> edge abuts its anchor.</summary>
     public static CornerRadius4 CornersFor(CornerJoin join, float radius) => join switch
@@ -1788,7 +1834,7 @@ internal sealed class FlyoutSurface : Component
         if (Chrome == PopupChrome.Raw || Chrome == PopupChrome.Modal || Chrome == PopupChrome.TeachingTip)
         {
             bool modal = Chrome == PopupChrome.Modal;
-            return new BoxEl
+            return OwnPresses(new BoxEl
             {
                 Direction = 1,
                 AlignSelf = modal ? FlexAlign.Center : FlexAlign.Start,
@@ -1810,7 +1856,7 @@ internal sealed class FlyoutSurface : Component
                 // A dialog WITH scrollable Content is unaffected — that inner scroller is a descendant, found first.
                 BlocksBackgroundScroll = modal,
                 Children = [Body()],
-            };
+            });
         }
 
         // The frosted popup card. Every WinUI transient surface carries the ONE default acrylic recipe
@@ -1846,7 +1892,7 @@ internal sealed class FlyoutSurface : Component
             // "menu overlaps the button" mid-open artifact).
             var menuPlate = Plate ?? PlateFor(Chrome);
             OnPlateStyle?.Invoke(menuPlate);
-            return new BoxEl
+            return OwnPresses(new BoxEl
             {
                 ZStack = true,
                 AlignSelf = FlexAlign.Start,
@@ -1883,13 +1929,13 @@ internal sealed class FlyoutSurface : Component
                         Children = [Body()],
                     },
                 ],
-            };
+            });
         }
 
         // The stock card pads 0,2,0,2 for every frosted chrome but the generic Popup flyout (see PlateFor).
         var plate = Plate ?? PlateFor(Chrome);
         OnPlateStyle?.Invoke(plate);
-        return new BoxEl
+        return OwnPresses(new BoxEl
     {
         Direction = 1,
         AlignSelf = FlexAlign.Start,
@@ -1906,6 +1952,6 @@ internal sealed class FlyoutSurface : Component
 
         OnRealized = h => OnSurface?.Invoke(h),
         Children = [Body()],
-    };
+    });
     }
 }

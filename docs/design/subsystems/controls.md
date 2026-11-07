@@ -774,8 +774,12 @@ save-restore come free). All shipped in `FluentGpu.Controls`.
   an open flyout pins its anchor's auto-hide scope; exposed via `IOverlayService.IsAnchorPinned(scope)`), plus
   `PreserveFocusOnOpen`/`ConstrainToRootBounds`/`SeamOffsetY`/`PassThrough`/`AnchorOffsetX`. The old demo `Popup.cs`
   class + `GenericFlyout` are superseded (the surviving `GenericFlyout.FlyoutButton` is the label-flyout convenience).
-- **MenuFlyout safe-triangle:** `MenuSafeTriangle` (a point-in-aim-triangle test from the pointer through the submenu
-  edge) keeps a submenu open while the pointer travels diagonally toward it (the WinUI/macOS hover-intent behavior).
+- **Menu cascades:** `MenuCascade` is the ONE hover intent of every cascading menu level (`MenuFlyoutPresenter` and the
+  `CommandBarFlyout` overflow rows): WinUI CascadingMenuHelper's MenuShowDelay open and close, click/tap/Right to open
+  at once, Left to close a level, plus submenu aim (macOS/Chrome/GTK): a move inside the triangle from the exit point
+  (or from the pointer a few samples ago) to the open cascade's near edge restarts the timers instead of switching or
+  closing, moves over a level's gaps count, the pointer anywhere in a deeper level holds every ancestor open, and a
+  close that comes due outside every menu re-checks the pointer first.
 - **Toast:** an **auto-mounted lane** in `OverlayHost` (a top-Z, hit-test-transparent `ZStack` slot that every app
   already gets) + an optional explicit `ToastHost.Create(ToastHostOptions?)`. `Toast.Show(string message,
   ToastOptions? options = null) → ToastHandle{ bool IsOpen; void Close(); }`. `ToastOptions` = `{ InfoBarSeverity
