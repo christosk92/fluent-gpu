@@ -2806,6 +2806,7 @@ public sealed partial class SceneStore : ISceneBackend
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
         Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
         Array.Resize(ref _aux, n);
+        DropSubtreeLayoutDirtyAtOrAbove(n);     // a shrink cuts recorded slots with their _aux bytes (SceneStore.Aux.cs)
         Array.Resize(ref _subtreeVersion, n);   // P4 fix: per-node subtree-content version, parallel to _aux (SceneStore.Aux.cs)
         Array.Resize(ref _recordDirty, n); Array.Resize(ref _recordDirtySelf, n); Array.Resize(ref _recordDirtyDescendant, n);
         Array.Resize(ref _shapeHanded, n);
