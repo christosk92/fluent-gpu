@@ -13,7 +13,12 @@ namespace FluentGpu.Foundation;
 /// are units, except a child that is (or holds) a group itself, which dissolves into its own children. A unit is a leaf of the
 /// cascade: nothing inside it is staggered again, so no offset compounds. A unit outside the viewport (the clip of every
 /// scroll viewport and <c>ClipToBounds</c> box between it and the root) is never animated; nor is one whose pose another track
-/// already drives (its own mount Enter, a hover lift). A root that holds no group enters as the one unit.</para>
+/// already drives (its own mount Enter, a hover lift). A root that holds no group enters as the one unit.
+/// <b>No unit is cut on its way in.</b> A child dissolves only when every unit it yields travels its terminal offset inside the
+/// clips between it and the root (as far as the root itself shows it). A clip INSIDE the child that would cut one (a list's
+/// viewport under its rows sliding sideways, a shelf's clip under its cards rising) keeps the child whole: the list, the shelf
+/// or the section enters as one unit. Without that rule a list's rows slid 200 DIP under the list's own left edge and showed only
+/// their right-hand cells until they had nearly landed.</para>
 /// <para><b>The delays.</b> Unit <c>i</c> starts at <see cref="DelayMs"/> + the sum of the first <c>i</c> gaps, where the first gap
 /// is <see cref="StepMs"/> and each next one is the previous × <see cref="StepDecay"/> (WinUI's stagger <c>DelayReduce</c>), never
 /// later than <see cref="DelayMs"/> + <see cref="MaxDelayMs"/> (WinUI's <c>DelayCap</c>). A long page therefore cascades its head
@@ -30,6 +35,10 @@ namespace FluentGpu.Foundation;
 /// <param name="MaxUnits">The units animated at most; past them a unit appears with the page (a bound for a dense viewport).</param>
 /// <param name="CompositeUnits">The first this many units are composited while they enter (<c>NodePaint.CompositeLayer</c>: their
 /// slide and fade are composite parameters, nothing under them re-records per frame). The rest fold inline.</param>
+/// <param name="KeepInRoot">Each unit's travel is shortened to the room between it and the root's edge on the side it enters from, so
+/// no unit is ever cut by the root's own edge on its way in (a sideways slide inside a page: the section nearest the page's gutter
+/// moves as far as the gutter, one with room beside it the whole <see cref="Enter"/> offset). Off: the root's edge cuts what enters
+/// across it (a page rising from below its own bottom edge).</param>
 public readonly record struct EntranceCascade(
     EnterExit Enter,
     TransitionDynamics Dynamics,
@@ -38,7 +47,8 @@ public readonly record struct EntranceCascade(
     float StepDecay = 1f,
     float MaxDelayMs = float.PositiveInfinity,
     int MaxUnits = 48,
-    int CompositeUnits = 8)
+    int CompositeUnits = 8,
+    bool KeepInRoot = false)
 {
     /// <summary>The start delay of unit <paramref name="ordinal"/> (0-based) under this cascade.</summary>
     public float DelayOf(int ordinal)

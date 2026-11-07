@@ -29,6 +29,13 @@ public sealed partial class TreeReconciler
     private readonly List<LiveCascade> _liveCascades = new(2);
     private readonly HashSet<int> _cascadePath = new();
     private readonly List<NodeHandle> _cascadeUnits = new(32);
+    /// <summary>The walk's state: the cascade root's rect (the page's own edge), the terminal's travel, and whether a unit offered since
+    /// the innermost dissolving group would be cut by a clip under the root on its way in.</summary>
+    private RectF _cascadeRootClip;
+    private float _cascadeDx, _cascadeDy;
+    private bool _cascadeClipBroken, _cascadeKeepIn;
+    private float[] _cascadeTravel = new float[64], _cascadeOwn = new float[64];
+    private RectF[] _cascadeRects = new RectF[32];
     private double[] _cascadeOrderKeys = new double[32];
     private NodeHandle[] _cascadeOrder = new NodeHandle[32];
     /// <summary>Units this reconciler composited for their entrance: the flag is cleared when their tracks settle.</summary>
@@ -113,7 +120,12 @@ public sealed partial class TreeReconciler
 
         // 2. The units, clipped to what the viewport shows.
         _cascadeUnits.Clear();
-        if (_cascadePath.Count > 0) Visit(root, _scene.AbsoluteRect(root), cascade.MaxUnits);
+        _cascadeRootClip = _scene.AbsoluteRect(root);
+        _cascadeDx = cascade.Enter.Dx;
+        _cascadeDy = cascade.Enter.Dy;
+        _cascadeKeepIn = cascade.KeepInRoot;
+        _cascadeClipBroken = false;
+        if (_cascadePath.Count > 0) Visit(root, _cascadeRootClip, cascade.MaxUnits);
         // A root that holds no group (yet) enters as the one unit: on the first frame only, and only when no recipe moves it already.
         if (_cascadeUnits.Count == 0)
         {
@@ -124,6 +136,7 @@ public sealed partial class TreeReconciler
         // 2b. The stagger runs down the screen: top first, then left to right along a row (a grid's cards, two columns side by side).
         //     Document order put a long list's rows ahead of the pane beside it, which then waited out the whole list.
         SortUnitsOnScreen();
+        if (cascade.KeepInRoot) BandTravel();
 
         // 3. Seed each unit not seen yet: from the terminal (or, joining late, from where its slot is now) to its authored pose.
         float elapsed = (float)(now - live.StartMs);
@@ -139,6 +152,7 @@ public sealed partial class TreeReconciler
             if (progress >= 1f) continue;                            // its slot is over: it is at rest, as it would be
             float k = 1f - Easings.Ease(ease, progress);             // how much of the terminal is still to travel
             EnterExit e = cascade.Enter;
+            if (cascade.KeepInRoot) e = e with { Dx = _cascadeTravel[i * 2], Dy = _cascadeTravel[i * 2 + 1] };
             EnterExit terminal = new(e.Dx * k, e.Dy * k, 1f + (e.Sx - 1f) * k, 1f + (e.Sy - 1f) * k, 1f + (e.Opacity - 1f) * k, true,
                 e.Blur * k, e.DelayMs + Math.Max(0f, slot));
             var spec = new LayoutTransition(TransitionChannels.Position | TransitionChannels.Opacity,
@@ -197,21 +211,111 @@ public sealed partial class TreeReconciler
     }
 
     /// <summary>A group's child: a unit, unless it is a layout-transparent anchor (its children are offered instead) or it is, or
-    /// holds, a group (it dissolves into its own children).</summary>
+    /// holds, a group (it dissolves into its own children). A child dissolves only when every unit it yields can travel unclipped:
+    /// one that a clip inside it would cut on its way (a list's row sliding sideways under the list's own viewport, a shelf's card
+    /// rising out of the shelf's clip) undoes the dissolve, and the child enters whole.</summary>
     private void Offer(NodeHandle c, RectF clip, int maxUnits)
     {
         if (!Shows(c)) return;
         int idx = (int)c.Raw.Index;
-        if (_entranceGroups.ContainsKey(idx) || _cascadePath.Contains(idx)) { Visit(c, clip, maxUnits); return; }
+        if (_entranceGroups.ContainsKey(idx) || _cascadePath.Contains(idx))
+        {
+            int mark = _cascadeUnits.Count;
+            bool outer = _cascadeClipBroken;
+            _cascadeClipBroken = false;
+            Visit(c, clip, maxUnits);
+            bool broken = _cascadeClipBroken;
+            _cascadeClipBroken = outer;
+            if (broken)
+            {
+                _cascadeUnits.RemoveRange(mark, _cascadeUnits.Count - mark);
+                AddUnit(c, idx, clip);
+            }
+            return;
+        }
         if (IsTransparentAnchor(c))
         {
             for (var g = _scene.FirstChild(c); !g.IsNull && _cascadeUnits.Count < maxUnits; g = _scene.NextSibling(g)) Offer(g, clip, maxUnits);
             return;
         }
+        AddUnit(c, idx, clip);
+    }
+
+    private void AddUnit(NodeHandle c, int idx, RectF clip)
+    {
         RectF r = _scene.AbsoluteRect(c);
         if (r.IsEmpty || r.Intersect(clip).IsEmpty) return;   // off screen: never animated
         if (_scene.TryGetScrollEffects(idx, out var fx) && fx is { Length: > 0 }) return;   // a sticky / parallax pose is the scroll's
+        if (!TravelFits(in r, in clip)) { _cascadeClipBroken = true; return; }
         _cascadeUnits.Add(c);
+    }
+
+    /// <summary>Does a unit at <paramref name="r"/> travel its terminal offset without a clip under the cascade's root cutting it? Along
+    /// each axis the unit moves on, the span it sweeps (as far as the root shows it: the page's own edge clips any entrance) must lie
+    /// inside the clips between it and the root. An axis it does not move on is not judged: a row that a list cuts at rest is cut the
+    /// same way the whole time.</summary>
+    private bool TravelFits(in RectF r, in RectF clip)
+    {
+        const float Slack = 1f;
+        var (dx, dy) = TravelOf(r);
+        if (dx != 0f)
+        {
+            float a = MathF.Max(MathF.Min(r.X, r.X + dx), _cascadeRootClip.X);
+            float b = MathF.Min(MathF.Max(r.X + r.W, r.X + r.W + dx), _cascadeRootClip.X + _cascadeRootClip.W);
+            if (b > a && (a < clip.X - Slack || b > clip.X + clip.W + Slack)) return false;
+        }
+        if (dy != 0f)
+        {
+            float a = MathF.Max(MathF.Min(r.Y, r.Y + dy), _cascadeRootClip.Y);
+            float b = MathF.Min(MathF.Max(r.Y + r.H, r.Y + r.H + dy), _cascadeRootClip.Y + _cascadeRootClip.H);
+            if (b > a && (a < clip.Y - Slack || b > clip.Y + clip.H + Slack)) return false;
+        }
+        return true;
+    }
+
+    /// <summary>Under <see cref="EntranceCascade.KeepInRoot"/>: each unit's travel (<see cref="TravelOf"/>), then the shortest of it across the
+    /// units beside it (those a sideways travel passes: their vertical spans overlap; a vertical travel, their horizontal ones), so two parts
+    /// side by side move together and one never slides over the other (a side column with room travelled 200 over the list beside it that
+    /// had 36). Into <see cref="_cascadeTravel"/> (dx, dy per unit, in the sorted order).</summary>
+    private void BandTravel()
+    {
+        int n = _cascadeUnits.Count;
+        if (_cascadeTravel.Length < n * 2) { _cascadeTravel = new float[n * 4]; _cascadeOwn = new float[n * 4]; _cascadeRects = new RectF[n * 2]; }
+        for (int i = 0; i < n; i++)
+        {
+            RectF r = _scene.AbsoluteRect(_cascadeUnits[i]);
+            _cascadeRects[i] = r;
+            var (dx, dy) = TravelOf(r);
+            _cascadeOwn[i * 2] = dx;
+            _cascadeOwn[i * 2 + 1] = dy;
+        }
+        for (int i = 0; i < n; i++)
+        {
+            RectF a = _cascadeRects[i];
+            float dx = _cascadeOwn[i * 2], dy = _cascadeOwn[i * 2 + 1];
+            for (int j = 0; j < n; j++)
+            {
+                if (j == i) continue;
+                RectF b = _cascadeRects[j];
+                if (a.Y < b.Y + b.H && b.Y < a.Y + a.H && MathF.Abs(_cascadeOwn[j * 2]) < MathF.Abs(dx)) dx = _cascadeOwn[j * 2];
+                if (a.X < b.X + b.W && b.X < a.X + a.W && MathF.Abs(_cascadeOwn[j * 2 + 1]) < MathF.Abs(dy)) dy = _cascadeOwn[j * 2 + 1];
+            }
+            _cascadeTravel[i * 2] = dx;
+            _cascadeTravel[i * 2 + 1] = dy;
+        }
+    }
+
+    /// <summary>The offset a unit at <paramref name="r"/> enters from: the terminal's, or under <see cref="EntranceCascade.KeepInRoot"/> as
+    /// much of it as the room between the unit and the root's edge on that side allows.</summary>
+    private (float Dx, float Dy) TravelOf(in RectF r)
+    {
+        if (!_cascadeKeepIn) return (_cascadeDx, _cascadeDy);
+        RectF root = _cascadeRootClip;
+        float dx = _cascadeDx > 0f ? MathF.Min(_cascadeDx, MathF.Max(0f, root.X + root.W - (r.X + r.W)))
+                 : _cascadeDx < 0f ? -MathF.Min(-_cascadeDx, MathF.Max(0f, r.X - root.X)) : 0f;
+        float dy = _cascadeDy > 0f ? MathF.Min(_cascadeDy, MathF.Max(0f, root.Y + root.H - (r.Y + r.H)))
+                 : _cascadeDy < 0f ? -MathF.Min(-_cascadeDy, MathF.Max(0f, r.Y - root.Y)) : 0f;
+        return (dx, dy);
     }
 
     private bool Shows(NodeHandle n)
