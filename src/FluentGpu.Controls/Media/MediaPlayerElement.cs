@@ -123,6 +123,10 @@ public sealed class MediaPlayerElement : Component
     /// <summary>Optional host-owned seek command. The requested mode is preserved for hosts that distinguish fast
     /// keyframe previews from accurate commits. Null seeks <see cref="Player"/> directly.</summary>
     public Action<TimeSpan, SeekMode>? SeekRequested { get; init; }
+    /// <summary>Optional host-owned playback-rate command: the <c>[</c> / <c>]</c> / Backspace keys and the built-in speed rows ask
+    /// the host instead of setting <see cref="Player"/>'s rate, and the host applies the rate or declines it (content whose
+    /// rate is not the user's to change). Null sets <see cref="Player"/> directly.</summary>
+    public Action<double>? RateRequested { get; init; }
     /// <summary>Round the composited video's corners (DIP; 0 = square, the default). The frame composites in its own
     /// DirectComposition visual OUTSIDE the UI back buffer, so a rounded parent with ClipToBounds cannot clip it — the
     /// radius has to reach the compositor, which is what this does. Half the shorter side gives a circle.</summary>
@@ -283,6 +287,10 @@ public sealed class MediaPlayerElement : Component
     ///
     /// <para>The element never interprets these rows; it only renders them. It stays host-agnostic.</para></summary>
     public Func<IReadOnlyList<MenuFlyoutItem>>? MoreMenuItems { get; init; }
+    /// <summary>When set (with <see cref="MoreMenuItems"/>), the host's rows ARE the menu: the element adds none of its own.
+    /// For a host that already offers the same settings in its own menu, so a right-click on the video and the host's ⋯
+    /// open one menu with one set of verbs instead of two that disagree.</summary>
+    public bool MoreMenuHostOnly { get; init; }
 
     /// <summary>Controlled fullscreen state (auto-materialized when absent).</summary>
     internal Signal<bool>? FullscreenState { get; init; }
@@ -951,6 +959,7 @@ public sealed class MediaPlayerElement : Component
                     PlayRequested = PlayRequested,
                     PauseRequested = PauseRequested,
                     SeekRequested = SeekRequested,
+                    RateRequested = RateRequested,
                     Binding = binding,
                     AspectMode = aspectSig,
                     CustomAspectRatio = customAspectSig,
@@ -1809,7 +1818,7 @@ public sealed class MediaPlayerElement : Component
         ];
 
         MenuFlyoutItem Speed(double value) => MenuFlyoutItem.RadioItem(MediaStrings.RateLabel((float)value), Math.Abs(rate - value) < 0.01,
-            () => Player.SetRate(value));
+            () => RequestRate(value));
     }
 
     // ── keyboard (Task 2) ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1859,7 +1868,7 @@ public sealed class MediaPlayerElement : Component
             case VkCloseBracket:
                 ScaleRate(1f / 0.9f); e.Handled = true; break;
             case Keys.Back:
-                Player.SetRate(1.0); e.Handled = true; break;
+                RequestRate(1.0); e.Handled = true; break;
             case Keys.C:
                 CycleCaptions(); e.Handled = true; break;
             case Keys.F:
@@ -1907,7 +1916,13 @@ public sealed class MediaPlayerElement : Component
     }
 
     private void ScaleRate(float factor)
-        => Player.SetRate(Math.Clamp(Player.Rate.Peek() * factor, MinRate, MaxRate));
+        => RequestRate(Math.Clamp(Player.Rate.Peek() * factor, MinRate, MaxRate));
+
+    private void RequestRate(double rate)
+    {
+        if (RateRequested is { } request) request(rate);
+        else Player.SetRate(rate);
+    }
 
     private const float MinRate = 0.25f, MaxRate = 2.0f;
 
@@ -1958,6 +1973,11 @@ public sealed class MediaPlayerElement : Component
 
         var items = new System.Collections.Generic.List<MenuFlyoutItem>(12);
         IReadOnlyList<MenuFlyoutItem>? hostItems = MoreMenuItems?.Invoke();
+        if (MoreMenuHostOnly && hostItems is not null)
+        {
+            for (int i = 0; i < hostItems.Count; i++) items.Add(hostItems[i]);
+            return items;
+        }
         if (hostItems is { Count: > 0 })
         {
             for (int i = 0; i < hostItems.Count; i++) items.Add(hostItems[i]);
@@ -2056,7 +2076,7 @@ public sealed class MediaPlayerElement : Component
         ];
 
         MenuFlyoutItem Speed(double value) => MenuFlyoutItem.RadioItem(MediaStrings.RateLabel((float)value), Math.Abs(rate - value) < 0.01,
-            () => Player.SetRate(value));
+            () => RequestRate(value));
     }
 
     /// <summary>The <c>elapsed / total</c> time label as its OWN component. It bridges the ~per-frame position/duration
@@ -2112,6 +2132,7 @@ public sealed class MediaPlayerElement : Component
         public Action? PlayRequested { get; init; }
         public Action? PauseRequested { get; init; }
         public Action<TimeSpan, SeekMode>? SeekRequested { get; init; }
+        public Action<double>? RateRequested { get; init; }
         public required VideoBinding Binding { get; init; }
         public required Signal<VideoAspectMode> AspectMode { get; init; }
         public required Signal<double> CustomAspectRatio { get; init; }
@@ -2138,6 +2159,7 @@ public sealed class MediaPlayerElement : Component
                         PlayRequested = PlayRequested,
                         PauseRequested = PauseRequested,
                         SeekRequested = SeekRequested,
+                        RateRequested = RateRequested,
                         PresentationBinding = Binding,
                         AspectMode = AspectMode,
                         CustomAspectRatio = CustomAspectRatio,

@@ -2126,8 +2126,16 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Custom IMFMediaSource — one video stream of demuxed encrypted samples.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFTrustedInput>
+// RATE CONTROL (IMFGetService + IMFRateSupport + IMFRateControl). Without them the Media Session reports that the minimum
+// AND maximum playback rate is 1.0, regardless of what other components are in the pipeline ("Implementing Rate Control",
+// Media Sources), so IMFMediaEngine::SetPlaybackRate(1.5) returned S_OK and the protected video kept playing at 1.0: the
+// episode-speed menu changed nothing on a video. The rate does not touch the samples (their time stamps stay; the
+// presentation clock runs faster), so forward playback at any rate up to the fastest one is free for this source. Mirrors
+// Chromium's MediaFoundationSourceWrapper: forward only, no thinning, 0..8.
+struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFTrustedInput, IMFGetService, IMFRateSupport, IMFRateControl>
 {
+    static constexpr float FastestRate = 8.0f;
+    float m_rate = 1.0f;                              // m_mx — the rate the session last set (GetRate answers it)
     winrt::com_ptr<IMFMediaEventQueue> m_queue;
     winrt::com_ptr<IMFPresentationDescriptor> m_pd;
     // Every stream this source can serve: video (id 1) and, for a music video, its own soundtrack (id 2). A vector
@@ -2324,6 +2332,79 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
         for (auto const& s : streams) if (s) s->Shutdown();
         std::lock_guard<std::mutex> g(m_mx);
         if (m_queue) m_queue->Shutdown();
+        return S_OK;
+    }
+
+    // IMFGetService: the rate control service only (the session asks the SOURCE for it; see the note on the struct).
+    IFACEMETHODIMP GetService(REFGUID service, REFIID riid, LPVOID* value) noexcept override
+    {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (!IsEqualGUID(service, MF_RATE_CONTROL_SERVICE)) return MF_E_UNSUPPORTED_SERVICE;
+        if (IsEqualIID(riid, __uuidof(IMFRateSupport))) { auto p = static_cast<IMFRateSupport*>(this); p->AddRef(); *value = p; return S_OK; }
+        if (IsEqualIID(riid, __uuidof(IMFRateControl))) { auto p = static_cast<IMFRateControl*>(this); p->AddRef(); *value = p; return S_OK; }
+        return E_NOINTERFACE;
+    }
+
+    // IMFRateSupport: forward 0..FastestRate, no reverse, no thinning.
+    IFACEMETHODIMP GetSlowestRate(MFRATE_DIRECTION direction, BOOL /*thin*/, float* rate) noexcept override
+    {
+        if (!rate) return E_POINTER;
+        *rate = 0.0f;
+        if (direction == MFRATE_REVERSE) return MF_E_REVERSE_UNSUPPORTED;
+        std::lock_guard<std::mutex> g(m_mx);
+        return m_shutdown ? MF_E_SHUTDOWN : S_OK;
+    }
+    IFACEMETHODIMP GetFastestRate(MFRATE_DIRECTION direction, BOOL /*thin*/, float* rate) noexcept override
+    {
+        if (!rate) return E_POINTER;
+        *rate = 0.0f;
+        if (direction == MFRATE_REVERSE) return MF_E_REVERSE_UNSUPPORTED;
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown) return MF_E_SHUTDOWN;
+        *rate = FastestRate;
+        return S_OK;
+    }
+    IFACEMETHODIMP IsRateSupported(BOOL thin, float rate, float* nearest) noexcept override
+    {
+        if (nearest) *nearest = 0.0f;
+        {
+            std::lock_guard<std::mutex> g(m_mx);
+            if (m_shutdown) return MF_E_SHUTDOWN;
+        }
+        if (thin) return MF_E_THINNING_UNSUPPORTED;
+        if (rate < 0.0f) return MF_E_REVERSE_UNSUPPORTED;
+        if (rate > FastestRate) { if (nearest) *nearest = FastestRate; return MF_E_UNSUPPORTED_RATE; }
+        if (nearest) *nearest = rate;
+        return S_OK;
+    }
+
+    // IMFRateControl: accept a supported rate and announce it (MESourceRateChanged, VT_R4) — the session waits for it.
+    IFACEMETHODIMP SetRate(BOOL thin, float rate) noexcept override
+    {
+        float accepted = 0.0f;
+        HRESULT hr = IsRateSupported(thin, rate, &accepted);
+        if (FAILED(hr)) { LogLine("[cenc-src] SetRate " + std::to_string(rate) + " refused hr=" + fgpr::Hex(hr)); return hr; }
+        PROPVARIANT v; PropVariantInit(&v);
+        v.vt = VT_R4;
+        v.fltVal = accepted;
+        {
+            std::lock_guard<std::mutex> g(m_mx);
+            if (m_shutdown) return MF_E_SHUTDOWN;
+            m_rate = accepted;
+            hr = m_queue->QueueEventParamVar(MESourceRateChanged, GUID_NULL, S_OK, &v);
+        }
+        LogLine("[cenc-src] SetRate " + std::to_string(accepted) + " hr=" + fgpr::Hex(hr));
+        return hr;
+    }
+    IFACEMETHODIMP GetRate(BOOL* thin, float* rate) noexcept override
+    {
+        if (thin) *thin = FALSE;
+        if (!rate) return E_POINTER;
+        std::lock_guard<std::mutex> g(m_mx);
+        *rate = 0.0f;
+        if (m_shutdown) return MF_E_SHUTDOWN;
+        *rate = m_rate;
         return S_OK;
     }
 

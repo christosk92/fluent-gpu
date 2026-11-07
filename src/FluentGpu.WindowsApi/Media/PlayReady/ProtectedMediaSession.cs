@@ -130,6 +130,11 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             // source's ladder position, probe/climb state and viewport cap.
             _abr.ResetForNewSource();
             _qualitySelection = _abr.Selection;
+            // A pin the shared controller carries from the PREVIOUS source names that manifest's representation: one this
+            // track does not list can never be selected, and holding it as a pin would keep ABR off (Auto is the only
+            // selection the ladder runs under) and leave this source on its opening rung for good.
+            if (!_qualitySelection.IsAuto && FindRepresentation(_videoTrack, _qualitySelection.VariantId) is null)
+                _abr.Selection = _qualitySelection = QualitySelection.Auto;
             _activeQuality = FindInitialQuality(_videoTrack, request.InitUrl);
             _downloadingQualityId = _activeQuality?.Id;
             for (int i = 0; i < _qualityVariants.Length; i++)

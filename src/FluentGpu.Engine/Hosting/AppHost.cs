@@ -3497,6 +3497,9 @@ public sealed partial class AppHost : IDisposable
             else w.SetBoundsPx(restored);
         }
         w.SetTitle(child._strings.Intern(request.Title));
+        // The reveal re-applies _revealTopmost (TryRevealDetached): it must be THIS open's value, or a window parked while
+        // always-on-top came back topmost after the preference was turned off.
+        child._revealTopmost = request.AlwaysOnTop;
         w.SetTopmost(request.AlwaysOnTop);
         child._warmParked = false;
         // A fresh open re-measures time-to-first-video (and re-fires OnFirstVideoBound, which the app sets again on reuse) from the
