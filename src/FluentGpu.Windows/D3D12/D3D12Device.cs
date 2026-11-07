@@ -637,7 +637,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Task Stage(int slot, Action build) => Task.Run(() =>
         {
             long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-            build();
+            using (CrashTrail.Enter(NativeRegion.PipelineCompile, s_pipeStageNames[slot]))
+                build();
             ms[slot] = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         });
 
@@ -1044,7 +1045,46 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // The AppHost UI recover gate polls this: consume a pending live adapter switch (Settings > About picker →
     // GpuAdapterInfo.RequestAdapterSwitch). Test-and-clear so the host can drive the device-loss rendezvous once,
     // re-running InitDevice on the newly-preferred adapter. Keeps the Engine seam TerraFX-free (the flag lives here).
-    public bool ConsumeAdapterSwitchRequest() => GpuAdapterInfo.ConsumeSwitchRequest();
+    public bool ConsumeAdapterSwitchRequest()
+    {
+        if (!GpuAdapterInfo.ConsumeSwitchRequest()) return false;
+        // The crash trail's "switched GPU from X to Y" (issues #2/#4 were a Settings GPU pick followed by a driver fault).
+        CrashTrail.Record(TrailEvent.AdapterSwitch, _trailAdapterId, TrailAdapterIdFor(GpuAdapterInfo.PreferredAdapterLuid));
+        return true;
+    }
+
+    private long _trailAdapterId;   // vendor << 32 | device of the adapter the live device runs on (crash trail only)
+
+    /// <summary>Cold path (a user GPU pick): the packed vendor/device of the adapter <paramref name="packedLuid"/> names, 0 for
+    /// "automatic" or when it cannot be resolved.</summary>
+    private long TrailAdapterIdFor(long packedLuid)
+    {
+        if (packedLuid == 0 || _factory == null) return 0;
+        LUID luid = default;
+        luid.LowPart = unchecked((uint)packedLuid);
+        luid.HighPart = (int)(packedLuid >> 32);
+        IDXGIAdapter1* a = null;
+        if ((int)_factory->EnumAdapterByLuid(luid, __uuidof<IDXGIAdapter1>(), (void**)&a) < 0 || a == null) return 0;
+        DXGI_ADAPTER_DESC1 d;
+        long id = (int)a->GetDesc1(&d) >= 0 ? CrashTrail.AdapterId(d.VendorId, d.DeviceId) : 0;
+        a->Release();
+        return id;
+    }
+
+    /// <summary>The adapter's user-mode driver version ("a.b.c.d"), or "" when the driver does not answer.</summary>
+    private string DriverVersionOf(LUID luid)
+    {
+        if (_factory == null) return "";
+        IDXGIAdapter1* a = null;
+        if ((int)_factory->EnumAdapterByLuid(luid, __uuidof<IDXGIAdapter1>(), (void**)&a) < 0 || a == null) return "";
+        LARGE_INTEGER umd = default;
+        bool ok = (int)a->CheckInterfaceSupport(__uuidof<IDXGIDevice>(), &umd) >= 0;
+        a->Release();
+        if (!ok) return "";
+        ulong v = (ulong)umd.QuadPart;
+        return string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"{(v >> 48) & 0xFFFF}.{(v >> 32) & 0xFFFF}.{(v >> 16) & 0xFFFF}.{v & 0xFFFF}");
+    }
 
     private void InitDevice()
     {
@@ -1236,6 +1276,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                            : selectionMode == "warp" ? "Microsoft Basic Render Driver (WARP)" : "<unknown>";
         FluentGpu.Foundation.GpuProfile.AdapterName = adapterName;
         FluentGpu.Foundation.GpuProfile.IsSoftwareAdapter = software;
+        string driverVersion = "";
+        try { driverVersion = DriverVersionOf(adapterLuid); } catch { /* best-effort, evidence only */ }
+        FluentGpu.Foundation.GpuProfile.DriverVersion = driverVersion;
+        _trailAdapterId = haveDesc ? CrashTrail.AdapterId(chosenDesc.VendorId, chosenDesc.DeviceId) : 0;
+        CrashTrail.Record(TrailEvent.AdapterSelected, _trailAdapterId, software ? 1 : 0, selectionMode);
         GpuAdapterInfo.Publish(adapterLuid);   // sibling device creators (D3D11 video decode) pin to this GPU
 
         // ALWAYS-ON identity line (one per device init/recovery — the Release-build evidence of WHICH GPU ran).
@@ -1244,7 +1289,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             $" vendorId=0x{chosenDesc.VendorId:X4} deviceId=0x{chosenDesc.DeviceId:X4}" +
             $" vramMB={(long)(chosenDesc.DedicatedVideoMemory / (1024 * 1024))} sharedMB={(long)(chosenDesc.SharedSystemMemory / (1024 * 1024))}" +
             $" luid=0x{adapterLuid.HighPart:X8}:{adapterLuid.LowPart:X8} uma={uma} software={software}" +
-            $" tier={FluentGpu.Foundation.GpuProfile.Tier}");
+            $" tier={FluentGpu.Foundation.GpuProfile.Tier} driver version={(driverVersion.Length > 0 ? driverVersion : "unknown")}");
 
         _memoryProbeObserver?.Invoke("native-device-created-before-queue");
         D3D12_COMMAND_QUEUE_DESC qd = default;
@@ -1920,7 +1965,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             gpuExecutionResolved = true;
         }
         PassEnd(sc);
-        HRESULT closeHr = _cmdList->Close();
+        HRESULT closeHr;
+        using (CrashTrail.Enter(NativeRegion.D3D12Close)) closeHr = _cmdList->Close();
         if ((int)closeHr < 0)
         {
             DrainDebugLayerMessages();
@@ -5188,14 +5234,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         AssertSubmitThread();
         _recoveryCount++;
         Diag.Line($"[d3d12.recovery] phase=recover-start recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
+        using var region = CrashTrail.Enter(NativeRegion.DeviceRecovery, default, _recoveryCount);
         try
         {
             RecoverDeviceCore();
             _firstRecoverySubmitPending = true;
+            CrashTrail.Record(TrailEvent.DeviceRecovered, _recoveryCount);
             Diag.Line($"[d3d12.recovery] phase=recover-end recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
         }
         catch
         {
+            CrashTrail.Record(TrailEvent.DeviceRecoverFailed, _recoveryCount);
             Diag.Line($"[d3d12.recovery] phase=recover-failed recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
             throw;
         }

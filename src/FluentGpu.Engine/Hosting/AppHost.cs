@@ -865,6 +865,7 @@ public sealed partial class AppHost : IDisposable
                 // ...unless a pop-out sharing the cache is on screen: its images must re-decode at once, not wait for this window's restore.
                 _images.HiddenKeepLandings = AnyVisibleDetachedChild();
                 RequestHiddenStage(HiddenStage.Shallow);
+                CrashTrail.Record(TrailEvent.HiddenShallow, (long)CurrentHiddenPark(), evicted);
                 FluentGpu.Foundation.Diag.Line($"[hidden] shallow park={CurrentHiddenPark()} unpinnedReleased={evicted} ready={_images.ReadyCount} ms={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:0.00}");
             }
             else
@@ -887,6 +888,7 @@ public sealed partial class AppHost : IDisposable
                 int parked = _images.ParkPinnedGpu(_deepChildHeld);
                 _images.HiddenStage = HiddenStage.Deep;
                 RequestHiddenStage(HiddenStage.Deep);
+                CrashTrail.Record(TrailEvent.HiddenDeep, (long)CurrentHiddenPark(), parked);
                 FluentGpu.Foundation.Diag.Line($"[hidden] deep park={CurrentHiddenPark()} parked={parked} unpinnedReleased={evicted} ready={_images.ReadyCount} visiblePopouts={(anyVisibleChild ? 1 : 0)} ms={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:0.00}");
             }
         }
@@ -936,6 +938,7 @@ public sealed partial class AppHost : IDisposable
         _images.HiddenKeepLandings = false;
         RequestHiddenStage(HiddenStage.Visible);   // AFTER the restart and the arm (see above)
         RequestFullRepaintOnce();                  // every tile the release dropped re-rasters in the first frame back; never elide it as unchanged
+        CrashTrail.Record(TrailEvent.HiddenRestore, (long)before, parkedBefore);
         FluentGpu.Foundation.Diag.Line($"[hidden] restore from={before} parked={parkedBefore} restarted={restarted} pending={pending} hold={holdNote} holdMaxMs={HiddenMemoryBudget.RestoreHoldMaxMs} ready={_images.ReadyCount} ms={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:0.00}");
     }
 
@@ -2921,6 +2924,7 @@ public sealed partial class AppHost : IDisposable
 
     private void DumpDeviceLostFrames(Exception? ex, string path)
     {
+        CrashTrail.Record(TrailEvent.DeviceLost, (uint)_device.PollDeviceLost(), _deviceLostRecoveryCount, path);
         WriteDeviceLostLine($"[device-lost] path={path} backend={_device.BackendName} recoveries={_deviceLostRecoveryCount}" + (ex is null ? "" : $" exception={ex.GetType().Name}: {ex.Message}"));
         int count = Math.Min(_deviceLostFrameSeq, DeviceLostFrameRingSize);
         if (count == 0) { WriteDeviceLostLine("[device-lost] no frame breadcrumbs captured"); return; }
@@ -4630,10 +4634,14 @@ public sealed partial class AppHost : IDisposable
         long now = ColdMaintenanceNowMs;
         ObserveSceneCapacity(now);
         bool serviced = false;
+        int trimmed = 0;
+        int slotsBefore = 0;
         // Disarm BEFORE releasing buffers: a Return that races the trim can arm the next finite episode.
-        if (_pixelMaintenance.TryConsume(now)) { _pixelPool.Trim(); serviced = true; }
+        if (_pixelMaintenance.TryConsume(now)) { _pixelPool.Trim(); serviced = true; trimmed |= 1; }
         if (_sceneMaintenance.TryConsume(now, _coldQuietFromMs))
         {
+            slotsBefore = _scene.Capacity;
+            trimmed |= 2;
             _scene.TrimExcessCapacity();
             _seenSceneCapacityRevision = _scene.CapacityRevision; // Our own shrink must not schedule another attempt.
             serviced = true;
@@ -4645,7 +4653,9 @@ public sealed partial class AppHost : IDisposable
                 _renderSeam.TryReclaimSceneCapacity(_scene, _images, _strings,
                     _connected.Detached, _popupWindows, _anim, now);
             serviced = true;
+            trimmed |= 4;
         }
+        if (trimmed != 0) CrashTrail.Record(TrailEvent.ColdTrim, trimmed, slotsBefore);
         if (serviced) ColdMaintenanceRuns++;
     }
 
@@ -5939,6 +5949,8 @@ public sealed partial class AppHost : IDisposable
             OwningRenderThread?.WakeAsync();
             if (minimized) FlushToQuiescence();
         }
+        if (minimized != _wasParked)
+            CrashTrail.Record(minimized ? TrailEvent.WindowParked : TrailEvent.WindowRestored, (long)CurrentHiddenPark(), _isDetachedChild ? 1 : 0);
         _wasParked = minimized;
         if (minimized)
         {
