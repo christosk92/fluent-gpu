@@ -27,8 +27,8 @@ if (-not (Test-Path $fluent) -or -not (Test-Path $winUI)) {
     if (-not $AllowNonAot) {
         throw "NativeAOT hosts missing under $PublishRoot. Build with build-release.ps1, or pass -AllowNonAot for local bin paths."
     }
-    $fluent = Join-Path $benchRoot 'FluentGpuBench\bin\Release\net10.0\win-arm64\FluentGpuBench.exe'
-    $winUI = Join-Path $benchRoot 'WinUIBench\bin\Release\net10.0-windows10.0.26100.0\win-arm64\WinUIBench.exe'
+    $fluent = Join-Path $benchRoot 'FluentGpuBench\bin\Release\net11.0\win-arm64\FluentGpuBench.exe'
+    $winUI = Join-Path $benchRoot 'WinUIBench\bin\Release\net11.0-windows10.0.26100.0\win-arm64\WinUIBench.exe'
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null

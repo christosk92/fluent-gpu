@@ -60,9 +60,12 @@ internal sealed unsafe class SurfacePool : IDisposable
         public int CreatedTurn;      // tile: the turn its texture was (re)created — it holds no pixels a partial raster may keep
         public bool LastPartial;     // tile: its last raster wrote only LastDamage (tile px); the serial after it is Serial
         public PixelRect LastDamage;
+        public int HeapSlot;         // tile: 0 = a committed texture, k + 1 = placed on heap k (TileHeapPool) at Block, Blocks long
+        public int Block, Blocks;
+        public bool NeedsInit;       // tile: placed this turn — the raster's barrier batch aliases it in and discards it first
     }
 
-    private struct Retired { public ID3D12Resource* Res; public ulong Fence; public long Bytes; }
+    private struct Retired { public ID3D12Resource* Res; public ulong Fence; public long Bytes; public int HeapSlot, Block, Blocks; }
 
     private readonly ID3D12Device* _device;
     private readonly int _tileCap;
@@ -83,6 +86,11 @@ internal sealed unsafe class SurfacePool : IDisposable
     private uint _rtvInc, _srvInc;
     private int _bank;
     private int _turn;
+    // Placed tile textures (TileMemory.PlacedTiles): the pooled heaps, and the wall clock of the last composite turn (an EMPTY heap
+    // is released only once the app has composited nothing for TileMemory.HeapIdleReleaseMs, one per idle tick).
+    private readonly TileHeapPool? _heaps;
+    private long _lastFrameMs;
+    private long _committedCreated, _committedReleased;
 
     public SurfacePool(ID3D12Device* device, int tileCap)
     {
@@ -113,14 +121,19 @@ internal sealed unsafe class SurfacePool : IDisposable
         D3D12MemoryDiagnostics.Track(_srvHeap, "Tiles.SrvHeap", (ulong)sh.NumDescriptors * _srvInc);
         for (int i = 0; i < _tiles.Length; i++) _tiles[i].SrvStamp = int.MinValue;
         for (int i = 0; i < _scratch.Length; i++) _scratch[i].SrvStamp = int.MinValue;
+        if (FluentGpu.Render.Tiles.TileMemory.PlacedTiles) _heaps = new TileHeapPool(device);
     }
 
     public ID3D12DescriptorHeap* SrvHeap => _srvHeap;
 
-    /// <summary>Textures this pool created / released since it was built (the raster cost counters: on the owner's UMA
-    /// driver a release zero-fills the texture, so both are real per-turn CPU).</summary>
-    public long TexturesCreated { get; private set; }
-    public long TexturesReleased { get; private set; }
+    /// <summary>MEMORY allocations / releases this pool made since it was built — committed textures and tile heaps (the raster
+    /// cost counters: on the owner's UMA driver a release costs ~0.3 ms whatever its size, a create ~0.05–0.1 ms, both real
+    /// per-turn CPU when they land in a turn). A placed texture allocates and frees no memory (<see cref="PlacedCreated"/> /
+    /// <see cref="PlacedReleased"/>).</summary>
+    public long TexturesCreated => _committedCreated + (_heaps?.HeapCreates ?? 0);
+    public long TexturesReleased => _committedReleased + (_heaps?.HeapReleases ?? 0);
+    public long PlacedCreated { get; private set; }
+    public long PlacedReleased { get; private set; }
     public int TileCap => _tileCap;
 
     private static void Check(HRESULT hr, string what)
@@ -136,6 +149,7 @@ internal sealed unsafe class SurfacePool : IDisposable
     {
         _bank = bank;
         _turn = turn;
+        _lastFrameMs = Environment.TickCount64;
         ScratchLeases = 0; ScratchPx = 0L; ScratchRefused = 0;
         DrainRetired(completedFence);
         for (int i = 0; i < _scratch.Length; i++)
@@ -155,9 +169,23 @@ internal sealed unsafe class SurfacePool : IDisposable
         for (int i = _retired.Count - 1; i >= 0; i--)
         {
             if (!LayerTargetTrim.CanRelease(_retired[i].Fence, completedFence)) continue;
-            D3D12MemoryDiagnostics.Release(_retired[i].Res, "Tiles.Surface");
-            _retired[i].Res->Release();
-            TexturesReleased++;
+            if (_retired[i].HeapSlot != 0)
+            {
+                // a placed tile: its block run goes back to the heap; no memory is freed (a placed release costs ~2 µs)
+                _retired[i].Res->Release();
+                _heaps!.Free(_retired[i].HeapSlot - 1, _retired[i].Block, _retired[i].Blocks);
+                PlacedReleased++;
+            }
+            else
+            {
+                D3D12MemoryDiagnostics.Release(_retired[i].Res, "Tiles.Surface");
+                long t0 = FluentGpu.Render.Tiles.TileMemory.HeapLog ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+                _retired[i].Res->Release();
+                _committedReleased++;
+                if (t0 != 0)
+                    Console.Error.WriteLine($"[tile-heaps] committed-release {_retired[i].Bytes / 1048576.0:F2}MiB " +
+                        $"{(System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency:F3}ms");
+            }
             Interlocked.Add(ref _retiredBytes, -_retired[i].Bytes);
             Interlocked.Decrement(ref _retiredCount);
             _retired.RemoveAt(i);
@@ -188,6 +216,11 @@ internal sealed unsafe class SurfacePool : IDisposable
         }
     }
 
+    /// <summary>The heaps' free capacity (empty heaps plus the free runs inside partly used ones) is above the free-surface cap and
+    /// an empty heap can go: the housekeeping pass should run right after this turn (<see cref="TrimIdle"/> releases one heap per
+    /// pass while the excess lasts).</summary>
+    public bool HeapExcess(bool weak) => _heaps is { } h && h.EmptyCount > 0 && h.HeldBytes - h.UsedBytes > LayerTargetTrim.FreeScratchCapBytes(weak);
+
     /// <summary>Idle-path housekeeping on the wall clock (render thread, between turns): drain what the fence has passed and
     /// retire FREE scratch nothing has leased for <see cref="LayerTargetTrim.IdleMs"/>: an idle app runs no composite turn to
     /// age them. A retained derived result is left alone (re-drawing it is the point of keeping it). Returns the ms until it next
@@ -204,7 +237,151 @@ internal sealed unsafe class SurfacePool : IDisposable
             else next = Math.Min(next, LayerTargetTrim.IdleMs(weak) - (nowMs - e.LastUseMs));
         }
         if (RetiredCount > 0) next = Math.Min(next, 500);   // waiting on the fence
+        if (_heaps is { } heaps && heaps.EmptyCount > 0)
+        {
+            // EMPTY heaps: all of them go once the app has composited nothing for HeapIdleReleaseMs (one per idle tick); while it
+            // composites, only while the heaps' free capacity (empty heaps + free runs inside partly used ones) is above the pool's
+            // free-surface cap (so the heaps hold at most that much more than their live surfaces, as the committed pool), one heap per pass —
+            // and the pass runs again right after the next turn while the excess lasts. A driver release costs ~0.2–0.4 ms: it
+            // runs after a present, never inside a turn, never two at once (today's trims released 8–24 textures in one turn).
+            long quiet = nowMs - Volatile.Read(ref _lastFrameMs);
+            bool idle = quiet >= FluentGpu.Render.Tiles.TileMemory.HeapIdleReleaseMs;
+            long cap = LayerTargetTrim.FreeScratchCapBytes(weak);
+            if (idle || heaps.HeldBytes - heaps.UsedBytes > cap)
+            {
+                heaps.ReleaseOneEmpty();
+                if (heaps.EmptyCount > 0 && (idle || heaps.HeldBytes - heaps.UsedBytes > cap))
+                    next = Math.Min(next, idle ? FluentGpu.Render.Tiles.TileMemory.HeapReleaseSpacingMs : 1);
+            }
+            if (!idle && heaps.EmptyCount > 0) next = Math.Min(next, FluentGpu.Render.Tiles.TileMemory.HeapIdleReleaseMs - quiet);
+        }
+        else if (_heaps is { } hc && hc.HeapCount >= 2 && hc.Version != _compactFailedAt)
+        {
+            // an idle compaction may empty a heap (D3D12Device.CompactTileHeapsIdle): look again once the app is idle
+            long quiet = nowMs - Volatile.Read(ref _lastFrameMs);
+            long wait = FluentGpu.Render.Tiles.TileMemory.HeapIdleReleaseMs - quiet;
+            if (wait > 0) next = Math.Min(next, wait);
+        }
         return next == long.MaxValue ? -1 : (int)Math.Max(1, next);
+    }
+
+    /// <summary>One surface (tile, or scratch at Slot − tile cap) of a heap compaction: its texture is copied from
+    /// <see cref="Old"/> (on the sparsest heap) to <see cref="New"/> (placed in COPY_DEST on a free run of another heap).</summary>
+    public struct HeapMove
+    {
+        public int Slot;
+        public ID3D12Resource* Old, New;
+        public D3D12_RESOURCE_STATES OldState;
+        public int NewHeapSlot, NewBlock;
+    }
+
+    private HeapMove[] _moves = new HeapMove[64];
+    private int _compactFailedAt = -1;   // TileHeapPool.Version of the last plan that could not empty its heap
+
+    /// <summary>Idle compaction (render thread, between turns; the app has composited nothing for
+    /// <see cref="FluentGpu.Render.Tiles.TileMemory.HeapIdleReleaseMs"/>, no empty heap and no fence-retired texture is pending):
+    /// plan to move every surface of the sparsest heap into free runs of the others, so the heap empties and the idle path releases
+    /// it. All or nothing: when a tile finds no room the planned runs are returned and nothing moves (and the same layout is not
+    /// planned again). Returns the moves; the caller records the copies, then <see cref="CommitMoves"/>.</summary>
+    public ReadOnlySpan<HeapMove> PlanCompaction(long nowMs)
+    {
+        if (_heaps is not { } hp || RetiredCount > 0 || hp.EmptyCount > 0) return default;
+        if (nowMs - Volatile.Read(ref _lastFrameMs) < FluentGpu.Render.Tiles.TileMemory.HeapIdleReleaseMs) return default;
+        if (hp.Version == _compactFailedAt) return default;
+        return PlanMoves(hp);
+    }
+
+    private long _lastFrameCompactMs;
+
+    /// <summary>In-frame compaction (render thread, at the start of a composite turn, before any raster): while the app keeps
+    /// compositing, the idle compaction never runs, so the free runs inside partly used heaps grow with every page a session
+    /// visits. When they exceed <see cref="FluentGpu.Render.Tiles.TileMemory.FragmentCapHeaps"/> heaps' worth, plan to move the
+    /// sparsest heap's surfaces into the others (at most once per <see cref="FluentGpu.Render.Tiles.TileMemory.FrameCompactSpacingMs"/>);
+    /// the caller records the copies into this turn's command list and <see cref="CommitMoves"/> with this turn's fence.</summary>
+    public ReadOnlySpan<HeapMove> PlanFrameCompaction(long nowMs)
+    {
+        if (_heaps is not { } hp || hp.Version == _compactFailedAt) return default;
+        if (nowMs - _lastFrameCompactMs < FluentGpu.Render.Tiles.TileMemory.FrameCompactSpacingMs) return default;
+        if (hp.FragmentBytes <= FluentGpu.Render.Tiles.TileMemory.FragmentCapHeaps * (long)TileHeapPool.HeapBytes) return default;
+        _lastFrameCompactMs = nowMs;
+        return PlanMoves(hp);
+    }
+
+    private ReadOnlySpan<HeapMove> PlanMoves(TileHeapPool hp)
+    {
+        int victim = hp.Sparsest();
+        if (victim < 0 || hp.FreeBlocksExcept(victim) < hp.UsedBlocks(victim)) { _compactFailedAt = hp.Version; return default; }
+        int n = 0;
+        bool ok = true;
+        for (int i = 0; i < _tiles.Length + _scratch.Length && ok; i++)
+        {
+            ref Entry e = ref At(i);
+            if (e.Res == null || e.HeapSlot != victim + 1) continue;
+            if (e.InUse || e.NeedsInit) { ok = false; break; }   // (never at idle) a leased or never-initialized surface stays put
+            if (!hp.Allocate(e.Blocks, victim, false, out int h, out int b)) { ok = false; break; }
+            D3D12_RESOURCE_DESC rd = TargetDesc(e.W, e.H);
+            D3D12_CLEAR_VALUE cv = default;
+            cv.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
+            ID3D12Resource* res = null;
+            if (_device->CreatePlacedResource(hp.Heap(h), (ulong)b * TileHeapPool.BlockBytes, &rd,
+                    D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, &cv, __uuidof<ID3D12Resource>(), (void**)&res) < 0 || res == null)
+            {
+                hp.Free(h, b, e.Blocks);
+                ok = false; break;
+            }
+            if (n == _moves.Length) Array.Resize(ref _moves, n * 2);
+            _moves[n++] = new HeapMove { Slot = i, Old = e.Res, New = res, OldState = e.State, NewHeapSlot = h + 1, NewBlock = b };
+        }
+        if (!ok)
+        {
+            for (int k = 0; k < n; k++)
+            {
+                _moves[k].New->Release();
+                hp.Free(_moves[k].NewHeapSlot - 1, _moves[k].NewBlock, At(_moves[k].Slot).Blocks);
+            }
+            _compactFailedAt = hp.Version;
+            return default;
+        }
+        return new ReadOnlySpan<HeapMove>(_moves, 0, n);
+    }
+
+    /// <summary>The copies of <see cref="PlanCompaction"/>'s moves are on the GPU behind <paramref name="fence"/>: each tile now
+    /// IS its new texture (same pixels, same serial, same write record), resting in PIXEL_SHADER_RESOURCE; the old texture retires
+    /// behind that fence and its run returns to the emptied heap at the drain.</summary>
+    public void CommitMoves(ReadOnlySpan<HeapMove> moves, ulong fence)
+    {
+        for (int k = 0; k < moves.Length; k++)
+        {
+            ref readonly HeapMove m = ref moves[k];
+            ref Entry e = ref At(m.Slot);
+            // the old placed texture retires behind the copy (and any frame still sampling it); its run frees at the drain
+            long bytes = LayerTargetBucket.Bytes(e.W, e.H);
+            _retired.Add(new Retired { Res = m.Old, Fence = Math.Max(e.LastUseFence, fence), Bytes = bytes, HeapSlot = e.HeapSlot, Block = e.Block, Blocks = e.Blocks });
+            Interlocked.Add(ref _retiredBytes, bytes);
+            Interlocked.Increment(ref _retiredCount);
+            // the tile keeps everything else (serial, write record, created turn: its pixels are the same)
+            e.Res = m.New;
+            e.HeapSlot = m.NewHeapSlot; e.Block = m.NewBlock;
+            e.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            e.SrvStamp = int.MinValue;   // the next turn writes the new texture's SRV into its own bank
+            e.LastUseFence = Math.Max(e.LastUseFence, fence);   // the copy writes the NEW texture at that fence: no retire before it
+            _device->CreateRenderTargetView(e.Res, null, Rtv(m.Slot));
+            PlacedCreated++;
+            Compacted++;
+        }
+    }
+
+    // tile k, or scratch k - tileCap (the RTV heap's index space)
+    private ref Entry At(int k) => ref (k < _tiles.Length ? ref _tiles[k] : ref _scratch[k - _tiles.Length]);
+
+    /// <summary>Surfaces moved by idle compaction since the pool was built.</summary>
+    public long Compacted { get; private set; }
+
+    /// <summary>Release every EMPTY tile heap now (a hidden window's memory release: nothing composites).</summary>
+    public void ReleaseEmptyHeaps()
+    {
+        if (_heaps is null) return;
+        while (_heaps.ReleaseOneEmpty()) { }
     }
 
     /// <summary>Retire (behind its last-use fence) the texture of every tile slot the <see cref="SliceTable"/> released this
@@ -231,7 +408,7 @@ internal sealed unsafe class SurfacePool : IDisposable
     {
         if (e.Res == null) { e = default; e.SrvStamp = int.MinValue; return; }
         long retiredBytes = LayerTargetBucket.Bytes(e.W, e.H);
-        _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence, Bytes = retiredBytes });
+        _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence, Bytes = retiredBytes, HeapSlot = e.HeapSlot, Block = e.Block, Blocks = e.Blocks });
         Interlocked.Add(ref _retiredBytes, retiredBytes);
         Interlocked.Increment(ref _retiredCount);
         e = default;
@@ -241,10 +418,21 @@ internal sealed unsafe class SurfacePool : IDisposable
     /// <summary>Retire every texture (device recovery / teardown — the caller has drained the GPU).</summary>
     public void ReleaseAll()
     {
-        for (int i = 0; i < _tiles.Length; i++) if (_tiles[i].Res != null) { D3D12MemoryDiagnostics.Release(_tiles[i].Res, "Tiles.Surface"); _tiles[i].Res->Release(); _tiles[i] = default; _tiles[i].SrvStamp = int.MinValue; }
-        for (int i = 0; i < _scratch.Length; i++) if (_scratch[i].Res != null) { D3D12MemoryDiagnostics.Release(_scratch[i].Res, "Tiles.Surface"); _scratch[i].Res->Release(); _scratch[i] = default; _scratch[i].SrvStamp = int.MinValue; }
-        foreach (var r in _retired) { D3D12MemoryDiagnostics.Release(r.Res, "Tiles.Surface"); r.Res->Release(); }
+        for (int i = 0; i < _tiles.Length; i++)
+            if (_tiles[i].Res != null)
+            {
+                if (_tiles[i].HeapSlot == 0) D3D12MemoryDiagnostics.Release(_tiles[i].Res, "Tiles.Surface");
+                _tiles[i].Res->Release(); _tiles[i] = default; _tiles[i].SrvStamp = int.MinValue;
+            }
+        for (int i = 0; i < _scratch.Length; i++)
+            if (_scratch[i].Res != null)
+            {
+                if (_scratch[i].HeapSlot == 0) D3D12MemoryDiagnostics.Release(_scratch[i].Res, "Tiles.Surface");
+                _scratch[i].Res->Release(); _scratch[i] = default; _scratch[i].SrvStamp = int.MinValue;
+            }
+        foreach (var r in _retired) { if (r.HeapSlot == 0) D3D12MemoryDiagnostics.Release(r.Res, "Tiles.Surface"); r.Res->Release(); }
         _retired.Clear();
+        _heaps?.ReleaseAll();   // every placed resource is released above
         Interlocked.Exchange(ref _retiredBytes, 0);
         Interlocked.Exchange(ref _retiredCount, 0);
     }
@@ -259,9 +447,11 @@ internal sealed unsafe class SurfacePool : IDisposable
         if (e.Res == null || e.W != w || e.H != h)
         {
             Retire(ref e);
-            e.Res = CreateTarget(w, h, "Tiles.Surface");
+            e.Res = CreatePooled(w, h, "Tiles.Surface", out e.HeapSlot, out e.Block, out e.Blocks);
             e.W = w; e.H = h;
-            e.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            // a placed tile starts in RENDER_TARGET and is aliased in + discarded by the raster's barrier batch (TakeTileInit)
+            e.NeedsInit = e.HeapSlot != 0;
+            e.State = e.NeedsInit ? D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             _device->CreateRenderTargetView(e.Res, null, Rtv(slot));
             e.CreatedTurn = _turn;
         }
@@ -285,6 +475,16 @@ internal sealed unsafe class SurfacePool : IDisposable
     }
 
     public uint TileSerial(int slot) => (uint)slot < (uint)_tiles.Length ? _tiles[slot].Serial : 0u;
+
+    /// <summary>The slot's texture was PLACED this turn on memory another tile may have used: true once, and the caller's
+    /// barrier batch must alias it in (and discard it) before the raster — whose whole-surface CLEAR then defines every pixel,
+    /// as a committed texture's zeroed memory never needed to (<see cref="TileFresh"/> forces that raster whole).</summary>
+    public bool TakeTileInit(int slot)
+    {
+        if ((uint)slot >= (uint)_tiles.Length || !_tiles[slot].NeedsInit) return false;
+        _tiles[slot].NeedsInit = false;
+        return true;
+    }
 
     /// <summary>The tile slot's texture was created THIS turn (by <see cref="EnsureTile"/>): it holds no previous pixels, so
     /// a partial raster into it must raster whole.</summary>
@@ -349,9 +549,11 @@ internal sealed unsafe class SurfacePool : IDisposable
             }
             ref Entry n = ref _scratch[best];
             Retire(ref n);
-            n.Res = CreateTarget(w, h, "Tiles.Scratch");
+            n.Res = CreatePooled(w, h, "Tiles.Scratch", out n.HeapSlot, out n.Block, out n.Blocks);
             n.W = w; n.H = h;
-            n.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            // a placed scratch starts in RENDER_TARGET; its first barrier aliases it in and clears it whole (TakeScratchInit)
+            n.NeedsInit = n.HeapSlot != 0;
+            n.State = n.NeedsInit ? D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             _device->CreateRenderTargetView(n.Res, null, Rtv(_tileCap + best));
         }
         ref Entry s = ref _scratch[best];
@@ -379,6 +581,16 @@ internal sealed unsafe class SurfacePool : IDisposable
     public void DropScratch()
     {
         for (int i = 0; i < _scratch.Length; i++) Retire(ref _scratch[i]);
+    }
+
+    /// <summary>Scratch <paramref name="i"/> was PLACED this lease on memory another surface may have used: true once, and the
+    /// caller (the scratch's first barrier) must alias it in and clear it whole to transparent black — what a committed texture
+    /// starts with — before anything draws into or samples it.</summary>
+    public bool TakeScratchInit(int i)
+    {
+        if ((uint)i >= (uint)_scratch.Length || !_scratch[i].NeedsInit) return false;
+        _scratch[i].NeedsInit = false;
+        return true;
     }
 
     public void ReleaseScratch(int i) { if ((uint)i < (uint)_scratch.Length && !_scratch[i].Retained) _scratch[i].InUse = false; }
@@ -521,7 +733,13 @@ internal sealed unsafe class SurfacePool : IDisposable
           .Append(" scratch leased=").Append(nIn).Append('/').Append((inUse / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
           .Append(" retained=").Append(nRet).Append('/').Append((retained / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
           .Append(" idle=").Append(nIdle).Append('/').Append((idle / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
-          .Append(" retired=").Append((Interlocked.Read(ref _retiredBytes) / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)).AppendLine(" MiB");
+          .Append(" retired=").Append((Interlocked.Read(ref _retiredBytes) / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)).Append(" MiB");
+        if (_heaps is { } hp)
+            sb.Append(" heaps=").Append(hp.HeapCount).Append('/').Append((hp.HeldBytes / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
+              .Append(" MiB used=").Append((hp.UsedBytes / MiB).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
+              .Append(" MiB created=").Append(hp.HeapCreates).Append(" released=").Append(hp.HeapReleases)
+              .Append(" placed=").Append(PlacedCreated).Append('/').Append(PlacedReleased).Append(hp.NotZeroed ? " notZeroed" : "");
+        sb.AppendLine();
         foreach (var kv in tileSizes) sb.Append("  tile ").Append(kv.Key).Append(" x").Append(kv.Value.N).Append(' ').Append((kv.Value.B / MiB).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)).AppendLine(" MiB");
         foreach (var kv in scratchSizes) sb.Append("  scratch ").Append(kv.Key).Append(" x").Append(kv.Value.N).Append(' ').Append((kv.Value.B / MiB).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)).AppendLine(" MiB");
         return sb.ToString();
@@ -561,16 +779,47 @@ internal sealed unsafe class SurfacePool : IDisposable
         return gpu;
     }
 
-    private ID3D12Resource* CreateTarget(int w, int h, string name)
+    /// <summary>A tile or scratch texture: placed on a free block run of the pooled heaps (<see cref="TileHeapPool"/>), else (no
+    /// heaps, a texture larger than half a heap, a heap that cannot be created) a committed texture as before.</summary>
+    private ID3D12Resource* CreatePooled(int w, int h, string name, out int heapSlot, out int block, out int blocks)
     {
-        TexturesCreated++;
-        D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
+        heapSlot = 0; block = 0; blocks = 0;
+        if (_heaps is null) return CreateTarget(w, h, name);
+        D3D12_RESOURCE_DESC rd = TargetDesc(w, h);
+        var info = _device->GetResourceAllocationInfo(0, 1, &rd);
+        int n = TileHeapPool.BlocksFor(info.SizeInBytes);
+        if (n == 0 || info.Alignment > TileHeapPool.BlockBytes || !_heaps.Allocate(n, out int hp, out int b))
+            return CreateTarget(w, h, name);
+        D3D12_CLEAR_VALUE cv = default;
+        cv.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
+        ID3D12Resource* res = null;
+        if (_device->CreatePlacedResource(_heaps.Heap(hp), (ulong)b * TileHeapPool.BlockBytes, &rd,
+                D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, __uuidof<ID3D12Resource>(), (void**)&res) < 0 || res == null)
+        {
+            _heaps.Free(hp, b, n);
+            return CreateTarget(w, h, name);
+        }
+        PlacedCreated++;
+        heapSlot = hp + 1; block = b; blocks = n;
+        return res;
+    }
+
+    private static D3D12_RESOURCE_DESC TargetDesc(int w, int h)
+    {
         D3D12_RESOURCE_DESC rd = default;
         rd.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         rd.Width = (ulong)w; rd.Height = (uint)h; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
         rd.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM; rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags = D3D12_RESOURCE_FLAGS.D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        return rd;
+    }
+
+    private ID3D12Resource* CreateTarget(int w, int h, string name)
+    {
+        _committedCreated++;
+        D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC rd = TargetDesc(w, h);
         ulong bytes = D3D12MemoryDiagnostics.AllocationBytes(_device, &rd);
         // Optimized clear value = transparent black: every tile / scratch pass begins with a CLEAR to exactly that.
         D3D12_CLEAR_VALUE cv = default;

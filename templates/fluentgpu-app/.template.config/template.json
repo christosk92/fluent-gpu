@@ -24,7 +24,7 @@
     "GlobalJson": {
       "type": "parameter",
       "datatype": "bool",
-      "description": "Add a global.json that pins the .NET 10 SDK feature band the engine builds with (10.0.300, latestFeature). Turn off when the folder already sits under a global.json.",
+      "description": "Add a global.json that pins the .NET 11 SDK the engine builds with (11.0.100-rc.3.26522.148, latestFeature). Turn off when the folder already sits under a global.json.",
       "defaultValue": "true"
     }
   },

@@ -865,6 +865,7 @@ public sealed partial class AppHost : IDisposable
                 // ...unless a pop-out sharing the cache is on screen: its images must re-decode at once, not wait for this window's restore.
                 _images.HiddenKeepLandings = AnyVisibleDetachedChild();
                 RequestHiddenStage(HiddenStage.Shallow);
+                CrashTrail.Record(TrailEvent.HiddenShallow, (long)CurrentHiddenPark(), evicted);
                 FluentGpu.Foundation.Diag.Line($"[hidden] shallow park={CurrentHiddenPark()} unpinnedReleased={evicted} ready={_images.ReadyCount} ms={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:0.00}");
             }
             else
@@ -887,6 +888,7 @@ public sealed partial class AppHost : IDisposable
                 int parked = _images.ParkPinnedGpu(_deepChildHeld);
                 _images.HiddenStage = HiddenStage.Deep;
                 RequestHiddenStage(HiddenStage.Deep);
+                CrashTrail.Record(TrailEvent.HiddenDeep, (long)CurrentHiddenPark(), parked);
                 FluentGpu.Foundation.Diag.Line($"[hidden] deep park={CurrentHiddenPark()} parked={parked} unpinnedReleased={evicted} ready={_images.ReadyCount} visiblePopouts={(anyVisibleChild ? 1 : 0)} ms={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:0.00}");
             }
         }
@@ -936,6 +938,7 @@ public sealed partial class AppHost : IDisposable
         _images.HiddenKeepLandings = false;
         RequestHiddenStage(HiddenStage.Visible);   // AFTER the restart and the arm (see above)
         RequestFullRepaintOnce();                  // every tile the release dropped re-rasters in the first frame back; never elide it as unchanged
+        CrashTrail.Record(TrailEvent.HiddenRestore, (long)before, parkedBefore);
         FluentGpu.Foundation.Diag.Line($"[hidden] restore from={before} parked={parkedBefore} restarted={restarted} pending={pending} hold={holdNote} holdMaxMs={HiddenMemoryBudget.RestoreHoldMaxMs} ready={_images.ReadyCount} ms={(Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency:0.00}");
     }
 
@@ -1893,6 +1896,7 @@ public sealed partial class AppHost : IDisposable
         var frame = slices.BuildComposite(tiles, scene, in submit, themeEpoch, submit.RepaintDamage, withStreams: true);
         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
         _device.SubmitComposite(in frame, _swapchain);
+        if (_device.HeapReleaseDue) _renderThread?.RequestIdleTrimThisTurn();   // freed tile heaps above the cap: release after this present
         slices.EndComposite(tiles, in frame);
         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
         _evBuildTicks = t1 - t0; _evSubmitTicks = t2 - t1;
@@ -2385,6 +2389,9 @@ public sealed partial class AppHost : IDisposable
                 {
                     _renderSubmissionContinuity.Elided(rf.PublishSeq);
                     presented = false;
+                    // An identical publication owes no present: rebase the missed-vsync baseline, or the next present charges this
+                    // gap as missed vsyncs that were never owed (the render-thread elision _lastNoPresentQpc's doc names).
+                    NoteNoPresentTurn();
                     Interlocked.Increment(ref _framesSkippedSubmit);
                     if (fresh) Interlocked.Increment(ref _freshIdentical);
                     // E5: this turn skips the submit (no command list, no present) but the staging pass at the top of
@@ -2920,6 +2927,7 @@ public sealed partial class AppHost : IDisposable
 
     private void DumpDeviceLostFrames(Exception? ex, string path)
     {
+        CrashTrail.Record(TrailEvent.DeviceLost, (uint)_device.PollDeviceLost(), _deviceLostRecoveryCount, path);
         WriteDeviceLostLine($"[device-lost] path={path} backend={_device.BackendName} recoveries={_deviceLostRecoveryCount}" + (ex is null ? "" : $" exception={ex.GetType().Name}: {ex.Message}"));
         int count = Math.Min(_deviceLostFrameSeq, DeviceLostFrameRingSize);
         if (count == 0) { WriteDeviceLostLine("[device-lost] no frame breadcrumbs captured"); return; }
@@ -4515,8 +4523,24 @@ public sealed partial class AppHost : IDisposable
     private ulong _seenSceneCapacityRevision;
     // Deterministic monotonic-clock seam for behavioral tests; production uses the OS uptime clock, not frame time.
     internal Func<long>? ColdMaintenanceClock { get; set; }
-    private long ColdMaintenanceNowMs => ColdMaintenanceClock?.Invoke() ?? Environment.TickCount64;
+    private long ColdMaintenanceNowMs => (ColdMaintenanceClock?.Invoke() ?? Environment.TickCount64) + Volatile.Read(ref _coldMaintenanceSkewMs);
+    // How far AdvanceColdMaintenanceClock moved the clock ahead of its source (0 in production: nothing calls it).
+    private long _coldMaintenanceSkewMs;
     internal int ColdMaintenanceRuns { get; private set; }
+
+    /// <summary>Diagnostics (a headless inspector): move the cold-maintenance clock <paramref name="ms"/> ahead of the OS uptime
+    /// clock it reads, so a 30 s deadline (the scene slab trim, the pixel-pool trim, the snapshot reclaim) falls due on the next
+    /// <see cref="RunFrame"/> instead of after 30 s of wall clock. Every reader of that clock moves together (the interaction quiet
+    /// hold too), so the services run as they would after the wait: on the next frame, parked frames included. Forward only; a
+    /// value of 0 or less does nothing. UI thread.</summary>
+    public void AdvanceColdMaintenanceClock(long ms)
+    {
+        if (ms > 0) Interlocked.Add(ref _coldMaintenanceSkewMs, ms);
+    }
+
+    /// <summary>Diagnostics: how many frames ran at least one cold service (a pixel-pool trim, the scene slab trim or a snapshot
+    /// reclaim) since the host started. UI thread.</summary>
+    public int ColdMaintenanceRunCount => ColdMaintenanceRuns;
     internal int ColdMaintenanceWakeCount { get; private set; }
 
     private void OnPixelBufferRetained(FluentGpu.Media.PixelBufferPool pool)
@@ -4613,10 +4637,14 @@ public sealed partial class AppHost : IDisposable
         long now = ColdMaintenanceNowMs;
         ObserveSceneCapacity(now);
         bool serviced = false;
+        int trimmed = 0;
+        int slotsBefore = 0;
         // Disarm BEFORE releasing buffers: a Return that races the trim can arm the next finite episode.
-        if (_pixelMaintenance.TryConsume(now)) { _pixelPool.Trim(); serviced = true; }
+        if (_pixelMaintenance.TryConsume(now)) { _pixelPool.Trim(); serviced = true; trimmed |= 1; }
         if (_sceneMaintenance.TryConsume(now, _coldQuietFromMs))
         {
+            slotsBefore = _scene.Capacity;
+            trimmed |= 2;
             _scene.TrimExcessCapacity();
             _seenSceneCapacityRevision = _scene.CapacityRevision; // Our own shrink must not schedule another attempt.
             serviced = true;
@@ -4628,7 +4656,9 @@ public sealed partial class AppHost : IDisposable
                 _renderSeam.TryReclaimSceneCapacity(_scene, _images, _strings,
                     _connected.Detached, _popupWindows, _anim, now);
             serviced = true;
+            trimmed |= 4;
         }
+        if (trimmed != 0) CrashTrail.Record(TrailEvent.ColdTrim, trimmed, slotsBefore);
         if (serviced) ColdMaintenanceRuns++;
     }
 
@@ -5922,6 +5952,8 @@ public sealed partial class AppHost : IDisposable
             OwningRenderThread?.WakeAsync();
             if (minimized) FlushToQuiescence();
         }
+        if (minimized != _wasParked)
+            CrashTrail.Record(minimized ? TrailEvent.WindowParked : TrailEvent.WindowRestored, (long)CurrentHiddenPark(), _isDetachedChild ? 1 : 0);
         _wasParked = minimized;
         if (minimized)
         {
@@ -6774,6 +6806,7 @@ public sealed partial class AppHost : IDisposable
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             if (capturedProjections) ApplyProjections(layoutSize, keepAliveSuppressed);   // FLIP "Last+Invert+Play"
+            _reconciler.RunEntranceCascades();                 // 6.7 staggered entrances requested this commit: their units are what this layout shows
             _enterReflowsSeeded.Clear();                       // read by ApplyProjections' SeedReflowsFirst (this frame's only)
             _anim.PendingEnterReveal.Clear();                  // seeded at 6.3, read by ApplyProjections as shove carriers
             _anim.RevealExitCarriers.Clear();
@@ -6784,6 +6817,7 @@ public sealed partial class AppHost : IDisposable
             MountProf.Enter(MountProf.Anim);
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
+            _reconciler.SettleEntranceCascades();               // 7 a cascade unit whose entrance settled stops compositing
             _reconciler.SettlePersistWaiters();                 // 7 E7: a Flow.Persist slot still waiting for a live owner has a duplicate key
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
@@ -8805,11 +8839,11 @@ public sealed partial class AppHost : IDisposable
     /// and it is, because between two consecutive PRESENTING turns no RunFrame/Paint turn can return without either
     /// presenting or hitting one of the enumerated no-present stamps above; there is no third kind of turn. So
     /// `_lastNoPresentQpc <= prev` holds in that case and NotePresented's gap math below runs unmodified, charging
-    /// the real miss. NOT covered by this field (out of scope for this fix, flagged rather than silently ignored):
-    /// a present-thread-owned elision inside <see cref="SubmitPresentOnRenderThread"/> itself (its own
-    /// <c>ShouldSkipRenderSubmit</c> skip, and the clock-driven re-record early-out) — those are render-thread
-    /// turns, not UI-thread RunFrame/Paint turns, and can still under-stamp a gap that contains only render-thread-
-    /// side elisions with no UI-thread no-present turn in it.</para></summary>
+    /// the real miss. The present-thread-owned <c>ShouldSkipRenderSubmit</c> skip inside
+    /// <see cref="SubmitPresentOnRenderThread"/> stamps it too (2026-11-07: a stage whose only motion was a composited video
+    /// published identical frames, skipped their submits, and read 2-5 "missed" vsyncs a second that no frame owed). NOT
+    /// covered (flagged rather than silently ignored): the clock-driven re-record early-out, a render-thread turn that can
+    /// still under-stamp a gap with no other no-present turn in it.</para></summary>
     private long _lastNoPresentQpc;
 
     /// <summary>One-liner for every RunFrame/Paint exit that ran this turn but did not submit a present — see

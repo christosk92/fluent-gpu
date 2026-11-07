@@ -318,14 +318,17 @@ public sealed unsafe partial class D3D12Device
                     if (_itemSurface[i] >= 0)
                     {
                         PixelRect rg = _itemRegion[i];
-                        // a posed self-blur drawn between whole pixels reaches one pixel further on its leading sides
-                        if (it.SubPxX != 0f || it.SubPxY != 0f) rg = new PixelRect(rg.Left - 1, rg.Top - 1, rg.Right + 1, rg.Bottom + 1);
+                        // a surface drawn between whole pixels (a posed self-blur, a slide group: CompositeItem.SubPxX) lands that much
+                        // further and reaches one pixel further on its leading sides
+                        if (it.SubPxX != 0f || it.SubPxY != 0f)
+                            rg = new PixelRect((int)MathF.Floor(rg.Left + it.SubPxX) - 1, (int)MathF.Floor(rg.Top + it.SubPxY) - 1,
+                                (int)MathF.Ceiling(rg.Right + it.SubPxX) + 1, (int)MathF.Ceiling(rg.Bottom + it.SubPxY) + 1);
                         foot = PpIntersect(in rg, in sci);
                     }
                     int end = _itemChunkStart[i] + _itemChunkCount[i];
                     for (int c = _itemChunkStart[i]; c < end; c++) foot = PpUnion(in foot, PpIntersect(_chunks[c].Rect, in sci));
                     ulong s = sig;
-                    if (it.Kind == CompositeKind.Group && it.BlurSigma <= 0f && TileDamage.PrecisePresent)
+                    if (it.Kind == CompositeKind.Group && it.BlurSigma <= 0f && TileDamage.PrecisePresent && it.SubPxX == 0f && it.SubPxY == 0f)
                     {
                         // An unblurred group composites each pixel from its members' pixels at that pixel (alpha, feather,
                         // rounded clip): what changed inside it is exactly what its members' own entries dirty, so its

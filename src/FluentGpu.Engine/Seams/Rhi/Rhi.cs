@@ -135,6 +135,11 @@ public partial interface IGpuDevice : IDisposable
     /// pending). Default: nothing to do.</summary>
     int TrimIdleResources(long nowMs) => -1;
 
+    /// <summary>True when the turn just submitted left more empty pooled memory than the device may keep while the app composites
+    /// (placed-tile heaps above the free-surface cap): the host runs the housekeeping pass right after this turn instead of at its
+    /// armed time, so the excess goes back to the driver within a few presents, never inside a turn. Default false.</summary>
+    bool HeapReleaseDue => false;
+
     /// <summary>The hidden-window memory stage the host reached (render thread, or the UI thread in SingleThread mode, BETWEEN
     /// turns): <see cref="Hosting.HiddenStage.Shallow"/> drops every device resource no visible frame needs - the scratch / retained /
     /// group / blur surfaces, the stencil target of the primary swapchain, the free image-texture pools, the staging ring and the

@@ -23,4 +23,4 @@ dotnet build FluentGpu.slnx -c Release
 
 > Status: the **portable core is real**. The Windows D3D12/DWrite/UIA leaves
 > and the source generators are scaffolded (see each project's `Placeholder.cs`) — the next code milestone is the real
-> D3D12 backend so the same `Counter` renders to an actual window. Baseline: `net10.0`, C# 14, AOT-compatible (`Directory.Build.props`).
+> D3D12 backend so the same `Counter` renders to an actual window. Baseline: `net11.0`, C# 15, AOT-compatible (`Directory.Build.props`).

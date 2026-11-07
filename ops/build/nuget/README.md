@@ -1,6 +1,6 @@
 # FluentGpu
 
-A from-scratch, near-zero-allocation, **NativeAOT**, **GPU-rendered** UI engine for **.NET 10** — a React/Reactor
+A from-scratch, near-zero-allocation, **NativeAOT**, **GPU-rendered** UI engine for **.NET 11** — a React/Reactor
 programming model (immutable `Element` records + `Component` + hooks + a keyed reconciler) over a **signals-first**
 reactive core and a custom **Direct3D 12 + DirectWrite + DirectComposition** renderer.
 
@@ -46,7 +46,7 @@ One package, all the assemblies inside it:
 
 ## Requirements
 
-- **.NET 10 SDK** (the package targets `net10.0`).
+- **.NET 11 SDK** (the package targets `net11.0`).
 - **Windows 10 21H2 or later**, x64 or arm64 (Direct3D 12 / WDDM 2.0 + the OS HLSL compiler).
 - For a self-contained native build: `dotnet publish -c Release -r win-x64 -p:PublishAot=true`.
 

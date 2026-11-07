@@ -46,6 +46,10 @@ public static class GpuProfile
     /// Complements <see cref="IsWeak"/>: software implies Weak, but Weak (an iGPU) does not imply software.</summary>
     public static bool IsSoftwareAdapter { get; set; }
 
+    /// <summary>The adapter's user-mode driver version as Windows reports it (<c>IDXGIAdapter::CheckInterfaceSupport</c>,
+    /// e.g. "32.0.15.6094"), published with <see cref="AdapterName"/>. Empty until set or when the driver did not answer.</summary>
+    public static string DriverVersion { get; set; } = "";
+
     /// <summary>Path-rendering AA strategy (gpu-renderer.md §5 step 4). Default <see cref="PathAaMode.Fringe"/>;
     /// <see cref="PathAaMode.Msaa4"/> is selectable but falls back to <see cref="PathAaMode.Fringe"/> (MSAA is
     /// descoped — canon's open <c>OQ-1</c>). <b>Deviation from canon:</b> gpu-renderer.md §5 prints

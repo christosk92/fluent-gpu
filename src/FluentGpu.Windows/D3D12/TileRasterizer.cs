@@ -489,12 +489,29 @@ public sealed unsafe partial class D3D12Device
     private void ScratchBarrier(int i, D3D12_RESOURCE_STATES to)
     {
         if (i < 0) return;
-        var from = _surfaces!.ScratchState(i);
+        if (_surfaces!.TakeScratchInit(i)) InitPlacedScratch(i);
+        var from = _surfaces.ScratchState(i);
         if (from == to) return;
         bool reopen = _inRenderPass;
         if (reopen) EndPassIfOpen();
         Barrier(_surfaces.ScratchResource(i), from, to);
         _surfaces.SetScratchState(i, to);
+        if (reopen) ResumePass();
+    }
+
+    /// <summary>A scratch placed on pooled heap memory (<see cref="SurfacePool.TakeScratchInit"/>), at its first barrier: alias it
+    /// in, then clear it whole to transparent black (it was created in RENDER_TARGET) — the bytes a committed texture starts
+    /// with, so no user of a fresh scratch can tell the two apart.</summary>
+    private void InitPlacedScratch(int i)
+    {
+        bool reopen = _inRenderPass;
+        if (reopen) EndPassIfOpen();
+        D3D12_RESOURCE_BARRIER ab = default;
+        ab.Type = D3D12_RESOURCE_BARRIER_TYPE.D3D12_RESOURCE_BARRIER_TYPE_ALIASING;
+        ab.Anonymous.Aliasing.pResourceAfter = _surfaces!.ScratchResource(i);
+        _cmdList->ResourceBarrier(1, &ab);
+        float* zero = stackalloc float[4] { 0f, 0f, 0f, 0f };
+        _cmdList->ClearRenderTargetView(_surfaces.ScratchRtv(i), zero, 0, null);
         if (reopen) ResumePass();
     }
 

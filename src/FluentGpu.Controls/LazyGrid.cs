@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -150,9 +151,20 @@ public sealed record LazyGridFit(float MinColWidth, float Gap, float RowExtra);
 /// scroller), reserves the full extent for a KNOWN total, and realizes only the rows intersecting the live scroll window —
 /// rendering a placeholder for any cell whose data hasn't arrived (pairs with <see cref="VirtualCollection{T}"/>). It calls
 /// <c>ensureRange</c> with the visible item range so the data layer pages in. The column COUNT derives from the measured
-/// width (responsive); each row then lays its cells out at <c>Grow=1, Basis=0</c> (CSS-grid <c>1fr</c>) so the ENGINE sizes
-/// the card widths — nothing is hand-sized. Rows are a uniform height so the windowing is exact. An optional inline drawer
-/// expands a cell in place (iTunes-style), its height reserved in the extent so the page scroll never jumps.
+/// width (responsive); every column is the same share of it (CSS-grid <c>1fr</c>). Rows are a uniform height so the windowing
+/// is exact. An optional inline drawer expands a cell in place (iTunes-style), its height reserved in the extent so the page
+/// scroll never jumps.
+///
+/// ONE PLACED BODY. Every realized cell and every realized row's drawer slot is a child of one z-stack body, placed at its
+/// grid position. A cell keeps the same parent whatever row is expanded and whatever the column count, so it is never
+/// remounted by a drawer moving and every move it makes is a position FLIP from where it was presented. (The grid used to cut
+/// the rows into a slice above the drawer and a slice below it: a cell whose row crossed the drawer was remounted at its new
+/// place at once, and a cell that stayed in the lower slice FLIPped by its move WITHIN that slice, so on a switch to another
+/// row two card rows drew over each other while the page glided, and a close let the rows snap up under the collapsing
+/// drawer.) Each realized row owns a drawer slot keyed by the row, 0 tall while the row is shut: opening a row grows its slot,
+/// closing it (or opening another row) shrinks it, both on the same spring the cells move on, so the old drawer collapses
+/// while the new one opens and the rows between ride in lockstep. The panel inside a slot is keyed by the item: a switch
+/// within one row cross-fades the panels while the slot resizes; a closing slot keeps its panel as a fading exit until shut.
 ///
 /// Reactive inputs are read through delegates/signals (count, cell, expanded, the data version), so the autonomous reused
 /// component always sees live state. Zero engine changes — it rides the existing <c>OnScrollGeometryChanged</c> + scene
@@ -195,11 +207,21 @@ public sealed class LazyGrid : Component
     readonly Action _applyWindow;
     readonly Action _invokeVisibleRangeChanged;
     // Render scratch. The reconciler retains the previous Element tree (Update/RecordChanged diff old against new), so
-    // every Children ARRAY handed to a BoxEl/GridEl must be fresh — the list is only the builder behind ToArray().
-    // GridEl.Columns is likewise retained by reference (SetGrid stores it in the GridSpec) but never mutated, so one
-    // TrackSize[] per column count is shared by every render until cols changes.
+    // every Children ARRAY handed to a BoxEl must be fresh — the list is only the builder behind ToArray().
     List<Element>? _children;
-    TrackSize[]? _tracks;
+    // The motion the placed cells and drawer slots move on, chosen by WHAT moved them and kept until something else moves
+    // them (a commit can render twice — the grid re-measures its width after the layout — and a choice made only on the
+    // render that saw the change would be gone before the commit's FLIPs are measured). A re-fit (column count or row
+    // height) glides on the house card re-fit; a drawer opening, closing, switching or re-sizing moves on the reveal spring,
+    // the same one its slot resizes on, so the rows ride the drawer's edge exactly.
+    bool _refitMotion;
+    int _motionCols, _motionExpanded = -1;
+    float _motionRowH, _motionDrawerH;
+    // The expanded item of the last render: a panel mounting into a row whose slot was ALREADY open (a switch within one row)
+    // fades in over the outgoing one; a panel opening a shut slot is revealed by the slot's edge alone.
+    int _lastExpandedIndex = -1, _lastExpandedRow = -1;
+    // The open drawer's panel, built at the top of the render (before its height is read) and placed in its row's slot.
+    Element? _openPanel;
     NodeHandle _node;                                // captured at realize; for content-space position via the scene
     readonly int _initialIndex;                      // >0 ⇒ on first valid layout, scroll the page so this item is at the top
     bool _didInitialScroll;
@@ -319,6 +341,13 @@ public sealed class LazyGrid : Component
 
         (float sectionTop, float viewportH, float scrollOffset, bool pageScrollLive) = Geometry(publishedScrollOffset);
         int expandedRow = expandedIndex >= 0 ? expandedIndex / cols : -1;
+        // The open drawer's panel is built FIRST, before its height is read: the builder is where the caller derives the
+        // height it then reports (a verdict off the item it opens), so a height read before it is the PREVIOUS item's (or
+        // none on a first open) and the slot would open to the wrong height, or not at all.
+        _openPanel = expandedIndex >= 0 && widthKnown && _drawer is { } build
+            ? build(expandedIndex, new GridDrawerInfo(cols, expandedIndex - expandedRow * cols, cellW, _gap,
+                                                      (expandedIndex - expandedRow * cols) * (cellW + _gap)))
+            : null;
         float drawerH = expandedIndex >= 0 && _drawerHeight is { } dh ? dh(expandedIndex) : 0f;
         bool hasViewport = viewportH < 1e8f;
         float scrollInSection = scrollOffset - sectionTop;
@@ -356,7 +385,6 @@ public sealed class LazyGrid : Component
         int oldCols = _lastCols;
         float oldRowH = _lastRowH;
         float oldSectionTop = _lastSectionTop;
-        bool animateRefit = oldCols > 0 && (oldCols != cols || MathF.Abs(oldRowH - rowH) > 0.5f);
         UseLayoutEffect(() =>
         {
             float newTop = Geometry().sectionTop;
@@ -383,8 +411,47 @@ public sealed class LazyGrid : Component
         if (!widthKnown || totalRows == 0)
             return Root(new BoxEl { Height = 1f });
 
-        List<Element> children = FlatChildren(view, cols, cellW, rowH, count, expandedIndex, expandedRow, animateRefit);
-        return Root(new BoxEl { Direction = 1, Gap = 0f, Children = children.ToArray() });
+        ChooseMotion(cols, rowH, expandedIndex, drawerH);
+        float drawer = expandedRow >= 0 ? MathF.Max(0f, drawerH) : 0f;
+        List<Element> children = BodyChildren(view, cols, cellW, rowH, count, expandedIndex, expandedRow, drawer);
+        _lastExpandedIndex = expandedIndex;
+        _lastExpandedRow = expandedRow;
+        // The body reserves the whole extent (every row plus the open drawer); its height change rides out to everything
+        // below the grid on the same reveal spring, so the next section never jumps while the rows above it glide.
+        return Root(new BoxEl
+        {
+            Key = "lazy-body", ZStack = true, Height = totalRows * rowH + drawer, Animate = s_bodyMotion,
+            Children = children.ToArray(),
+        });
+    }
+
+    static readonly TransitionDynamics s_revealDynamics = MotionTok.Reveal.ToDynamics();
+    static readonly LayoutTransition s_bodyMotion = new(TransitionChannels.Size, s_revealDynamics, SizeMode.FlowReveal);
+    static readonly LayoutTransition s_cellDrawerMotion = MotionRecipes.CardRefit with { Dynamics = s_revealDynamics };
+    // A slot moves with its row and clips its panel to the spring's presented height; its panel lays out at the slot's FULL
+    // height (the panel's own size), so a closing slot wipes up over a panel that stays put.
+    static readonly LayoutTransition s_slotDrawerMotion = new(TransitionChannels.Bounds, s_revealDynamics, SizeMode.Reveal, Axes: SizeAxes.Height);
+    static readonly LayoutTransition s_slotRefitMotion = s_slotDrawerMotion with { Dynamics = MotionRecipes.CardRefit.Dynamics };
+    // A panel leaving its slot (closed, or replaced within the row) drops out fast (a WinUI ControlFast fade on the
+    // decelerating curve) while the slot's edge closes over it, so a switch within a row never shows two panels' text over
+    // each other; one arriving in an already-open slot fades in on WinUI's entrance (ControlNormal, FluentDecelerate) just
+    // after the outgoing one has mostly gone.
+    const float PanelOutMs = 150f, PanelInMs = 250f, PanelInDelayMs = 50f;
+    static readonly LayoutTransition s_panelSwap = new(TransitionChannels.Opacity,
+        TransitionDynamics.Tween(PanelInMs, Easing.FluentDecelerate),
+        Enter: new EnterExit(Opacity: 0f, Active: true, DelayMs: PanelInDelayMs), Exit: new EnterExit(Opacity: 0f, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(PanelOutMs, Easing.FluentDecelerate));
+    static readonly LayoutTransition s_panelExit = s_panelSwap with { Enter = default };
+
+    /// <summary>Which motion the placed children move on this commit (see <see cref="_refitMotion"/>): a re-fit when the
+    /// column count or the row height moved, the drawer's spring when the expanded item or its height moved, else the last.</summary>
+    void ChooseMotion(int cols, float rowH, int expandedIndex, float drawerH)
+    {
+        bool refit = _motionCols > 0 && (cols != _motionCols || MathF.Abs(rowH - _motionRowH) > 0.5f);
+        bool drawerMoved = expandedIndex != _motionExpanded || MathF.Abs(drawerH - _motionDrawerH) > 0.5f;
+        if (refit) _refitMotion = true;
+        else if (drawerMoved) _refitMotion = false;
+        _motionCols = cols; _motionRowH = rowH; _motionExpanded = expandedIndex; _motionDrawerH = drawerH;
     }
 
     /// <summary>Derive both window keys from the live scene geometry at <paramref name="offset"/> and write each signal
@@ -420,27 +487,74 @@ public sealed class LazyGrid : Component
         _visible.Value = visible;
     }
 
-    List<Element> FlatChildren(in LazyGridMath.View view, int cols, float cellW, float rowH, int count,
-                               int expandedIndex, int expandedRow, bool animateRefit)
+    /// <summary>The placed body's children: the realized rows' cells, then one drawer slot per realized row (drawn over the
+    /// cells, so a slot an interrupted motion briefly overlaps stays on top). A row's top is its index times the row height,
+    /// plus the open drawer when the row is below it; a slot sits under its row's folded gap, the row's full pitch down.</summary>
+    List<Element> BodyChildren(in LazyGridMath.View view, int cols, float cellW, float rowH, int count,
+                               int expandedIndex, int expandedRow, float drawer)
     {
-        var children = _children ??= new List<Element>(5);
+        var children = _children ??= new List<Element>(32);
         children.Clear();
-        if (view.TopPad > 0.5f) children.Add(new BoxEl { Key = "lazy-top", Height = view.TopPad });
-        bool hasRows = view.LastRow >= view.FirstRow;
-        if (!view.DrawerVisible && hasRows)
-            children.Add(GridSlice(view.FirstRow, view.LastRow, cols, cellW, rowH, count, false, animateRefit));
-        else if (_drawer is { } drawer)
+        if (view.LastRow < view.FirstRow) return children;
+        LayoutTransition cellMotion = _refitMotion ? MotionRecipes.CardRefit : s_cellDrawerMotion;
+        float pitch = cellW + _gap;
+        for (int row = view.FirstRow; row <= view.LastRow; row++)
         {
-            children.Add(GridSlice(view.FirstRow, expandedRow, cols, cellW, rowH, count, false, animateRefit));
-            int column = expandedIndex - expandedRow * cols;
-            children.Add(drawer(expandedIndex,
-                new GridDrawerInfo(cols, column, cellW, _gap, column * (cellW + _gap))));
-            if (expandedRow < view.LastRow)
-                children.Add(GridSlice(expandedRow + 1, view.LastRow, cols, cellW, rowH, count, true, animateRefit));
+            float top = RowTop(row, rowH, expandedRow, drawer);
+            int end = Math.Min(count, (row + 1) * cols);
+            for (int idx = row * cols; idx < end; idx++)
+            {
+                children.Add(new BoxEl
+                {
+                    Key = "lazy-cell:" + idx,
+                    Direction = 1, Width = cellW, Height = rowH,
+                    AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                    Margin = new Edges4((idx - row * cols) * pitch, top, 0f, 0f),
+                    // The motion stays on every cell, moved or not: a cell whose move lands on a second render of the
+                    // commit must still find it (see _refitMotion).
+                    Animate = cellMotion,
+                    Children = [_cell(idx, cellW)],
+                });
+            }
         }
-        if (view.BottomPad > 0.5f) children.Add(new BoxEl { Key = "lazy-bottom", Height = view.BottomPad });
+        if (_drawer is not null)
+        {
+            LayoutTransition slotMotion = _refitMotion ? s_slotRefitMotion : s_slotDrawerMotion;
+            for (int row = view.FirstRow; row <= view.LastRow; row++)
+            {
+                bool open = row == expandedRow && drawer > 0f && _openPanel is not null;
+                Element[] panel = [];
+                if (open)
+                {
+                    // A switch within an open row fades the new panel in over the outgoing one; an opening slot reveals it.
+                    bool swap = _lastExpandedRow == row && _lastExpandedIndex >= 0 && _lastExpandedIndex != expandedIndex;
+                    panel =
+                    [
+                        new BoxEl
+                        {
+                            Key = "lazy-panel:" + expandedIndex, Direction = 1,
+                            Animate = swap ? s_panelSwap : s_panelExit,
+                            Children = [_openPanel!],
+                        },
+                    ];
+                }
+                children.Add(new BoxEl
+                {
+                    Key = "lazy-drawer:" + row,
+                    Direction = 1, Height = open ? drawer : 0f, ClipToBounds = true,
+                    AlignSelf = FlexAlign.Start,
+                    Margin = new Edges4(0f, RowTop(row, rowH, expandedRow, drawer) + rowH, 0f, 0f),
+                    HitTestVisible = open,
+                    Animate = slotMotion,
+                    Children = panel,
+                });
+            }
+        }
         return children;
     }
+
+    static float RowTop(int row, float rowH, int expandedRow, float drawer)
+        => row * rowH + (expandedRow >= 0 && row > expandedRow ? drawer : 0f);
 
     Element Root(Element inner) => new BoxEl
     {
@@ -449,45 +563,6 @@ public sealed class LazyGrid : Component
         OnBoundsChanged = r => { if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f) _w.Value = r.W; },
         Children = [inner],
     };
-
-    Element GridSlice(int firstRow, int lastRow, int cols, float cellW, float rowH, int count, bool isBelow, bool animateRefit)
-    {
-        int start = firstRow * cols;
-        int end = Math.Min(count, (lastRow + 1) * cols);
-        var cells = new Element[Math.Max(0, end - start)];
-        for (int idx = start; idx < end; idx++)
-        {
-            // The refit transition stays on every cell, refit or not: set only on the render whose column count changed, a second render in the same
-            // frame (the grid re-measures its width after the commit's layout) cleared it before the commit's FLIPs were applied, so a tier crossing
-            // that re-fit the grid moved every cell at once.
-            cells[idx - start] = new BoxEl
-            {
-                Key = "lazy-cell:" + idx,
-                Direction = 1,
-                Animate = MotionRecipes.CardRefit,
-                Children = [_cell(idx, cellW)],
-            };
-        }
-        // One 1fr-per-column array per column count, shared by every render (and by the above/below slices of a drawer
-        // render) until cols changes: the scene keeps the reference (GridSpec.Columns) and nobody mutates it, so the
-        // grid-spec diff short-circuits on ReferenceEquals instead of re-comparing tracks.
-        var tracks = _tracks;
-        if (tracks is null || tracks.Length != cols)
-        {
-            tracks = new TrackSize[cols];
-            Array.Fill(tracks, TrackSize.Star());
-            _tracks = tracks;
-        }
-        return new GridEl
-        {
-            Key = isBelow ? "lazy-grid:below" : "lazy-grid",
-            Columns = tracks,
-            ColGap = _gap,
-            RowGap = 0f,
-            RowHeight = rowH,
-            Children = cells,
-        };
-    }
 
     void PreserveColumnAnchor(int oldCols, float oldRowH, float oldTop, int cols, float rowH, float sectionTop)
     {
