@@ -1893,6 +1893,7 @@ public sealed partial class AppHost : IDisposable
         var frame = slices.BuildComposite(tiles, scene, in submit, themeEpoch, submit.RepaintDamage, withStreams: true);
         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
         _device.SubmitComposite(in frame, _swapchain);
+        if (_device.HeapReleaseDue) _renderThread?.RequestIdleTrimThisTurn();   // freed tile heaps above the cap: release after this present
         slices.EndComposite(tiles, in frame);
         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
         _evBuildTicks = t1 - t0; _evSubmitTicks = t2 - t1;

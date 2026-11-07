@@ -114,7 +114,11 @@ public enum ImageAtlasExperiment : byte
 /// distribution test compares item footprint boxes only, without the per-op refinement (the A/B arm). <c>group-fades</c> —
 /// every edge fade composites through its group surface (the reference of the distribution's equivalence check).
 /// <c>ink-validate</c> — every replayed glyph run's quads are checked against the glyph ink extent the fade distribution test
-/// read for it (<c>GlyphInk</c>; breaches are logged).</item>
+/// read for it (<c>GlyphInk</c>; breaches are logged). <c>committed-tiles</c> — one committed texture per tile surface instead of
+/// placed resources in pooled heaps (the A/B arm of <see cref="FluentGpu.Render.Tiles.TileMemory.PlacedTiles"/>).
+/// <c>heap-probe</c> — time committed / heap / placed creates and releases once at device init. <c>heap-log</c> — a line per
+/// tile heap create / release. <c>pixel-slides</c> — a sliding transition layer re-rasters its members at their exact phase
+/// every frame instead of compositing its group surface bilinearly (the A/B arm of the slide groups).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -317,6 +321,10 @@ public static class EngineSwitches
             case "no-defer-geometry": FluentGpu.Render.Tiles.SliceTable.DeferMovingGeometry = false; return true;
             case "raw-phase": FluentGpu.Render.SliceRecorder.CanonicalPhase = false; return true;
             case "box-fade-test": FluentGpu.Render.SliceRecorder.BoxFadeTest = true; return true;
+            case "committed-tiles": FluentGpu.Render.Tiles.TileMemory.PlacedTiles = false; return true;
+            case "heap-probe": FluentGpu.Render.Tiles.TileMemory.HeapProbe = true; return true;
+            case "heap-log": FluentGpu.Render.Tiles.TileMemory.HeapLog = true; return true;
+            case "pixel-slides": FluentGpu.Render.SliceRecorder.SlideGroups = false; return true;
             case "ink-validate": FluentGpu.Render.Tiles.TileDamage.InkValidate = true; return true;
             case "group-fades": FluentGpu.Render.SliceRecorder.GroupFadesSwitch = true; return true;
             case "rewalk-validate": FluentGpu.Render.SceneRecordingContext.PartialKeepValidate = true; return true;

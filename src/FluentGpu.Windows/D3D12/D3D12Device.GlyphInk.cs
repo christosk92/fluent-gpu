@@ -10,7 +10,7 @@ namespace FluentGpu.Rhi.D3D12;
 // GlyphInk (relative to its layout origin, keyed by its shaping inputs), where the slice recorder's fade distribution test
 // reads it in place of the run's 1.5-em halo box. `--fg ink-validate` checks the premise on every replay: the quads this
 // replay emitted lie inside the extent the table held for the run BEFORE it (the one a distribution decision could have
-// read), margin included.
+// read), margin included, both through the run's transform (where the replay's baseline snap is taken).
 public sealed unsafe partial class D3D12Device
 {
     private long _inkRuns, _inkQuads, _inkBreaches;
@@ -29,21 +29,22 @@ public sealed unsafe partial class D3D12Device
 
     private void CheckInk(in DrawGlyphRunCmd g, in RectF prior, int first)
     {
-        RectF box = GlyphInk.LocalBox(in g, in prior);
+        RectF box = GlyphInk.PaintedBox(in g, in prior);
         _inkRuns++;
         for (int i = first; i < _glyphInsts.Count; i++)
         {
             GlyphInstance q = _glyphInsts[i];
             if (!(q.DstW > 0f) || !(q.DstH > 0f)) continue;
             _inkQuads++;
+            RectF w = g.Transform.TransformBounds(new RectF(q.DstX, q.DstY, q.DstW, q.DstH));
             float over = box.IsEmpty ? float.PositiveInfinity
-                : MathF.Max(MathF.Max(box.X - q.DstX, q.DstX + q.DstW - box.Right), MathF.Max(box.Y - q.DstY, q.DstY + q.DstH - box.Bottom));
+                : MathF.Max(MathF.Max(box.X - w.X, w.Right - box.Right), MathF.Max(box.Y - w.Y, w.Bottom - box.Bottom));
             if (over <= 0f) continue;
             _inkBreaches++;
             if (over > _inkMaxOver) _inkMaxOver = over;
             if (_inkBreaches <= 10)
                 Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                    $"[ink-validate] BREACH text={g.Text.Value} size={g.FontSize} box=({box.X:0.##},{box.Y:0.##} {box.W:0.##}x{box.H:0.##}) quad=({q.DstX:0.##},{q.DstY:0.##} {q.DstW:0.##}x{q.DstH:0.##}) over={over:0.###}"));
+                    $"[ink-validate] BREACH text={g.Text.Value} size={g.FontSize} box=({box.X:0.##},{box.Y:0.##} {box.W:0.##}x{box.H:0.##}) quad=({w.X:0.##},{w.Y:0.##} {w.W:0.##}x{w.H:0.##}) over={over:0.###} transform=({q.M11:0.###},{q.M12:0.###},{q.M21:0.###},{q.M22:0.###},{q.Dx:0.##},{q.Dy:0.##}) scale={_frameScale}"));
         }
         if (_inkRuns % 500 == 1)
             Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,

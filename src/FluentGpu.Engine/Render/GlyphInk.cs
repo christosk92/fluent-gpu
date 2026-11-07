@@ -11,15 +11,19 @@ namespace FluentGpu.Render;
 /// by the run's shaping inputs, RELATIVE to the run's layout origin (Bounds.X, Bounds.Y) — the shape bakes the origin into
 /// every quad and nothing else of the origin reaches it — and the slice recorder reads it to test a fade's distribution per
 /// painted pixel instead of per box (<c>SliceRecorder.OpBoxesIn</c>). A replay moves a run's quads by at most one device
-/// pixel from the shaped ones (the baseline's sub-pixel phase snap, a sub-pixel origin), which <see cref="MarginDip"/>
-/// covers; <c>--fg ink-validate</c> checks every replayed run's quads against the extent the table held BEFORE it.
+/// pixel from the shaped ones (the baseline's sub-pixel phase snap, a sub-pixel origin) — one device pixel of the space the
+/// run's TRANSFORM maps into, where the snap is taken (GlyphRenderer.SnapDy), so the margin is applied there
+/// (<see cref="PaintedBox"/>): in the run's own local space a pixel is 1 / (scale · device scale) DIP, 7.5 DIP under the
+/// 0.06 × 0.089 scale of a page miniature; <c>--fg ink-validate</c> checks every replayed run's quads against the extent the
+/// table held BEFORE it.
 /// Render thread only (one table per thread: a device and its recorder share their render thread); a miss means "use the
 /// box". The key is a 64-bit hash of every shaping input — the text, family, size, weight, box width, wrap, trim, line
 /// limits, spacing, line height and bounds, span run, typography and the device scale.
 /// </summary>
 public static class GlyphInk
 {
-    /// <summary>The slack around a published extent (local DIP): a replay's quads lie within it.</summary>
+    /// <summary>The slack around a published extent, in the space the run's transform maps into (DIP): a replay's quads lie
+    /// within it (the baseline snap moves them by at most one device pixel there, 1 / device scale ≤ 2 DIP at a scale ≥ ½).</summary>
     public const float MarginDip = 2f;
 
     private const int Cap = 8192;
@@ -53,12 +57,14 @@ public static class GlyphInk
         return t_ink is { } d && d.TryGetValue(key, out inkRelative);
     }
 
-    /// <summary>The painted box of a run whose quads span <paramref name="inkRelative"/>, in the run's local space
-    /// (margin included; empty when it draws nothing).</summary>
-    public static RectF LocalBox(in DrawGlyphRunCmd c, in RectF inkRelative)
-        => inkRelative.IsEmpty ? default
-            : new RectF(c.Bounds.X + inkRelative.X - MarginDip, c.Bounds.Y + inkRelative.Y - MarginDip,
-                inkRelative.W + 2f * MarginDip, inkRelative.H + 2f * MarginDip);
+    /// <summary>The painted box of a run whose quads span <paramref name="inkRelative"/>, through the run's transform (the
+    /// space its footprint is in), margin included there; empty when it draws nothing.</summary>
+    public static RectF PaintedBox(in DrawGlyphRunCmd c, in RectF inkRelative)
+    {
+        if (inkRelative.IsEmpty) return default;
+        RectF b = c.Transform.TransformBounds(new RectF(c.Bounds.X + inkRelative.X, c.Bounds.Y + inkRelative.Y, inkRelative.W, inkRelative.H));
+        return new RectF(b.X - MarginDip, b.Y - MarginDip, b.W + 2f * MarginDip, b.H + 2f * MarginDip);
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static uint Bits(float f) => BitConverter.SingleToUInt32Bits(f);
