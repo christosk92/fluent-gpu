@@ -164,6 +164,7 @@ public sealed unsafe partial class D3D12Device
         // Tile textures trim ONLY where the table released the slot (no tile holds it) — never on the pool's own clock:
         // a tile consumed through a retained group / self-blur result is valid and placed while nothing samples it.
         _surfaces.TrimTiles(frame.TrimSurfaces);
+        CompactTileHeapsInFrame(_fenceValue + 1);   // fragmented tile heaps: move the sparsest heap's surfaces (rare; before any raster)
         LogRenderPassesOnce();
         f.TextRepaintPending = false;
         EnsureItemScratch(frame.Items.Length);
@@ -368,18 +369,30 @@ public sealed unsafe partial class D3D12Device
         Array.Clear(_rastersOfRow, 0, frame.Slices.Length);
         for (int i = 0; i < rasters.Length; i++) { int rr = RowOf(rasters[i].Key.SliceId); if (rr >= 0) _rastersOfRow[rr]++; }
         ulong fence = _fenceValue + 1;
-        if (_tileBarriers.Length < rasters.Length) _tileBarriers = new D3D12_RESOURCE_BARRIER[rasters.Length * 2];
-        int nb = 0;
+        if (_tileBarriers.Length < rasters.Length * 2) _tileBarriers = new D3D12_RESOURCE_BARRIER[rasters.Length * 2];
+        if (_tileInits.Length < rasters.Length) _tileInits = new nint[rasters.Length * 2];
+        int nb = 0, ni = 0;
         for (int i = 0; i < rasters.Length; i++)
         {
             ref readonly TileRaster tr = ref rasters[i];
             if (RowOf(tr.Key.SliceId) < 0) continue;
             ID3D12Resource* res = _surfaces!.EnsureTile(tr.Surface, tr.W, tr.H, fence);
+            if (_surfaces.TakeTileInit(tr.Surface))
+            {
+                // A placed tile on memory an earlier tile may have used: alias it in (it starts in RENDER_TARGET), discard it after
+                // the batch; its raster is whole (TileFresh), and the pass's CLEAR defines every pixel before anything reads one.
+                D3D12_RESOURCE_BARRIER ab = default;
+                ab.Type = D3D12_RESOURCE_BARRIER_TYPE.D3D12_RESOURCE_BARRIER_TYPE_ALIASING;
+                ab.Anonymous.Aliasing.pResourceAfter = res;
+                _tileBarriers[nb++] = ab;
+                _tileInits[ni++] = (nint)res;
+            }
             if (_surfaces.TileState(tr.Surface) == D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET) continue;
             _tileBarriers[nb++] = Transition(res, _surfaces.TileState(tr.Surface), D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
             _surfaces.SetTileState(tr.Surface, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         }
         FlushBarriers(nb);
+        for (int k = 0; k < ni; k++) _cmdList->DiscardResource((ID3D12Resource*)_tileInits[k], null);
 
         float* zero = stackalloc float[4] { 0f, 0f, 0f, 0f };   // a partial raster's damage clear (transparent, as the CLEAR load)
         for (int i = 0; i < rasters.Length; i++)
@@ -489,6 +502,8 @@ public sealed unsafe partial class D3D12Device
         b.Anonymous.Transition.Subresource = 0xFFFFFFFF;
         return b;
     }
+
+    private nint[] _tileInits = new nint[16];   // tiles placed this raster batch (aliased in, then discarded)
 
     private void FlushBarriers(int n)
     {
