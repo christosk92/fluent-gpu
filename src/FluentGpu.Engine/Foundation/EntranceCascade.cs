@@ -4,7 +4,7 @@ namespace FluentGpu.Foundation;
 /// instead of as one block. WinUI's model, made an engine primitive: a container marked
 /// <see cref="FluentGpu.Dsl.Element.EntranceGroup"/> is a panel whose <c>ChildrenTransitions</c> hold an
 /// <c>EntranceThemeTransition</c> with <c>IsStaggeringEnabled</c>: each of its children that the viewport shows is a UNIT, and
-/// the units enter in reading order, each <see cref="Enter"/> → rest on <see cref="Dynamics"/>.
+/// the units enter down the screen (top first, then left to right), each <see cref="Enter"/> → rest on <see cref="Dynamics"/>.
 /// <para><b>Who starts one.</b> A <c>Flow.KeepAlive</c> boundary whose <c>KeepAliveOptions.CascadeFor</c> answers a cascade for
 /// an activation (a page swap), or a component through <c>RenderContext.EntranceCascade</c> (a pivot that re-presents part of a
 /// page). Either way the cascade is resolved AFTER the frame's layout, so it knows what the viewport shows, and seeded before the

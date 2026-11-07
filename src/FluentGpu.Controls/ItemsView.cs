@@ -2204,6 +2204,7 @@ public sealed class ItemsView : Component, IPropsHost
                 Snap = Snap,
                 Grow = Grow,
                 OnRealized = h => viewportNode.Value = h,
+                EntranceGroup = true,   // a navigation entrance staggers the realized items the viewport shows (WinUI ListView/GridView)
                 OnItemPrepared = onSlotWindow,     // bound roving tab stop re-sync (window enter/leave + rebind)
                 OnItemClearing = onSlotWindow,
                 OnItemIndexChanged = onSlotRebind,
@@ -2233,11 +2234,12 @@ public sealed class ItemsView : Component, IPropsHost
                 // (the gallery card shape; D1).
                 Grow = Grow,
                 OnRealized = h => viewportNode.Value = h,
+                EntranceGroup = true,   // a navigation entrance staggers the realized items the viewport shows (WinUI ListView/GridView)
             }
             // Wrap/Inline small-collection fallback (always a BoxEl) — capture the host box so FocusIndex can
             // walk its children (ord == index; no scroll state).
             : BuildNonVirtualList(count, containerTemplate, KeyOf, Transition, in spec)
-                with { OnRealized = h => viewportNode.Value = h };
+                with { OnRealized = h => viewportNode.Value = h, EntranceGroup = true };
 
         // Declarative insertion: the view hosts its OWN drop surface — the list body, the in-gap preview and the
         // accent line stacked over one accepting target. Every consumer that sets Insertion gets the premiere

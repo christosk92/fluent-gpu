@@ -80,7 +80,7 @@ public abstract record Element
     /// <summary>A navigation entrance STAGGERS this node's on-screen children (WinUI: a panel whose <c>ChildrenTransitions</c> hold an
     /// <c>EntranceThemeTransition</c> with <c>IsStaggeringEnabled</c>). When an <see cref="FluentGpu.Foundation.EntranceCascade"/> runs over
     /// an ancestor (a page swap of a keep-alive boundary whose <c>KeepAliveOptions.CascadeFor</c> answers one, or
-    /// <c>RenderContext.EntranceCascade</c>), each child the viewport shows enters one after another in reading order; a child that is
+    /// <c>RenderContext.EntranceCascade</c>), each child the viewport shows enters one after another, top first; a child that is
     /// (or holds) a group dissolves into its own children. Nothing happens on a plain mount or re-render: <see cref="Stagger"/> is the
     /// mount-time spelling. Layout-transparent anchors (components, providers, Show, For, skeleton regions) are seen through.</summary>
     public bool EntranceGroup { get => (_ecold ?? ElementCold.Default).EntranceGroup; init { if (!EqualityComparer<bool>.Default.Equals((_ecold ?? ElementCold.Default).EntranceGroup, value)) ECold.EntranceGroup = value; } }
