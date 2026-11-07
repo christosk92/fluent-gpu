@@ -237,7 +237,8 @@ public sealed partial class SceneStore
     /// the last clear. It does not walk from the worklist entries, so a dirty node that was freed or detached (exit
     /// orphan, KeepAlive park) before the clear cannot strand the bit on its former ancestors. A recorded slot that was
     /// freed and reallocated meanwhile is harmless to clear: no bit survives the frame boundary by definition, and
-    /// <see cref="CreateNode"/> already zeroed it.</summary>
+    /// <see cref="CreateNode"/> already zeroed it. A recorded slot that a trim cut off no longer exists:
+    /// <see cref="DropSubtreeLayoutDirtyAtOrAbove"/> took it out of the set when the columns shrank.</summary>
     private void ClearSubtreeLayoutDirtyBits()
     {
         for (int i = 0; i < _subtreeLayoutDirtySetCount; i++)
@@ -246,6 +247,25 @@ public sealed partial class SceneStore
             _aux[n] = (byte)((AuxFlags)_aux[n] & ~AuxFlags.SubtreeLayoutDirty);
         }
         _subtreeLayoutDirtySetCount = 0;
+    }
+
+    /// <summary>Forget the recorded slots at or above <paramref name="capacity"/>, the new column length, when
+    /// <c>ResizeColumns</c> shrinks the slab. Those slots are gone with their <c>_aux</c> bytes, so there is no bit
+    /// left to clear. Only a FREED node can sit there (the trim keeps every live index), but the set still names it
+    /// when it was marked and then freed before the next <c>ClearLayoutDirty</c>. That gap is real: a parked window
+    /// skips <c>Paint</c> (so no layout and no clear) while its reactive flushes keep marking and freeing nodes, and the
+    /// cold maintenance that trims runs on those parked turns too. The restore frame's clear then indexed past the cut
+    /// <c>_aux</c> (IndexOutOfRangeException in <see cref="ClearSubtreeLayoutDirtyBits"/>, 0.3.7 crash reports).
+    /// Compacts in place, keeping the order.</summary>
+    private void DropSubtreeLayoutDirtyAtOrAbove(int capacity)
+    {
+        int kept = 0;
+        for (int i = 0; i < _subtreeLayoutDirtySetCount; i++)
+        {
+            int n = _subtreeLayoutDirtySet[i];
+            if (n < capacity) _subtreeLayoutDirtySet[kept++] = n;
+        }
+        _subtreeLayoutDirtySetCount = kept;
     }
 
     /// <summary>True when <paramref name="h"/> itself is a scroll viewport OR has one anywhere below it. The Arrange
