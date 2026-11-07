@@ -742,6 +742,120 @@ public readonly record struct FillRowGeometry(int Rows, int PerPage, float CardW
 }
 
 /// <summary>
+/// A vertical stack of KNOWN, unequal item extents (a queue's headers, rows and "show more" rows; a lead card): the owner
+/// states every item's main-axis extent each render (<see cref="SetExtents"/>), the layout keeps their prefix sums, and
+/// windowing is a binary search. Exact geometry, so nothing is estimated or corrected for those items: the scroll extent,
+/// a row's offset and a reorder's slot math agree from the first frame (no anchor shifts, no jump while rows realize). An
+/// item whose height only its content knows (wrapping text) is stated NEGATIVE: its magnitude is the estimate, and the
+/// layout engine's measure of the realized item replaces it (<see cref="SetMeasured"/>, anchored like any measured list).
+/// A leading and a trailing pad frame the items (a body padding). STATEFUL: create once, hoist it, and restate the extents
+/// every render; grow-only storage, allocation-free once warm.
+/// </summary>
+public sealed class ExtentTableVirtualLayout : IMeasuredVirtualLayout
+{
+    private float[] _start = new float[1];      // _start[i] = item i's offset (lead included); _start[count] = the items' end
+    private float[] _stated = [];               // what the owner stated (negative = measured, |value| the estimate)
+    private float[] _measured = [];             // the engine's measure of a measured item (NaN until realized)
+    private int _count;
+    private float _lead, _tail;
+
+    /// <summary>Restate the items: <paramref name="extents"/>[i] is item i's main-axis extent, or its NEGATED estimate when only
+    /// its measure knows it; <paramref name="lead"/> / <paramref name="tail"/> pad the content before the first and after the
+    /// last item. True when the geometry changed.</summary>
+    public bool SetExtents(ReadOnlySpan<float> extents, float lead = 0f, float tail = 0f)
+    {
+        int n = extents.Length;
+        Ensure(n);
+        for (int i = 0; i < n; i++)
+        {
+            if (extents[i] >= 0f || _stated[i] >= 0f) _measured[i] = float.NaN;   // a measured item keeps its measure while it stays one
+            _stated[i] = extents[i];
+        }
+        _count = n;
+        _lead = lead;
+        _tail = tail;
+        return Rebuild(0);
+    }
+
+    public float ContentExtent(int itemCount, float crossSize) => _start[Math.Clamp(itemCount, 0, _count)] + _tail;
+
+    public void Window(int itemCount, float crossSize, float viewportExtent, float scrollOffset, int overscan, out int first, out int last)
+    {
+        int n = Math.Min(itemCount, _count);
+        if (n <= 0) { first = 0; last = 0; return; }
+        first = Math.Max(0, Find(scrollOffset, n) - overscan);
+        last = Math.Min(n, Find(scrollOffset + MathF.Max(0f, viewportExtent), n) + 1 + overscan);
+        if (last < first) last = first;
+    }
+
+    public RectF ItemRect(int index, float crossSize)
+    {
+        int i = Math.Clamp(index, 0, _count);
+        float y = _start[i], h = i < _count ? _start[i + 1] - y : 0f;
+        return new RectF(0f, y, crossSize, h);
+    }
+
+    /// <summary>The engine's measure of a realized item: kept for an item stated negative (measured), ignored for an exact one.</summary>
+    public void SetMeasured(int index, float mainExtent, float crossSize)
+    {
+        if ((uint)index >= (uint)_count || _stated[index] >= 0f || _measured[index] == mainExtent) return;
+        _measured[index] = mainExtent;
+        Rebuild(index);
+    }
+
+    public float OffsetOf(int index, float crossSize) => _start[Math.Clamp(index, 0, _count)];
+
+    public int IndexAt(float offset, float crossSize) => _count == 0 ? 0 : Find(offset, _count);
+
+    private void Ensure(int n)
+    {
+        if (_start.Length < n + 1)
+        {
+            int cap = Math.Max(8, _start.Length);
+            while (cap < n + 1) cap *= 2;
+            Array.Resize(ref _start, cap);
+        }
+        if (_stated.Length < n)
+        {
+            int old = _stated.Length, cap = Math.Max(8, old);
+            while (cap < n) cap *= 2;
+            Array.Resize(ref _stated, cap);
+            Array.Resize(ref _measured, cap);
+            for (int i = old; i < cap; i++) _measured[i] = float.NaN;
+        }
+    }
+
+    private bool Rebuild(int from)
+    {
+        bool changed = false;
+        float y = from == 0 ? _lead : _start[from];
+        if (from == 0 && _start[0] != y) changed = true;
+        for (int i = from; i < _count; i++)
+        {
+            if (_start[i] != y) changed = true;
+            _start[i] = y;
+            float s = _stated[i];
+            y += s >= 0f ? s : float.IsNaN(_measured[i]) ? -s : _measured[i];
+        }
+        if (_start[_count] != y) changed = true;
+        _start[_count] = y;
+        return changed;
+    }
+
+    /// <summary>The item whose band holds <paramref name="offset"/> (the last item whose start is at or before it).</summary>
+    private int Find(float offset, int n)
+    {
+        int lo = 0, hi = n - 1;
+        while (lo < hi)
+        {
+            int mid = (lo + hi + 1) >> 1;
+            if (_start[mid] <= offset) lo = mid; else hi = mid - 1;
+        }
+        return lo;
+    }
+}
+
+/// <summary>
 /// The Fenwick variable-extent list behind the <see cref="IMeasuredVirtualLayout"/> seam (E11-L0): every row starts at
 /// <see cref="Estimate"/>, gets corrected to its measured extent on realize, and the layout engine re-pins the scroll
 /// anchor across corrections. Functionally the engine's legacy <c>ItemLayout = null</c> variable path (kept for

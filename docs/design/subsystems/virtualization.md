@@ -597,6 +597,31 @@ that already exists. The explicit edge is `VirtualListEl.TemplateStamp` (engine)
 
 ---
 
+### 5.7 Keyed identity on the RenderItem path, and a reorder's live projection (frames lane, 2026-11-07)
+
+`VirtualListEl.KeyedIdentity` makes a RenderItem viewport diff its window like a plain keyed list whose off-screen rows are
+simply not built (`Reconciler.ReconcileWindowCore`, pass 1b and the edge rule):
+
+- a keyed row realized at another slot of the old window keeps its node (moved, diffed in place), so its layout transition
+  carries it to the new slot; a keyed row never takes or lends another item's node through the plain-tree recycler;
+- a row mounted because the window reached it (its index was outside the old window) seeds no Enter, and a row the window
+  leaves is freed without its Exit; a row that appears or disappears where the window already was plays its Enter / Exit.
+  The viewport's first realize mounts like a plain list.
+
+`Reorderable.List` turns it on for a virtual body, so live projection (`Reorderable.LiveProject`, the default) works over a
+virtual list: the displaced rows slide aside through their FLIP exactly as in a plain keyed list. A lifted row can still leave
+the realized window (the dwell holds it home while an edge auto-scroll carries the list); a Stationary drag carries on through
+its chip (`DragDropContext.PruneDead`), and `Reorderable` follows the gesture through its drop target from then on: the slot
+tracks the session's pointer against the press point, a release over the list commits there, the session's end without one
+cancels (read on the consumer's next render through the host's `DragEpoch`), and the row renders lifted (the Stationary dim,
+no hit test) wherever it re-enters the window.
+
+`ExtentTableVirtualLayout` is the exact-geometry stack for KNOWN unequal extents (a queue's headers, rows, "show more" rows,
+a lead card): the owner restates every extent each render, prefix sums answer offsets and windowing is a binary search, so the
+scroll extent, a row's offset and a reorder's slot math agree from the first frame. An item stated negative is measured (its
+magnitude the estimate) and corrected on realize like any measured list. The Wavee queue panels (WinUI, Classic, Zune) are one
+such virtual list: lead items, the lane's slots, the tail.
+
 ## 6. Uniform fast path vs variable-height + anchoring (POLICY owned here; mechanics in layout.md)
 
 The single most important *policy* decision (the mechanics — `VirtualLayout` two-pass, the Fenwick offset↔index

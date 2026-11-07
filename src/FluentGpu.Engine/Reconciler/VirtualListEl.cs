@@ -65,6 +65,20 @@ public sealed record VirtualListEl : Element
     /// no keep-alive bucket (recycled slots lose live state; byte-identical to the pre-#5 path). Ignored on RenderItem.</summary>
     public Func<int, bool>? KeepAlive { get; init; }
     public bool Horizontal { get; init; }
+    /// <summary>KEYED item identity (the <see cref="RenderItem"/> path), so a virtual list behaves like a plain keyed list
+    /// whose off-screen rows simply are not built:
+    /// <list type="bullet">
+    /// <item>a row whose <see cref="Element.Key"/> was realized at another slot of the window last pass keeps its NODE (moved,
+    /// diffed in place) instead of being recycled or remounted at the new slot, and never takes (or lends) another item's node — a reorder's live projection
+    /// (<c>Reorderable.List</c> sets it on a virtual body) slides the displaced rows aside through their layout transition;</item>
+    /// <item>a row realized because the WINDOW reached it (a scroll) mounts without its Enter, and a row the window leaves is
+    /// freed without its Exit: only a row that appears or disappears where the window already was (an insert, a removal, a
+    /// replaced list) plays its Enter / Exit, exactly as the same keyed list would without virtualization. The first realize
+    /// of the viewport mounts like a plain list (Enters play).</item>
+    /// </list>
+    /// Off (default): the positional window diff (a row that changes slot is recycled into another item's node, no motion;
+    /// every mount and removal runs its Enter / Exit). Ignored on the <see cref="RowBind"/> path.</summary>
+    public bool KeyedIdentity { get; init; }
     /// <summary>Realize and MEASURE every item, not just the present-time window: the whole document stays mounted and
     /// every row's extent comes from its real layout, so offsets computed from the item layout (a follow target, an
     /// anchor, <c>OffsetOf(i)</c> for a row far off screen) use measured heights instead of estimates. Virtualization is
