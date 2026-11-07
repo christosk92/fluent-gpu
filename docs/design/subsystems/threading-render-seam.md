@@ -614,10 +614,13 @@ against the NEXT publication rather than the one just captured.
 
 **Parity is the definition of correct.** An incremental refresh is right iff the snapshot it produces is
 column-for-column indistinguishable from a from-scratch capture of the same store at the same instant
-(`SceneRecordingSnapshot.EqualsForParity`). In a DEBUG/`FLUENTGPU_DIAG` build every incremental capture is
-re-derived in full into a scratch snapshot and compared; on a divergence it reports the offending column and
-REDOES the publication as a full capture, so the frame stays correct while the audit stays loud. Release
-compiles the check out. Gates: `gate.capture.incremental-coast` (a scroll-only frame copies ≤ 8 nodes where a
+(`SceneRecordingSnapshot.EqualsForParity`). In a DEBUG/`FLUENTGPU_DIAG` build that opts in
+(`SceneRecordingSnapshot.ParityMode`: `--fg capture-selfcheck` samples the first capture of each incremental streak and then
+every Nth, `--fg capture-validate` every capture) incremental
+captures are re-derived in full into a scratch snapshot and compared; on a divergence it reports the offending column and
+REDOES the publication as a full capture, so the frame stays correct while the audit stays loud. It is off by default:
+one verification re-captures the whole scene whatever changed (12.9 ms on a docked-queue page in Debug, the idle
+13-22 ms frames of 2026-11-07), and an interactive Debug run must cost what changed. Release compiles the check out. Gates: `gate.capture.incremental-coast` (a scroll-only frame copies ≤ 8 nodes where a
 full capture copies 204, with column parity), `gate.capture.gap-union` (a slot that skipped two publications
 still reaches full parity against its own older baseline), `gate.capture.add-remove-parity` (adds, removes and
 a recycled slot index, interleaved with incremental captures), `gate.capture.string-refcount-no-churn`

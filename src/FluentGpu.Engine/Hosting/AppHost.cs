@@ -4753,7 +4753,8 @@ public sealed partial class AppHost : IDisposable
     }
 
 #if DEBUG || FLUENTGPU_DIAG
-    // DEBUG self-check of the elide path: every NoopParityInterval-th elision (and the first) re-captures the store in full into
+    // DEBUG self-check of the elide path, run when the capture self-check is opted in (SceneRecordingSnapshot.ParityMode; off by
+    // default): every NoopParityInterval-th elision (and the first) re-captures the store in full into
     // a scratch snapshot and compares it with the snapshot the newest publication carried. Equal is the definition of a sound
     // skip; a mismatch means some store write escaped the ledger HasUnpublishedChanges reads. It is reported, the gate is
     // reset, and this frame publishes, so the pixels are right either way. Compiled out of Release, like the capture parity.
@@ -4765,6 +4766,7 @@ public sealed partial class AppHost : IDisposable
 
     private bool VerifyNoopPublication()
     {
+        if (FluentGpu.Scene.SceneRecordingSnapshot.ParityMode == FluentGpu.Scene.SceneRecordingSnapshot.CaptureParityMode.Off) return true;
         if (_noopParityCounter++ % NoopParityInterval != 0) return true;
         if (_renderSeam.NewestCapturedScene is not { } newest) return true;
         NoopParityVerifications++;
@@ -6815,8 +6817,8 @@ public sealed partial class AppHost : IDisposable
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
             _reconciler.SettlePersistWaiters();                 // 7 E7: a Flow.Persist slot still waiting for a live owner has a duplicate key
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
-            RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             RunReflowLayout(layoutSize);                       // 7 boundary-scoped re-solve for SizeMode.Reflow (smooth reflow)
+            RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout (after every re-solve: its own box only)
             // 7.05 presented flow (SizeMode.FlowReveal): fold the ticked reveal rows into the flow columns, re-clamp every
             // scroll extent against the PRESENTED content, and realize the rows a reveal pulls into view (seed frames only).
             RunFlowPass(layoutSize);
@@ -8046,7 +8048,7 @@ public sealed partial class AppHost : IDisposable
             // computed by TryProjectionRects; here `to` is the live parent-relative rect, absent for a non-live node).
             RectF fLog = default, tLog = default;
             if (s_motionDiag) { fLog = kv.Value.Rel; tLog = _scene.IsLive(n) ? RelRect(n) : default; }
-            if (n == _dispatcher.Drag.ActiveNode) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "drag-skip", fLog, tLog); continue; }   // E5: the pointer owns the dragged node's transform
+            if (n == PointerOwnedNode) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "drag-skip", fLog, tLog); continue; }   // E5: the pointer owns the dragged node's transform
             if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "dead-node", fLog, tLog); continue; }
             if (suppressed && !(scrollOnly && _anim.TryGetTransition(n, out var scrollSpec) && scrollSpec.AnimateDuringScroll))
             { if (s_motionDiag) LogMotionNode(n.Raw.Index, "suppressed-snap", fLog, tLog); _anim.SnapStructuralToLayout(n); continue; }   // skip-start + cancel-in-flight → snap to laid-out bounds
@@ -8154,7 +8156,7 @@ public sealed partial class AppHost : IDisposable
                     || (spec.Channels & TransitionChannels.Size) == 0 || (spec.Axes & SizeAxes.Height) == 0) continue;
                 float fromH = kv.Value.Rel.H, toH = _scene.Bounds(n).H;
                 if (MathF.Abs(fromH - toH) < 0.5f) continue;
-                if (suppressed || n == _dispatcher.Drag.ActiveNode) _anim.SnapFlowReveal(n, fromH, toH);
+                if (suppressed || n == PointerOwnedNode) _anim.SnapFlowReveal(n, fromH, toH);
                 else _anim.SeedFlowRevealResize(n, fromH, toH, spec.Dynamics);
             }
         var enters = _anim.PendingEnterReveal;
@@ -8197,6 +8199,12 @@ public sealed partial class AppHost : IDisposable
     /// from a row into a column) and the reflow carries the rest through layout. Skips what the main pass snaps (a part under a projection root,
     /// a reflow-owned root, the dragged node) and reduced motion (a reflow there snaps). Flow reveals the re-solve resizes re-aim, as on a tick.
     /// A node that mounted with a Reflow enter this commit starts here too (<see cref="_enterReflowsSeeded"/>).</summary>
+    /// <summary>The node whose placement the POINTER owns this commit, which the layout projection must leave alone: a GHOST lift's
+    /// dragged node (its transform follows the pointer). A STATIONARY lift owns no transform (the row stays in its slot, dimmed; the chip
+    /// is the moving visual), so its row projects like any other: a reorder's live projection moves it to its new slot with the same
+    /// slide its displaced siblings take, instead of snapping there (the frames lane, 2026-11-07). Null when no ghost drag is live.</summary>
+    private NodeHandle PointerOwnedNode => _dispatcher.Drag.ActiveLift == DragLift.Stationary ? NodeHandle.Null : _dispatcher.Drag.ActiveNode;
+
     private bool SeedReflowsFirst(Size2 layoutSize, bool reduced, float posEps, float sizeEps)
     {
         if (reduced) return false;
@@ -8204,7 +8212,7 @@ public sealed partial class AppHost : IDisposable
         foreach (var kv in _projectBefore)
         {
             NodeHandle n = kv.Key;
-            if (n == _dispatcher.Drag.ActiveNode || !_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
+            if (n == PointerOwnedNode || !_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
             if (!_anim.TryGetTransition(n, out var spec) || spec.Size != SizeMode.Reflow || (spec.Channels & TransitionChannels.Size) == 0) continue;
             if (_reflowOwnedRoots.Contains(n) || IsBelowProjectionSuppressionRoot(n)) continue;
             if (!TryProjectionRects(n, kv.Value, posEps, sizeEps, out RectF from, out RectF to)) continue;
@@ -8317,8 +8325,8 @@ public sealed partial class AppHost : IDisposable
     private readonly List<AnimEngine.LiveRelayout> _liveRelayoutScratch = new(16);
 
     /// <summary>Re-aim every live SizeMode.Relayout row toward an AUTO size (declared NaN) on its parent's CROSS axis, where the parent stretches it and
-    /// the parent's size comes from above, at the parent's live inner size: the row pins the node's layout input to its interp every tick, so the
-    /// layout can never show the node's live target itself, but a stretched child's target is its parent's inner size, which a live reflow's re-solve
+    /// the parent's size comes from above, at the parent's live inner size: the row aims at the size of the commit that seeded it, but a
+    /// stretched child's target is its parent's inner size, which a live reflow's re-solve
     /// (a page easing beside a docking pane) moves every tick. Each re-aim departs from where the row is, over the time it has left, so the
     /// resize lands on the live size instead of the size of the commit that seeded it and then stepping to the layout at its settle. Host-called
     /// after the reflow re-solve, beside FollowLayoutReveals. Allocates nothing on a frame with no Relayout row.</summary>
@@ -8472,6 +8480,14 @@ public sealed partial class AppHost : IDisposable
         return false;
     }
 
+    /// <summary>SizeMode.Relayout (phase 7, after the reflow re-solve): lay each node whose presented size a Relayout row moved this tick out
+    /// at that size, its subtree re-wrapping inside it. The interpolated size is the node's OWN box only: its layout input goes back to the
+    /// declared size right after, so every other solve (the next commit's, a reflow tick's re-solve of its parent) lays the parent and the
+    /// siblings out at the size the row aims at, the size the commit measured their FLIPs against. Left pinned at the interp, the input handed
+    /// a parent re-solve between two commits (a page easing beside a docking pane) the interp instead: the siblings moved by the row's
+    /// distance from its target on every such frame while each commit measured their FLIPs against the target again, so their offsets grew
+    /// by that distance every frame (a column beside a delayed resize drawn ~650 DIP off its slot, then gliding back). Runs after every other
+    /// re-solve of the frame, so the frame presents the subtree at the interp whatever re-laid its parent. Allocates nothing.</summary>
     private void RunIncrementalLayout()
     {
         var roots = _anim.IncrementalRoots;
@@ -8482,9 +8498,12 @@ public sealed partial class AppHost : IDisposable
             if (!_scene.IsLive(r)) continue;
             ref NodePaint p = ref _scene.Paint(r);
             ref LayoutInput li = ref _scene.Layout(r);
+            float declaredW = li.Width, declaredH = li.Height;
             if (!float.IsNaN(p.PresentedW)) li.Width = p.PresentedW;
             if (!float.IsNaN(p.PresentedH)) li.Height = p.PresentedH;
             _layout.RunSubtree(r);
+            li.Width = declaredW;
+            li.Height = declaredH;
         }
         roots.Clear();
     }

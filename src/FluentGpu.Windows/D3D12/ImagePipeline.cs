@@ -101,7 +101,10 @@ float4 PSMain(VSOut i) : SV_Target
     float2 auv = i.atlasUv.xy + i.uv * i.atlasUv.zw;    // resolve the atlas sub-rect ((0,0,1,1) = whole texture)
     float4 img = gTex.Sample(gSamp, auv);               // premultiplied image
     float4 col = lerp(i.ph, img, saturate(i.crossFade)); // placeholder→image cross-fade, premultiplied space
-    float4 ov = float4(i.overlay.rgb * i.overlay.a, i.overlay.a);
+    // Source-ATOP: the overlay paints only where the image has pixels (scaled by the image's coverage), so a tint over an alpha texture
+    // (a stripe, a groove ring, a flange with windows) colours the texture and never fills its transparent parts; on an opaque image this
+    // is exactly the old source-over.
+    float4 ov = float4(i.overlay.rgb * i.overlay.a, i.overlay.a) * img.a;
     img = ov + img * (1.0 - i.overlay.a);
     col = lerp(i.ph, img, saturate(i.crossFade));
     // Saturation multiply on the premultiplied color is equivalent to unpremultiply->adjust->repremultiply here:

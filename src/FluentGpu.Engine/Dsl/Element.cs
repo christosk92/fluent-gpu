@@ -1062,7 +1062,9 @@ public sealed record ImageEl : Element
     /// still shows or restores instantly (a player bar's now-playing artwork); every other image is restored, inside a held
     /// first frame, when the window returns.</summary>
     public bool KeepWhileHidden { get; init; }
-    /// <summary>Source-over color applied in the image shader after sampling. Transparent disables it.</summary>
+    /// <summary>A color composited ATOP the image in the image shader after sampling: over the image's own pixels only (scaled by their
+    /// alpha), never over its transparent parts, so on an alpha texture it tints the texture (alpha 1 recolours it outright). On an opaque
+    /// image it is a plain source-over wash. Transparent disables it.</summary>
     public ColorF ColorOverlay { get; init; }
     /// <summary>Optional leaf-local alpha feather evaluated in the image shader (no offscreen layer).</summary>
     public ImageMaskSpec? Mask { get; init; }

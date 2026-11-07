@@ -9,17 +9,35 @@ namespace FluentGpu.Scene;
 /// snapshot it produces is column-for-column indistinguishable from a from-scratch capture of the same store at the
 /// same instant. Every <c>gate.capture.*</c> check is that comparison against a scratch snapshot, and so is the DEBUG
 /// self-check below.</para>
-/// <para><b>The DEBUG self-check.</b> In a DEBUG (or <c>FLUENTGPU_DIAG</c>) build incremental captures are re-derived
-/// in full into a scratch snapshot and compared — the first of every incremental streak, then every Nth (the cost is
-/// bounded; see <see cref="VerifyIncrementalParity"/>). On a divergence it does not assert and die —
-/// it reports the offending column to stderr and REDOES the capture as a full one, so the published frame is correct
-/// either way. That makes the whole VerticalSlice suite, the engine tests and any DEBUG app run a continuous audit of
-/// the store's capture ledger: the day someone adds a column write without a <c>NoteCaptureChanged</c> /
-/// <c>NoteBulkMutation</c>, it says so instead of silently painting last frame's geometry. Release compiles all of it
-/// out (the repo's "production safety == CI coverage" rule).</para>
+/// <para><b>The self-check.</b> In a DEBUG (or <c>FLUENTGPU_DIAG</c>) build, when a run opts in (<see cref="ParityMode"/>:
+/// <c>--fg capture-selfcheck</c> samples, <c>--fg capture-validate</c> checks every capture; both act on the threaded render
+/// seam's captures, which the headless inspector's record-on-render path does not take), incremental captures are re-derived in full into a scratch snapshot and
+/// compared — the first of every incremental streak, then every Nth (the cost is bounded; see
+/// <see cref="VerifyIncrementalParity"/>). On a divergence it does not assert and die — it reports the offending column
+/// to stderr and REDOES the capture as a full one, so the published frame is correct either way: the day someone adds a
+/// column write without a <c>NoteCaptureChanged</c> / <c>NoteBulkMutation</c>, an opted-in run says so instead of
+/// silently painting last frame's geometry. It is OFF by default because one verification is a whole re-capture of the
+/// scene whatever changed (12.9 ms for a one-node change on the owner's docked-queue page in Debug, every 8th capture: the
+/// idle 13-22 ms frames of 2026-11-07), and an interactive Debug run must cost what the scene's changes cost. Release
+/// compiles all of it out.</para>
 /// </summary>
 public sealed partial class SceneRecordingSnapshot
 {
+    /// <summary>When the capture self-check runs (<see cref="ParityMode"/>).</summary>
+    public enum CaptureParityMode : byte
+    {
+        /// <summary>Never (the default): a capture costs what changed.</summary>
+        Off = 0,
+        /// <summary>The first incremental capture of every streak, then every Nth (<c>--fg capture-selfcheck</c>).</summary>
+        Sampled = 1,
+        /// <summary>Every incremental capture, with a summary line every 2 s (<c>--fg capture-validate</c>, the differential validator).</summary>
+        Every = 2,
+    }
+
+    /// <summary>The capture self-check's opt-in (DEBUG / <c>FLUENTGPU_DIAG</c> builds; Release compiles the check out and ignores it). It
+    /// also gates the publish elide's self-check (<c>AppHost.VerifyNoopPublication</c>), the same full re-capture.</summary>
+    public static CaptureParityMode ParityMode;
+
 #if DEBUG || FLUENTGPU_DIAG
     /// <summary>Whether the DEBUG incremental-capture self-check is compiled in (false in Release).</summary>
     public const bool ParityVerifyCompiledIn = true;
@@ -40,7 +58,8 @@ public sealed partial class SceneRecordingSnapshot
     internal const int ParityNodesPerPublish = 256;
 
     /// <summary>
-    /// Re-derive a FULL capture and compare — bounded, deterministic, always compiled into Debug. A verification is one
+    /// Re-derive a FULL capture and compare — bounded, deterministic, compiled into Debug and run when <see cref="ParityMode"/>
+    /// opts in. A verification is one
     /// complete re-capture of the reachable scene plus a column-by-column compare; measured on the gallery's 100k-row
     /// list page (412 live nodes, Debug, the Adreno X1 dev machine) it costs ~1.8 ms and ~2.2 MB of allocation. Run on
     /// EVERY incremental publish that made each Debug frame 2 ms of UI work instead of 0.2 ms and drove 67 gen-0 GCs a
@@ -57,15 +76,17 @@ public sealed partial class SceneRecordingSnapshot
     /// </summary>
     private void VerifyIncrementalParity(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots, bool ledgered)
     {
-        if (_inParityVerify) return;
+        var mode = ParityMode;
+        if (mode == CaptureParityMode.Off || _inParityVerify) return;
+        bool everyCapture = mode == CaptureParityMode.Every;
         int every = Math.Max(ParityVerifyMinInterval, (_captured.Count + ParityNodesPerPublish - 1) / ParityNodesPerPublish);
-        if (!ParityValidateEveryCapture && _incrementalStreak != 1 && _incrementalStreak % every != 0) return;
+        if (!everyCapture && _incrementalStreak != 1 && _incrementalStreak % every != 0) return;
         ParityVerifications++;
         var scratch = _parityScratch ??= new SceneRecordingSnapshot();
         scratch.Capture(source, extraRoots);
         bool equal = EqualsForParity(scratch, out string mismatch);
         scratch.ReleaseResources();   // balance the span-run references the scratch capture took
-        if (ParityValidateEveryCapture) NoteValidated(ledgered, equal);
+        if (everyCapture) NoteValidated(ledgered, equal);
         if (equal) return;
 
         IncrementalParityFailures++;
@@ -106,10 +127,6 @@ public sealed partial class SceneRecordingSnapshot
 
     private void VerifyIncrementalParity(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots, bool ledgered) { }
 #endif
-
-    /// <summary><c>--fg capture-validate</c>: run the parity self-check on every incremental capture (DEBUG builds; Release
-    /// compiles the check out).</summary>
-    internal static bool ParityValidateEveryCapture;
 
     /// <summary>
     /// Column-level equality against another snapshot of the same scene — the invariant an incremental capture must
