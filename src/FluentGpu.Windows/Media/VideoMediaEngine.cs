@@ -284,6 +284,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         _videoLease = lease;
         _d3d = lease.Device.D3d;
         _dxgiManager = lease.Device.Manager;
+        VideoOverlayProbe.ProbeIfEmpty(_d3d);   // F087: the output's plane verdict, asked with this D3D11 device (cold, once per process)
 
         // The CCW owns this GCHandle from here: it is freed when the struct's last reference goes (MediaEngineNotifyCcw.ReleaseRef).
         _notify = MediaEngineNotifyCcw.Create(GCHandle.ToIntPtr(GCHandle.Alloc(this)));
@@ -295,15 +296,12 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             if ((hr = MFCreateAttributes(&attrs, 4)) < 0) return Log("MFCreateAttributes", hr);
             Guid gCb = MF.MF_MEDIA_ENGINE_CALLBACK; attrs->SetUnknown(&gCb, (IUnknown*)_notify);
             if (_dxgiManager != null) { Guid gDm = MF.MF_MEDIA_ENGINE_DXGI_MANAGER; attrs->SetUnknown(&gDm, (IUnknown*)_dxgiManager); }
-            // F249: BGRA is the long-standing output (a video-processor NV12 -> BGRA pass per decoded frame). NV12 only behind --fg video-nv12
-            // and only where the output's overlay probe says NV12 can take a plane; the verdict is the newest published one (an engine is
-            // created after its window's output was probed), and an unprobed output keeps BGRA.
-            VideoOverlayCaps overlayCaps = VideoOverlayCaps.Latest;
-            VideoOutputFormat outputFormat = VideoOverlayCaps.ChooseOutputFormat(FluentGpu.Hosting.EngineSwitches.Nv12VideoOutput, in overlayCaps);
-            DXGI_FORMAT dxgiFormat = outputFormat == VideoOutputFormat.Nv12 ? DXGI_FORMAT.DXGI_FORMAT_NV12 : DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
-            if (FluentGpu.Hosting.EngineSwitches.Nv12VideoOutput)
-                Diag.Line($"[video] output format={(outputFormat == VideoOutputFormat.Nv12 ? "nv12" : "bgra")} overlay[{overlayCaps.Describe()}] (--fg video-nv12)");
-            Guid gFmt = MF.MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT; attrs->SetUINT32(&gFmt, (uint)dxgiFormat);
+            // No MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT: it is the FRAME-SERVER render-target format (MS Learn), and in windowless swap-chain
+            // mode the Simple Video Renderer ignores it. Measured (nv12 lane, presentation-manager probe, 1080p60 H.264, Adreno X1-85):
+            // with BGRA forced, NV12 forced or nothing set, SVR presents the decoder's own NV12 textures (BIND_DECODER, shared displayable)
+            // zero-copy through the Composition Swapchain API, tags them DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709 and picks YUV vs RGB
+            // from its own MPO feedback - no video-processor pass either way. Chromium's MediaFoundationRenderer and the Microsoft
+            // MediaEngine DComp samples set nothing here either; the forced BGRA (and F249's NV12 arm) were a no-op.
 
             Guid clsid = CLSID.CLSID_MFMediaEngineClassFactory;
             Guid iidF = IID.IID_IMFMediaEngineClassFactory;

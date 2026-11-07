@@ -136,6 +136,14 @@ internal sealed class VideoPlacementApplier
     // (null before the first one: nothing is promoted until a presenter has been seen).
     private bool OverlayEligible() => OverlayEnabled && _drainedBy is { SupportsOverlay: true };
 
+    // Why a surface is where it is, for the change line only (cold): the gate's inputs in the order they are checked.
+    private string OverlayReason(in Slot s, IVideoPresenter presenter)
+        => s.Overlay.Above ? "clear"
+         : !OverlayEnabled ? "switch-off"
+         : !presenter.SupportsOverlay ? "no-plane"
+         : s.Intent.RadiusDip > 0f ? "rounded"
+         : "covered-or-hold";
+
     /// <summary>Counter (render thread writes): applies that moved an already-placed surface.</summary>
     internal long MotionTurns { get; private set; }
 
@@ -274,7 +282,9 @@ internal sealed class VideoPlacementApplier
                 clip = ph.EffClip;
                 unoccluded = ph.Unoccluded;
             }
-            bool overlayChanged = s.Overlay.Update(overlayEligible, unoccluded, now) != s.AppliedOverlay;
+            // A rounded surface stays an underlay: DWM cannot put a rounded-clipped visual on a hardware plane, so promoting it would only
+            // move it above the UI to be composed all the same (the fallback is composition either way; the reason is logged on change).
+            bool overlayChanged = s.Overlay.Update(overlayEligible && s.Intent.RadiusDip <= 0f, unoccluded, now) != s.AppliedOverlay;
             bool poseSame = MathF.Abs(dx - s.AppliedDx) <= PoseEpsilonDip && MathF.Abs(dy - s.AppliedDy) <= PoseEpsilonDip
                 && s.AppliedScale == scale && clip == s.AppliedClip;
             if (poseSame && !overlayChanged) continue;
@@ -533,7 +543,7 @@ internal sealed class VideoPlacementApplier
         {
             presenter.SetOverlay(s.SurfaceId, s.Overlay.Above);
             s.AppliedOverlay = s.Overlay.Above;
-            Diag.Line($"[video.surface] overlay token={i + 1} id={s.SurfaceId.Value} above={(s.AppliedOverlay ? "true" : "false")}");
+            Diag.Line($"[video.surface] overlay token={i + 1} id={s.SurfaceId.Value} above={(s.AppliedOverlay ? "true" : "false")} reason={OverlayReason(in s, presenter)}");
         }
 
         if (s.Placed && s.GeomDirty) _lastTurnMoved = true;

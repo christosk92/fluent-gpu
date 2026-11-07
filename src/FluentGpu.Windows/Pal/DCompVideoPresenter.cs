@@ -215,9 +215,11 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
     }
 
-    /// <summary>F087: overlay promotion is offered only where the render output reported an overlay plane for NV12, YUY2 or BGRA
-    /// (<see cref="D3D12Swapchain.OverlayCaps"/>, probed with <c>IDXGIOutput3::CheckOverlaySupport</c> on the topology edge).</summary>
-    public bool SupportsOverlay => Target.OverlayCaps.AnyPromotable;
+    /// <summary>F087: overlay promotion is offered only where the output showing this window reported an overlay plane for NV12, YUY2 or
+    /// BGRA (<see cref="FluentGpu.Media.Windows.VideoOverlayProbe"/>: <c>IDXGIOutput3::CheckOverlaySupport</c> with a D3D11 device). A monitor
+    /// not probed yet answers false and queues the one background probe; the verdict is read live, so a window moved to another monitor
+    /// is judged by that monitor's output. Only asked while the overlay switch is on (the applier short-circuits otherwise).</summary>
+    public bool SupportsOverlay => FluentGpu.Media.Windows.VideoOverlayProbe.ForMonitor((nint)Target.TopologyMonitor, requestIfMissing: true).AnyPromotable;
 
     public void SetOverlay(VideoSurfaceId id, bool above)
     {

@@ -36,7 +36,7 @@ namespace FluentGpu.Media.Windows;
 ///   <see cref="VideoDelivery.CompositedSurface"/> — the shipping Path A (spec §9.1).</item>
 /// </list>
 /// </summary>
-public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource
+public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource, IMediaClockSource
 {
     private readonly IVideoEngine _engine;
     // The source-switch generation THIS session owns (IVideoEngine.PostSetSource's return value). A snapshot whose
@@ -165,6 +165,20 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     // only by the edges that really need one (first bind, a new handle, this source's first frame, a StreamRect change,
     // a finished paused seek).
     private void OnEngineStateChanged() => RequestPump(repaint: false);
+
+    /// <summary>The engine's latest clock sample (<see cref="IMediaClockSource"/>): the snapshot the engine thread republishes
+    /// every self-refresh (250 ms while playing), read between the ~1 Hz pumps. A snapshot of another source epoch, or one from
+    /// before metadata, is no clock of THIS session's. Any thread (one wait-free seqlock read); no allocation.</summary>
+    public bool TryReadClock(out MediaClockSample sample)
+    {
+        sample = default;
+        if (_disposed) return false;
+        VideoEngineSnapshot snap = _engine.Snapshot;
+        if (snap.SourceEpoch != _sourceEpoch || (snap.Flags & VideoEngineFlags.MetadataLoaded) == 0 || snap.PositionTimestamp == 0) return false;
+        bool running = (snap.Flags & (VideoEngineFlags.Playing | VideoEngineFlags.Waiting | VideoEngineFlags.Seeking)) == VideoEngineFlags.Playing;
+        sample = new MediaClockSample(TimeSpan.FromSeconds(Math.Max(0, snap.PositionSeconds)), snap.PositionTimestamp, snap.PlaybackRate, running);
+        return true;
+    }
 
     /// <summary>The caller DECLARED this source live (<see cref="SourceLiveness.Live"/>). Distinct from the engine's own
     /// latched <see cref="VideoEngineFlags.LiveSource"/> bit: only a DECLARED live source suppresses the duration
