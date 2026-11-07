@@ -62,7 +62,9 @@ public static class Tape
     {
         int t = Begin();
         if (ProbePath is not null) s_probeLabels[t_stamp] = label;
-        else if (FluentGpu.Foundation.Diag.CompiledIn) { int r = (int)(t_stamp & (LabelRing - 1)); s_ringStamp[r] = t_stamp; s_ringLabel[r] = label; }
+#if DEBUG || FLUENTGPU_DIAG
+        else { int r = (int)(t_stamp & (LabelRing - 1)); s_ringStamp[r] = t_stamp; s_ringLabel[r] = label; }
+#endif
         return t;
     }
 
@@ -93,6 +95,7 @@ public static class Tape
 
     /// <summary>Probe mode: the app method behind a delegate (through one level of closure: Skel.Region's own lambdas wrap the
     /// app's), for <see cref="ProbeNote"/>.</summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "Probe-only diagnostic (--fg tape-probe): a trimmed member only shortens the description.")]
     public static string DescribeDelegate(Delegate? d)
     {
         if (d is null) return "null";
@@ -165,6 +168,7 @@ public static class Tape
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Probe-only diagnostic (--fg tape-probe): a trimmed member only shortens the description.")]
     private static void ProbeStale(int slot, uint stamp, string column)
     {
         s_probeReads++;
@@ -269,6 +273,7 @@ internal sealed class TapeColumn<T> : TapeColumn
 
     internal override string ItemTypeName => typeof(T).Name;
 
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "Probe-only diagnostic (--fg tape-probe): a trimmed member only shortens the description.")]
     internal override string DescribeSlot(int slot)
     {
         if ((uint)slot >= (uint)Items.Length) return "(slot out of range)";
