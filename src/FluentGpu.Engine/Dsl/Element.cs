@@ -77,6 +77,13 @@ public abstract record Element
     /// children entering in that pass) × Stagger, BAKED at reconcile (no runtime closure, no O(n²) sort). Exits and layout
     /// moves are not delayed.</summary>
     public float Stagger { get => (_ecold ?? ElementCold.Default).Stagger; init { if (!EqualityComparer<float>.Default.Equals((_ecold ?? ElementCold.Default).Stagger, value)) ECold.Stagger = value; } }
+    /// <summary>A navigation entrance STAGGERS this node's on-screen children (WinUI: a panel whose <c>ChildrenTransitions</c> hold an
+    /// <c>EntranceThemeTransition</c> with <c>IsStaggeringEnabled</c>). When an <see cref="FluentGpu.Foundation.EntranceCascade"/> runs over
+    /// an ancestor (a page swap of a keep-alive boundary whose <c>KeepAliveOptions.CascadeFor</c> answers one, or
+    /// <c>RenderContext.EntranceCascade</c>), each child the viewport shows enters one after another in reading order; a child that is
+    /// (or holds) a group dissolves into its own children. Nothing happens on a plain mount or re-render: <see cref="Stagger"/> is the
+    /// mount-time spelling. Layout-transparent anchors (components, providers, Show, For, skeleton regions) are seen through.</summary>
+    public bool EntranceGroup { get => (_ecold ?? ElementCold.Default).EntranceGroup; init { if (!EqualityComparer<bool>.Default.Equals((_ecold ?? ElementCold.Default).EntranceGroup, value)) ECold.EntranceGroup = value; } }
     /// <summary>Declarative auto-FLIP on layout change (the first-class spelling of the per-box <c>Animate</c> opt-in).
     /// Any layout move/resize of this node animates via transform only.</summary>
     public LayoutTransition? Layout { get => (_ecold ?? ElementCold.Default).Layout; init { if (!EqualityComparer<LayoutTransition?>.Default.Equals((_ecold ?? ElementCold.Default).Layout, value)) ECold.Layout = value; } }

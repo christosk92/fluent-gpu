@@ -26,6 +26,7 @@ internal sealed class ElementCold : IEquatable<ElementCold>
     public EnterExit? Enter;
     public EnterExit? Exit;
     public float Stagger;
+    public bool EntranceGroup;
     public LayoutTransition? Layout;
     public FluentGpu.Scroll.Runtime.ScrollHandle? WheelTarget;
     public float ScrollLineDip;
@@ -54,6 +55,7 @@ internal sealed class ElementCold : IEquatable<ElementCold>
             && EqualityComparer<EnterExit?>.Default.Equals(Enter, o.Enter)
             && EqualityComparer<EnterExit?>.Default.Equals(Exit, o.Exit)
             && EqualityComparer<float>.Default.Equals(Stagger, o.Stagger)
+            && EntranceGroup == o.EntranceGroup
             && EqualityComparer<LayoutTransition?>.Default.Equals(Layout, o.Layout)
             && EqualityComparer<FluentGpu.Scroll.Runtime.ScrollHandle?>.Default.Equals(WheelTarget, o.WheelTarget)
             && EqualityComparer<float>.Default.Equals(ScrollLineDip, o.ScrollLineDip)
