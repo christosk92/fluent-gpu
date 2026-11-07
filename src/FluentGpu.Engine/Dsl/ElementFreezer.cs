@@ -9,13 +9,18 @@ namespace FluentGpu.Dsl;
 /// once (the source generator emits one per such type, from a module initializer); every other type is a no-op.</summary>
 public static class ElementFreezer
 {
-    private static readonly Dictionary<Type, Action<object>> s_byType = new();
+    // Copy-on-write: registrations run in module initializers (rare), lookups on every component render (hot): a read takes no lock.
+    private static volatile Dictionary<Type, Action<object>> s_byType = new();
     private static readonly object s_gate = new();
 
     /// <summary>Register the in-place freezer of <paramref name="type"/> (generated code; the last registration wins).</summary>
     public static void Register(Type type, Action<object> freeze)
     {
-        lock (s_gate) s_byType[type] = freeze;
+        lock (s_gate)
+        {
+            var next = new Dictionary<Type, Action<object>>(s_byType) { [type] = freeze };
+            s_byType = next;
+        }
     }
 
     [ThreadStatic] private static HashSet<object>? t_visiting;
@@ -27,9 +32,14 @@ public static class ElementFreezer
     {
         if (o is null || !Tape.RegionsEnabled || o is string || o is Delegate) return;
         Action<object>? f = null;
-        if (o is not IElementHolder) { lock (s_gate) s_byType.TryGetValue(o.GetType(), out f); if (f is null) return; }
-        var visiting = t_visiting ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
-        if (!visiting.Add(o)) return;
+        if (o is not IElementHolder) { s_byType.TryGetValue(o.GetType(), out f); if (f is null) return; }
+        // The visited set cuts cycles (a component holding its owner); the top call needs no entry (an object reached again below it is
+        // walked once more, then cut), which spares the identity hash of every props object and hook value frozen alone.
+        if (t_depth > 0)
+        {
+            var visiting = t_visiting ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
+            if (!visiting.Add(o)) return;
+        }
         t_depth++;
         try
         {
@@ -38,7 +48,7 @@ public static class ElementFreezer
         }
         finally
         {
-            if (--t_depth == 0) visiting.Clear();
+            if (--t_depth == 0) t_visiting?.Clear();
         }
     }
 
