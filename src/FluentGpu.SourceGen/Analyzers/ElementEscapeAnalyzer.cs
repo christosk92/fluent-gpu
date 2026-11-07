@@ -16,7 +16,9 @@ namespace FluentGpu.SourceGen.Analyzers;
 /// <item><b>FGEL001</b>: a lambda that runs LATER (a <c>[Deferred]</c> parameter: skeleton region content, list row builders, a
 /// component factory, an overlay's content; a boundary element's delegate member; an element's handler such as <c>OnClick</c>)
 /// captures a local or parameter holding an element built outside it. Build the element inside the lambda, or freeze it where
-/// it is captured (<c>var body = Compose(...).Freeze();</c>).</item>
+/// it is captured (<c>var body = Compose(...).Freeze();</c>). A captured struct of parts that holds elements counts too: freeze
+/// the copy the lambda captures (<c>var frozen = ElementFreezer.Freeze(parts);</c>; the struct must be nameable from the assembly,
+/// internal or public, so the generated freezer can reach it).</item>
 /// <item><b>FGEL002</b>: a static field or property holding an element is initialized without <c>Ui.Static(() =&gt; ...)</c>. A
 /// static initializer runs on the type's first use, which can be inside a render.</item>
 /// </list>
@@ -92,6 +94,13 @@ public sealed class ElementEscapeAnalyzer : DiagnosticAnalyzer
                 if (nt.TypeKind != TypeKind.Delegate && nt.IsGenericType && nt.TypeArguments.Length == 1
                     && nt.OriginalDefinition.ContainingNamespace?.ToDisplayString() == "System.Collections.Generic")
                     return HoldsElement(nt.TypeArguments[0], depth + 1);
+                // a tuple of elements: (Element Head, Element Body)
+                if (nt.IsTupleType) return nt.TupleElements.Any(f => HoldsElement(f.Type, depth + 1));
+                // a struct of source code that holds elements (a template's record struct of parts): a copy made in this render, so
+                // its elements are this render's unless it is frozen (ElementFreezer.Freeze(parts)). A class holder is not decided
+                // here: a reference that reaches a deferred lambda was handed on by the reconciler (props, context), which froze it.
+                if (nt.IsValueType && nt.TypeKind == TypeKind.Struct && !IsFrameworkType(nt))
+                    return nt.GetMembers().OfType<IFieldSymbol>().Any(f => !f.IsStatic && !f.IsConst && HoldsElement(f.Type, depth + 1));
             }
             return false;
         }
@@ -117,6 +126,12 @@ public sealed class ElementEscapeAnalyzer : DiagnosticAnalyzer
             // a delegate parameter of a boundary element's constructor (SkelRegionEl, ForEl, VirtualListEl, KeepAliveEl)
             return p.Type.TypeKind == TypeKind.Delegate && p.ContainingSymbol is IMethodSymbol { MethodKind: MethodKind.Constructor } m
                    && IsBoundaryOrKind(m.ContainingType);
+        }
+
+        private static bool IsFrameworkType(INamedTypeSymbol t)
+        {
+            string ns = t.ContainingNamespace?.ToDisplayString() ?? "";
+            return ns == "System" || ns.StartsWith("System.") || ns.StartsWith("Microsoft.");
         }
 
         private static bool Eq(ISymbol? a, ISymbol? b) => b is not null && SymbolEqualityComparer.Default.Equals(a, b);
@@ -177,9 +192,19 @@ public sealed class ElementEscapeAnalyzer : DiagnosticAnalyzer
             if (asg.Parent is IObjectOrCollectionInitializerOperation) continue;
             ITypeSymbol? type = target switch { IFieldSymbol f => f.Type, IPropertySymbol p => p.Type, _ => null };
             if (!k.HoldsElement(type)) continue;
-            if (asg.Value.Syntax is ExpressionSyntax v && IsFreezeCall(v)) continue;
+            if (IsFrozenValue(asg.Value, k)) continue;
             c.ReportDiagnostic(Diagnostic.Create(Stored, asg.Syntax.GetLocation(), target.Name));
         }
+    }
+
+    /// <summary>A stored value that holds no tape element: a freeze call, or a tuple whose element-holding parts each are one
+    /// (<c>(tier, Skeleton().Freeze())</c>).</summary>
+    private static bool IsFrozenValue(IOperation value, Known k)
+    {
+        while (value is IConversionOperation conv) value = conv.Operand;
+        if (value is ITupleOperation tuple)
+            return tuple.Elements.All(e => !k.HoldsElement(e.Type) || IsFrozenValue(e, k));
+        return value.Syntax is ExpressionSyntax v && IsFreezeCall(v);
     }
 
     private static bool IsImmediateArgument(IAnonymousFunctionOperation lambda)
@@ -273,5 +298,9 @@ public sealed class ElementEscapeAnalyzer : DiagnosticAnalyzer
     private static bool IsEmpty(ExpressionSyntax e)
         => e is CollectionExpressionSyntax { Elements.Count: 0 }
            || e is InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: "Empty" } }
-           || e is LiteralExpressionSyntax lit && lit.IsKind(SyntaxKind.DefaultLiteralExpression);
+           || e is LiteralExpressionSyntax lit && lit.IsKind(SyntaxKind.DefaultLiteralExpression)
+           // a default-constructed holder (a struct's empty value: `new()`): it holds no element until one is stored into it
+           // a holder constructed from literals only (`new(ShowTrackArtist: false)`): a literal is never an element
+           || e is BaseObjectCreationExpressionSyntax { Initializer: null } oc
+              && (oc.ArgumentList is null || oc.ArgumentList.Arguments.All(a => a.Expression is LiteralExpressionSyntax));
 }

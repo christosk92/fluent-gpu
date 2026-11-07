@@ -42,6 +42,27 @@ public static class ElementFreezer
         }
     }
 
+    /// <summary>The in-place freezer of a struct that holds elements (generated, one per nameable holder struct).</summary>
+    public delegate void RefFreezer<T>(ref T value) where T : struct;
+
+    private static class StructFreezer<T> where T : struct { public static RefFreezer<T>? F; }
+
+    /// <summary>Register the freezer of the holder struct <typeparamref name="T"/> (generated code).</summary>
+    public static void RegisterStruct<T>(RefFreezer<T> freeze) where T : struct => StructFreezer<T>.F = freeze;
+
+    /// <summary>A frozen copy of a struct that holds elements (a template's record struct of parts), for a lambda that runs after this
+    /// render to capture (FGEL001): <c>var frozen = ElementFreezer.Freeze(parts);</c>. The struct's freezer is generated; one the
+    /// generator cannot name (a private nested struct) is not registered, and freezing it fails loudly instead of keeping tape
+    /// elements: make the struct internal.</summary>
+    public static T Freeze<T>(T value) where T : struct
+    {
+        if (!Tape.RegionsEnabled) return value;
+        var f = StructFreezer<T>.F ?? throw new InvalidOperationException(
+            $"ElementFreezer.Freeze<{typeof(T).Name}>: no generated freezer (a struct that holds elements must be internal or public).");
+        f(ref value);
+        return value;
+    }
+
     /// <summary>Every item of a list of objects that may hold elements.</summary>
     public static void FreezeEach(System.Collections.IEnumerable? items)
     {

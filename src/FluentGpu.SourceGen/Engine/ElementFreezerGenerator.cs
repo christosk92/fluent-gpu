@@ -102,7 +102,14 @@ namespace FluentGpu.SourceGen.Engine
             sb.Append("        internal static void Register()\n        {\n");
             foreach (var t in ordered)
             {
-                if (t.IsAbstract || t.TypeKind == TypeKind.Struct) continue;
+                if (t.TypeKind == TypeKind.Struct)
+                {
+                    // a holder struct is frozen as a member through its ref, or as a copy a deferred lambda captures (ElementFreezer.Freeze)
+                    if (Nameable(t, comp))
+                        sb.Append("            ").Append(Freezer).Append(".RegisterStruct<").Append(Fq(t)).Append(">(Freeze_").Append(index[t]).Append(");\n");
+                    continue;
+                }
+                if (t.IsAbstract) continue;
                 sb.Append("            ").Append(Freezer).Append(".Register(");
                 if (Nameable(t, comp)) sb.Append("typeof(").Append(Fq(t)).Append(")");
                 else sb.Append("global::System.Type.GetType(\"").Append(RuntimeName(t)).Append("\", throwOnError: true)");
