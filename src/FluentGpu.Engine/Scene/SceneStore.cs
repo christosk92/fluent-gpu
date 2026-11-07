@@ -386,6 +386,37 @@ public sealed partial class SceneStore : ISceneBackend
     public int CapacityFloor { get; set; }
     /// <summary>UI-owned allocation/free revision for one-shot cold tail reclamation; paint/motion do not change it.</summary>
     internal ulong CapacityRevision { get; private set; }
+    /// <summary>Diagnostics: the slab's high-water (one past the highest slot ever handed out since the last trim), the live
+    /// span <see cref="TrimExcessCapacity"/> measures against.</summary>
+    public int HighWater => _high;
+
+    /// <summary>Diagnostics (a headless inspector), O(pending): the ancestors whose subtree-layout-dirty bit the next layout's
+    /// clear resets (marked since the last <c>ClearLayoutDirty</c>; a parked window runs no layout, so they accumulate while it
+    /// is minimized): how many, the highest slot among them, and how many sit at or past <see cref="Capacity"/>. A slot past
+    /// the capacity is one a trim cut off while it was still recorded; the clear would write past the columns.</summary>
+    public (int Count, int MaxSlot, int PastCapacity) SubtreeLayoutDirtyCensus()
+    {
+        int max = 0, past = 0, cap = _aux.Length;
+        for (int i = 0; i < _subtreeLayoutDirtySetCount; i++)
+        {
+            int n = _subtreeLayoutDirtySet[i];
+            if (n > max) max = n;
+            if (n >= cap) past++;
+        }
+        return (_subtreeLayoutDirtySetCount, max, past);
+    }
+
+    /// <summary>Diagnostics, O(high-water): the live node in the highest slot (<see cref="NodeHandle.Null"/> when none), the
+    /// node that keeps <see cref="TrimExcessCapacity"/> from cutting lower.</summary>
+    public NodeHandle HighestLiveNode()
+    {
+        var free = new HashSet<int>(_freeCount);
+        for (int i = 0; i < _freeCount; i++) free.Add(_freeHeap[i]);
+        for (int i = _high - 1; i >= 1; i--)
+            if (!free.Contains(i)) return new NodeHandle(new Handle((uint)i, _gen[i]));
+        return NodeHandle.Null;
+    }
+
     /// <summary>Live scroll/virtual-viewport rows — O(1) census of the <c>_scroll</c> side-table.</summary>
     public int ScrollStateCount => _scroll.Count;
     /// <summary>In-flight implicit brush transitions — O(1) census of the <c>_brushAnims</c> side-table.</summary>

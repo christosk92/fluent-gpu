@@ -4516,8 +4516,24 @@ public sealed partial class AppHost : IDisposable
     private ulong _seenSceneCapacityRevision;
     // Deterministic monotonic-clock seam for behavioral tests; production uses the OS uptime clock, not frame time.
     internal Func<long>? ColdMaintenanceClock { get; set; }
-    private long ColdMaintenanceNowMs => ColdMaintenanceClock?.Invoke() ?? Environment.TickCount64;
+    private long ColdMaintenanceNowMs => (ColdMaintenanceClock?.Invoke() ?? Environment.TickCount64) + Volatile.Read(ref _coldMaintenanceSkewMs);
+    // How far AdvanceColdMaintenanceClock moved the clock ahead of its source (0 in production: nothing calls it).
+    private long _coldMaintenanceSkewMs;
     internal int ColdMaintenanceRuns { get; private set; }
+
+    /// <summary>Diagnostics (a headless inspector): move the cold-maintenance clock <paramref name="ms"/> ahead of the OS uptime
+    /// clock it reads, so a 30 s deadline (the scene slab trim, the pixel-pool trim, the snapshot reclaim) falls due on the next
+    /// <see cref="RunFrame"/> instead of after 30 s of wall clock. Every reader of that clock moves together (the interaction quiet
+    /// hold too), so the services run as they would after the wait: on the next frame, parked frames included. Forward only; a
+    /// value of 0 or less does nothing. UI thread.</summary>
+    public void AdvanceColdMaintenanceClock(long ms)
+    {
+        if (ms > 0) Interlocked.Add(ref _coldMaintenanceSkewMs, ms);
+    }
+
+    /// <summary>Diagnostics: how many frames ran at least one cold service (a pixel-pool trim, the scene slab trim or a snapshot
+    /// reclaim) since the host started. UI thread.</summary>
+    public int ColdMaintenanceRunCount => ColdMaintenanceRuns;
     internal int ColdMaintenanceWakeCount { get; private set; }
 
     private void OnPixelBufferRetained(FluentGpu.Media.PixelBufferPool pool)
