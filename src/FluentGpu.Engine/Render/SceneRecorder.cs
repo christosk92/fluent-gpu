@@ -1629,7 +1629,9 @@ internal sealed partial class SceneRecordingContext
             float hs = 1f + (localInteraction.HoverScale - 1f) * useH;
             float isc = hs + (localInteraction.PressScale - hs) * useP;
             if (MathF.Abs(isc - 1f) > 0.0008f)
-                world = world.Translate(ox, oy).Multiply(Affine2D.Scale(isc, isc)).Translate(-ox, -oy);
+                world = world.Translate(ox, oy)
+                    .Multiply(Affine2D.Scale(localInteraction.ScaleAxes == ScaleAxes.Y ? 1f : isc, localInteraction.ScaleAxes == ScaleAxes.X ? 1f : isc))
+                    .Translate(-ox, -oy);
         }
         // ScaleCorrect counter-scale: a child that opted out of an ancestor's animated scale applies the inverse (about
         // its centre) so it stays undistorted, and passes an un-scaled factor to ITS children (Framer-Motion projection).

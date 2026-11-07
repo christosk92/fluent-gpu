@@ -322,6 +322,8 @@ internal sealed class BoxColdMotion : IEquatable<BoxColdMotion>
     public float PressDurationMs = float.NaN;
     public EasingSpec HoverEasing = Easing.FluentPopOpen;
     public EasingSpec PressEasing = Easing.FluentPopOpen;
+    public float PressReleaseDurationMs = float.NaN;
+    public ScaleAxes InteractScaleAxes;
     public float BrushTransitionMs = float.NaN;
     public bool CounterScale;
 
@@ -354,6 +356,8 @@ internal sealed class BoxColdMotion : IEquatable<BoxColdMotion>
             && EqualityComparer<float>.Default.Equals(PressDurationMs, o.PressDurationMs)
             && EqualityComparer<EasingSpec>.Default.Equals(HoverEasing, o.HoverEasing)
             && EqualityComparer<EasingSpec>.Default.Equals(PressEasing, o.PressEasing)
+            && EqualityComparer<float>.Default.Equals(PressReleaseDurationMs, o.PressReleaseDurationMs)
+            && InteractScaleAxes == o.InteractScaleAxes
             && EqualityComparer<float>.Default.Equals(BrushTransitionMs, o.BrushTransitionMs)
             && EqualityComparer<bool>.Default.Equals(CounterScale, o.CounterScale);
     }

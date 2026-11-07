@@ -5817,6 +5817,8 @@ public sealed partial class TreeReconciler
                     ia.PressScale = b.PressScale;
                     ia.HoverDurationMs = float.IsNaN(b.HoverDurationMs) ? InteractionAnim.ControlFasterMs : b.HoverDurationMs;
                     ia.PressDurationMs = float.IsNaN(b.PressDurationMs) ? InteractionAnim.ControlFasterMs : b.PressDurationMs;
+                    ia.PressReleaseMs = float.IsNaN(b.PressReleaseDurationMs) ? ia.PressDurationMs : b.PressReleaseDurationMs;
+                    ia.ScaleAxes = b.InteractScaleAxes;
                     ia.HoverEasing = b.HoverEasing;
                     ia.PressEasing = b.PressEasing;
                     // DEFERRED to the end of this case (see the seed block): the decision needs this node's OWN

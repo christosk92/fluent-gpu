@@ -175,7 +175,8 @@ public sealed partial class AnimEngine
         if (!force && !_scene.TryGetInteract(node, out _)) return;
         ref InteractionAnim ia = ref _scene.InteractRef(node);
         ia.PressTarget = on ? 1f : 0f;
-        SeedInteractFade(node, AnimChannel.PressFade, ia.PressT, ia.PressTarget, ia.PressDurationMs, ia.PressEasing);
+        // The release may run its own duration (0 = WinUI's snap back when the pressed state has no VisualTransition).
+        SeedInteractFade(node, AnimChannel.PressFade, ia.PressT, ia.PressTarget, on ? ia.PressDurationMs : ia.PressReleaseMs, ia.PressEasing);
     }
 
     /// <summary>Seed (or retarget) the hover/press fade as an eased track HoverT→target over the node's authored

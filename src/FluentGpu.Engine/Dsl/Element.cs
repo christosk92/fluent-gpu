@@ -443,6 +443,12 @@ public sealed record BoxEl : Element
     public float PressDurationMs { get => (_cMotion ?? BoxColdMotion.Default).PressDurationMs; init { if (!EqualityComparer<float>.Default.Equals((_cMotion ?? BoxColdMotion.Default).PressDurationMs, value)) CMotion.PressDurationMs = value; } }
     public EasingSpec HoverEasing { get => (_cMotion ?? BoxColdMotion.Default).HoverEasing; init { if (!EqualityComparer<EasingSpec>.Default.Equals((_cMotion ?? BoxColdMotion.Default).HoverEasing, value)) CMotion.HoverEasing = value; } }
     public EasingSpec PressEasing { get => (_cMotion ?? BoxColdMotion.Default).PressEasing; init { if (!EqualityComparer<EasingSpec>.Default.Equals((_cMotion ?? BoxColdMotion.Default).PressEasing, value)) CMotion.PressEasing = value; } }
+    /// <summary>The press fade's RELEASE duration (ms); NaN = <see cref="PressDurationMs"/> (a symmetric fade). 0 snaps back at
+    /// release, as a WinUI visual state with no VisualTransition does (the ComboBox pill's SelectedPressed → Selected).</summary>
+    public float PressReleaseDurationMs { get => (_cMotion ?? BoxColdMotion.Default).PressReleaseDurationMs; init { if (!EqualityComparer<float>.Default.Equals((_cMotion ?? BoxColdMotion.Default).PressReleaseDurationMs, value)) CMotion.PressReleaseDurationMs = value; } }
+    /// <summary>Which axes <see cref="HoverScale"/>/<see cref="PressScale"/> act on (default both). <see cref="ScaleAxes.Y"/> is a
+    /// WinUI ScaleY-only squish about <see cref="TransformOriginY"/> (the 3×16 selection pill).</summary>
+    public ScaleAxes InteractScaleAxes { get => (_cMotion ?? BoxColdMotion.Default).InteractScaleAxes; init { if ((_cMotion ?? BoxColdMotion.Default).InteractScaleAxes != value) CMotion.InteractScaleAxes = value; } }
 
     /// <summary>Implicit brush transition (WinUI <c>BrushTransition</c>): when a re-render changes Fill/BorderColor on
     /// this LIVE node (a logical state flip — checked, selected…), the displayed color cross-fades over this duration
