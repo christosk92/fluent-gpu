@@ -2484,9 +2484,9 @@ public sealed partial class SliceRecorder
                     var g = MemoryMarshal.Read<DrawGlyphRunCmd>(payload);
                     if (GlyphInk.TryGet(GlyphInk.Key(in g, _inkScale), out RectF rel))
                     {
-                        RectF lb = GlyphInk.LocalBox(in g, in rel);
-                        if (lb.IsEmpty) continue;   // it draws no quad
-                        ob = g.Transform.TransformBounds(lb).Intersect(ob);   // still cut by the clip its footprint was cut by
+                        RectF pb = GlyphInk.PaintedBox(in g, in rel);
+                        if (pb.IsEmpty) continue;   // it draws no quad
+                        ob = pb.Intersect(ob);   // still cut by the clip its footprint was cut by
                         if (ob.IsEmpty) continue;
                     }
                 }
