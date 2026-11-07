@@ -23,9 +23,9 @@ public static class Tape
     [ThreadStatic] private static uint[]? t_stamps;    // per open region: the stamp of the region it interrupted
     private static int s_nextStamp;
 
-    /// <summary>The reconciler opens regions (<c>--fg tape</c>; PERF r3 MODEL M4b phase P2). Off: no region is ever opened and every
-    /// element is frozen at push, the class-world lifetime.</summary>
-    public static bool RegionsEnabled;
+    /// <summary>The reconciler opens regions (on by default since PERF r3 MODEL M4b phase P2; <c>--fg no-tape</c> is the A/B arm). Off: no
+    /// region is ever opened and every element is frozen at push, the class-world lifetime.</summary>
+    public static bool RegionsEnabled = true;
 
     /// <summary><c>--fg tape-probe=PATH</c>: regions never give their slots back; a closed region's slots are marked dead and a read of
     /// one is logged to PATH (first occurrence of each stack in full) and SERVED, so one run lists every escape (an element read

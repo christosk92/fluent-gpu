@@ -270,7 +270,8 @@ public static class EngineSwitches
             case "layout": LayoutDiag = true; return true;
             case "layout-overflow": LayoutOverflow = true; return true;
             case "layout-verify": LayoutVerify = true; return true;
-            case "tape": FluentGpu.Dsl.Tape.RegionsEnabled = true; return true;
+            case "tape": FluentGpu.Dsl.Tape.RegionsEnabled = true; return true;   // the default; kept so older scripts still parse
+            case "no-tape": FluentGpu.Dsl.Tape.RegionsEnabled = false; return true;   // the class-world lifetime: every element frozen at push (A/B arm)
             case "tape-probe": FluentGpu.Dsl.Tape.RegionsEnabled = true; FluentGpu.Dsl.Tape.ProbePath = string.IsNullOrEmpty(value) ? null : value; return FluentGpu.Dsl.Tape.ProbePath is not null;
             case "record-verify": RecordVerifyPath = string.IsNullOrEmpty(value) ? null : value; return RecordVerifyPath is not null;
             case "render":
