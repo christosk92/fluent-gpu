@@ -6,10 +6,12 @@ using Gen = FluentGpu.Interop.Generated;
 namespace FluentGpu.Rhi.D3D12;
 
 /// <summary>
-/// A side queue for work that must never ride the frame's DIRECT list (docs/plans/scroll-gpu-retained-tiles-implementation.md
-/// §C): the COPY queue the discrete image uploads are recorded on, and the COMPUTE queue the baked image blurs run on.
-/// One command list over a small ring of allocators; each batch closes, executes and signals its own fence with a
-/// strictly increasing value (<see cref="UploadFenceLedger"/>). Readiness of what a batch wrote is a fence COMPARE
+/// A batch stream for work that must never ride the frame's own command list (docs/plans/scroll-gpu-retained-tiles-implementation.md
+/// §C): the COPY queue the discrete image uploads are recorded on, and the image bakes (<see cref="BakedBlurCompositor"/>),
+/// whose DIRECT lists execute on the frame's own queue (<see cref="Init"/> with a shared queue — never a COMPUTE queue: see
+/// the compositor's summary for the driver crash that rules one out). One command list over a small ring of allocators;
+/// each batch closes, executes and signals its OWN fence with a strictly increasing value (<see cref="UploadFenceLedger"/>),
+/// also when it shares the frame's queue. Readiness of what a batch wrote is a fence COMPARE
 /// (<see cref="IsComplete"/>) — the frame never waits on it: until the copy lands the scene draws the placeholder, and
 /// the host keeps turning while <see cref="HasInFlight"/>. The CPU waits only when every allocator of the ring still
 /// holds an unfinished batch (<see cref="Depth"/> batches in flight — the per-turn upload budget keeps that a
@@ -37,11 +39,13 @@ internal sealed unsafe class UploadQueue : IDisposable
         _name = name;
     }
 
-    /// <summary>Create the queue, its fence, the allocator ring and the (closed) list. Throws on a failed create — a
-    /// device that cannot make a side queue cannot upload at all.</summary>
-    public void Init(void* device)
+    /// <summary>Create the fence, the allocator ring, the (closed) list and the queue — or, given
+    /// <paramref name="sharedQueue"/> (of this stream's type), execute on that one instead, holding a reference to it until
+    /// <see cref="Dispose"/>. Throws on a failed create — a device that cannot make a side queue cannot upload at all.</summary>
+    public void Init(void* device, void* sharedQueue = null)
     {
-        Check(D3D12SideQueues.CreateQueue(device, _type, out _queue), "CreateQueue");
+        if (sharedQueue != null) { Gen.IUnknownVtbl.AddRef(sharedQueue); _queue = sharedQueue; }
+        else Check(D3D12SideQueues.CreateQueue(device, _type, out _queue), "CreateQueue");
         Check(D3D12SideQueues.CreateFence(device, 0, out _fence), "CreateFence");
         for (int i = 0; i < Depth; i++) Check(D3D12SideQueues.CreateAllocator(device, _type, out _allocators[i]), "CreateAllocator");
         Check(D3D12SideQueues.CreateClosedList(device, _type, _allocators[0], asList4: false, out _list), "CreateCommandList");

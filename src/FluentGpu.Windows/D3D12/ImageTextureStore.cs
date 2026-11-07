@@ -77,8 +77,8 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         public bool NeedsCopy, Live;
         public SmallImageHeapPool.Lease Placed;
         public ulong Fence;                      // the side-queue batch writing it (0 = drawable once published)
-        public byte FenceQueue;                  // 0 none | 1 copy (upload) | 2 compute (baked derivative)
-        public ulong ComputeReadFence;           // the last compute batch that READS it (a bake source); 0 = none
+        public byte FenceQueue;                  // 0 none | 1 copy (upload) | 2 bake (baked derivative)
+        public ulong BakeReadFence;              // the last bake batch that READS it (a bake source); 0 = none
         public bool Derived;                     // a baked derivative (RGBA8 UAV texture from the derived pool)
         public uint Serial;                      // content identity of this placement's pixels (ContentSerial)
     }
@@ -124,8 +124,8 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         public D3D12_GPU_DESCRIPTOR_HANDLE Srv;
         public D3D12_RESOURCE_STATES State;
         public ulong SideFence;                 // a side-queue batch that may still write it (0 = none)
-        public byte SideQueue;                  // 1 copy | 2 compute
-        public ulong ComputeReadFence;          // a compute batch that may still read it (0 = none)
+        public byte SideQueue;                  // 1 copy | 2 bake
+        public ulong BakeReadFence;             // a bake batch that may still read it (0 = none)
     }
 
     private ID3D12Device* _device;
@@ -190,12 +190,12 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     // A re-staged id whose new pixels are still on their side queue keeps its PRIOR (drawable) placement published here
     // until they land — a cover never flashes to its placeholder between its blur-hash and its art.
     private readonly List<(int Id, Tex Prior)> _replacing = new(8);
-    // Derivative placements reserved by the compute bake, keyed by token, until committed or abandoned.
+    // Derivative placements reserved by the bake, keyed by token, until committed or abandoned.
     private readonly List<(int Token, Tex T)> _reserved = new(2);
     private int _nextReserveToken;
     private UploadQueue? _copyQueue;
-    private UploadQueue? _computeQueue;
-    // Baked derivatives: RGBA8 unordered-access textures (the compute bake writes them directly), pooled by bucket.
+    private UploadQueue? _bakeBatches;
+    // Baked derivatives: RGBA8 unordered-access textures (the bake writes them directly), pooled by bucket.
     private readonly Dictionary<int, Stack<Pooled>> _derivedPool = new();
     private const int MaxFreeDerivedPerBucket = 2;
     private readonly List<AtlasPage> _pages = new();
@@ -262,7 +262,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// NOT folded in here: it is fence-only maintenance (<see cref="ReclaimCompleted"/>), reclaimable on an elided
     /// frame via <see cref="FluentGpu.Rhi.IGpuDevice.ReclaimCompletedUploads"/> without opening a command list.</summary>
     public bool HasPendingUploads => _pendingCopies.Count > 0 || (_smallImages?.HasUnsubmittedActivation ?? false)
-        || (_copyQueue?.HasInFlightAnyThread ?? false) || (_computeQueue?.HasInFlightAnyThread ?? false);
+        || (_copyQueue?.HasInFlightAnyThread ?? false) || (_bakeBatches?.HasInFlightAnyThread ?? false);
     /// <summary>True while resources evicted from residency are still waiting on their retire fence (queued by
     /// <see cref="Free"/>/<see cref="RetirePlacement"/>, drained by <see cref="ReclaimCompleted"/>), OR a descriptor
     /// slot has cleared its fence but is still sitting out <see cref="FluentGpu.Rhi.SlotQuarantinePolicy.InitialGenerations"/> generations in
@@ -378,13 +378,13 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         return cap && (heapFlags & D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER) != 0;
     }
 
-    /// <summary>The compute queue baked derivatives are written on (its fences gate their readiness).</summary>
-    internal void AttachComputeQueue(UploadQueue queue) => _computeQueue = queue;
+    /// <summary>The batches baked derivatives are written by (their fences gate their readiness).</summary>
+    internal void AttachBakeBatches(UploadQueue batches) => _bakeBatches = batches;
 
     private bool SideDone(byte queue, ulong fence) => queue switch
     {
         1 => _copyQueue is null || _copyQueue.IsComplete(fence),
-        2 => _computeQueue is null || _computeQueue.IsComplete(fence),
+        2 => _bakeBatches is null || _bakeBatches.IsComplete(fence),
         _ => true,
     };
 
@@ -440,8 +440,8 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
     /// <summary>How a draw of <paramref name="id"/> resolves this frame: true when it samples pixels (<see cref="IsResident"/>
     /// — the current placement, or the prior one a replacement keeps published), false for the placeholder.
-    /// <paramref name="provisional"/> is true when newer pixels for the id are staged or still on the copy / compute queue
-    /// (<see cref="IsInFlight"/>) or may still wait behind a budget-held upload (<see cref="UploadBacklogHeld"/>), whichever
+    /// <paramref name="provisional"/> is true when newer pixels for the id are staged, still on the copy queue or in a bake
+    /// batch (<see cref="IsInFlight"/>) or may still wait behind a budget-held upload (<see cref="UploadBacklogHeld"/>), whichever
     /// of the two stands in for them: a retained tile that drew it is not the final picture and must re-raster once they land.</summary>
     public bool ResolveDraw(int id, out bool provisional)
     {
@@ -482,9 +482,10 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     }
 
     /// <summary>Reserve a PRIVATE placement (pool / standalone, never a shared atlas page — the copy queue may be writing
-    /// one of its cells) for a <paramref name="w"/>×<paramref name="h"/> baked derivative. The compute bake writes it at
-    /// (0, 0) of <paramref name="destination"/> (COMMON, promoted on the compute queue and returned to COMMON there), then
-    /// <see cref="CommitDerived"/> publishes it behind the batch's fence, or <see cref="AbandonDerived"/> returns it.</summary>
+    /// one of its cells) for a <paramref name="w"/>×<paramref name="h"/> baked derivative. The bake writes it at
+    /// (0, 0) of <paramref name="destination"/> (COMMON, barriered to unordered access by the bake batch and returned to
+    /// COMMON there), then <see cref="CommitDerived"/> publishes it behind the batch's fence, or <see cref="AbandonDerived"/>
+    /// returns it.</summary>
     internal bool TryReserveDerived(int w, int h, out ID3D12Resource* destination, out int token)
     {
         AssertRenderThread();
@@ -510,13 +511,13 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         return true;
     }
 
-    /// <summary>A compute batch (<paramref name="computeFence"/>) reads <paramref name="id"/>'s drawable pixels (a bake
+    /// <summary>A bake batch (<paramref name="bakeFence"/>) reads <paramref name="id"/>'s drawable pixels (a bake
     /// source): its placement is not reclaimed before that batch completes.</summary>
-    internal void NoteComputeRead(int id, ulong computeFence)
+    internal void NoteBakeRead(int id, ulong bakeFence)
     {
         if (_byId.TryGetValue(id, out var t) && Drawable(in t))
         {
-            t.ComputeReadFence = computeFence;
+            t.BakeReadFence = bakeFence;
             _byId[id] = t;
             return;
         }
@@ -524,36 +525,36 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         if (r >= 0)
         {
             var prior = _replacing[r].Prior;
-            prior.ComputeReadFence = computeFence;
+            prior.BakeReadFence = bakeFence;
             _replacing[r] = (id, prior);
         }
     }
 
-    /// <summary>Publish reserved derivative <paramref name="token"/> as <paramref name="id"/>'s pixels, drawable once compute
-    /// batch <paramref name="computeFence"/> completed; the id's current pixels stay drawable until then.</summary>
-    internal void CommitDerived(int token, int id, ulong computeFence)
+    /// <summary>Publish reserved derivative <paramref name="token"/> as <paramref name="id"/>'s pixels, drawable once bake
+    /// batch <paramref name="bakeFence"/> completed; the id's current pixels stay drawable until then.</summary>
+    internal void CommitDerived(int token, int id, ulong bakeFence)
     {
         AssertRenderThread();
         int r = FindReserved(token);
         if (r < 0) return;
         Tex t = _reserved[r].T;
         _reserved.RemoveAt(r);
-        t.Live = true; t.NeedsCopy = false; t.Fence = computeFence; t.FenceQueue = 2;
+        t.Live = true; t.NeedsCopy = false; t.Fence = bakeFence; t.FenceQueue = 2;
         bool had = _byId.TryGetValue(id, out var prior);
         if (had) _pendingCopies.Remove(id);
         PublishReplacement(id, t, prior, reroute: had);
     }
 
-    /// <summary>Return reserved derivative <paramref name="token"/> unpublished — behind compute batch
-    /// <paramref name="computeFence"/> when one was recorded into it (0 = never written).</summary>
-    internal void AbandonDerived(int token, ulong computeFence)
+    /// <summary>Return reserved derivative <paramref name="token"/> unpublished — behind bake batch
+    /// <paramref name="bakeFence"/> when one was recorded into it (0 = never written).</summary>
+    internal void AbandonDerived(int token, ulong bakeFence)
     {
         AssertRenderThread();
         int r = FindReserved(token);
         if (r < 0) return;
         Tex t = _reserved[r].T;
         _reserved.RemoveAt(r);
-        t.Fence = computeFence; t.FenceQueue = computeFence != 0 ? (byte)2 : (byte)0;
+        t.Fence = bakeFence; t.FenceQueue = bakeFence != 0 ? (byte)2 : (byte)0;
         RetireCounted(ref t);
     }
 
@@ -846,7 +847,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         {
             Fence = _retireFence, Upload = t.Upload, UploadCapacity = t.UploadCapacity, State = t.State,
             SideFence = t.Fence, SideQueue = t.FenceQueue,   // a side queue may still be writing it
-            ComputeReadFence = t.ComputeReadFence,           // ...or a bake still reading it
+            BakeReadFence = t.BakeReadFence,                 // ...or a bake still reading it
         };
         if (t.Placed.IsValid) { r.Kind = 4; r.Placed = t.Placed; r.Slot = t.Slot; }
         else if (t.Derived) { r.Kind = 6; r.Bucket = t.Bucket; r.Resource = t.Resource; r.Srv = t.Srv; r.Slot = t.Slot; }
@@ -887,7 +888,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         for (int i = _retired.Count - 1; i >= 0; i--)
         {
             if (_retired[i].Fence > completedFence || !SideDone(_retired[i].SideQueue, _retired[i].SideFence)
-                || !SideDone(2, _retired[i].ComputeReadFence)) continue;
+                || !SideDone(2, _retired[i].BakeReadFence)) continue;
             var r = _retired[i];
             // The staging heap rides on ANY kind (a Free before the copy flushed carries it too): ring-sized heaps go
             // back to their bucket, one-offs and over-cap returns are released. Kinds 3 and 5 exist only for this.
@@ -1086,8 +1087,8 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         stk.Push(pt);
     }
 
-    /// <summary>A bucket² RGBA8 texture the compute bake writes through an unordered-access view (RGBA8 is the typed-UAV
-    /// store every D3D12 device supports; BGRA8's is optional). COMMON for life: the compute queue barriers it to
+    /// <summary>A bucket² RGBA8 texture the bake writes through an unordered-access view (RGBA8 is the typed-UAV
+    /// store every D3D12 device supports; BGRA8's is optional). COMMON for life: the bake batch barriers it to
     /// UNORDERED_ACCESS for its write and back, the frames promote it to read.</summary>
     private ID3D12Resource* CreateDerivedTexture(int bucket)
     {
@@ -1333,7 +1334,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         // NULL on failure, never a throw: on a removed device (DXGI_ERROR_DEVICE_REMOVED, 0x887A0005) every create here
         // fails, and this runs on the fgpu-render thread INSIDE the image drain — a throw past that seam is unobserved
         // and kills the process. Every caller treats null as "could not admit" (media-pipeline.md §4.1).
-        // COMMON for life: the copy (or compute) queue promotes it for its write, the frames promote it to read.
+        // COMMON for life: the copy queue (or a bake batch) promotes it for its write, the frames promote it to read.
         if ((int)_device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
         { NoteResourceFault("Image.CreateTexture"); return null; }

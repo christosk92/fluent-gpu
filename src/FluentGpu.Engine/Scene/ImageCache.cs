@@ -193,6 +193,7 @@ public sealed partial class ImageCache
         public bool BakeQueued;
         public bool BakeUpgradeQueued;
         public byte BakeUpgradeAttempts;
+        public byte BakeDeferrals;   // initial bakes re-queued because the source was not resident yet (MaxBakeDeferrals)
         public BakedBlurQueue.Quality BakeQuality;
         // Allocated lazily only when a UseImage consumer observes this handle. Terminal state changes bump this signal,
         // so one image completion invalidates only its own observers instead of every unsettled image component.
@@ -1234,6 +1235,7 @@ public sealed partial class ImageCache
         e.BakeQueued = false;
         e.BakeUpgradeQueued = false;
         e.BakeUpgradeAttempts = 0;
+        e.BakeDeferrals = 0;
         e.BakeQuality = BakedBlurQueue.Quality.Minimal;
         e.BakeGeneration++;
         _pendingCount++;
@@ -1241,6 +1243,11 @@ public sealed partial class ImageCache
         NoteContentChanged(id);
         TryQueueDerived(id, e);
     }
+
+    /// <summary>How often an initial bake is re-queued because its source was not resident in the backend's store yet
+    /// (<see cref="BakedBlurQueue.Result.SourcePending"/>) before it fails: 60 × the queue's 33 ms cadence ≈ 2 s, well past
+    /// the post-recovery upload throttle (<c>PostRecoveryThrottleFrames</c>) and a budget-held upload burst.</summary>
+    private const int MaxBakeDeferrals = 60;
 
     private void TryQueueDerived(int id, Entry e)
     {
@@ -1538,6 +1545,18 @@ public sealed partial class ImageCache
                 continue;
             }
             e.BakeQueued = false;
+            // The backend ran the job before the source's pixels reached its store (the source is Ready here a frame ahead
+            // of the render thread's staging; the upload budget or the post-recovery throttle can hold it longer). Not a
+            // failure: queue the bake again (the queue's 33 ms cadence paces the retries), as long as the source is still
+            // Ready and within MaxBakeDeferrals; past that, or with the source gone, it fails as before.
+            if (!result.Ok && result.SourcePending && e.BakeDeferrals < MaxBakeDeferrals
+                && _byId.TryGetValue(e.SourceId, out var bakeSource) && bakeSource.State == ImageState.Ready)
+            {
+                e.BakeDeferrals++;
+                TryQueueDerived(result.Id, e);
+                continue;
+            }
+            e.BakeDeferrals = 0;
             _pendingCount--;
             e.State = result.Ok ? ImageState.Ready : ImageState.Failed;
             e.Failure = result.Ok ? ImageFailureKind.None : ImageFailureKind.GpuUpload;
@@ -1949,6 +1968,7 @@ public sealed partial class ImageCache
                 e2.BakeQueued = false;
                 e2.BakeUpgradeQueued = false;
                 e2.BakeUpgradeAttempts = 0;
+                e2.BakeDeferrals = 0;
                 e2.BakeQuality = BakedBlurQueue.Quality.Minimal;
                 e2.BakeGeneration++;
                 _bakedBlurs?.Invalidate(victim, e2.BakeGeneration);

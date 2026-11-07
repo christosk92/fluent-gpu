@@ -10,14 +10,26 @@ using Gen = FluentGpu.Interop.Generated;
 namespace FluentGpu.Rhi.D3D12;
 
 /// <summary>
-/// The image BAKE (a blurred derivative of a decoded image — mosaic / hero backdrops), run OFF the frame on its own
-/// COMPUTE queue (docs/plans/scroll-gpu-retained-tiles-implementation.md §C): the source is resampled to the output size,
-/// then a dual-Kawase down/up chain (<see cref="AcrylicKawaseMath"/> — the σ→chain mapping the live acrylic uses) blurs
-/// it, the last up pass writing straight into the derivative's texture through an unordered-access view. The derivative
-/// is published behind the batch's fence (<see cref="ImageTextureStore.CommitDerived"/>): until the compute work lands
-/// the frame keeps drawing what it drew before (the unblurred pixels / the placeholder) — never a hole, and no frame
-/// ever waits on a bake. One job per turn; one scratch pyramid per batch in flight (<see cref="UploadQueue.Depth"/>
-/// banks), each reused only once its batch completed.
+/// The image BAKE (a blurred derivative of a decoded image — mosaic / hero backdrops), run OFF the frame as its own
+/// batch (docs/plans/scroll-gpu-retained-tiles-implementation.md §C): the source is resampled to the output size, then a
+/// dual-Kawase down/up chain (<see cref="AcrylicKawaseMath"/> — the σ→chain mapping the live acrylic uses) blurs it, the
+/// last up pass writing straight into the derivative's texture through an unordered-access view. The derivative is
+/// published behind the batch's fence (<see cref="ImageTextureStore.CommitDerived"/>): until the bake lands the frame
+/// keeps drawing what it drew before (the unblurred pixels / the placeholder) — never a hole, and no frame ever waits on
+/// a bake. One job per 33 ms (<see cref="BakedBlurQueue"/>); one scratch pyramid per batch in flight
+/// (<see cref="UploadQueue.Depth"/> banks), each reused only once its batch completed.
+/// <para>The batch is a DIRECT list (dispatches, barriers and timestamps are all legal there) executed on the frame's
+/// own DIRECT queue, behind its own fence — never on a COMPUTE queue. A COMPUTE queue is a separate hardware engine on
+/// most GPUs, and on the Adreno X1-85 (driver 31.0.148.0, the newest 31.0.178.0 lists no fix) its preemption path is
+/// broken: on 2026-11-07 the kernel driver bugchecked 0x119 VIDEO_SCHEDULER_INTERNAL_ERROR (a DMA_PREEMPTED interrupt
+/// reporting a fence older than one already completed) on GPU node 4, the compute engine, whose only user on the machine
+/// was this bake queue — an inspector's bake burst hung it, the TDR reset every device, and the first bake on the
+/// recreated device took the machine down (the full kernel dump's trail). The async-compute overlap it bought was worth
+/// nothing next to that: a bake is a few dispatches over at most 512² texels, once per 33 ms while a page's images land
+/// (measured on that Adreno: 87 µs of GPU for a 128² bake, 220 µs for 256², so about 0.75 ms at the 512² ceiling, and
+/// <see cref="BakedBlurQueue.ReportGpuTime"/> drops the quality above 2 ms), so no batch is long enough to need
+/// preempting mid-dispatch either. On the frame's queue the bake is ordered with the frames like any other packet of the
+/// process's one hardware context, the path every application exercises.</para>
 /// </summary>
 internal sealed unsafe class BakedBlurCompositor : IDisposable
 {
@@ -27,7 +39,7 @@ internal sealed unsafe class BakedBlurCompositor : IDisposable
     private const int SlotsPerBank = 2 + 2 * Levels;                   // source SRV, output UAV, level SRVs, level UAVs
 
     private ID3D12Device* _device;
-    private readonly UploadQueue _compute = new(D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_COMPUTE, "BakedBlur.ComputeQueue");
+    private readonly UploadQueue _bakes = new(D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT, "BakedBlur.Batches");
     private ID3D12DescriptorHeap* _heap;
     private uint _inc;
     private ID3D12RootSignature* _root;
@@ -43,10 +55,10 @@ internal sealed unsafe class BakedBlurCompositor : IDisposable
     private int _nextBank;
     private readonly float[] _k = new float[16];
 
-    /// <summary>The compute queue whose fences gate a derivative's readiness (the image store reads them).</summary>
-    public UploadQueue ComputeQueue => _compute;
+    /// <summary>The bake batches whose fences gate a derivative's readiness (the image store reads them).</summary>
+    public UploadQueue Batches => _bakes;
 
-    /// <summary>Scratch pyramids — one per compute batch that may be in flight.</summary>
+    /// <summary>Scratch pyramids — one per bake batch that may be in flight.</summary>
     internal int ScratchBankCount => _bankFence.Length;
 
     /// <summary>Timestamp pairs — one per scratch bank.</summary>
@@ -98,10 +110,12 @@ void CSKawaseUp(uint3 id : SV_DispatchThreadID)
 }
 """;
 
-    public void Init(ID3D12Device* device)
+    /// <summary>Build the bake's objects on <paramref name="device"/>; its batches execute on <paramref name="frameQueue"/>,
+    /// the frame's DIRECT queue (see the class summary for why never a COMPUTE queue).</summary>
+    public void Init(ID3D12Device* device, ID3D12CommandQueue* frameQueue)
     {
         _device = device;
-        _compute.Init(device);
+        _bakes.Init(device, frameQueue);
         InitTimestamps();
         D3D12_DESCRIPTOR_HEAP_DESC hd = default;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -130,11 +144,11 @@ void CSKawaseUp(uint3 id : SV_DispatchThreadID)
     }
 
     /// <summary>Hidden-window stage: destroy the scratch pyramids (they are recreated lazily by the next bake - <c>EnsureBank</c>)
-    /// once the compute queue has nothing in flight. Returns false and leaves them alone while a bake may still read or write one.
+    /// once no bake batch is in flight. Returns false and leaves them alone while a bake may still read or write one.
     /// Render thread, between turns.</summary>
     internal bool ReleaseLevels()
     {
-        if (_compute.HasInFlightAnyThread) return false;
+        if (_bakes.HasInFlightAnyThread) return false;
         for (int i = 0; i < _levels.Length; i++)
             if (_levels[i] != null)
             {
@@ -162,21 +176,28 @@ void CSKawaseUp(uint3 id : SV_DispatchThreadID)
         }
     }
 
-    /// <summary>Run at most one runnable job: record its compute batch, submit it, publish the derivative behind the
+    /// <summary>Run at most one runnable job: record its batch, submit it, publish the derivative behind the
     /// batch's fence and post the result. Returns whether a job was consumed.</summary>
     public bool DrainOne(ImageTextureStore images, BakedBlurQueue queue)
     {
         CollectGpuTimes(queue);
-        // Never wait on the compute fence here. At the one-job-per-turn cadence the next bank's previous batch (and the
+        // Never wait on the bake fence here. At the one-job-per-turn cadence the next bank's previous batch (and the
         // allocator Open would reuse) landed long ago; when it has not (a slow or HUNG GPU) the job stays queued for a
         // later turn. This runs at the top of turns whose frame elides, so an INFINITE wait here would park the render
         // thread outside the frame-fence watchdog (WaitFenceEventBounded) that turns a hang into a controlled recovery.
-        if (!_compute.IsComplete(_bankFence[_nextBank]) || _compute.OpenWouldWait) return false;
+        if (!_bakes.IsComplete(_bankFence[_nextBank]) || _bakes.OpenWouldWait) return false;
         if (!queue.TryDequeueRunnableJob(out var job)) return false;
         long recordStart = System.Diagnostics.Stopwatch.GetTimestamp();
-        if (!queue.IsCurrent(in job) || !images.TryGetBakeSource(job.SourceId, out var source, out var sourceUv))
+        if (!queue.IsCurrent(in job))
         {
             Fail(queue, in job, recordStart);
+            return true;
+        }
+        // The source's pixels are not resident here yet (the UI admits an image Ready a frame before this thread stages it,
+        // and the per-turn upload budget or the post-recovery throttle can hold it longer): the cache re-queues the bake.
+        if (!images.TryGetBakeSource(job.SourceId, out var source, out var sourceUv))
+        {
+            Fail(queue, in job, recordStart, sourcePending: true);
             return true;
         }
         int outW = Math.Clamp(job.OutputW, 1, ScratchSize), outH = Math.Clamp(job.OutputH, 1, ScratchSize);
@@ -192,7 +213,7 @@ void CSKawaseUp(uint3 id : SV_DispatchThreadID)
         EnsureBank(bank);
         AcrylicKawaseMath.SelectChain(job.SigmaTexels, 1f, out int iters, out float offset);
 
-        var cmd = _compute.Open();
+        var cmd = _bakes.Open();
         void* heap = _heap;
         Gen.ID3D12GraphicsCommandListVtbl.SetDescriptorHeaps(cmd, 1, &heap);
         Gen.ID3D12GraphicsCommandListVtbl.SetComputeRootSignature(cmd, _root);
@@ -236,9 +257,9 @@ void CSKawaseUp(uint3 id : SV_DispatchThreadID)
             cmd->ResolveQueryData(_timestampHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, (uint)q, 2, _timestampReadback, (ulong)q * sizeof(ulong));
             _timestampPending[bank] = true;
         }
-        ulong fence = _compute.Submit();
+        ulong fence = _bakes.Submit();
         _bankFence[bank] = fence;
-        images.NoteComputeRead(job.SourceId, fence);
+        images.NoteBakeRead(job.SourceId, fence);
         images.CommitDerived(token, job.Id, fence);
         // ExecuteCommandLists has accepted the work: the derivative is Ready to the UI; the frame draws it once the fence
         // passes (until then it keeps drawing the pixels it had).
@@ -247,9 +268,9 @@ void CSKawaseUp(uint3 id : SV_DispatchThreadID)
         return true;
     }
 
-    private static void Fail(BakedBlurQueue queue, in BakedBlurQueue.Job job, long recordStart)
+    private static void Fail(BakedBlurQueue queue, in BakedBlurQueue.Job job, long recordStart, bool sourcePending = false)
     {
-        queue.Post(new BakedBlurQueue.Result(job.Id, job.Generation, false, 0, 0, job.Quality, job.IsUpgrade));
+        queue.Post(new BakedBlurQueue.Result(job.Id, job.Generation, false, 0, 0, job.Quality, job.IsUpgrade, sourcePending));
         queue.ReportRecordTime(System.Diagnostics.Stopwatch.GetElapsedTime(recordStart).TotalMilliseconds);
     }
 
@@ -399,7 +420,7 @@ void CSKawaseUp(uint3 id : SV_DispatchThreadID)
     private void InitTimestamps()
     {
         ulong frequency;
-        if (_compute.Queue == null || _compute.Queue->GetTimestampFrequency(&frequency) < 0 || frequency == 0) return;
+        if (_bakes.Queue == null || _bakes.Queue->GetTimestampFrequency(&frequency) < 0 || frequency == 0) return;
         _timestampFrequency = frequency;
         D3D12_QUERY_HEAP_DESC qd = default;
         qd.Type = D3D12_QUERY_HEAP_TYPE.D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
@@ -429,7 +450,7 @@ void CSKawaseUp(uint3 id : SV_DispatchThreadID)
     private void CollectGpuTimes(BakedBlurQueue queue)
     {
         for (int b = 0; b < Banks; b++)
-            if (_timestampPending[b] && _compute.IsComplete(_bankFence[b])) CollectBank(queue, b);
+            if (_timestampPending[b] && _bakes.IsComplete(_bankFence[b])) CollectBank(queue, b);
     }
 
     private void CollectBank(BakedBlurQueue queue, int bank)
@@ -445,7 +466,7 @@ void CSKawaseUp(uint3 id : SV_DispatchThreadID)
 
     public void Dispose()
     {
-        _compute.Dispose();   // waits for every bake first
+        _bakes.Dispose();   // waits for every bake first, then drops its reference to the frame's queue
         for (int i = 0; i < _levels.Length; i++)
             if (_levels[i] != null) { D3D12MemoryDiagnostics.Release(_levels[i], "BakedBlur.Level"); _levels[i]->Release(); _levels[i] = null; }
         if (_resamplePso != null) { _resamplePso->Release(); _resamplePso = null; }

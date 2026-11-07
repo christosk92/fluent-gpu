@@ -657,7 +657,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         });
         tasks[7] = Stage(7, () => { var p = new ImageTextureStore(); p.Init(_device, _isUnifiedMemory); imageTextures = p; });
         tasks[8] = Stage(8, () => { var p = new ImagePipeline(); p.Init(_device, arena); imagePipe = p; });
-        tasks[9] = Stage(9, () => { var p = new BakedBlurCompositor(); p.Init(_device); bakedBlur = p; });
+        tasks[9] = Stage(9, () => { var p = new BakedBlurCompositor(); p.Init(_device, _queue); bakedBlur = p; });
         tasks[10] = Stage(10, () => { var p = new SeriesPipeline(); p.Init(_device, sdf, arena); seriesPipe = p; });
         tasks[11] = Stage(11, () => { var p = new SpritePipeline(); p.Init(_device, sdf, arena); spritePipe = p; });
 
@@ -684,7 +684,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _bakedBlur = bakedBlur;
         _seriesPipe = seriesPipe;
         _spritePipe = spritePipe;
-        _imageTextures!.AttachComputeQueue(bakedBlur!.ComputeQueue);   // baked derivatives are gated by its fences
+        _imageTextures!.AttachBakeBatches(bakedBlur!.Batches);   // baked derivatives are gated by its fences
         if (FluentGpu.Hosting.EngineSwitches.ImageAtlas == FluentGpu.Hosting.ImageAtlasExperiment.RowMajorProbe || FluentGpu.Hosting.EngineSwitches.ImagePlaced256Query)
             RunAtlasRevalidationProbes();   // log-only, default off
 
@@ -847,9 +847,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // The turn's image bake runs HERE, at the top of every render turn — not only inside a frame that records. A turn
         // whose frame elides (nothing on screen changed: the usual case while the bake is all that is left) never reached
         // BeginRecording, so the job stayed queued and the host kept waking at the bake cadence (bakedBlurPending) to
-        // publish frames that elided again: a 30 Hz loop that never made progress. The bake is its own compute batch,
-        // so it needs no frame; its result posts a completion wake, and the frame that shows it is the one that changed.
-        // Never on a lost device: the recovery gate rebuilds the queue's targets, and a compute submit would only fail.
+        // publish frames that elided again: a 30 Hz loop that never made progress. The bake is its own batch (on the
+        // frame's queue, behind its own fence), so it needs no frame; its result posts a completion wake, and the frame
+        // that shows it is the one that changed. Never on a lost device: the recovery gate rebuilds the queue, and a
+        // submit would only fail.
         if (System.Threading.Volatile.Read(ref _deviceLostReason) != 0) return;
         if (_bakedBlurQueue is { } bakedQueue && _bakedBlur is { } baker && baker.DrainOne(_imageTextures, bakedQueue))
         {
@@ -1901,10 +1902,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _glyphs!.UploadIfDirty(_cmdList); // the full prepared dirty band, before any glyph draw can sample it
             _frameUploadBytes += _glyphs.LastUploadBytes;
         }
-        // One image bake per turn, on its own COMPUTE queue (never this list): recorded, submitted and published behind
-        // its fence right here, before the frame's draws — which keep showing the prior pixels until it lands. A host with
-        // an image upload queue already ran the turn's bake in DrainImageJobs (the queue's 33 ms cadence makes this one a
-        // no-op then); this site stays for a SingleThread host, which has no upload queue and never calls DrainImageJobs.
+        // One image bake per turn, as its own batch (never this list; it executes on the frame's queue ahead of it):
+        // recorded, submitted and published behind its fence right here, before the frame's draws — which keep showing the
+        // prior pixels until it lands. A host with an image upload queue already ran the turn's bake in DrainImageJobs (the
+        // queue's 33 ms cadence makes this one a no-op then); this site stays for a SingleThread host, which has no upload
+        // queue and never calls DrainImageJobs.
         if (isPrimaryTarget &&
             _bakedBlurQueue is { } bakedQueue && _bakedBlur is { } baker && _imageTextures is { } textures
             && baker.DrainOne(textures, bakedQueue))
@@ -2202,7 +2204,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     // Draw whatever texture is resident under this id — the BlurHash LQIP preview (uploaded at request)
                     // OR the full-res art (which replaces it on decode). Flat tint only when no texture exists yet.
                     bool drawable = _imageTextures!.ResolveDraw(im.ImageId, out bool provisional);
-                    // Pixels staged or still on the copy / compute queue: the placeholder, or the prior pixels a replacement
+                    // Pixels staged, still on the copy queue or in a bake batch: the placeholder, or the prior pixels a replacement
                     // keeps published (the LQIP under the landing full-res art, a re-bake's previous derivative), stands in,
                     // and a retained tile holding it is not faithful (it re-rasters once they land — RasterTiles).
                     if (provisional) _frameImagesInFlight++;
@@ -4092,7 +4094,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.PresentTopologyState = state;
         bool overlayChanged = overlay != target.OverlayCaps;
         target.OverlayCaps = overlay;
-        if (overlay.Probed) FluentGpu.Media.VideoOverlayCaps.Publish(in overlay);   // the engines read the newest verdict when they are created
 
         // Diagnostics-card snapshot (GpuVideoMemorySnapshot): merges the display-mode + topology fields without
         // touching the video-memory fields, which PublishVideoMemory refreshes on its own (~1/60-presents) cadence.
