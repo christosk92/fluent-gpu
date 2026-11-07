@@ -196,10 +196,16 @@ public static class Tape
             s_probeOut = new StreamWriter(path, append: true) { AutoFlush = true };
             s_probeOut.WriteLine($"[tape-probe] pid {Environment.ProcessId}");
         }
-        if (s_probeSeen.TryGetValue(sig, out int id)) { s_probeSeen[sig] = id; s_probeOut.WriteLine($"#{id}"); return; }
+        // what the dead slot holds (its key, its text), per occurrence: names the escaping element in the app's own words
+        string what = "";
+        if (t_columns is { } cols)
+            foreach (var c in cols)
+                if (c.ItemTypeName == column) { what = " " + c.DescribeSlot(slot); break; }
+        if (s_probeSeen.TryGetValue(sig, out int id)) { s_probeSeen[sig] = id; s_probeOut.WriteLine($"#{id}{what}"); return; }
         id = s_probeSeen.Count + 1;
         s_probeSeen[sig] = id;
         s_probeOut.WriteLine($"=={id} {sig}");
+        s_probeOut.WriteLine($"#{id}{what}");
     }
 }
 
@@ -207,6 +213,9 @@ public static class Tape
 internal abstract class TapeColumn
 {
     internal int Top;
+    internal abstract string ItemTypeName { get; }
+    /// <summary>Probe mode: the key and text of the value in <paramref name="slot"/> (reflection; never on a hot path).</summary>
+    internal abstract string DescribeSlot(int slot);
     internal abstract void TruncateTo(int top);
     /// <summary>Probe mode: the slots from <paramref name="top"/> up are dead (their stamps fail every check) but keep their values.</summary>
     internal abstract void MarkDead(int top);
@@ -256,6 +265,28 @@ internal sealed class TapeColumn<T> : TapeColumn
     {
         if ((uint)slot >= (uint)Top || Stamps[slot] != stamp) Tape.Stale(slot, stamp, typeof(T).Name);
         return ref Items[slot];
+    }
+
+    internal override string ItemTypeName => typeof(T).Name;
+
+    internal override string DescribeSlot(int slot)
+    {
+        if ((uint)slot >= (uint)Items.Length) return "(slot out of range)";
+        object? v = Items[slot];
+        if (v is null) return "";
+        var sb = new System.Text.StringBuilder();
+        foreach (var name in new[] { "Key", "Text", "Spans" })
+        {
+            var pi = v.GetType().GetProperty(name);
+            if (pi is null) continue;
+            object? x;
+            try { x = pi.GetValue(v); } catch { continue; }
+            if (x is null) continue;
+            string str = x.ToString() ?? "";
+            if (str.Length > 60) str = str[..60];
+            sb.Append(name).Append('=').Append(str).Append(' ');
+        }
+        return sb.ToString().TrimEnd();
     }
 
     /// <summary>A contiguous range written by one region (an <see cref="ElementList"/>).</summary>

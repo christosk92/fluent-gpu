@@ -108,7 +108,7 @@ public sealed partial class TreeReconciler
     // Bound (RowBind) viewports keep persistent SLOTS instead: one signal/element/root per realized logical item.
     private sealed class VirtualEntry
     {
-        public Element[]? Prev; public int PrevLen; public int PrevFirst; public VirtualListEl? El;
+        public int PrevLen; public int PrevFirst; public VirtualListEl? El;   // the previous window: its rows are the content's first PrevLen children
         // EP6: the VirtualListEl.TemplateStamp the live bound slots were built under; a different stamp on a later pass rebuilds them all.
         public int BuiltStamp;
         // W2-E3: the viewport's VISIBLE item band [VisibleFirst, VisibleLast) (whole rows for a grid/FillRow layout) as of
@@ -3827,22 +3827,31 @@ public sealed partial class TreeReconciler
         {
             int oldFirst = entry.PrevFirst, oldLast = entry.PrevFirst + entry.PrevLen;   // E11 lifecycle window delta
 
-            var prev = reuseOverlap ? entry.Prev : null;
             int prevFirst = entry.PrevFirst;
+            // The previous window is its rows' RECORDS (PERF r3 MODEL M4b): what RenderItem built for it lived on that realize's tape and
+            // is gone; a row's record is the element it was last reconciled against, valid while the row lives. An overlap row reuses
+            // its record (the same element again: its node is left untouched, as the reused element object was).
+            int prevLen = entry.PrevLen;
+            var old = ArrayPool<Element>.Shared.Rent(Math.Max(1, prevLen));
+            {
+                int j = 0;
+                for (var c = _scene.FirstChild(content); !c.IsNull && j < prevLen; c = _scene.NextSibling(c)) old[j++] = _records.Get((int)c.Raw.Index);
+                prevLen = j;
+            }
             var cur = ArrayPool<Element>.Shared.Rent(Math.Max(1, w));
             for (int i = 0; i < w; i++)
             {
                 int idx = first + i;
                 int oldSlot = idx - prevFirst;
-                Element? el = prev is not null && (uint)oldSlot < (uint)entry.PrevLen ? prev[oldSlot] : null;
-                cur[i] = el ?? ve.RenderItem(idx);   // overlap reuses the element OBJECT — no keys, no `with` clone
+                bool reuse = reuseOverlap && (uint)oldSlot < (uint)prevLen && !old[oldSlot].IsNone;
+                cur[i] = reuse ? old[oldSlot] : ve.RenderItem(idx);   // overlap reuses the row's record: no RenderItem, no diff
             }
 
-            ReconcileWindow(content, cur.AsSpan(0, w),
-                entry.Prev is null ? default : entry.Prev.AsSpan(0, entry.PrevLen), first - prevFirst, first);
+            ReconcileWindow(content, cur.AsSpan(0, w), old.AsSpan(0, prevLen), first - prevFirst, first);
 
-            if (entry.Prev is not null) { Array.Clear(entry.Prev, 0, entry.PrevLen); ArrayPool<Element>.Shared.Return(entry.Prev); }
-            entry.Prev = cur; entry.PrevLen = w; entry.PrevFirst = first;
+            Array.Clear(old, 0, prevLen); ArrayPool<Element>.Shared.Return(old);
+            Array.Clear(cur, 0, w); ArrayPool<Element>.Shared.Return(cur);
+            entry.PrevLen = w; entry.PrevFirst = first;
 
             ref ScrollState scw = ref _scene.ScrollRef(node);
             scw.FirstRealized = first; scw.LastRealized = last;
@@ -5025,11 +5034,6 @@ public sealed partial class TreeReconciler
         {
             FreeSpareSlots(v, keep: 0);   // parked spares are detached, so the list's FreeSubtree cannot reach them
             FreeKeptSlots(v);             // so are keep-alive-parked rows
-            if (v.Prev is not null)
-            {
-                Array.Clear(v.Prev, 0, v.PrevLen);
-                ArrayPool<Element>.Shared.Return(v.Prev);
-            }
         }
     }
 
