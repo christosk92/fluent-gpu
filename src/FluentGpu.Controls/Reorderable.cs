@@ -1,6 +1,8 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Hooks;
 using FluentGpu.Input;
+using FluentGpu.Reconciler;
 using FluentGpu.Scene;
 
 namespace FluentGpu.Controls;
@@ -62,6 +64,13 @@ public sealed record ReorderPayload(Reorderable Owner, int Index, object? Item);
 /// item to the dwell-committed slot, the keyed diff keeps node identity, and the FLIP pass animates the displaced
 /// siblings (the part-to-make-room motion) while <c>DragController.Move</c> re-anchors the pointer-held visual.
 ///
+/// VIRTUAL LISTS get the same live projection: <see cref="List"/> turns on <see cref="VirtualListEl.KeyedIdentity"/> for a
+/// virtual body, so the window diff moves a keyed row's node to its projected slot instead of recycling it. A lifted row
+/// can still leave the realized window (the dwell holds it home while an edge auto-scroll carries the list away); a
+/// Stationary drag carries on through its chip (<c>DragDropContext.PruneDead</c>), and this class follows the gesture
+/// through the drop target from then on (<see cref="OnTargetOver"/>, <see cref="OnTargetDrop"/>, the session's end): the
+/// slot keeps tracking the pointer, a release over the list commits, and the row renders lifted wherever it re-enters.
+///
 /// CROSS-LIST: two Reorderables sharing a Kind. The target list accepts the foreign session, shows the insertion
 /// line while hovered, and on drop routes the ONE <see cref="OnCrossCommit"/> (target's, else the source's) —
 /// the source's gesture completion then cancels its local reorder instead of committing (no double mutation).
@@ -97,6 +106,9 @@ public sealed class Reorderable
     private bool _selfDrop;              // this gesture was RELEASED over this list (see RequireDropOnList)
     private float _liftOrigin;           // list content origin (window space, main axis) at lift — scroll baseline
     private float _pointerDelta;         // latest pointer main-axis travel since the press (window space)
+    private NodeHandle _liftSource;      // the lifted item's node as the session first named it (Null until then)
+    private bool _sourceLost;            // that node left the tree mid-gesture (virtualized away): follow the session instead
+    private float _pressMain = float.NaN;   // the press point (window space, main axis), derived while the source was live
 
     public Reorderable(string kind)
     {
@@ -139,6 +151,10 @@ public sealed class Reorderable
     public Func<int, float>? ExtentOf;
     /// <summary>The container's main-axis Gap between items.</summary>
     public float Spacing;
+    /// <summary>Main-axis content ahead of item 0 inside the <see cref="List"/> wrapper's scroll content (a virtual body
+    /// whose first items are not lane items: a header, a card). The pointer → slot math of a FOREIGN session and the
+    /// insertion line subtract it; a same-list drag measures relative travel and never needs it. Default 0.</summary>
+    public float LeadExtent;
     /// <summary>Horizontal strip (TotalDx drives the slot math; Left/Right are the keyboard-lift arrows).</summary>
     public bool Horizontal;
     /// <summary>The scene (wire <c>Context.Scene</c>) — needed only for CROSS-LIST insertion math (pointer →
@@ -172,11 +188,10 @@ public sealed class Reorderable
     /// items (<c>List(itemColumn)</c>), not a padded container around them.</para></summary>
     public bool ShowInsertionLine = true;
     /// <summary>Live mid-drag projection (default): <see cref="ItemAt"/> returns the PROJECTED order while lifted, so
-    /// displaced siblings FLIP to make room (the rbd motion). REQUIRES key-preserving children (plain keyed children /
-    /// <c>ForEl</c> / <c>Repeater</c>): the keyed diff moves nodes with their items. Set FALSE over
-    /// <c>Virtual.List</c>/<c>VirtualListEl</c> — its window diff recycles nodes POSITIONALLY (no keys), so a mid-drag
-    /// projection would swap content under the lifted node; instead the resting order holds during the drag and the
-    /// insertion LINE shows the pending slot (commit still lands exactly where shown).</summary>
+    /// displaced siblings FLIP to make room (the rbd motion). REQUIRES keyed children (plain keyed children / <c>ForEl</c> /
+    /// <c>Repeater</c>, or a <c>Virtual.List</c> body, whose window diff <see cref="List"/> switches to keyed moves): the
+    /// diff moves nodes with their items. Off: the resting order holds during the drag and the insertion LINE shows the
+    /// pending slot (commit still lands exactly where shown) — a list's own look choice, never a virtualization need.</summary>
     public bool LiveProject = true;
 
     // ── drop POLICY (all optional; unset ⇒ byte-identical to the pre-policy list) ──────────────────
@@ -273,7 +288,7 @@ public sealed class Reorderable
                 pos = BoundaryOf(p > Core.DraggedIndex ? p + 1 : p);
             }
             if (pos < 0f) pos = 0f;
-            return pos - ViewportScrollOffset();
+            return pos + LeadExtent - ViewportScrollOffset();
         }
     }
 
@@ -298,6 +313,7 @@ public sealed class Reorderable
     /// the projection (identity), so the result is always an index of the CURRENT list.</summary>
     public int ItemAt(int slot)
     {
+        if (_sourceLost && Core.IsActive) SettleLostGesture();
         if (!Core.IsActive || !LiveProject || Stale) return slot;
         EnsureOrder();
         return (uint)slot < (uint)Core.Count ? _order[slot] : slot;
@@ -337,6 +353,9 @@ public sealed class Reorderable
     public Element Item(int index, Element content, string? key = null, LayoutTransition? transition = null)
     {
         bool kbLifted = _kbLifted == index;
+        // The lifted row came back into the realized window after its first node was virtualized away (the drag carries on
+        // through its chip): it renders with the lift's look itself, the dim and hit-test opt-out L1 gave the first node.
+        bool lostLift = _sourceLost && Core.IsActive && _kbLifted < 0 && Core.DraggedIndex == index;
         return new BoxEl
         {
             Key = key ?? "reorder#" + index,
@@ -353,8 +372,9 @@ public sealed class Reorderable
             Focusable = true,
             Animate = transition ?? LayoutTransition.Slide,
             // Keyboard-lift visuals (the pointer path gets these from DragController.Promote):
-            Opacity = kbLifted ? LiftOpacity : 1f,                        // ListViewItemDragThemeOpacity 0.80
+            Opacity = kbLifted ? LiftOpacity : lostLift ? LostLiftOpacity : 1f,   // ListViewItemDragThemeOpacity 0.80
             Shadow = kbLifted ? Elevation.Flyout : (ShadowSpec?)null,     // the lifted depth class (matches DragShadow)
+            HitTestVisible = !lostLift,
             Children = [content],
         };
     }
@@ -365,6 +385,9 @@ public sealed class Reorderable
     /// pointer→slot math (set <see cref="Scene"/>).</summary>
     public Element List(Element body)
     {
+        // A virtual body diffs its window by key, so the projection moves the rows' nodes (their FLIP slides them aside).
+        if (LiveProject && body is VirtualListEl { KeyedIdentity: false } virtualBody) body = virtualBody with { KeyedIdentity = true };
+        if (_sourceLost && Core.IsActive) SettleLostGesture();
         Element[] children = InsertionVisible && ShowInsertionLine
             ? new[] { body, InsertionLine() }
             : new[] { body };
@@ -403,6 +426,9 @@ public sealed class Reorderable
         _selfDrop = false;
         _lastDeltaWallMs = Environment.TickCount64;
         _pointerDelta = 0f;
+        _liftSource = NodeHandle.Null;
+        _sourceLost = false;
+        _pressMain = float.NaN;
         _liftOrigin = ContentOrigin();
         BeginCore(index);
         Announce(ReorderAnnounceKind.Grab, index);
@@ -436,6 +462,7 @@ public sealed class Reorderable
 
     private void CompleteGesture()
     {
+        if (!Core.IsActive && _kbLifted < 0) { _selfDrop = false; _crossConsumed = false; return; }   // already settled (a lost source's drop)
         if (_crossConsumed)
         {
             // The item was deposited into ANOTHER Reorderable — its OnCrossCommit mutated both models; committing
@@ -465,6 +492,7 @@ public sealed class Reorderable
             Core.Complete();   // fires OnReorder(from, to) iff the slot actually changed
         }
         _selfDrop = false;
+        _sourceLost = false;
         Changed();
     }
 
@@ -472,10 +500,31 @@ public sealed class Reorderable
     {
         _crossConsumed = false;
         _selfDrop = false;
+        _sourceLost = false;
         AnnounceEnd(ReorderAnnounceKind.Cancel);
         Core.Cancel();
         Changed();
     }
+
+    /// <summary>The lifted row's node left the tree mid-gesture (<see cref="_sourceLost"/>), so its L1 completion and cancel
+    /// can never arrive. Read during the consumer's render: it subscribes that render to the drag's edges (the host's
+    /// <c>DragEpoch</c>, bumped at the session's end), and once the session is over without a drop on this list
+    /// (<see cref="OnTargetDrop"/> commits one) it ends the lift here — state only, no re-render request (this IS the render).</summary>
+    private void SettleLostGesture()
+    {
+        var hooks = InputHooks.Current.Default;
+        if (hooks.DragEpoch is { } epoch) _ = epoch.Value;
+        if (hooks.GetDragState?.Invoke() is { Active: true }) return;
+        _sourceLost = false;
+        _selfDrop = false;
+        AnnounceEnd(ReorderAnnounceKind.Cancel);
+        Core.Cancel();
+        InvalidateOrder();
+    }
+
+    /// <summary>The look a lifted row takes when it re-enters the window after its first node was virtualized away: the
+    /// Stationary dim of its <see cref="DragStyle"/> (the engine default when none).</summary>
+    private float LostLiftOpacity => DragStyle?.Opacity ?? DragVisualStyle.Default.Opacity;
 
     // ── announcements ─────────────────────────────────────────────────────────────────────────────
 
@@ -628,7 +677,18 @@ public sealed class Reorderable
         {
             // Same-list: displacement, no line. The engine re-runs OnOver every frame of an edge auto-scroll with the
             // pointer still, so re-project the last pointer travel against the content that scrolled under it.
-            if (Core.IsActive && _kbLifted < 0) Follow(_pointerDelta);
+            if (!Core.IsActive || _kbLifted >= 0) return;
+            float main = Horizontal ? s.Position.X : s.Position.Y;
+            if (_liftSource.IsNull) _liftSource = s.Source;
+            else if (!_sourceLost && (s.Source != _liftSource || Scene is { } scene && !scene.IsLive(_liftSource)))
+            {
+                // The row was virtualized away (the session reparented onto the root): no more L1 deltas, completion or cancel
+                // from it. Track the session's pointer against the press point instead, and render the row lifted if it returns.
+                _sourceLost = true;
+                Changed();
+            }
+            if (!_sourceLost) _pressMain = main - _pointerDelta;   // the press point, refreshed while the source still reports
+            Follow(_sourceLost && !float.IsNaN(_pressMain) ? main - _pressMain : _pointerDelta);
             return;
         }
         int slot = SlotFromPosition(s.Position);
@@ -663,7 +723,14 @@ public sealed class Reorderable
             if (ReferenceEquals(rp.Owner, this))
             {
                 _selfDrop = true;   // the release happened HERE — RequireDropOnList lists may now commit
-                return;             // same-list: the gesture completion commits (SettleOnDrop glide)
+                // Same-list: the gesture completion commits (SettleOnDrop glide) — unless the lifted row's node is gone, whose
+                // completion can never fire: commit at the release point here.
+                if (_sourceLost && Core.IsActive && _kbLifted < 0)
+                {
+                    if (!float.IsNaN(_pressMain)) Track((Horizontal ? s.Position.X : s.Position.Y) - _pressMain);
+                    CompleteGesture();
+                }
+                return;
             }
             rp.Owner._crossConsumed = true;                // the source's completion cancels its local reorder
             var commit = OnCrossCommit ?? rp.Owner.OnCrossCommit;
@@ -698,6 +765,7 @@ public sealed class Reorderable
             main -= Horizontal ? r.X : r.Y;
             main += ViewportScrollOffset();
         }
+        main -= LeadExtent;
         if (Sampled) return Core.SlotAtOffset(main);
         float pitch = ItemExtent + Spacing;
         if (pitch <= 0f) return 0;

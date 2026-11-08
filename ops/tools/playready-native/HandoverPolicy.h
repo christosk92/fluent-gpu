@@ -1,4 +1,4 @@
-// HandoverPolicy.h — the two pieces of the session hand-over that need no Windows header, so tests/FeedTests.cpp can
+// HandoverPolicy.h — the two pieces of the session hand-over that need no Windows header, so they stay pure and
 // exercise them: the deferred unload of the engine's source, and the reaper that joins stopped feeder threads.
 //
 // WHY. One media engine is shared by every session. A source switch used to be Detach (Pause + an EMPTY SetSource, an

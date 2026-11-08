@@ -12,7 +12,7 @@ it there, but it never enters this public repo — `.gitignore` and `.githooks/p
 
 ## What this is
 
-FluentGpu is a from-scratch, near-zero-allocation, NativeAOT, Direct3D 12-rendered UI engine for .NET 10. The
+FluentGpu is a from-scratch, near-zero-allocation, NativeAOT, Direct3D 12-rendered UI engine for .NET 11. The
 authoring model is React/Reactor (`Element` records + `Component` + hooks) on a **signals-first (Solid-style) reactive
 core**. Immutable elements are reconciled into a retained struct-of-arrays scene; a recorder walks it into a GPU
 command list each frame. Updates are surgical — **no full-app re-render, no global dirty flag.**
@@ -145,7 +145,7 @@ Adding an `Element` type: assign a free `ElementTypeId`, then handle it in `Reco
 
 ## Conventions
 
-- .NET 10, C# 14, nullable enabled, `unsafe` allowed, NativeAOT-targeted. No reflection on hot paths; keep new
+- .NET 11, C# 15, nullable enabled, `unsafe` allowed, NativeAOT-targeted. No reflection on hot paths; keep new
   code AOT-clean (delegates over reflection). Match the terse, XML-doc-commented style of nearby files.
 - Commit/push only when asked. Don't commit build output or diagnostics dumps (`*.dmp`/`*.gcdump` are gitignored).
 - **No `FG_*` env kill switches for new behavior** — the new path ships as the unconditional default (standing user

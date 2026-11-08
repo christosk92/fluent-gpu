@@ -77,6 +77,13 @@ public abstract record Element
     /// children entering in that pass) × Stagger, BAKED at reconcile (no runtime closure, no O(n²) sort). Exits and layout
     /// moves are not delayed.</summary>
     public float Stagger { get => (_ecold ?? ElementCold.Default).Stagger; init { if (!EqualityComparer<float>.Default.Equals((_ecold ?? ElementCold.Default).Stagger, value)) ECold.Stagger = value; } }
+    /// <summary>A navigation entrance STAGGERS this node's on-screen children (WinUI: a panel whose <c>ChildrenTransitions</c> hold an
+    /// <c>EntranceThemeTransition</c> with <c>IsStaggeringEnabled</c>). When an <see cref="FluentGpu.Foundation.EntranceCascade"/> runs over
+    /// an ancestor (a page swap of a keep-alive boundary whose <c>KeepAliveOptions.CascadeFor</c> answers one, or
+    /// <c>RenderContext.EntranceCascade</c>), each child the viewport shows enters one after another, top first; a child that is
+    /// (or holds) a group dissolves into its own children. Nothing happens on a plain mount or re-render: <see cref="Stagger"/> is the
+    /// mount-time spelling. Layout-transparent anchors (components, providers, Show, For, skeleton regions) are seen through.</summary>
+    public bool EntranceGroup { get => (_ecold ?? ElementCold.Default).EntranceGroup; init { if (!EqualityComparer<bool>.Default.Equals((_ecold ?? ElementCold.Default).EntranceGroup, value)) ECold.EntranceGroup = value; } }
     /// <summary>Declarative auto-FLIP on layout change (the first-class spelling of the per-box <c>Animate</c> opt-in).
     /// Any layout move/resize of this node animates via transform only.</summary>
     public LayoutTransition? Layout { get => (_ecold ?? ElementCold.Default).Layout; init { if (!EqualityComparer<LayoutTransition?>.Default.Equals((_ecold ?? ElementCold.Default).Layout, value)) ECold.Layout = value; } }
@@ -436,6 +443,12 @@ public sealed record BoxEl : Element
     public float PressDurationMs { get => (_cMotion ?? BoxColdMotion.Default).PressDurationMs; init { if (!EqualityComparer<float>.Default.Equals((_cMotion ?? BoxColdMotion.Default).PressDurationMs, value)) CMotion.PressDurationMs = value; } }
     public EasingSpec HoverEasing { get => (_cMotion ?? BoxColdMotion.Default).HoverEasing; init { if (!EqualityComparer<EasingSpec>.Default.Equals((_cMotion ?? BoxColdMotion.Default).HoverEasing, value)) CMotion.HoverEasing = value; } }
     public EasingSpec PressEasing { get => (_cMotion ?? BoxColdMotion.Default).PressEasing; init { if (!EqualityComparer<EasingSpec>.Default.Equals((_cMotion ?? BoxColdMotion.Default).PressEasing, value)) CMotion.PressEasing = value; } }
+    /// <summary>The press fade's RELEASE duration (ms); NaN = <see cref="PressDurationMs"/> (a symmetric fade). 0 snaps back at
+    /// release, as a WinUI visual state with no VisualTransition does (the ComboBox pill's SelectedPressed → Selected).</summary>
+    public float PressReleaseDurationMs { get => (_cMotion ?? BoxColdMotion.Default).PressReleaseDurationMs; init { if (!EqualityComparer<float>.Default.Equals((_cMotion ?? BoxColdMotion.Default).PressReleaseDurationMs, value)) CMotion.PressReleaseDurationMs = value; } }
+    /// <summary>Which axes <see cref="HoverScale"/>/<see cref="PressScale"/> act on (default both). <see cref="ScaleAxes.Y"/> is a
+    /// WinUI ScaleY-only squish about <see cref="TransformOriginY"/> (the 3×16 selection pill).</summary>
+    public ScaleAxes InteractScaleAxes { get => (_cMotion ?? BoxColdMotion.Default).InteractScaleAxes; init { if ((_cMotion ?? BoxColdMotion.Default).InteractScaleAxes != value) CMotion.InteractScaleAxes = value; } }
 
     /// <summary>Implicit brush transition (WinUI <c>BrushTransition</c>): when a re-render changes Fill/BorderColor on
     /// this LIVE node (a logical state flip — checked, selected…), the displayed color cross-fades over this duration
@@ -1062,7 +1075,9 @@ public sealed record ImageEl : Element
     /// still shows or restores instantly (a player bar's now-playing artwork); every other image is restored, inside a held
     /// first frame, when the window returns.</summary>
     public bool KeepWhileHidden { get; init; }
-    /// <summary>Source-over color applied in the image shader after sampling. Transparent disables it.</summary>
+    /// <summary>A color composited ATOP the image in the image shader after sampling: over the image's own pixels only (scaled by their
+    /// alpha), never over its transparent parts, so on an alpha texture it tints the texture (alpha 1 recolours it outright). On an opaque
+    /// image it is a plain source-over wash. Transparent disables it.</summary>
     public ColorF ColorOverlay { get; init; }
     /// <summary>Optional leaf-local alpha feather evaluated in the image shader (no offscreen layer).</summary>
     public ImageMaskSpec? Mask { get; init; }

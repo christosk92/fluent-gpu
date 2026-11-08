@@ -193,11 +193,6 @@ internal static unsafe partial class PrNative
     [LibraryImport(LibraryName)]
     internal static partial long FgPrRuntimeUptimeMs(ulong rt);
 
-    /// <summary>F249: the media engine's output format for the NEXT runtime (0 = BGRA, the default; 1 = NV12). Process-wide, read once
-    /// when the runtime is created, so it is set BEFORE <see cref="FgPrRuntimeCreateOnAdapter"/>.</summary>
-    [LibraryImport(LibraryName)]
-    internal static partial int FgPrRuntimeSetVideoOutputFormat(int format);
-
     /// <summary>F022: which PlayReady security level the NEXT runtime's CDM asks for (<see cref="SecurityProbe3000"/> or
     /// <see cref="SecurityForce2000"/>). Process-wide, read once when the runtime is created, so it is set BEFORE
     /// <see cref="FgPrRuntimeCreateOnAdapter"/>.</summary>

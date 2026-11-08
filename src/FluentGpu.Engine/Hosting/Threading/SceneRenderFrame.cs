@@ -234,17 +234,12 @@ internal sealed class SceneRenderFrame
     }
 }
 
-[InlineArray(8)]
-internal struct RecordingVideoRects { private RectF _element0; }
-
 /// <summary>Value-only reverse-mailbox payload. Never aliases render-owned arrays.</summary>
 internal struct RecordingFeedback
 {
     internal ulong SceneSequence;
     internal SceneRecordStats Stats;
-    internal int VideoCount;
     internal int PoseCount;
     internal int CommandCount;
     internal double RecordMs;
-    internal RecordingVideoRects VideoRects;
 }

@@ -650,6 +650,11 @@ struct Sample
     // Foundation's current type describes, so the change lands where the new representation's first sample does, not
     // where it was spliced in. Travels with the sample through trims, splices and a re-attach's TakeSamples.
     uint16_t repGen = 0;
+    // A NON-REFERENCE picture: every slice NAL (types 1 and 5) has nal_ref_idc == 0 and every NAL header was readable in the clear.
+    // No other picture predicts from it (H.264 8.2.4: only reference pictures enter the reference lists), so a picture that is never
+    // DISPLAYED - one that ends before an exact seek's target - can be withheld from the decoder without changing a single decoded
+    // pixel of any picture that is displayed. Set by ConvertAvccToAnnexBInPlace, the one pass that already walks the NALs.
+    bool nonRef = false;
 };
 
 // Media Foundation's H.264 decoder consumes Annex-B access units (start-code-prefixed NALs), while ISO BMFF stores
@@ -673,17 +678,26 @@ static bool ConvertAvccToAnnexBInPlace(Sample& sample, uint8_t nalLenSize)
     };
 
     size_t off = 0;
+    bool sawSlice = false, anyRef = false, headersClear = true;
     while (off + 4 <= sample.data.size())
     {
         if (!rangeIsClear(off, 4)) return false;
         uint32_t nalBytes = rd32(sample.data.data() + off);
         if (nalBytes == 0 || (uint64_t)off + 4 + nalBytes > sample.data.size()) return false;
+        if (rangeIsClear(off + 4, 1))
+        {
+            const uint8_t nalHeader = sample.data[off + 4];
+            const uint8_t nalType = nalHeader & 0x1F;
+            if (nalType == 1 || nalType == 5) { sawSlice = true; if ((nalHeader >> 5) & 3) anyRef = true; }
+        }
+        else headersClear = false;
         sample.data[off + 0] = 0;
         sample.data[off + 1] = 0;
         sample.data[off + 2] = 0;
         sample.data[off + 3] = 1;
         off += 4 + nalBytes;
     }
+    sample.nonRef = sawSlice && !anyRef && headersClear && !sample.keyframe;
     return off == sample.data.size();
 }
 
@@ -1247,12 +1261,19 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     // delivered sample legitimately jump.
     uint64_t m_deliveredReachTicks = 0;
     bool m_haveDeliveredReach = false;          // false until the first sample is ever delivered
+    // Exact-seek catch-up (video only): after a Start that repositioned to a keyframe BEFORE the target, the pictures between the
+    // keyframe and the target are decoded only to be dropped by the renderer. The non-reference ones among them (Sample::nonRef)
+    // are withheld: they predict nothing, so every displayed picture decodes bit-identically, and the decoder does ~half the
+    // catch-up work on a B-frame encode (47.9 % of Axinom's 1080p samples, 48.5 % of an x264 encode are non-reference).
+    bool m_skipNonRef = false;
+    uint64_t m_skipNonRefBeforeTicks = 0;       // presentation ticks: a non-reference picture ENDING at or before this is withheld
+    uint32_t m_skippedNonRef = 0;
     uint64_t m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();   // rate-limit: once per hole start
 
     // An unbuffered seek (FlushForSeek) emptied this stream and the target segment has not been repositioned to yet:
     // until Start(reposition) runs, nothing may be delivered - the segment that lands for the new position would
     // otherwise be handed to Media Foundation on the OLD clock, ahead of the reposition that rewinds it. Set only by
-    // FlushForSeek; cleared by Start(reposition), ReleaseReposition (the engine refused the seek), TakeSamples and
+    // FlushForSeek; cleared by Start(reposition), ReleaseReposition (the engine refused the seek, or completed it without a Start), TakeSamples and
     // Shutdown - every path that ends a seek, or a missed one freezes playback. Guarded by m_mx.
     bool m_holdForReposition = false;
     // The playhead (ms) as the feeder last saw it, -1 = unknown. The trim measures the retention window and the keyframe
@@ -1270,6 +1291,23 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     // screen changes with it). Installed by the session next to m_demand; it may only touch leaf state and raise an event
     // (a push into the native event ring, never a call into managed code, so it is safe under m_mx).
     std::function<void(int32_t)> m_onRepDelivered;
+
+    // ── THE KEY GATE ─────────────────────────────────────────────────────────────────────────────────────────────────
+    // An ENCRYPTED sample that reaches the PlayReady decryptor before the CDM holds a usable key for its KID is not held
+    // until the key lands: the ITA fails the whole topology with MSPR_E_NO_DECRYPTOR_AVAILABLE (0x8004B896). Since F217
+    // the attach SetSources and Plays first and posts the licence after, so on a cold runtime the source's first Start can
+    // beat license.delivered (2026-11-07, sid=996ef8e4: Start 11 ms ahead of the 151 ms licence POST, five ERRORs, the
+    // video row faulted; every open whose key was usable before its Start played). So delivery asks first: while
+    // `m_keyPending(kid)` says the KID's licence is still PENDING, a request for an encrypted sample is parked here, as a
+    // paused one is, and ReleaseKeyParked hands the parked requests to delivery once the licence leaves Pending (usable;
+    // or failed / expired, so the pipeline's own error surfaces instead of a silent wait). Null = no gate. Installed by the
+    // session next to m_demand (PrSession.cpp InstallDemandHooks); it runs under m_mx and may take only the licence
+    // table's leaf lock. Guarded by m_mx: the parked tokens, the wait's start and the KID last seen settled.
+    std::function<bool(const uint8_t* kid)> m_keyPending;
+    std::vector<winrt::com_ptr<::IUnknown>> m_keyParkedRequests;
+    uint64_t m_keyParkedSinceMs = 0;       // GetTickCount64() at the first park of the current wait, 0 = not waiting
+    uint8_t m_keySettledKid[16] = {};      // the KID last seen settled: a settled key is never asked about again
+    bool m_keySettled = false;
 
     CencMediaStream() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
 
@@ -1376,6 +1414,24 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
             m_starvedRequests.push_back(std::move(token));
             return S_OK;
         }
+        // Exact-seek catch-up: withhold the non-reference pictures that end before the target (m_skipNonRef). Each one is accounted
+        // exactly as a delivered one would be (cursor, hole detector), so everything downstream sees the same stream state.
+        while (m_skipNonRef && m_next < m_samples.size())
+        {
+            auto const& c = m_samples[m_next];
+            if (m_info.timescale > 0 && c.timeTicks >= m_skipNonRefBeforeTicks + 2ULL * m_info.timescale)
+            {   // two seconds of presentation past the target: no decode-order reordering reaches back that far
+                m_skipNonRef = false;
+                if (m_skippedNonRef) LogLine(std::string("[cenc-src] ") + m_label + " seek catch-up withheld " + std::to_string(m_skippedNonRef) + " non-reference picture(s)");
+                m_skippedNonRef = 0;
+                break;
+            }
+            if (!c.nonRef || c.timeTicks + c.durTicks > m_skipNonRefBeforeTicks) break;   // a reference picture, or a displayed one
+            const uint64_t end = c.timeTicks + c.durTicks;
+            if (m_haveDeliveredReach && end > m_deliveredReachTicks) m_deliveredReachTicks = end;
+            m_next++;
+            m_skippedNonRef++;
+        }
         if (m_next >= m_samples.size())
         {
             if (!m_complete)
@@ -1398,6 +1454,21 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
                 return S_OK;
             }
             if (!m_eos) { m_eos = true; m_queue->QueueEventParamVar(MEEndOfStream, GUID_NULL, S_OK, nullptr); NotifySourceEnded(); }
+            return S_OK;
+        }
+        if (m_samples[m_next].encrypted && KeyPendingLocked())
+        {
+            // The key gate: park until the KID's licence settles (ReleaseKeyParked). Not a starvation: the feeder keeps
+            // filling to its forward target meanwhile, so the first sample after the key lands is already buffered.
+            winrt::com_ptr<::IUnknown> token;
+            if (pToken) token.copy_from(pToken);
+            m_keyParkedRequests.push_back(std::move(token));
+            if (m_keyParkedSinceMs == 0)
+            {
+                m_keyParkedSinceMs = GetTickCount64();
+                LogLine(std::string("[cenc-src] ") + m_label + " holding encrypted sample " + std::to_string(m_next) +
+                        ": the key is not usable yet (licence pending)");
+            }
             return S_OK;
         }
         if (m_next == 0)
@@ -1530,6 +1601,10 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
                 m_next = 0;
             }
             m_discontinuity = true;
+            if (m_skippedNonRef) LogLine(std::string("[cenc-src] ") + m_label + " seek catch-up withheld " + std::to_string(m_skippedNonRef) + " non-reference picture(s)");
+            m_skippedNonRef = 0;
+            m_skipNonRef = m_streamId == 1 && found && bestTime < targetTicks;
+            m_skipNonRefBeforeTicks = targetTicks;
             // A reposition can legitimately jump the next delivered sample's presentation time in either direction;
             // the hole detector must not compare it against history from before the seek.
             m_haveDeliveredReach = false;
@@ -1543,7 +1618,9 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         m_started = true; m_paused = false; m_eos = false;
         m_queue->QueueEventParamVar(seeking ? MEStreamSeeked : MEStreamStarted, GUID_NULL, S_OK, startPos);
         // Requests accepted during Pause are released only AFTER MEStreamStarted, which is the exact boundary after
-        // which the stream may resume data delivery. Deliver under the same stream lock to preserve request order.
+        // which the stream may resume data delivery. Deliver under the same stream lock to preserve request order: the
+        // key gate's are the oldest (parked before the pause, or before this reposition), then the paused ones.
+        ReleaseKeyParkedLocked();
         for (auto const& token : m_pausedRequests) DeliverSampleLocked(token.get());
         m_pausedRequests.clear();
         ReleaseStarvedLocked();   // a request parked while stopped/paused becomes deliverable again here
@@ -1560,11 +1637,14 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         std::lock_guard<std::mutex> g(m_mx);
         m_started = false; m_paused = false;
         m_next = 0; m_eos = false; m_discontinuity = true;
+        m_skipNonRef = false;
         m_haveDeliveredReach = false;
         m_deliveredReachTicks = 0;
         m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
         m_pausedRequests.clear();
         m_starvedRequests.clear();
+        m_keyParkedRequests.clear();   // a stop discards every outstanding request, the key gate's too
+        m_keyParkedSinceMs = 0;
         m_queue->QueueEventParamVar(MEStreamStopped, GUID_NULL, S_OK, nullptr);
     }
 
@@ -1591,8 +1671,8 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     /// splice are the OLD representation and must be refetched in the new one.
     ///
     /// The actual policy — the ordering key, the straddle filter, the truncating-splice staleness rule — now lives in
-    /// fgpr::SpliceSamples (SegmentStore.h), as a pure function over just the vector and the cursor, so it can be
-    /// exercised from a console test exe with no Media Foundation, no lock and no byte ledger in the way. This method
+    /// fgpr::SpliceSamples (SegmentStore.h), as a pure function over just the vector and the cursor, so it stays
+    /// readable on its own, with no Media Foundation, no lock and no byte ledger in the way. This method
     /// is the thin locked wrapper: it hands the byte delta to m_bytes/the store, bumps m_cutGen when coverage was cut
     /// (StaleBoundary/no-op leaves it alone — nothing changed), and — because a splice bug here is exactly the kind of
     /// thing that corrupts playback silently for minutes before anyone notices — verifies the ascending invariant
@@ -1736,14 +1816,15 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         LogLine(std::string("[cenc-src] ") + m_label + " flushed for an unbuffered seek, holding delivery until the reposition");
     }
 
-    /// The engine refused the reposition a FlushForSeek was waiting for: nothing will ever call Start(reposition), so lift
+    /// The engine refused the reposition a FlushForSeek was waiting for, or completed the seek without restarting the source (it
+    /// already stood at the target - PrSession.cpp SessionSeekLanded): nothing will ever call Start(reposition), so lift
     /// the hold and let what is parked resume (the stream is empty or holds the landed target; either way not frozen).
     void ReleaseReposition()
     {
         std::lock_guard<std::mutex> g(m_mx);
         if (!m_holdForReposition) return;
         m_holdForReposition = false;
-        LogLine(std::string("[cenc-src] ") + m_label + " reposition hold released (the seek was not applied)");
+        LogLine(std::string("[cenc-src] ") + m_label + " reposition hold released (no Start(reposition) follows)");
         if (!m_shutdown) ReleaseStarvedLocked();
     }
 
@@ -1935,6 +2016,40 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
 
     bool IsShutdown() { std::lock_guard<std::mutex> g(m_mx); return m_shutdown; }
 
+    /// The key gate's question for the KID this stream's samples carry (m_info.kid), cached once it settled.
+    bool KeyPendingLocked()
+    {
+        if (!m_keyPending) return false;
+        if (m_keySettled && memcmp(m_keySettledKid, m_info.kid, sizeof(m_keySettledKid)) == 0) return false;
+        if (m_keyPending(m_info.kid)) return true;
+        memcpy(m_keySettledKid, m_info.kid, sizeof(m_keySettledKid));
+        m_keySettled = true;
+        return false;
+    }
+
+    /// A licence of the runtime left Pending (PrSession.cpp SessionsKeySettled): if this stream's key is no longer pending,
+    /// hand what the key gate parked to delivery. While stopped or paused nothing is delivered - Start releases them; a
+    /// stream whose own KID is still pending (another licence settled) keeps them parked.
+    void ReleaseKeyParked()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown) return;
+        ReleaseKeyParkedLocked();
+    }
+    void ReleaseKeyParkedLocked()
+    {
+        if (m_keyParkedRequests.empty() || !m_started || m_paused) return;
+        if (m_next < m_samples.size() && m_samples[m_next].encrypted && KeyPendingLocked()) return;
+        auto parked = std::move(m_keyParkedRequests);
+        m_keyParkedRequests.clear();
+        const uint64_t heldMs = m_keyParkedSinceMs ? GetTickCount64() - m_keyParkedSinceMs : 0;
+        m_keyParkedSinceMs = 0;
+        LogLine(std::string("[cenc-src] ") + m_label + " key settled: releasing " + std::to_string(parked.size()) +
+                " held request(s) after " + std::to_string((unsigned long long)heldMs) + "ms");
+        // Each goes back through the whole delivery path: a reposition hold or an empty buffer parks it there instead.
+        for (auto const& token : parked) DeliverSampleLocked(token.get());
+    }
+
     void ReleaseStarvedLocked()
     {
         if (m_starvedRequests.empty() || !m_started || m_paused) return;
@@ -1942,7 +2057,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         m_starvedRequests.clear();
         for (auto const& token : parked) DeliverSampleLocked(token.get());
     }
-    void Shutdown() { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return; m_shutdown = true; m_holdForReposition = false; if (m_queue) m_queue->Shutdown(); }
+    void Shutdown() { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return; m_shutdown = true; m_holdForReposition = false; m_keyParkedRequests.clear(); m_keyParkedSinceMs = 0; if (m_queue) m_queue->Shutdown(); }
 
     void NotifySourceEnded();   // defined after CencMediaSource
 
@@ -2011,8 +2126,16 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Custom IMFMediaSource — one video stream of demuxed encrypted samples.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFTrustedInput>
+// RATE CONTROL (IMFGetService + IMFRateSupport + IMFRateControl). Without them the Media Session reports that the minimum
+// AND maximum playback rate is 1.0, regardless of what other components are in the pipeline ("Implementing Rate Control",
+// Media Sources), so IMFMediaEngine::SetPlaybackRate(1.5) returned S_OK and the protected video kept playing at 1.0: the
+// episode-speed menu changed nothing on a video. The rate does not touch the samples (their time stamps stay; the
+// presentation clock runs faster), so forward playback at any rate up to the fastest one is free for this source. Mirrors
+// Chromium's MediaFoundationSourceWrapper: forward only, no thinning, 0..8.
+struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFTrustedInput, IMFGetService, IMFRateSupport, IMFRateControl>
 {
+    static constexpr float FastestRate = 8.0f;
+    float m_rate = 1.0f;                              // m_mx — the rate the session last set (GetRate answers it)
     winrt::com_ptr<IMFMediaEventQueue> m_queue;
     winrt::com_ptr<IMFPresentationDescriptor> m_pd;
     // Every stream this source can serve: video (id 1) and, for a music video, its own soundtrack (id 2). A vector
@@ -2209,6 +2332,79 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
         for (auto const& s : streams) if (s) s->Shutdown();
         std::lock_guard<std::mutex> g(m_mx);
         if (m_queue) m_queue->Shutdown();
+        return S_OK;
+    }
+
+    // IMFGetService: the rate control service only (the session asks the SOURCE for it; see the note on the struct).
+    IFACEMETHODIMP GetService(REFGUID service, REFIID riid, LPVOID* value) noexcept override
+    {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (!IsEqualGUID(service, MF_RATE_CONTROL_SERVICE)) return MF_E_UNSUPPORTED_SERVICE;
+        if (IsEqualIID(riid, __uuidof(IMFRateSupport))) { auto p = static_cast<IMFRateSupport*>(this); p->AddRef(); *value = p; return S_OK; }
+        if (IsEqualIID(riid, __uuidof(IMFRateControl))) { auto p = static_cast<IMFRateControl*>(this); p->AddRef(); *value = p; return S_OK; }
+        return E_NOINTERFACE;
+    }
+
+    // IMFRateSupport: forward 0..FastestRate, no reverse, no thinning.
+    IFACEMETHODIMP GetSlowestRate(MFRATE_DIRECTION direction, BOOL /*thin*/, float* rate) noexcept override
+    {
+        if (!rate) return E_POINTER;
+        *rate = 0.0f;
+        if (direction == MFRATE_REVERSE) return MF_E_REVERSE_UNSUPPORTED;
+        std::lock_guard<std::mutex> g(m_mx);
+        return m_shutdown ? MF_E_SHUTDOWN : S_OK;
+    }
+    IFACEMETHODIMP GetFastestRate(MFRATE_DIRECTION direction, BOOL /*thin*/, float* rate) noexcept override
+    {
+        if (!rate) return E_POINTER;
+        *rate = 0.0f;
+        if (direction == MFRATE_REVERSE) return MF_E_REVERSE_UNSUPPORTED;
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown) return MF_E_SHUTDOWN;
+        *rate = FastestRate;
+        return S_OK;
+    }
+    IFACEMETHODIMP IsRateSupported(BOOL thin, float rate, float* nearest) noexcept override
+    {
+        if (nearest) *nearest = 0.0f;
+        {
+            std::lock_guard<std::mutex> g(m_mx);
+            if (m_shutdown) return MF_E_SHUTDOWN;
+        }
+        if (thin) return MF_E_THINNING_UNSUPPORTED;
+        if (rate < 0.0f) return MF_E_REVERSE_UNSUPPORTED;
+        if (rate > FastestRate) { if (nearest) *nearest = FastestRate; return MF_E_UNSUPPORTED_RATE; }
+        if (nearest) *nearest = rate;
+        return S_OK;
+    }
+
+    // IMFRateControl: accept a supported rate and announce it (MESourceRateChanged, VT_R4) — the session waits for it.
+    IFACEMETHODIMP SetRate(BOOL thin, float rate) noexcept override
+    {
+        float accepted = 0.0f;
+        HRESULT hr = IsRateSupported(thin, rate, &accepted);
+        if (FAILED(hr)) { LogLine("[cenc-src] SetRate " + std::to_string(rate) + " refused hr=" + fgpr::Hex(hr)); return hr; }
+        PROPVARIANT v; PropVariantInit(&v);
+        v.vt = VT_R4;
+        v.fltVal = accepted;
+        {
+            std::lock_guard<std::mutex> g(m_mx);
+            if (m_shutdown) return MF_E_SHUTDOWN;
+            m_rate = accepted;
+            hr = m_queue->QueueEventParamVar(MESourceRateChanged, GUID_NULL, S_OK, &v);
+        }
+        LogLine("[cenc-src] SetRate " + std::to_string(accepted) + " hr=" + fgpr::Hex(hr));
+        return hr;
+    }
+    IFACEMETHODIMP GetRate(BOOL* thin, float* rate) noexcept override
+    {
+        if (thin) *thin = FALSE;
+        if (!rate) return E_POINTER;
+        std::lock_guard<std::mutex> g(m_mx);
+        *rate = 0.0f;
+        if (m_shutdown) return MF_E_SHUTDOWN;
+        *rate = m_rate;
         return S_OK;
     }
 

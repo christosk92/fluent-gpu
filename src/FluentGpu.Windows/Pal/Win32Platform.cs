@@ -2302,6 +2302,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // park point (the pop-out-fling bug).
                 uint leaveId = GET_POINTERID_WPARAM(wParam);
                 if (leaveId == _primaryDownId && _primaryDown) CancelPrimaryContact("pointer-leave");
+                else if (TryHandOverPointer(leaveId)) return true;   // onto one of our own popup windows: not a leave
                 _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
                     Pointer: PointerKindOf(leaveId), TimestampMs: Now(), PointerId: leaveId));
                 return true;
@@ -2708,7 +2709,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // against the held primary contact. FIRSTBUTTON is the mouse's own left-button-down flag (mouse-in-pointer reports
     // every physical button as one of the FIRST..FIFTHBUTTON bits); INCONTACT is the generic "still touching/pressed"
     // bit every OTHER pointer type (pen, touch) carries instead — a pen's primary action has no button bit at all.
-    private const uint POINTER_FLAG_INCONTACT = 0x00000004, POINTER_FLAG_FIRSTBUTTON = 0x00000010;
+    private const uint POINTER_FLAG_INRANGE = 0x00000002, POINTER_FLAG_INCONTACT = 0x00000004, POINTER_FLAG_FIRSTBUTTON = 0x00000010;
 
     private void EmitPointerMove(in POINTER_INFO pi)
     {
@@ -2822,18 +2823,65 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
             Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId));
 
-    // WM_POINTERLEAVE over the popup: the hovering pointer left the popup HWND. Leaving onto the owner is already covered
-    // (its own WM_POINTERUPDATE re-hovers). Leaving onto the desktop sends the owner nothing, so without this park the
-    // last in-popup hover (a menu item's plate, HoverWithin, a hover-opened cascade, the dispatcher's last pointer
-    // position) stays latched until the mouse comes back to the main window. Same park move as the owner's own leave.
+    // WM_POINTERLEAVE over the popup: the hovering pointer left the popup HWND. Leaving onto the desktop sends the owner
+    // nothing, so without the park the last in-popup hover (a menu item's plate, HoverWithin, a hover-opened cascade, the
+    // dispatcher's last pointer position) stays latched until the mouse comes back to the main window. Leaving onto
+    // ANOTHER window of this one (the owner, a sibling or nested popup) is a handover, not a leave (TryHandOverPointer).
     // The HELD primary contact is left alone. Its press took a real SetCapture on the OWNER (PointerDownUp), and that
     // capture move can itself deliver this leave to the popup mid-press, so cancelling or parking here would kill the
     // click (or feed a latched drag the offscreen sample). The owner's stream and loss paths own that contact now.
     internal void ForwardPopupPointerLeave(uint pointerId)
     {
         if (_primaryDown && pointerId == _primaryDownId) return;
+        if (TryHandOverPointer(pointerId)) return;
         _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
             Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId));
+    }
+
+    /// <summary>
+    /// A WM_POINTERLEAVE from one window of this host (the owner or one of its windowed popups) is a HANDOVER when the
+    /// still-hovering pointer now stands over another window of the same host: crossing from a menu's popup HWND into
+    /// its cascade's, from a cascade back to its parent, or between a popup and the owner. All of them feed ONE
+    /// dispatcher that hit-tests one scene, so the pointer never left the app: the handover emits a move at its REAL
+    /// position (the dispatcher's hover moves straight from the old window's content to the new one's) instead of the
+    /// offscreen park that ends a real leave.
+    ///
+    /// <para><b>Why the park was wrong here.</b> Windows posts the old window's WM_POINTERLEAVE and the new window's
+    /// first WM_POINTERUPDATE in either order. Parked first, every popup-to-popup crossing read as "the pointer left the
+    /// menu" for a beat: the open row's exit armed its cascade's delay-close with an offscreen pointer, a hover-pending
+    /// sub-menu row lost its open timer, and when the park came AFTER the new window's update and the pointer then rested,
+    /// the dispatcher kept the offscreen point as the pointer, so the new row's hover, its open timer and every
+    /// "is the pointer inside the menu chain" check read a pointer that was nowhere (the Claude usage widget's four
+    /// windowed cascade levels: the deeper levels could not be reached or kept). A pointer that is not in range (a lifted
+    /// touch contact), or is over a window that is not ours, still parks. Any depth of nested popups works: every popup
+    /// HWND is owned by this host's window, and the owner chain is walked, not one level.</para>
+    /// </summary>
+    private bool TryHandOverPointer(uint pointerId)
+    {
+        POINTER_INFO pi;
+        if (!GetPointerInfo(pointerId, &pi) || (pi.pointerFlags & POINTER_FLAG_INRANGE) == 0) return false;
+        HWND under = WindowFromPoint(pi.ptPixelLocation);
+        if (under == HWND.NULL) return false;
+        HWND root = GetAncestor(under, 2 /* GA_ROOT */);
+        if (!IsOwnWindow(root)) return false;
+        // Onto the owner it is a handover only over its CLIENT content: its caption, frame and resize borders are the
+        // non-client stream's (WM_NCPOINTER*, its own synthetic pointer), which the park hands them to as before.
+        if (root == _hwnd)
+        {
+            nint lp = (nint)(((pi.ptPixelLocation.y & 0xFFFF) << 16) | (pi.ptPixelLocation.x & 0xFFFF));
+            if ((nint)SendMessageW(_hwnd, WM_NCHITTEST, default, (LPARAM)lp) != HTCLIENT) return false;
+        }
+        EmitPointerMove(in pi);
+        PaintRequested?.Invoke();   // the handover can land while the frame loop idles
+        return true;
+    }
+
+    /// <summary>Is top-level <paramref name="hwnd"/> this host's window or a popup owned by it (directly or through other popups)?</summary>
+    private bool IsOwnWindow(HWND hwnd)
+    {
+        for (HWND w = hwnd; w != HWND.NULL; w = GetWindow(w, GW_OWNER))
+            if (w == _hwnd) return true;
+        return false;
     }
 
     // WM_SETCURSOR over the popup's client: re-assert the engine-chosen cursor (I-beam/hand/resize) exactly like the

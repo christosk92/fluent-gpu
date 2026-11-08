@@ -531,25 +531,58 @@ public sealed partial class AnimEngine
         else
         {
             // The captured rect carries the LAYOUT size (AppHost.RelRect), which mid-flight is the previous TARGET, not
-            // what is on screen. Restart an interrupted tween from the presented extent (the live row), as the spring
-            // branch does — else a quick open/close reversal popped fully open for the seed frame before closing.
-            if (TryLiveTween(node, ch, out float presented)) fromSize = presented;
+            // what is on screen. An interrupted tween departs from the presented extent (the live row), as the spring
+            // branch does — else a quick open/close reversal popped fully open for the seed frame before closing — and is
+            // RE-AIMED, not restarted (RetargetLiveTween): a commit that lands every frame (a part whose column follows a page
+            // a docking pane's reflow is easing) restarted a full tween with its delay and seed-frame hold each time, so the
+            // row never advanced and the presented size drifted from the layout by every commit's change. Aimed at the same
+            // size already: it keeps flying.
+            if (TryLiveTween(node, ch, out float presented))
+            {
+                ref readonly AnimValue live = ref _slab.At(Find(node, ch));
+                if (MathF.Abs(live.To - toSize) < 0.5f && !live.Has(AnimFlags.Done)) return;
+                if (RetargetLiveTween(node, ch, presented, toSize, dyn)) return;
+                fromSize = presented;
+            }
             Animate(node, ch, fromSize, toSize, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
         }
     }
 
-    // SizeMode.Relayout seed/retarget. While a row flies, RunIncrementalLayout pins LayoutInput.Width/Height to its interp
-    // every tick, so that column is OURS, not the author's. A commit that re-solves the parent WITHOUT re-rendering this
-    // node (it was only shoved — a centred/trailing toggle beside an async count) hands that pinned interp back as BOTH the
-    // captured and the solved size: re-seeding from it restarted a zero-distance tween (the resize froze mid-way), and
-    // re-reading the column as the "declared" size stashed the interp as RestoreTo, which SettleRestore then wrote back
-    // as the node's permanent size. Mirror ReflowSize: an echo of our own interp keeps flying, and a genuine retarget
-    // carries the declared value stashed at the row's creation (a re-render refreshes it through RecordDeclaredSize).
+    /// <summary>Re-aim the live wall-clock tween on <paramref name="ch"/> from <paramref name="start"/> (where it is presented, in the
+    /// caller's basis) to <paramref name="to"/>, as <see cref="ReframePosition"/> re-aims a position: over the time the row has LEFT (its
+    /// deadline kept), with what is left of its start delay, and no seed-frame hold. Re-aimed every frame (a commit per frame of a docking
+    /// pane's slide), the shoves fold into one decaying tail that lands by the original deadline instead of a fresh full-length tween that
+    /// never advances. False when no such row flies (a spring, a driven, additive or settled row): the caller seeds afresh. Allocates only
+    /// the re-seed's keyframes, as every retarget.</summary>
+    private bool RetargetLiveTween(NodeHandle node, AnimChannel ch, float start, float to, in TransitionDynamics dyn)
+    {
+        int ex = Find(node, ch);
+        if (ex < 0) return false;
+        ref readonly AnimValue cur = ref _slab.At(ex);
+        if (cur.Kind is not (GenKind.Eased or GenKind.Keyframes) || cur.Has(AnimFlags.Driven) || cur.Has(AnimFlags.Additive) || cur.Has(AnimFlags.Done))
+            return false;
+        float uiBase = cur.Position;
+        float remaining = MathF.Max(1f, cur.Gen.DurationMs - cur.ElapsedMs);
+        float pendingDelay = cur.DelayRemainingMs;
+        Animate(node, ch, start, to, remaining, dyn.Easing, delayMs: pendingDelay);
+        int s = Find(node, ch);
+        if (s < 0) return false;
+        _slab.At(s).Flags &= ~AnimFlags.JustSeeded;   // a re-aim keeps moving (as ReframePosition's retarget)
+        MarkSeedRelative(s, uiBase);
+        return true;
+    }
+
+    // SizeMode.Relayout seed/retarget. The interp is the node's own box only (AppHost.RunIncrementalLayout lays its subtree out at it and puts
+    // the declared size back), so every commit solves the node at its declared size: `toSize` is the size the row should aim at. A commit that
+    // re-lays it at the size it already flies to (a sibling's or the page's change re-solved the parent) keeps it flying: re-seeding restarted
+    // its delay and its tween on every such commit, so a delayed resize under a commit per frame (a page a docking pane's slide re-renders) never
+    // began until the commits stopped. A genuine retarget carries the declared value stashed at the row's creation (a re-render refreshes it
+    // through RecordDeclaredSize).
     private void RelayoutSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn, float delayMs, bool followLive = false)
     {
         int ex = Find(node, ch);
         bool live = ex >= 0 && _slab.At(ex).Has(AnimFlags.RestoreLayout);
-        if (live && MathF.Abs(_slab.At(ex).Position - toSize) < 0.5f) return;   // echo: layout still holds our own interp
+        if (live && !_slab.At(ex).Has(AnimFlags.Done) && MathF.Abs(_slab.At(ex).To - toSize) < 0.5f) return;
         float declared = live ? _slab.At(ex).RestoreTo
             : ch == AnimChannel.SizeW ? _scene.Layout(node).Width : _scene.Layout(node).Height;
         // Under a live reflow the commit only moved the target: follow it over the row's own clock.
@@ -627,7 +660,12 @@ public sealed partial class AnimEngine
         {
             // fromRatio is old LAYOUT / new layout; an interrupted tween was presenting old layout × its live scale, so
             // fold that scale in (same reason as RevealSize: restart from what is on screen, not the previous target).
-            if (TryLiveTween(node, ch, out float scale)) fromRatio *= scale;
+            // Re-aimed over the time it has left with its delay kept, as RevealSize: restarted, a scale re-aimed every frame never advanced.
+            if (TryLiveTween(node, ch, out float scale))
+            {
+                fromRatio *= scale;
+                if (RetargetLiveTween(node, ch, fromRatio, 1f, dyn)) return;
+            }
             Animate(node, ch, fromRatio, 1f, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
         }
     }

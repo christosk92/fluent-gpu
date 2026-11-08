@@ -1,5 +1,5 @@
 // PrRuntime.cpp — the process-lifetime PlayReady runtime: FgPrRuntimeCreateOnAdapter / FgPrRuntimeDestroy / FgPrRuntimeUptimeMs /
-// FgPrRuntimeSetVideoOutputFormat / FgPrRuntimeSetSecurityPolicy.
+// FgPrRuntimeSetSecurityPolicy.
 //
 // WHAT MOVED HERE, AND WHY IT IS DONE ONCE (wavee-0.3-video-engine-implementation.md §1.3, §3.1.1). The one-shot
 // FgPlayReadyRunEx did CoInitializeEx + MFStartup, D3D11CreateDevice + the DXGI manager, CreateAndPrepareCdm (which
@@ -320,10 +320,12 @@ struct MediaEngineProtectionManager
 {
     winrt::com_ptr<IMFContentDecryptionModule> m_cdm;
     winrt::Windows::Foundation::Collections::PropertySet m_props;
+    uint64_t m_runtime = 0;
 
-    MediaEngineProtectionManager(IMFContentDecryptionModule* cdm)
+    MediaEngineProtectionManager(IMFContentDecryptionModule* cdm, uint64_t runtime)
     {
         m_cdm.copy_from(cdm);
+        m_runtime = runtime;
         winrt::com_ptr<IMFGetService> svc = m_cdm.as<IMFGetService>();
         winrt::com_ptr<ABI::Windows::Media::Protection::IMediaProtectionPMPServer> abiPmp;
         winrt::check_hresult(svc->GetService(MF_CONTENTDECRYPTIONMODULE_SERVICE, IID_PPV_ARGS(abiPmp.put())));
@@ -360,9 +362,25 @@ struct MediaEngineProtectionManager
         if (enablerType == MFENABLETYPE_MF_RebootRequired) return MF_E_REBOOT_REQUIRED;
         if (enablerType == MFENABLETYPE_MF_UpdateRevocationInformation) return MF_E_GRL_VERSION_TOO_LOW;
         if (enablerType == MFENABLETYPE_MF_UpdateUntrustedComponent) return HRESULT_FROM_WIN32(ERROR_INVALID_IMAGE_HASH);
-        hr = m_cdm->SetContentEnabler(enabler.get(), asyncResult.get());
+        hr = fgpr::LicenseEnableContent(m_runtime, AttachedKeys(), m_cdm.get(), enabler.get(), asyncResult.get());
         LogLine("[eme-pm] SetContentEnabler hr=" + hx(hr));
         return hr;
+    }
+
+    /// The KIDs the attached session's source decrypts with: what the enabler waits for (the topology it belongs to is the
+    /// attached session's - the runtime has one engine).
+    fgpr::EnableKeys AttachedKeys() const
+    {
+        fgpr::EnableKeys keys;
+        std::shared_ptr<fgpr::Runtime> rt = fgpr::RuntimeFor(m_runtime);
+        if (!rt) return keys;
+        std::shared_ptr<fgpr::Session> sp = fgpr::SessionByHandle(rt->attached.load(std::memory_order_acquire));
+        if (!sp) return keys;
+        std::lock_guard<std::mutex> g(sp->feedMx);
+        if (sp->videoInfo.encrypted) std::memcpy(keys.kid[keys.count++], sp->videoInfo.kid, 16);
+        if (sp->haveAudio && sp->audioInfo.encrypted && (keys.count == 0 || std::memcmp(keys.kid[0], sp->audioInfo.kid, 16) != 0))
+            std::memcpy(keys.kid[keys.count++], sp->audioInfo.kid, 16);
+        return keys;
     }
     IFACEMETHODIMP EndEnableContent(IMFAsyncResult*) noexcept override { return S_OK; }
 
@@ -544,17 +562,6 @@ static bool TrustedInputReuseRequested()
     return n == 1 && value[0] == L'1';
 }
 
-/// FG_PLAYREADY_LICENSE_BEFORE_ATTACH=1 restores the pre-F217 order: the attach verb runs its own licence's CreateSession +
-/// GenerateRequest (a PMP round trip) BEFORE CompleteAttach, so the CDM session exists when CreateTrustedInput runs. Off by
-/// default: SetSource goes first and the acquisition follows it as the next runtime-queue item. A kill switch for a box where the
-/// trusted input turns out to need its key session to exist first (the CDM "associates the session with the trusted input").
-static bool LicenseBeforeAttachRequested()
-{
-    wchar_t value[4] = {};
-    const DWORD n = GetEnvironmentVariableW(L"FG_PLAYREADY_LICENSE_BEFORE_ATTACH", value, (DWORD)(sizeof(value) / sizeof(value[0])));
-    return n == 1 && value[0] == L'1';
-}
-
 /// FG_PLAYREADY_NO_OPM_WINDOW=1 leaves the engine without the virtual OPM window (F264): the pre-change engine wiring, as a kill
 /// switch for a box where the window turns out to matter. Off by default.
 static bool OpmWindowDisabled()
@@ -652,7 +659,7 @@ static HRESULT BringUp(fgpr::Runtime& rt)
 
     try
     {
-        auto pm = winrt::make_self<MediaEngineProtectionManager>(rt.cdm.get());
+        auto pm = winrt::make_self<MediaEngineProtectionManager>(rt.cdm.get(), rt.handle);
         rt.protectionManager = pm.as<IMFContentProtectionManager>();
     }
     catch (winrt::hresult_error const& e) { LogLine("[cenc] protection manager ctor hr=" + hx(e.code().value)); return e.code().value; }
@@ -689,11 +696,10 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     // passed the manager as a creation attribute + USE_PMP_FOR_ALL_CONTENT; that A/B arm (FG_CENC_LEGACY_ENGINE_WIRING)
     // is deleted.
     attrs->SetUINT32(MF_MEDIA_ENGINE_CONTENT_PROTECTION_FLAGS, MF_MEDIA_ENGINE_ENABLE_PROTECTED_CONTENT);
-    // F249: BGRA is the long-standing output; NV12 only when the managed side asked for it (FgPrRuntimeSetVideoOutputFormat, behind
-    // --fg video-nv12, after its overlay probe said NV12 can take a plane).
-    const DXGI_FORMAT outputFormat = rt.videoOutputFormat == FgPrVideoOutput_Nv12 ? DXGI_FORMAT_NV12 : DXGI_FORMAT_B8G8R8A8_UNORM;
-    attrs->SetUINT32(MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, outputFormat);
-    LogLine(std::string("[cenc] engine output format ") + (outputFormat == DXGI_FORMAT_NV12 ? "NV12" : "BGRA"));
+    // No MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT: it is the frame-server render-target format (MS Learn) and windowless swap-chain mode's
+    // Simple Video Renderer ignores it - it presents the decoder's own NV12 textures through the Composition Swapchain API, tags the
+    // colour space and chooses YUV vs RGB from its own MPO feedback (measured on the clear engine, same mfsvr.dll; Chromium's
+    // MediaFoundationRenderer and the Microsoft MediaEngine samples set nothing either). The forced BGRA (and F249's NV12 arm) were a no-op.
     if (HWND opmHwnd = rt.opm.Handle()) attrs->SetUINT64(MF_MEDIA_ENGINE_OPM_HWND, (UINT64)(uintptr_t)opmHwnd);
     hr = factory->CreateInstance(0, attrs.get(), rt.engine.put());
     LogLine("[cenc] CreateInstance(engine) hr=" + hx(hr));
@@ -723,8 +729,6 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     if (ItaPreflightRequested()) fgpr::RuntimeItaPreflight(rt);
     rt.trustedInputReuse = TrustedInputReuseRequested();
     LogLine(std::string("[runtime] trusted input: ") + (rt.trustedInputReuse ? "one per CDM (reused across attaches)" : "one per attach"));
-    rt.licenseBeforeAttach = LicenseBeforeAttachRequested();
-    LogLine(std::string("[runtime] attach order: ") + (rt.licenseBeforeAttach ? "licence acquisition BEFORE SetSource (FG_PLAYREADY_LICENSE_BEFORE_ATTACH)" : "SetSource first, licence acquisition after it"));
     return S_OK;
 }
 
@@ -844,6 +848,9 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
                 // confuse the seek planner. It is tagged with the user seekSeq, so it clears the `seeking` flag it raised
                 // and can never swallow a user seek's SEEKED (see plan::InternalSeek).
                 const fgpr::plan::InternalSeek::Verdict v = s.internalSeek.OnSeeked(s.seekSeq.load(std::memory_order_acquire));
+                // One engine seek at a time (PrSession.cpp FgPrSessionSeek): this SEEKED ends the one in flight. A user seek
+                // that waited behind it runs now, `seeking` stays raised, and ITS SEEKED is the one reported.
+                if (fgpr::SessionSeekLanded(rt, s)) break;
                 if (v.internal)
                 {
                     if (v.clearsSeeking) s.seeking.store(0, std::memory_order_release);
@@ -1072,7 +1079,6 @@ __declspec(dllexport) int32_t __stdcall FgPrRuntimeCreateOnAdapter(const wchar_t
         rt->handle = fgpr::NewHandle(fgpr::HandleKind::Runtime);
         rt->storePath = storePath;
         rt->adapterLuid = adapterLuid;
-        rt->videoOutputFormat = fgpr::Reg().videoOutputFormat.load(std::memory_order_acquire);
         rt->securityPolicy = fgpr::Reg().securityPolicy.load(std::memory_order_acquire);
         rt->createdQpc = fgpr::QpcNow();
         rt->thread = std::thread(RuntimeThreadMain, rt);
@@ -1149,12 +1155,6 @@ __declspec(dllexport) int64_t __stdcall FgPrRuntimeUptimeMs(FgPrRuntime handle)
 {
     std::shared_ptr<fgpr::Runtime> rt = fgpr::RuntimeFor(handle);
     return rt ? rt->UptimeMs() : 0;
-}
-
-__declspec(dllexport) int32_t __stdcall FgPrRuntimeSetVideoOutputFormat(int32_t format)
-{
-    fgpr::Reg().videoOutputFormat.store(format == FgPrVideoOutput_Nv12 ? FgPrVideoOutput_Nv12 : FgPrVideoOutput_Bgra, std::memory_order_release);
-    return S_OK;
 }
 
 __declspec(dllexport) int32_t __stdcall FgPrRuntimeSetSecurityPolicy(int32_t policy)

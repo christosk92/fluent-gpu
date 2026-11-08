@@ -1,5 +1,5 @@
-// LicensePolicy.h — the license lifecycle's pure decisions, pulled out of PrLicense.cpp so a dependency-free test exe
-// (tests/FeedTests.cpp) can exercise them with no <windows.h>, no CDM and no clock: which MF_MEDIAKEY_STATUS values mean
+// LicensePolicy.h — the license lifecycle's pure decisions, pulled out of PrLicense.cpp so they
+// stay pure, with no <windows.h>, no CDM and no clock: which MF_MEDIAKEY_STATUS values mean
 // what, what a batch of key statuses does to a license in a given state, and when a Pending license is stale.
 //
 // WHY. The first cut only understood USABLE and EXPIRED. A key that later went INTERNAL_ERROR / RELEASED /

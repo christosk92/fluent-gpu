@@ -386,7 +386,7 @@ and clip bugs are width-dependent, so reproduce the reported geometry.
 ## The NativeAOT/trim build baseline and the native link
 
 The language/GC baseline from [`dotnet10-csharp14-zero-alloc.md`](../../../design/dotnet10-csharp14-zero-alloc.md) §1 is
-set solution-wide in `src/Directory.Build.props`: `net10.0`, `LangVersion 14`, `Nullable`/`AllowUnsafeBlocks`,
+set solution-wide in `src/Directory.Build.props`: `net11.0`, `LangVersion 15`, `Nullable`/`AllowUnsafeBlocks`,
 `InvariantGlobalization`, `Deterministic`, and **Workstation + Concurrent GC** (`ServerGarbageCollection=false`,
 `ConcurrentGarbageCollection=true`). `GenerateDocumentationFile` is on (with `CS1591` suppressed) so `docfx metadata` has
 XML to read.
@@ -401,7 +401,7 @@ XML to read.
 
 **The native link.** The Windows leaves bind real system DLLs through **TerraFX.Interop.Windows 10.0.26100.6**
 (`PackageReference` in `src/FluentGpu.Windows/FluentGpu.Windows.csproj`; TerraFX is the one `PackageReference` in that project); a plain `dotnet build`/`dotnet run` of the
-gallery (`src/FluentGpu.WindowsApp`) needs only the .NET 10 SDK and resolves d3d12/dxgi/dcomp/dwrite/dwmapi at runtime —
+gallery (`src/FluentGpu.WindowsApp`) needs only the .NET 11 SDK and resolves d3d12/dxgi/dcomp/dwrite/dwmapi at runtime —
 no extra toolchain. The native link step that *does* need the MSVC linker is a **`PublishAot`** publish: NativeAOT shells
 out to `link.exe`, so a publish must run from a **Visual Studio Developer Command Prompt / Developer PowerShell** (or
 otherwise have `vcvars` on `PATH`) for the C++ Build Tools' linker and Windows SDK libs to be found. A normal debug

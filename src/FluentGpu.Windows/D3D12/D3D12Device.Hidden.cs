@@ -40,6 +40,7 @@ public sealed unsafe partial class D3D12Device
         }
         if (!otherWindowVisible) { _bakedBlur?.ReleaseLevels(); _imageTextures?.ReleaseIdle(completed); }
         _surfaces?.DrainRetired(completed);
+        _surfaces?.ReleaseEmptyHeaps();   // a hidden window's release: every tile heap nothing is placed on goes now
         _imageTextures?.ReclaimCompleted(completed);
         PublishVideoMemorySnapshot(force: true);   // the census line right after the release reads fresh numbers
     }

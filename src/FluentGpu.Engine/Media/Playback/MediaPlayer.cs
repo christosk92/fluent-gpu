@@ -105,7 +105,8 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
 
     /// <summary>Milliseconds since the connected video session was last state-pumped, or since it connected when it has not
     /// been yet; 0 while no video session is connected. Safe from any thread. A PLAYING session raises at least about once a
-    /// second (the engines' position tick), so a large value here means state, position and errors have stopped publishing.</summary>
+    /// second (the clear engine's ~1 Hz position raise; the protected session's native clock sample, which asks for a pump at
+    /// most once a second), so a large value here means state, position and errors have stopped publishing.</summary>
     public long StatePumpAgeMs
     {
         get
@@ -113,6 +114,18 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
             long last = Volatile.Read(ref _lastStatePumpMs);
             return last == 0 ? 0 : Math.Max(0, Environment.TickCount64 - last);
         }
+    }
+
+    /// <summary>The connected session's playback clock as of the engine's latest sample, stamped with the instant it was read
+    /// (<see cref="MediaClockSample"/>). <see cref="Position"/> is the clock as of the last state pump, about a second apart
+    /// while playing; a reader on its own cadence reads this instead and extrapolates from the sample's own timestamp. Any
+    /// thread, no allocation. False when the session has no clock to read (none connected, not opened, or not a
+    /// <see cref="IMediaClockSource"/>).</summary>
+    public bool TryReadClock(out MediaClockSample sample)
+    {
+        if (!_disposed && _session is IMediaClockSource clock && clock.TryReadClock(out sample)) return true;
+        sample = default;
+        return false;
     }
 
     // ── the one-call easy path (all funnel into Play(MediaSource)) ───────────────────────────────────────────────────
@@ -505,13 +518,17 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
                 DetachVideoPumpSource();
                 // Pause first, as Stop() does: a playing session's dispose stops its feed mid-waveform (a click) and plays
                 // whatever it had decoded until then.
+                long disposeTs = System.Diagnostics.Stopwatch.GetTimestamp();
                 await PauseAndDisposeAsync(old).ConfigureAwait(false);
+                OpenSpan("open.disposeold", disposeTs);
             }
             // A session Stop() released may still be disposing in the background: wait for it too, so its engine is back
             // before the backend leases one for this open (the backends' return-before-lease sequencing). Never faults.
             Task stopDisposals;
             lock (_openGate) stopDisposals = _stopDisposals;
+            long stopTs = System.Diagnostics.Stopwatch.GetTimestamp();
             await stopDisposals.ConfigureAwait(false);
+            OpenSpan("open.stopdisposals", stopTs);
             if (!IsCurrentOpen(generation)) return;
 
             var opts = new MediaOpenOptions
@@ -558,7 +575,9 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
             });
             try
             {
+                long backendTs = System.Diagnostics.Stopwatch.GetTimestamp();
                 var session = await backend.OpenAsync(source, opts, cts.Token).ConfigureAwait(false);
+                OpenSpan("open.backend", backendTs);
                 unclaimed = session;
                 // Start AND claim the session NOW, on this thread, before any UI hop: a session whose real work is native (the
                 // protected attach: segment fetch, licence) no longer waits for the post that connects its signals, and the
@@ -568,16 +587,21 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
                 // is live on the native engine), and a Stop/DisposeAsync either supersedes first (the session stays unclaimed
                 // and the finally below disposes it) or runs after the claim and takes the session out of _session itself.
                 bool live;
+                long startTs = System.Diagnostics.Stopwatch.GetTimestamp();
                 lock (_openGate)
                 {
+                    _openGateHeldSince = System.Diagnostics.Stopwatch.GetTimestamp();
                     live = IsCurrentOpen(generation);
                     if (live)
                     {
-                        session.Start();   // first: a Start that throws leaves the session unclaimed, so the finally disposes it
+                        try { session.Start(); }   // first: a Start that throws leaves the session unclaimed, so the finally disposes it
+                        finally { _openGateHeldSince = 0; }
                         _session = session;
                         claimed = true;
                     }
+                    _openGateHeldSince = 0;
                 }
+                OpenSpan("open.start(gate)", startTs);
                 if (!live) return;   // superseded while opening: the finally below disposes the session, unconnected
                 // backend.OpenAsync resumes on whatever thread completed the open — a pool/native worker thread, once
                 // ConfigureAwait(false) has dropped the original sync context. Pump-source wiring and ConnectSignals's handful
@@ -657,8 +681,11 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
         CancellationTokenSource? previous;
         CancellationTokenSource? previousSubtitles;
         int generation;
+        long gateTs = System.Diagnostics.Stopwatch.GetTimestamp();
+        long heldSince = Volatile.Read(ref _openGateHeldSince);
         lock (_openGate)
         {
+            GateWait("supersede", gateTs, heldSince);
             generation = ++_openGeneration;
             previous = _openCts;
             _openCts = next;
@@ -669,6 +696,24 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
         try { previous?.Cancel(); } catch (ObjectDisposedException) { }
         try { previousSubtitles?.Cancel(); } catch (ObjectDisposedException) { }
         return generation;
+    }
+
+    // ── video-probe timing (the open's stages and the _openGate wait the UI can pay; never per frame) ─────────────────
+    private long _openGateHeldSince;   // QPC while the open holds _openGate across session.Start (0 = not)
+
+    private static double MsSince(long ts) => (System.Diagnostics.Stopwatch.GetTimestamp() - ts) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
+    private static void OpenSpan(string stage, long ts)
+        => Diag.Line("[video] vtime " + stage + " ms=" + MsSince(ts).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
+            + " tid=" + Environment.CurrentManagedThreadId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    /// <summary>A wait for <see cref="_openGate"/> of 2 ms or more, with whether the open's Start was holding it.</summary>
+    private static void GateWait(string site, long ts, long heldSince)
+    {
+        double ms = MsSince(ts);
+        if (ms < 2.0) return;
+        Diag.Line("[video] vtime gate.wait site=" + site + " ms=" + ms.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
+            + " heldByStart=" + (heldSince != 0 ? "true" : "false") + " tid=" + Environment.CurrentManagedThreadId.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     private bool IsCurrentOpen(int generation) => !_disposed && Volatile.Read(ref _openGeneration) == generation;

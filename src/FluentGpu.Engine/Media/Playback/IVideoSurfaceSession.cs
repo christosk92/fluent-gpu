@@ -50,6 +50,50 @@ public interface IVideoPumpSource
     event Action? PumpRequested;
 }
 
+/// <summary>One reading of a session's playback clock: where the engine's clock stood (<see cref="Position"/>), the
+/// <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> it stood there AT (<see cref="Timestamp"/>), the rate it runs at and
+/// whether it was running. The sample carries its own instant, so a reader that receives it late extrapolates from when it was
+/// TRUE, never from when it arrived: a stale value stamped "now" is a frozen playhead that jumps when the next one lands.
+/// A plain value; reading one allocates nothing.</summary>
+public readonly struct MediaClockSample
+{
+    /// <summary>The clock's position at <see cref="Timestamp"/>.</summary>
+    public readonly TimeSpan Position;
+    /// <summary>The Stopwatch timestamp (QPC ticks) at which <see cref="Position"/> was read from the engine.</summary>
+    public readonly long Timestamp;
+    /// <summary>The rate the clock advances at while <see cref="Running"/>.</summary>
+    public readonly double Rate;
+    /// <summary>The clock was advancing when it was read (playing, not seeking, not starved).</summary>
+    public readonly bool Running;
+
+    /// <summary>A sample of <paramref name="position"/> read at <paramref name="timestamp"/>.</summary>
+    public MediaClockSample(TimeSpan position, long timestamp, double rate, bool running)
+    {
+        Position = position;
+        Timestamp = timestamp;
+        Rate = rate > 0 ? rate : 1.0;
+        Running = running;
+    }
+
+    /// <summary>The clock at <paramref name="nowTimestamp"/>: the sample, advanced by the time since it was read × rate while it
+    /// was running. Pure.</summary>
+    public TimeSpan At(long nowTimestamp)
+    {
+        if (!Running || nowTimestamp <= Timestamp) return Position;
+        return Position + TimeSpan.FromSeconds((nowTimestamp - Timestamp) * Rate / System.Diagnostics.Stopwatch.Frequency);
+    }
+}
+
+/// <summary>A session whose playback clock can be read between state pumps. The published <see cref="IMediaPlayer.Position"/>
+/// is the clock as of the last pump (a pump runs on an engine event, about once a second while playing); a reader on its own
+/// cadence (a position ticker, a hand-off that must land on the clock NOW) reads the engine's latest sample here instead.</summary>
+public interface IMediaClockSource
+{
+    /// <summary>The engine's latest clock sample. Any thread; never blocks, never allocates. False while there is none (not
+    /// opened yet, disposed, superseded).</summary>
+    bool TryReadClock(out MediaClockSample sample);
+}
+
 /// <summary>How big a composited video stream should be. ONE owner for both Windows backends (the clear
 /// <c>MfMediaSession</c> and the protected <c>ProtectedMediaSession</c>), so the two can never disagree about the buffer
 /// a destination is worth. <see cref="ContentSizeFor"/> is the continuous ideal; the sessions size the stream with

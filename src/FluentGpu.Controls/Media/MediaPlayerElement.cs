@@ -123,6 +123,10 @@ public sealed class MediaPlayerElement : Component
     /// <summary>Optional host-owned seek command. The requested mode is preserved for hosts that distinguish fast
     /// keyframe previews from accurate commits. Null seeks <see cref="Player"/> directly.</summary>
     public Action<TimeSpan, SeekMode>? SeekRequested { get; init; }
+    /// <summary>Optional host-owned playback-rate command: the <c>[</c> / <c>]</c> / Backspace keys and the built-in speed rows ask
+    /// the host instead of setting <see cref="Player"/>'s rate, and the host applies the rate or declines it (content whose
+    /// rate is not the user's to change). Null sets <see cref="Player"/> directly.</summary>
+    public Action<double>? RateRequested { get; init; }
     /// <summary>Round the composited video's corners (DIP; 0 = square, the default). The frame composites in its own
     /// DirectComposition visual OUTSIDE the UI back buffer, so a rounded parent with ClipToBounds cannot clip it — the
     /// radius has to reach the compositor, which is what this does. Half the shorter side gives a circle.</summary>
@@ -283,6 +287,10 @@ public sealed class MediaPlayerElement : Component
     ///
     /// <para>The element never interprets these rows; it only renders them. It stays host-agnostic.</para></summary>
     public Func<IReadOnlyList<MenuFlyoutItem>>? MoreMenuItems { get; init; }
+    /// <summary>When set (with <see cref="MoreMenuItems"/>), the host's rows ARE the menu: the element adds none of its own.
+    /// For a host that already offers the same settings in its own menu, so a right-click on the video and the host's ⋯
+    /// open one menu with one set of verbs instead of two that disagree.</summary>
+    public bool MoreMenuHostOnly { get; init; }
 
     /// <summary>Controlled fullscreen state (auto-materialized when absent).</summary>
     internal Signal<bool>? FullscreenState { get; init; }
@@ -951,6 +959,7 @@ public sealed class MediaPlayerElement : Component
                     PlayRequested = PlayRequested,
                     PauseRequested = PauseRequested,
                     SeekRequested = SeekRequested,
+                    RateRequested = RateRequested,
                     Binding = binding,
                     AspectMode = aspectSig,
                     CustomAspectRatio = customAspectSig,
@@ -1326,6 +1335,7 @@ public sealed class MediaPlayerElement : Component
         if (!active)
         {
             b.SetVisible(false);
+            NoteInView(false);
             if (IsDecorative) return;
             Player.PumpVideo(default, default, s);
             return;
@@ -1340,6 +1350,7 @@ public sealed class MediaPlayerElement : Component
         {
             if (!IsDecorative) Player.PumpVideo(b, default, s);
             b.SetVisible(false);    // no laid-out area ⇒ empty viewport
+            NoteInView(false);
             return;
         }
         // The TRANSFORMED rect (full affine walk), not the translation-only AbsoluteRect: under a scaled ancestor the hole is
@@ -1349,6 +1360,7 @@ public sealed class MediaPlayerElement : Component
         {
             if (!IsDecorative) Player.PumpVideo(b, default, s);
             b.SetVisible(false);
+            NoteInView(false);
             return;
         }
         SizeI natural = Player.NaturalSize.Peek();
@@ -1412,7 +1424,8 @@ public sealed class MediaPlayerElement : Component
         // viewport of the element's own rect keeps presenting at full size while the element scrolls out of its
         // scroller. That is how a video in a list ended up painted across the tab strip and the title bar.
         RectF viewport = ClipToAncestors(scene, h, area);
-        if (viewport.W <= 0.5f || viewport.H <= 0.5f) { b.SetVisible(false); return; }
+        if (viewport.W <= 0.5f || viewport.H <= 0.5f) { b.SetVisible(false); NoteInView(false); return; }
+        NoteInView(true);
         b.SetViewport(viewport);
         // Clamped so a caller asking for "fully round" on a non-square element still gets a clean capsule rather than
         // radii that overlap and degenerate. CornerRadius freezes at mount, so this is a constant per element.
@@ -1805,7 +1818,7 @@ public sealed class MediaPlayerElement : Component
         ];
 
         MenuFlyoutItem Speed(double value) => MenuFlyoutItem.RadioItem(MediaStrings.RateLabel((float)value), Math.Abs(rate - value) < 0.01,
-            () => Player.SetRate(value));
+            () => RequestRate(value));
     }
 
     // ── keyboard (Task 2) ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1855,7 +1868,7 @@ public sealed class MediaPlayerElement : Component
             case VkCloseBracket:
                 ScaleRate(1f / 0.9f); e.Handled = true; break;
             case Keys.Back:
-                Player.SetRate(1.0); e.Handled = true; break;
+                RequestRate(1.0); e.Handled = true; break;
             case Keys.C:
                 CycleCaptions(); e.Handled = true; break;
             case Keys.F:
@@ -1903,7 +1916,13 @@ public sealed class MediaPlayerElement : Component
     }
 
     private void ScaleRate(float factor)
-        => Player.SetRate(Math.Clamp(Player.Rate.Peek() * factor, MinRate, MaxRate));
+        => RequestRate(Math.Clamp(Player.Rate.Peek() * factor, MinRate, MaxRate));
+
+    private void RequestRate(double rate)
+    {
+        if (RateRequested is { } request) request(rate);
+        else Player.SetRate(rate);
+    }
 
     private const float MinRate = 0.25f, MaxRate = 2.0f;
 
@@ -1954,6 +1973,11 @@ public sealed class MediaPlayerElement : Component
 
         var items = new System.Collections.Generic.List<MenuFlyoutItem>(12);
         IReadOnlyList<MenuFlyoutItem>? hostItems = MoreMenuItems?.Invoke();
+        if (MoreMenuHostOnly && hostItems is not null)
+        {
+            for (int i = 0; i < hostItems.Count; i++) items.Add(hostItems[i]);
+            return items;
+        }
         if (hostItems is { Count: > 0 })
         {
             for (int i = 0; i < hostItems.Count; i++) items.Add(hostItems[i]);
@@ -2052,7 +2076,7 @@ public sealed class MediaPlayerElement : Component
         ];
 
         MenuFlyoutItem Speed(double value) => MenuFlyoutItem.RadioItem(MediaStrings.RateLabel((float)value), Math.Abs(rate - value) < 0.01,
-            () => Player.SetRate(value));
+            () => RequestRate(value));
     }
 
     /// <summary>The <c>elapsed / total</c> time label as its OWN component. It bridges the ~per-frame position/duration
@@ -2108,6 +2132,7 @@ public sealed class MediaPlayerElement : Component
         public Action? PlayRequested { get; init; }
         public Action? PauseRequested { get; init; }
         public Action<TimeSpan, SeekMode>? SeekRequested { get; init; }
+        public Action<double>? RateRequested { get; init; }
         public required VideoBinding Binding { get; init; }
         public required Signal<VideoAspectMode> AspectMode { get; init; }
         public required Signal<double> CustomAspectRatio { get; init; }
@@ -2134,6 +2159,7 @@ public sealed class MediaPlayerElement : Component
                         PlayRequested = PlayRequested,
                         PauseRequested = PauseRequested,
                         SeekRequested = SeekRequested,
+                        RateRequested = RateRequested,
                         PresentationBinding = Binding,
                         AspectMode = AspectMode,
                         CustomAspectRatio = CustomAspectRatio,
@@ -2644,6 +2670,27 @@ public sealed class MediaPlayerElement : Component
 
     private bool _surfacePresentedRaised;
     private int _surfaceProbePumps;
+
+    // ── the in-view report (a host that pauses a decorative loop it cannot see) ─────────────────────────────────────
+
+    /// <summary>Raised on the UI thread, from the pump, each time the element's PLACEABILITY flips: true when it is active
+    /// (not KeepAlive-parked, not minimized) and its area, clipped to every clipping ancestor, is non-empty — the element
+    /// could show a frame right now; false when it is parked, minimized, collapsed or scrolled out of its scroller.
+    /// Independent of whether a frame exists yet, so a host can open a source paused and start it on the first true.
+    /// The element only HIDES its surface when it cannot be seen; it never pauses the player (a player may have other
+    /// presenters). A host that owns a decorative loop (an ambient clip) pauses on false and resumes on true, so no
+    /// decoder runs for pixels nobody sees. Value-gated: one call per flip. Frozen at mount like every init prop.</summary>
+    public Action<bool>? InViewChanged { get; init; }
+
+    private int _inView = -1;   // -1 unknown, 0 out, 1 in
+
+    private void NoteInView(bool inView)
+    {
+        int v = inView ? 1 : 0;
+        if (_inView == v) return;
+        _inView = v;
+        InViewChanged?.Invoke(inView);
+    }
     private const int MaxSurfaceProbePumps = 120;   // about two seconds of frames; past it only a native pump re-checks
 
     /// <summary>Pump-side half of <see cref="SurfacePresented"/>. The presenter drain that creates the child visual runs on

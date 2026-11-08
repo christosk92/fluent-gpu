@@ -7,8 +7,8 @@ namespace FluentGpu.Rhi.D3D12;
 /// Cold-path construction helpers for the retained-tiles phases (docs/plans/scroll-gpu-retained-tiles-implementation.md
 /// §B/§C), every call through the GEN-COM bindings generated from <c>d3d12.comabi.json</c> (no hand-typed slots):
 /// the D3D12_OPTIONS5 <c>RenderPassesTier</c> query (logged once in [d3d12.present] by P2; render passes are callable at
-/// every tier — tier 0 is emulated by the runtime), and the COPY / COMPUTE side queue, allocator, closed command list and
-/// fence the P2 UploadQueue and compute Kawase bake build on. P0: NOT wired into rendering. Every method returns the
+/// every tier — tier 0 is emulated by the runtime), and the side queue, allocator, closed command list and fence the
+/// P2 UploadQueue and the Kawase bake build on. P0: NOT wired into rendering. Every method returns the
 /// HRESULT and leaves its out pointer null on failure; the caller owns (Releases) what it gets.
 /// </summary>
 internal static unsafe class D3D12SideQueues
@@ -23,7 +23,8 @@ internal static unsafe class D3D12SideQueues
         return hr;
     }
 
-    /// <summary>A command queue of <paramref name="type"/> (<c>COPY</c> for uploads, <c>COMPUTE</c> for bakes).</summary>
+    /// <summary>A command queue of <paramref name="type"/> (<c>COPY</c> for the discrete image uploads; the bakes execute
+    /// on the frame's DIRECT queue and create none).</summary>
     public static int CreateQueue(void* device, D3D12_COMMAND_LIST_TYPE type, out void* queue)
     {
         D3D12_COMMAND_QUEUE_DESC qd = default;

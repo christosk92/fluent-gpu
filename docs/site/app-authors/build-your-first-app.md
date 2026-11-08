@@ -4,7 +4,7 @@ This is the app-author's on-ramp to FluentGpu. By the end you will have a window
 live counter wired to a signal, and a clear picture of what the one-line entry point actually
 brings up — plus the lower-level frame loop you can drive yourself when you need to.
 
-FluentGpu is a near-zero-allocation, NativeAOT, GPU-rendered .NET 10 UI engine with a React/Reactor
+FluentGpu is a near-zero-allocation, NativeAOT, GPU-rendered .NET 11 UI engine with a React/Reactor
 authoring surface (immutable `Element` records + `Component` + hooks) over a **signals-first**
 reactive core. The mental model in one sentence: *a change reaches pixels through one mechanism — a
 signal* — and the cheapest updates (a bound prop) never touch reconcile or layout at all. If that

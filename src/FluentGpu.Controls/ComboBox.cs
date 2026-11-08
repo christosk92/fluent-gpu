@@ -81,6 +81,27 @@ public sealed class ComboBox : Component
         /// <summary>The dropdown card (the host FlyoutSurface plate of <see cref="PopupChrome.Dropdown"/>): acrylic, flyout ring,
         /// OverlayCornerRadius (squared where it abuts the field), flyout elevation, 0,2,0,2.</summary>
         public PopupPlate DropdownPlate { get; init; } = PopupPlate.Fluent();
+
+        // ── The dropdown rows' selection state (ComboBox_themeresources.xaml ComboBoxItem): the theme's, never a call site's. The
+        //    geometry (padding, margin, pitch) stays the control's: the popup's open-over-the-selection placement measures it. ──
+        /// <summary>Whether the selected row shows the 3×16 accent pill (ComboBoxItemPill). A theme whose choice is written in ink sets false.</summary>
+        public bool ItemPill { get; init; } = true;
+        /// <summary>The pill's fill (ComboBoxItemPillFillBrush = AccentFillColorDefault).</summary>
+        public ColorF ItemPillFill { get; init; } = Tok.AccentDefault;
+        /// <summary>A row's corner (ComboBoxItemCornerRadius 3).</summary>
+        public float ItemRadius { get; init; } = 3f;
+        /// <summary>A row's fill under the pointer and the keyboard cursor (ComboBoxItemBackgroundPointerOver = SubtleFillColorSecondary).</summary>
+        public ColorF ItemHoverFill { get; init; } = Tok.FillSubtleSecondary;
+        /// <summary>A row's fill while pressed (ComboBoxItemBackgroundPressed = SubtleFillColorTertiary).</summary>
+        public ColorF ItemPressedFill { get; init; } = Tok.FillSubtleTertiary;
+        /// <summary>The selected row's fill at rest (ComboBoxItemBackgroundSelected = SubtleFillColorSecondary).</summary>
+        public ColorF SelectedItemFill { get; init; } = Tok.FillSubtleSecondary;
+        /// <summary>The selected row's fill under the pointer (ComboBoxItemBackgroundSelectedPointerOver = SubtleFillColorTertiary).</summary>
+        public ColorF SelectedItemHoverFill { get; init; } = Tok.FillSubtleTertiary;
+        /// <summary>The selected row's fill while pressed (ComboBoxItemBackgroundSelectedPressed = SubtleFillColorSecondary).</summary>
+        public ColorF SelectedItemPressedFill { get; init; } = Tok.FillSubtleSecondary;
+        /// <summary>The selected row's label ink; null keeps TextFillColorPrimary (ComboBoxItemForegroundSelected). A Metro picker writes the choice in the accent.</summary>
+        public ColorF? SelectedItemForeground { get; init; }
     }
 
     /// <summary>The ComboBox style now: the active theme's (<see cref="ControlStyles.ComboBoxStyle"/>), else <see cref="FluentStyle"/>.</summary>
@@ -853,6 +874,7 @@ internal sealed class ComboBoxList : Component
         int sel = Selected.Value;          // subscribe → re-paint the selected pill
         int hi = Highlight.Value;          // subscribe → re-paint the keyboard-cursor row
         var items = Owner.Items;
+        var st = ComboBox.DefaultStyle;    // the rows' selection state, read now (a theme swap restyles the next open)
 
         void Move(int next)
         {
@@ -903,6 +925,8 @@ internal sealed class ComboBoxList : Component
             bool cursor = idx == hi;
             bool enabled = Owner.IsItemEnabled(idx);
             string? desc = Owner.ItemDescriptions is { } ds && idx < ds.Count ? ds[idx] : null;
+            // ComboBoxItemForegroundSelected = TextPrimary; a theme may write the choice in its own ink (the Metro accent).
+            ColorF labelFg = !enabled ? Tok.TextDisabled : selected && st.SelectedItemForeground is { } selInk ? selInk : Tok.TextPrimary;
 
             Element labelCol;
             if (desc is { Length: > 0 })
@@ -918,7 +942,7 @@ internal sealed class ComboBoxList : Component
                         new TextEl(items[idx])
                         {
                             Size = 14f,
-                            Color = enabled ? Tok.TextPrimary : Tok.TextDisabled,
+                            Color = labelFg,
                             PressedColor = Tok.TextSecondary,
                             Grow = 1f,
                         },
@@ -937,7 +961,7 @@ internal sealed class ComboBoxList : Component
                 labelCol = new TextEl(items[idx])
                 {
                     Size = 14f,
-                    Color = enabled ? Tok.TextPrimary : Tok.TextDisabled,
+                    Color = labelFg,
                     PressedColor = Tok.TextSecondary,
                     Grow = 1f,
                 };
@@ -951,16 +975,30 @@ internal sealed class ComboBoxList : Component
                 Padding = Owner.TouchInputMode ? ComboBox.ItemTouchPadding : ComboBox.ItemPadding,
                 Children = [labelCol],
             };
-            Element[] rowChildren = selected
+            // SelectedPressed: PillTransform ScaleY 1 → ComboBoxItemPillMinScale over ComboBoxItemScaleAnimationDuration
+            // (KeySpline 0,0,0,1 = FluentPopOpen) about the pill's centre (RenderTransformOrigin 0.5,0.5). The pill is
+            // not interactive, so it follows the ROW's press (the engine's press cascade); leaving SelectedPressed has no
+            // VisualTransition, so the release snaps back. Composited only: the row never relayouts. Reduced motion = no squish.
+            Element[] rowChildren = selected && st.ItemPill
                 ? [Owner.Parts.Apply(ComboBox.PartItemPill,
-                       new BoxEl { Width = 3f, Height = 16f, Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault, AlignSelf = FlexAlign.Center }), content]
+                       new BoxEl
+                       {
+                           Width = 3f, Height = 16f, Corners = CornerRadius4.All(1.5f), Fill = st.ItemPillFill, AlignSelf = FlexAlign.Center,
+                           PressScale = Motion.ReducedMotion ? 1f : ComboBox.ItemPillScaleMin,
+                           InteractScaleAxes = ScaleAxes.Y,
+                           PressDurationMs = ComboBox.PillScaleMs,
+                           PressReleaseDurationMs = 0f,
+                           PressEasing = Easing.FluentPopOpen,
+                       }), content]
                 : [content];
 
-            // Item state matrix (ComboBox_themeresources): unselected rest=Transparent, hover=SubtleSecondary,
+            // Item state matrix (ComboBox_themeresources, the style's): unselected rest=Transparent, hover=SubtleSecondary,
             // press=SubtleTertiary; selected rest=SubtleSecondary, hover=SubtleTertiary, press=SubtleSecondary.
-            // The keyboard cursor (Highlight) reads as the hover/selected fill so arrow nav is visible without a pointer.
+            // The keyboard cursor (Highlight) reads as the hover fill (on the selection, the selected rest) so arrow nav is visible
+            // without a pointer.
             ColorF rest = !enabled ? ColorF.Transparent
-                : selected || cursor ? Tok.FillSubtleSecondary : ColorF.Transparent;
+                : selected ? st.SelectedItemFill
+                : cursor ? st.ItemHoverFill : ColorF.Transparent;
             Action choose = enabled ? () => OnChoose(idx) : static () => { };
             var row = new BoxEl
             {
@@ -968,13 +1006,13 @@ internal sealed class ComboBoxList : Component
                 Width = MathF.Max(0f, Width - 10f),
                 AlignItems = FlexAlign.Stretch,
                 Margin = new Edges4(5, 2, 5, 2),
-                Corners = CornerRadius4.All(3f),
+                Corners = CornerRadius4.All(st.ItemRadius),
                 Role = AutomationRole.MenuItem,
                 Fill = rest,
                 HoverFill = !enabled ? ColorF.Transparent
-                    : selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
+                    : selected ? st.SelectedItemHoverFill : st.ItemHoverFill,
                 PressedFill = !enabled ? ColorF.Transparent
-                    : selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+                    : selected ? st.SelectedItemPressedFill : st.ItemPressedFill,
                 IsEnabled = enabled,
                 OnClick = choose,
                 Children = rowChildren,

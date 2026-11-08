@@ -141,13 +141,6 @@ enum FgPrSeekMode
     FgPrSeekMode_Keyframe = 1,    // SetCurrentTimeEx(APPROXIMATE) — present the keyframe ≤ target (a scrub preview)
 };
 
-/// FgPrRuntimeSetVideoOutputFormat values: the pixel format the runtime's media engine outputs into its windowless swap chain.
-enum FgPrVideoOutput
-{
-    FgPrVideoOutput_Bgra = 0,     // B8G8R8A8_UNORM - the format the engine has always been forced to (the default)
-    FgPrVideoOutput_Nv12 = 1,     // NV12 - the decoder's own format: no per-frame NV12 -> BGRA video-processor pass, and a YUV overlay plane can take it
-};
-
 /// FgPrRuntimeSetSecurityPolicy values: which PlayReady security level the runtime's CDM asks for (F022).
 enum FgPrSecurityPolicy
 {
@@ -268,14 +261,6 @@ __declspec(dllexport) void __stdcall FgPrRuntimeDestroy(FgPrRuntime rt);
 
 /// How long the runtime thread has been alive, in ms — the timeline every `[video.native]` line is stamped with.
 __declspec(dllexport) int64_t __stdcall FgPrRuntimeUptimeMs(FgPrRuntime rt);
-
-/// F249: choose the media engine's output format (FgPrVideoOutput) for the NEXT runtime created in this process. Process-wide and READ
-/// ONCE, when FgPrRuntimeCreateOnAdapter starts the bring-up: call it BEFORE the create; a runtime that already exists keeps the format it
-/// was created with. An unknown value selects BGRA, the default. The managed side asks for NV12 only behind `--fg video-nv12` and only
-/// after its output's overlay probe (IDXGIOutput3::CheckOverlaySupport) reported NV12 as plane-capable. A separate export, not a new
-/// parameter of FgPrRuntimeCreateOnAdapter, so a DLL of the older ABI is reported as a stale build (RequiredExports) instead of being
-/// called with arguments it would misread. Always returns S_OK.
-__declspec(dllexport) int32_t __stdcall FgPrRuntimeSetVideoOutputFormat(int32_t format);
 
 /// F022: choose the PlayReady security level (FgPrSecurityPolicy) the NEXT runtime's CDM asks for. Process-wide and READ ONCE, when
 /// FgPrRuntimeCreateOnAdapter starts the bring-up: call it BEFORE the create. The default (and any unknown value) is FgPrSecurity_Probe3000:

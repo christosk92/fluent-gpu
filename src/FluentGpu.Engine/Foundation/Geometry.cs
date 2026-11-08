@@ -235,3 +235,7 @@ public readonly record struct Affine2D(float M11, float M12, float M21, float M2
         return true;
     }
 }
+
+/// <summary>Which axes an interaction-driven composited scale (<c>HoverScale</c>/<c>PressScale</c>) acts on. <see cref="Y"/>
+/// is WinUI's ScaleY-only press squish (the ComboBox/ListView selection pill: <c>PillTransform</c> ScaleY 1 → 0.625).</summary>
+public enum ScaleAxes : byte { Both = 0, X = 1, Y = 2 }

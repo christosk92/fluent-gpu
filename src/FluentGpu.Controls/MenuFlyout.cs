@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Hosting;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 
@@ -11,8 +12,19 @@ public enum CheckState : byte { Unchecked = 0, Checked = 1, Indeterminate = 2 }
 
 /// <summary>The kind of a <see cref="MenuFlyoutItem"/> row: a plain command, a divider, a checkable
 /// <c>ToggleMenuFlyoutItem</c> (E73E check), a mutually-exclusive <c>RadioMenuFlyoutItem</c> (E915 bullet), or a
-/// cascading <c>MenuFlyoutSubItem</c> (E974 chevron + nested popup).</summary>
-public enum MenuItemKind : byte { Command = 0, Separator = 1, Toggle = 2, Radio = 3, SubMenu = 4 }
+/// cascading <c>MenuFlyoutSubItem</c> (E974 chevron + nested popup), or a group <c>Header</c> (a caption the rows under it
+/// share, never a stop: the WinUI flyout pattern of a <c>TextBlock</c> in CaptionTextBlockStyle over a radio group).</summary>
+public enum MenuItemKind : byte { Command = 0, Separator = 1, Toggle = 2, Radio = 3, SubMenu = 4, Header = 5 }
+
+/// <summary>How a menu style marks a radio row (<see cref="MenuFlyout.Style.RadioMark"/>).</summary>
+public enum MenuRadioMark : byte
+{
+    /// <summary>WinUI's RadioMenuFlyoutItem: the style's <see cref="MenuFlyout.Style.RadioGlyph"/> (E915, a small bullet) on the chosen row, nothing on the others.</summary>
+    Glyph = 0,
+    /// <summary>A drawn disc of <see cref="MenuFlyout.Style.DotSize"/> in the mark ink on the chosen row; with <see cref="MenuFlyout.Style.RingAtRest"/>
+    /// a ring of the same size on every other radio row. Exact at any size (no glyph's side bearings), so a theme can match its board.</summary>
+    Dot = 1,
+}
 
 /// <summary>A single row in a <see cref="MenuFlyout"/>: a label, an optional leading <see cref="Icon"/> (icon column), an
 /// enabled flag, the action to run when chosen, and an optional trailing keyboard-accelerator hint (e.g. "Ctrl+S"). The
@@ -35,6 +47,10 @@ public readonly record struct MenuFlyoutItem(string Label, IconRef Icon = defaul
 
     public bool IsSeparator => Kind == MenuItemKind.Separator;
     public static MenuFlyoutItem Separator => new("") { Kind = MenuItemKind.Separator };
+
+    /// <summary>A group header ("Sort by", "View"): caption text (12/16) in the tertiary ink over the rows it names, inset to the
+    /// check column. Not focusable, never invoked, skipped by the keyboard cursor and the first-letter jump (it is disabled).</summary>
+    public static MenuFlyoutItem Header(string label) => new(label, default, false) { Kind = MenuItemKind.Header };
 
     /// <summary>A checkable command (WinUI ToggleMenuFlyoutItem): an E73E check column whose glyph paints only when on.</summary>
     public static MenuFlyoutItem Toggle(string label, bool isChecked, Action? invoke = null, IconRef icon = default, bool enabled = true)
@@ -139,8 +155,55 @@ public static class MenuFlyout
         public Edges4 SeparatorPadding { get; init; } = new(0, 1, 0, 1);
         /// <summary>Whether a row's icon is drawn (and its 28 column reserved). False: the menu is words only. Default true.</summary>
         public bool ShowIcons { get; init; } = true;
-        /// <summary>The case transform of a row's label, applied at shaping (the stored label is never rewritten). Default <see cref="TextCase.AsWritten"/>.</summary>
+        /// <summary>The case transform of a row's label and its trailing accelerator text, applied at shaping (the stored label is never
+        /// rewritten). Default <see cref="TextCase.AsWritten"/>.</summary>
         public TextCase LabelCase { get; init; } = TextCase.AsWritten;
+
+        // ── The selection state: how a checked ToggleMenuFlyoutItem and the chosen RadioMenuFlyoutItem read, at rest. Each design
+        //    language marks a choice its own way, so this is the theme's, never a call site's. The defaults are WinUI 3's
+        //    (MenuFlyout_themeresources.xaml ToggleMenuFlyoutItem CheckGlyph E73E; RadioMenuFlyoutItem_themeresources.xaml CheckGlyph
+        //    E915): a 12px glyph in TextFillColorSecondary in the 28 check column, lifted to TextFillColorPrimary under the pointer
+        //    (MenuFlyoutItemForegroundPointerOver) and while pressed (MenuFlyoutSubItemForegroundPressed); no row fill, no label tint.
+        /// <summary>The check column's width (MenuFlyoutItemPlaceholderThemeThickness 28): the label starts this far past the row padding.</summary>
+        public float MarkColumnWidth { get; init; } = PlaceholderWidth;
+        /// <summary>A checked toggle row's glyph (ToggleMenuFlyoutItem CheckGlyph E73E).</summary>
+        public string CheckGlyph { get; init; } = MenuFlyout.CheckGlyph;
+        /// <summary>How a radio row is marked: the <see cref="RadioGlyph"/> on the chosen row (WinUI), or a drawn <see cref="MenuRadioMark.Dot"/>.</summary>
+        public MenuRadioMark RadioMark { get; init; } = MenuRadioMark.Glyph;
+        /// <summary>The chosen radio row's glyph under <see cref="MenuRadioMark.Glyph"/> (RadioMenuFlyoutItem CheckGlyph E915).</summary>
+        public string RadioGlyph { get; init; } = MenuFlyout.RadioGlyph;
+        /// <summary>The check and radio glyphs' size (CheckGlyph FontSize 12).</summary>
+        public float MarkGlyphSize { get; init; } = CheckGlyphSize;
+        /// <summary>The mark's ink at rest (MenuFlyoutSubItemChevron = TextFillColorSecondary).</summary>
+        public ColorF MarkColor { get; init; } = Tok.TextSecondary;
+        /// <summary>The mark's ink under the pointer (MenuFlyoutItemForegroundPointerOver = TextFillColorPrimary).</summary>
+        public ColorF MarkHoverColor { get; init; } = Tok.TextPrimary;
+        /// <summary>The mark's ink while pressed (MenuFlyoutSubItemForegroundPressed = TextFillColorPrimary).</summary>
+        public ColorF MarkPressedColor { get; init; } = Tok.TextPrimary;
+        /// <summary>The disc's diameter under <see cref="MenuRadioMark.Dot"/> (and the ring's, with <see cref="RingAtRest"/>).</summary>
+        public float DotSize { get; init; } = 6f;
+        /// <summary>Under <see cref="MenuRadioMark.Dot"/>: every radio row that is not chosen draws a ring of <see cref="DotSize"/>, so the group
+        /// reads as a choice at rest (the Metro radio). Default false (WinUI marks only the chosen row).</summary>
+        public bool RingAtRest { get; init; }
+        /// <summary>The ring's stroke under <see cref="RingAtRest"/>.</summary>
+        public float RingWidth { get; init; } = 1f;
+        /// <summary>The ring's ink under <see cref="RingAtRest"/>.</summary>
+        public ColorF RingColor { get; init; } = Tok.TextTertiary;
+        /// <summary>The label (and accelerator) ink of a checked toggle or the chosen radio row; null keeps the row's ink (WinUI). A Metro menu
+        /// writes the choice in the accent.</summary>
+        public ColorF? SelectedLabelColor { get; init; }
+        /// <summary>The chosen radio row's fill at rest; transparent in WinUI (the glyph alone marks it).</summary>
+        public ColorF SelectedFill { get; init; } = Tok.FillSubtleTransparent;
+        /// <summary>The chosen radio row's fill under the pointer and the keyboard cursor; null = <see cref="ItemHoverFill"/>.</summary>
+        public ColorF? SelectedHoverFill { get; init; }
+        /// <summary>The chosen radio row's fill while pressed; null = <see cref="ItemPressedFill"/>.</summary>
+        public ColorF? SelectedPressedFill { get; init; }
+        /// <summary>A sub-menu row's trailing glyph (SubItemChevron E974).</summary>
+        public string SubMenuGlyph { get; init; } = Icons.ChevronRightMed;
+        /// <summary>The sub-menu glyph's size (SubItemChevron FontSize 12).</summary>
+        public float SubMenuGlyphSize { get; init; } = ChevronGlyphSize;
+        /// <summary>The sub-menu glyph's ink at rest (MenuFlyoutSubItemChevron = TextFillColorSecondary; pressed TextFillColorTertiary).</summary>
+        public ColorF SubMenuGlyphColor { get; init; } = Tok.TextSecondary;
     }
 
     /// <summary>The menu style now: the active theme's (<see cref="ControlStyles.MenuFlyoutStyle"/>), else <see cref="FluentStyle"/>.</summary>
@@ -172,6 +235,18 @@ public static class MenuFlyout
 
     // ── Separator: a 1px DividerStrokeColorDefault line; SeparatorThemePadding -4,1,-4,1 bleeds it past the item
     //    inset to full presenter width (we model the -4 bleed with a negative horizontal margin on the line). ────────
+    /// <summary>A group header row: CaptionTextBlockStyle (12/16) in TextFillColorTertiary, on the rows' margin and their left padding,
+    /// 8 above and 4 below the line (a 32 row), so the caption's first letter sits over the check column's glyph.</summary>
+    internal static Element HeaderRow(MenuFlyoutItem it, Style st) => new BoxEl
+    {
+        Direction = 0, AlignItems = FlexAlign.Center, Margin = st.ItemMargin,
+        Padding = new Edges4(st.ItemPadding.Left, HeaderPadTop, st.ItemPadding.Right, HeaderPadBottom),
+        Role = AutomationRole.Text,
+        Children = [new TextEl(it.Label) { Size = HeaderSize, LineHeight = HeaderLine, Color = Tok.TextTertiary, MaxLines = 1, Case = it.Literal ? TextCase.AsWritten : st.LabelCase }],
+    };
+
+    internal const float HeaderSize = 12f, HeaderLine = 16f, HeaderPadTop = 8f, HeaderPadBottom = 4f;
+
     internal static Element Separator(Style st, TemplateParts? parts = null) => parts.Apply(PartSeparator, new BoxEl
     {
         Direction = 1,
@@ -189,22 +264,39 @@ public static class MenuFlyout
         Style st, bool subOpen = false, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
     {
         bool enabled = it.Enabled;
+        // The selection state (the style's, so each theme marks a choice in its own language): a checked toggle or the chosen radio.
+        bool marked = it.IsChecked && it.Kind is MenuItemKind.Toggle or MenuItemKind.Radio;
+        bool chosenRadio = enabled && marked && it.Kind == MenuItemKind.Radio;
         // MenuFlyoutItemForeground = TextPrimary; Disabled = TextDisabled. PointerOver/Pressed foreground stay Primary
-        // (the WinUI MenuFlyoutItem hover/pressed states do NOT recolor the label — they only change the row fill).
-        ColorF fg = enabled ? Tok.TextPrimary : Tok.TextDisabled;
-        // CheckGlyph (toggle E73E / radio E915) + SubItemChevron foreground = MenuFlyoutSubItemChevron = TextSecondary;
-        // Pressed = TextTertiary (MenuFlyoutSubItemChevronPressed); Disabled = TextDisabled (themeresources:26-30).
-        ColorF checkFg = enabled ? Tok.TextSecondary : Tok.TextDisabled;
+        // (the WinUI MenuFlyoutItem hover/pressed states do NOT recolor the label — they only change the row fill). A style may write
+        // the chosen row's label in its own ink (SelectedLabelColor: the Metro accent).
+        ColorF fg = !enabled ? Tok.TextDisabled : marked && st.SelectedLabelColor is { } selInk ? selInk : Tok.TextPrimary;
+        // SubItemChevron foreground = MenuFlyoutSubItemChevron = TextSecondary; Pressed = TextTertiary (MenuFlyoutSubItemChevronPressed);
+        // Disabled = TextDisabled (themeresources:26-30).
+        ColorF chevronFg = enabled ? st.SubMenuGlyphColor : Tok.TextDisabled;
 
         var children = new List<Element>(5);
 
-        // Column 0: check/radio glyph (28-wide), painted only when this toggle/radio is on (CheckGlyph.Opacity 0→1).
+        // Column 0: the check column (MarkColumnWidth): the toggle's check or the radio's mark, painted when on (CheckGlyph.Opacity 0→1),
+        // or the style's ring on a radio row that is not chosen. Every row of a checkable menu keeps the column, so a change of choice
+        // moves nothing.
         if (checkColumn)
         {
-            Element glyph = (it.Kind is MenuItemKind.Toggle or MenuItemKind.Radio) && it.IsChecked
-                ? new TextEl(it.Kind == MenuItemKind.Radio ? RadioGlyph : CheckGlyph) { Size = CheckGlyphSize, Color = checkFg, PressedColor = enabled ? Tok.TextTertiary : checkFg, FontFamily = Tok.Definition.Fonts.Icon }
-                : new BoxEl();
-            children.Add(new BoxEl { Width = PlaceholderWidth, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [glyph] });
+            Element mark = new BoxEl();
+            if (it.Kind == MenuItemKind.Radio && st.RadioMark == MenuRadioMark.Dot)
+            {
+                if (marked || st.RingAtRest) mark = Dot(marked, enabled, st);
+            }
+            else if (marked)
+            {
+                mark = new TextEl(it.Kind == MenuItemKind.Radio ? st.RadioGlyph : st.CheckGlyph)
+                {
+                    Size = st.MarkGlyphSize, FontFamily = Tok.Definition.Fonts.Icon,
+                    Color = enabled ? st.MarkColor : Tok.TextDisabled,
+                    HoverColor = enabled ? st.MarkHoverColor : default, PressedColor = enabled ? st.MarkPressedColor : default,
+                };
+            }
+            children.Add(new BoxEl { Width = st.MarkColumnWidth, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [mark] });
         }
 
         // Column 1: 16×16 icon (IconRoot Viewbox), painted when this row carries an icon. Glyph vs layered-vector is
@@ -223,20 +315,29 @@ public static class MenuFlyout
         // Column 3: optional keyboard-accelerator hint, right-aligned (HorizontalAlignment=Right),
         // CaptionTextBlock (12px), MenuFlyoutItemKeyboardAcceleratorTextForeground = TextSecondary / Disabled.
         if (it.AcceleratorText is { Length: > 0 } acc)
-            children.Add(new TextEl(acc) { Size = 12f, Color = enabled ? Tok.TextSecondary : Tok.TextDisabled, Margin = new Edges4(24, 4, 0, 0) });
-
-        // Column 4 (sub-menu rows): the cascade chevron — E974 @12, MenuFlyoutItemChevronMargin 24,0,0,-1, foreground
-        // MenuFlyoutSubItemChevron ramp (MenuFlyout_themeresources.xaml:26-30 + :720 SubItemChevron).
-        if (it.Kind == MenuItemKind.SubMenu)
-            children.Add(new TextEl(Icons.ChevronRightMed)
+            children.Add(new TextEl(acc)
             {
-                Size = ChevronGlyphSize, FontFamily = Tok.Definition.Fonts.Icon, Margin = ChevronMargin,
-                Color = checkFg, PressedColor = enabled ? Tok.TextTertiary : checkFg, DisabledColor = Tok.TextDisabled,
+                Size = 12f, Margin = new Edges4(24, 4, 0, 0), Case = it.Literal ? TextCase.AsWritten : st.LabelCase,
+                Color = !enabled ? Tok.TextDisabled : marked && st.SelectedLabelColor is { } accInk ? accInk : Tok.TextSecondary,
+            });
+
+        // Column 4 (sub-menu rows): the cascade glyph — WinUI E974 @12, MenuFlyoutItemChevronMargin 24,0,0,-1, foreground
+        // MenuFlyoutSubItemChevron ramp (MenuFlyout_themeresources.xaml:26-30 + :720 SubItemChevron); the style's glyph and ink.
+        if (it.Kind == MenuItemKind.SubMenu)
+            children.Add(new TextEl(st.SubMenuGlyph)
+            {
+                Size = st.SubMenuGlyphSize, FontFamily = Tok.Definition.Fonts.Icon, Margin = ChevronMargin,
+                Color = chevronFg, PressedColor = enabled ? Tok.TextTertiary : chevronFg, DisabledColor = Tok.TextDisabled,
             });
 
         // The keyboard cursor (highlight) and the SubMenuOpened state render the same brush as PointerOver
-        // (MenuFlyoutSubItemBackgroundSubMenuOpened = SubtleFillColorSecondary) so they read identically to a hover.
-        ColorF rest = enabled && (highlighted || subOpen) ? st.ItemHoverFill : Tok.FillSubtleTransparent;
+        // (MenuFlyoutSubItemBackgroundSubMenuOpened = SubtleFillColorSecondary) so they read identically to a hover. The chosen radio row
+        // rests on the style's SelectedFill (transparent in WinUI) and takes its own hover/press ramp when the style gives one.
+        ColorF hoverFill = chosenRadio && st.SelectedHoverFill is { } sh ? sh : st.ItemHoverFill;
+        ColorF pressedFill = chosenRadio && st.SelectedPressedFill is { } sp ? sp : st.ItemPressedFill;
+        ColorF rest = !enabled ? Tok.FillSubtleTransparent
+            : highlighted || subOpen ? hoverFill
+            : chosenRadio ? st.SelectedFill : Tok.FillSubtleTransparent;
 
         var row = new BoxEl
         {
@@ -252,8 +353,8 @@ public static class MenuFlyout
             Role = it.Kind switch { MenuItemKind.Toggle => AutomationRole.CheckBox, MenuItemKind.Radio => AutomationRole.RadioButton, _ => AutomationRole.MenuItem },
             // MenuFlyoutItemBackground (explicit rest) / ...PointerOver / ...Pressed. Disabled = transparent (no hover/press).
             Fill = rest,
-            HoverFill = enabled ? st.ItemHoverFill : Tok.FillSubtleTransparent,       // SubtleFillColorSecondary
-            PressedFill = enabled ? st.ItemPressedFill : Tok.FillSubtleTransparent,   // SubtleFillColorTertiary
+            HoverFill = enabled ? hoverFill : Tok.FillSubtleTransparent,       // SubtleFillColorSecondary
+            PressedFill = enabled ? pressedFill : Tok.FillSubtleTransparent,   // SubtleFillColorTertiary
 
             IsEnabled = enabled,                                   // engine gate: disabled = no hit-test/focus/keyboard/click
             Focusable = enabled,                                   // roving target (focus trap Tab/Shift-Tab + Enter/Space activation)
@@ -294,14 +395,24 @@ public static class MenuFlyout
         }
         return row;
     }
+
+    /// <summary>The <see cref="MenuRadioMark.Dot"/> mark: a disc in the mark ink when chosen, else the style's ring (<see cref="Style.RingAtRest"/>).
+    /// Both are the same box, so choosing another row recolours it in place.</summary>
+    static BoxEl Dot(bool chosen, bool enabled, Style st) => new()
+    {
+        Width = st.DotSize, Height = st.DotSize, Shrink = 0f, Corners = CornerRadius4.All(st.DotSize * 0.5f),
+        Fill = chosen ? (enabled ? st.MarkColor : Tok.TextDisabled) : ColorF.Transparent,
+        BorderWidth = chosen ? 0f : st.RingWidth, BorderColor = enabled ? st.RingColor : Tok.TextDisabled,
+        HitTestVisible = false,
+    };
 }
 
 /// <summary>The MenuFlyoutPresenter body: a vertical list of <see cref="MenuFlyout.Row"/>s with a keyboard-cursor
 /// (highlight) signal driving Up/Down/Home/End roving (focus follows the cursor), first-letter jump-to-item, and
-/// cascading <see cref="MenuItemKind.SubMenu"/> rows — hover-open after the 400ms MenuShowDelay, click/Right-arrow
-/// immediate open, hover-away delay-close, Left-arrow/Escape close (WinUI CascadingMenuHelper). Wrapped by the host's
-/// FlyoutSurface (acrylic + stroke + shadow + corners + 0,2,0,2 padding). Tall menus scroll internally. Run-once-ish:
-/// re-render triggers are the highlight + cascade signals only, so pointer hover/press never re-renders.</summary>
+/// cascading <see cref="MenuItemKind.SubMenu"/> rows, whose open/keep/close hover intent is this level's
+/// <see cref="MenuCascade"/> (WinUI CascadingMenuHelper delays plus submenu aim). Wrapped by the host's FlyoutSurface
+/// (acrylic + stroke + shadow + corners + 0,2,0,2 padding). Tall menus scroll internally. Run-once-ish: re-render
+/// triggers are the highlight and the open cascade only, so pointer hover/press never re-renders.</summary>
 internal sealed class MenuFlyoutPresenter : Component
 {
     public required IReadOnlyList<MenuFlyoutItem> Items;
@@ -310,12 +421,10 @@ internal sealed class MenuFlyoutPresenter : Component
     /// <summary>MenuBar adjacent-menu navigation: invoked with -1 (Left) / +1 (Right) when the key is not a
     /// sub-menu boundary action (MenuBarItem.cpp:205-228 OnPresenterKeyDown).</summary>
     public Action<int>? OnNavigate;
-    /// <summary>Set on a SUB-menu presenter: closes this cascade level (Left arrow — WinUI returns focus to the
-    /// parent item; the overlay's close-start focus restore does exactly that).</summary>
-    public Action? CloseSelf;
-    /// <summary>Set on a SUB-menu presenter: notifies the PARENT presenter that the pointer is inside this child,
-    /// cancelling the parent's pending delay-close (CascadingMenuHelper.cpp OnPointerEntered stops m_delayCloseMenuTimer).</summary>
-    public Action? OnChildHover;
+    /// <summary>Set on a SUB-menu presenter: the cascade of the level that opened it. Left closes this level through it
+    /// (WinUI returns focus to the parent item; the overlay's close-start focus restore does exactly that), and the
+    /// pointer anywhere in this level keeps every ancestor's cascade open.</summary>
+    internal MenuCascade? ParentCascade;
     /// <summary>Keyboard-opened menus put the cursor + focus on the FIRST selectable row after mount (WinUI
     /// CascadingMenuHelper keyboard open focuses the first MenuFlyoutItem; MenuBar Down-open does the same).</summary>
     public bool FocusFirstOnMount;
@@ -324,32 +433,46 @@ internal sealed class MenuFlyoutPresenter : Component
     public TemplateParts? Parts;
     /// <summary>The rows' height on the size axis (<see cref="MenuFlyout.RowHeightFor"/>) — inherited by every cascading sub-menu level.</summary>
     public ControlSize Size = ControlSize.Medium;
-    /// <summary>Set on a cascade CHILD presenter: reports the child's realized root node so the PARENT can compute the
-    /// safe-triangle (hover-intent) geometry for it. Null on a root presenter.</summary>
-    public Action<NodeHandle>? OnRootRealized;
 
     // WinUI MenuFlyoutPresenter ScrollViewer max before internal scroll (mirrors the flyout's content cap; AutoSuggest
     // uses 374 — menus share the same overlay sizing). Content shorter than this never scrolls.
     const float MaxHeight = 468f;
 
+    MenuCascade? _cascade;
+    NodeHandle[] _rowNodes = [];
+    NodeHandle _selfNode;
+
     public override Element Render()
     {
         var svc = UseContext(Overlay.Service);
         var hooks = UseContext(InputHooks.Current);
+        var timers = UseContext(HostTimers.Current);
         var highlight = UseSignal(-1);                            // keyboard cursor index; -1 = none (pointer-only)
-        var subOpenIdx = UseSignal(-1);                           // index of the row whose cascade popup is open
-        var pendingOpenIdx = UseSignal(-1);                       // sub-item row hovered, waiting MenuShowDelay
-        var pendingClose = UseSignal(false);                      // hover left the open sub-item row → delay-close armed
-        var subHandle = UseRef<OverlayHandle?>(null);
-        var subMenuNode = UseRef<NodeHandle>(default);   // the open cascade child's root node (safe-triangle base edge)
-        var aimApex = UseRef<Point2>(default);           // launch point for the safe-triangle (pointer over the open sub-item row)
-        var rowNodes = UseRef<NodeHandle[]>([]);
-        if (rowNodes.Value.Length != Items.Count) rowNodes.Value = new NodeHandle[Items.Count];
+        if (_rowNodes.Length != Items.Count) _rowNodes = new NodeHandle[Items.Count];
+
+        // This level's cascade, wired once (the items and the parent are mount-time fields of this presenter).
+        var cascade = _cascade;
+        if (cascade is null)
+        {
+            cascade = _cascade = new MenuCascade
+            {
+                Parent = ParentCascade,
+                Parts = Parts,
+                Size = Size,
+                CloseAll = Close,
+            };
+            cascade.Scene = () => Context.Scene;
+            cascade.SelfNode = () => _selfNode;
+            cascade.RowNode = i => (uint)i < (uint)_rowNodes.Length ? _rowNodes[i] : default;
+            cascade.CascadeOf = i => (uint)i < (uint)Items.Count && Items[i] is { Kind: MenuItemKind.SubMenu, Enabled: true, SubItems: { Count: > 0 } sub } ? sub : null;
+        }
+        cascade.Overlay = svc;
+        cascade.Hooks = hooks;
+        cascade.Timers = timers;
+        UseEffect(() => (Action?)(() => cascade.Dispose()), DepKey.Empty);   // unmount: no timer outlives the level
 
         int hi = highlight.Value;                                 // subscribe → re-highlight on arrow move
-        int subOpen = subOpenIdx.Value;                           // subscribe → re-render the SubMenuOpened row fill
-        int pendingOpen = pendingOpenIdx.Value;                   // subscribe → mount/unmount the open-delay clock
-        bool closePending = pendingClose.Value;                   // subscribe → mount/unmount the close-delay clock
+        int subOpen = cascade.OpenIndex.Value;                    // subscribe → re-render the SubMenuOpened row fill
 
         // The menu's look, read now (the control style table): a theme swap restyles the next open, nothing is frozen.
         var st = MenuFlyout.DefaultStyle;
@@ -358,7 +481,7 @@ internal sealed class MenuFlyoutPresenter : Component
         for (int i = 0; i < Items.Count; i++)
         {
             var it = Items[i];
-            if (it.IsSeparator) continue;
+            if (it.IsSeparator || it.Kind == MenuItemKind.Header) continue;
             if (it.Kind is MenuItemKind.Toggle or MenuItemKind.Radio) checkColumn = true;
             if (it.Icon.HasContent && st.ShowIcons) iconColumn = true;
         }
@@ -373,7 +496,7 @@ internal sealed class MenuFlyoutPresenter : Component
         {
             if (!IsSelectable(i)) return;
             highlight.Value = i;
-            var node = rowNodes.Value[i];
+            var node = _rowNodes[i];
             if (!node.IsNull) hooks.MoveFocusVisual?.Invoke(node);
         }
 
@@ -411,58 +534,6 @@ internal sealed class MenuFlyoutPresenter : Component
             }
         }
 
-        void CloseSub()
-        {
-            pendingClose.Value = false;
-            pendingOpenIdx.Value = -1;
-            if (subHandle.Value is { IsOpen: true } h) h.Close();
-            subHandle.Value = null;
-            subMenuNode.Value = default;
-            subOpenIdx.Value = -1;
-        }
-
-        // Open the cascade popup for the sub-item row at <paramref name="i"/>. Anchored to the ROW node so the E4
-        // nested-overlay plumbing resolves the parent chain (z-order above this popup; cascade close with it).
-        // Placement = right of the item, top edges aligned (falls back left per the positioner's fallback walk).
-        // Windowed (ConstrainToRootBounds=false): WinUI menus are windowed popups (FlyoutBase SetIsWindowedPopup).
-        void OpenSub(int i, bool focusFirst)
-        {
-            if (!IsSelectable(i) || Items[i].Kind != MenuItemKind.SubMenu || Items[i].SubItems is not { } subItems) return;
-            if (subOpenIdx.Peek() == i && subHandle.Value is { IsOpen: true }) return;
-            CloseSub();
-            var node = rowNodes.Value[i];
-            if (node.IsNull) return;
-            aimApex.Value = hooks.GetPointerPosition?.Invoke() ?? aimApex.Value;   // safe-triangle launch point
-            var handle = svc.Open(
-                () => rowNodes.Value[i],
-                () => Embed.Comp(() => new MenuFlyoutPresenter
-                {
-                    Items = subItems,
-                    Close = Close,                       // invoking a sub item closes the WHOLE chain (cascade close)
-                    MinWidth = MenuFlyout.ThemeMinWidth,
-                    CloseSelf = () => CloseSub(),        // Left arrow closes one cascade level
-                    OnChildHover = () => pendingClose.Value = false,   // pointer inside the child cancels delay-close
-                    FocusFirstOnMount = focusFirst,      // keyboard open → cursor + focus on the first sub item
-                    Parts = Parts,                       // part modifiers cascade into every sub-menu level
-                    Size = Size,                         // so does the row height
-                    OnRootRealized = h => subMenuNode.Value = h,   // safe-triangle base edge (the child's rect)
-                }),
-                FlyoutPlacement.RightEdgeAlignedTop,
-                new PopupOptions(Chrome: PopupChrome.Flyout)
-                {
-                    ConstrainToRootBounds = false,
-                    // The cascade overlaps its owner by 4px (m_subMenuOverlapPixels — CascadingMenuHelper.h:121,
-                    // cpp:678 subMenuPosition.X += subItemWidth − 4); mirrored automatically on a left flip.
-                    AnchorOffsetX = -4f,
-                });
-            handle.ClosedAction = () =>
-            {
-                if (ReferenceEquals(subHandle.Value, handle)) { subHandle.Value = null; subOpenIdx.Value = -1; }
-            };
-            subHandle.Value = handle;
-            subOpenIdx.Value = i;
-        }
-
         // Keyboard-opened menus: cursor + focus land on the first selectable row once the rows have realized
         // (post-layout, exactly once) — WinUI CascadingMenuHelper keyboard open / MenuBar Down-open semantics.
         var focusedFirst = UseRef(false);
@@ -470,86 +541,10 @@ internal sealed class MenuFlyoutPresenter : Component
         {
             if (!FocusFirstOnMount || focusedFirst.Value) return;
             int f = FirstSelectable();
-            if (f < 0 || rowNodes.Value[f].IsNull) return;
+            if (f < 0 || _rowNodes[f].IsNull) return;
             focusedFirst.Value = true;
             SetCursor(f);
         }, FocusFirstOnMount);
-
-        // Per-row hover bookkeeping — the CascadingMenuHelper timers:
-        //  • hovering a sub-item row arms the 400ms delay-OPEN (cancelled by hovering another row or leaving it — OnRowExit);
-        //  • hovering any OTHER row while a cascade is open arms the 400ms delay-CLOSE (cancelled by re-entering the
-        //    open sub-item row or by the pointer reaching the child popup — OnChildHover).
-        // Safe-triangle (WinUI/macOS submenu hover-intent): while the pointer moves from the sub-item that opened a
-        // cascade TOWARD that open cascade, it stays inside the triangle (launch point → the submenu's near edge) — so
-        // a transient hover over an intervening sibling must NOT arm the delay-close. Leaving the triangle (or dwelling
-        // over a sibling outside it) falls through to the normal 400ms delay-close.
-        bool AimingAtOpenSubmenu(Point2 ptr)
-        {
-            var scene = Context.Scene;
-            int so = subOpenIdx.Peek();
-            if (scene is null || so < 0 || so >= rowNodes.Value.Length) return false;
-            var sub = subMenuNode.Value;
-            if (sub.IsNull || !scene.IsLive(sub)) return false;
-            var r = scene.AbsoluteRect(sub);
-            if (r.W <= 0f || r.H <= 0f) return false;
-            // Near edge = the submenu edge facing the parent menu (left edge when the cascade opened to the right of the
-            // row, else the right edge on a left-flip).
-            var rowNode = rowNodes.Value[so];
-            float nearX = r.X;
-            if (!rowNode.IsNull && scene.IsLive(rowNode))
-            {
-                var rr = scene.AbsoluteRect(rowNode);
-                nearX = r.X >= rr.X ? r.X : r.X + r.W;
-            }
-            return MenuSafeTriangle.Contains(aimApex.Value, new Point2(nearX, r.Y), new Point2(nearX, r.Y + r.H), ptr);
-        }
-
-        void OnRowHover(int i)
-        {
-            OnChildHover?.Invoke();   // bubbling: pointer in THIS presenter also cancels the parent's delay-close
-            var it = Items[i];
-            var ptr = hooks.GetPointerPosition?.Invoke() ?? default;
-            if (subOpenIdx.Peek() == i)   // over the open sub-item row → keep the cascade, refresh the launch point
-            {
-                aimApex.Value = ptr;
-                pendingClose.Value = false;
-                pendingOpenIdx.Value = -1;
-                return;
-            }
-            // Aiming into the open cascade: keep it open (cancel any armed delay-close), ignore this passing sibling.
-            if (subOpenIdx.Peek() >= 0 && AimingAtOpenSubmenu(ptr))
-            {
-                if (pendingClose.Peek()) pendingClose.Value = false;
-                if (pendingOpenIdx.Peek() >= 0) pendingOpenIdx.Value = -1;
-                return;
-            }
-            if (it.Kind == MenuItemKind.SubMenu && it.Enabled)
-            {
-                if (pendingOpenIdx.Peek() != i) pendingOpenIdx.Value = i;
-                if (subOpenIdx.Peek() >= 0) pendingClose.Value = true;
-            }
-            else
-            {
-                if (pendingOpenIdx.Peek() >= 0) pendingOpenIdx.Value = -1;
-                if (subOpenIdx.Peek() >= 0 && !pendingClose.Peek()) pendingClose.Value = true;
-            }
-        }
-
-        // Pointer left row i (WinUI CascadingMenuHelper::OnPointerExited): the row's pending delay-OPEN is cancelled — the
-        // cascade never pops beside a pointer that already moved on (the page, a separator, the menu padding) — and
-        // leaving the OPEN sub-item row for anywhere but its cascade arms the delay-CLOSE. Re-entering the row or reaching
-        // a child row cancels it (OnRowHover / OnChildHover, which fire after this exit on the same move); a pointer that
-        // is already inside the cascade's rect (the 4px overlap, the child's padding/separators) leaves it alone.
-        void OnRowExit(int i)
-        {
-            if (pendingOpenIdx.Peek() == i) pendingOpenIdx.Value = -1;
-            if (subOpenIdx.Peek() != i || pendingClose.Peek()) return;
-            var scene = Context.Scene;
-            var sub = subMenuNode.Value;
-            var ptr = hooks.GetPointerPosition?.Invoke() ?? default;
-            if (scene is not null && !sub.IsNull && scene.IsLive(sub) && scene.AbsoluteRect(sub).Contains(ptr)) return;
-            pendingClose.Value = true;
-        }
 
         // Row-level non-roving keys: Right opens a cascade (focus-first), Left closes a cascade level (sub menus) or
         // navigates the MenuBar; Enter on a sub-item row opens its cascade (the OnClick path handles activation).
@@ -558,12 +553,12 @@ internal sealed class MenuFlyoutPresenter : Component
             int cur = highlight.Peek();
             if (a.KeyCode == Keys.Right)
             {
-                if (IsSelectable(cur) && Items[cur].Kind == MenuItemKind.SubMenu) { OpenSub(cur, focusFirst: true); a.Handled = true; }
+                if (IsSelectable(cur) && Items[cur].Kind == MenuItemKind.SubMenu) { cascade.Open(cur, focusFirst: true); a.Handled = true; }
                 else if (OnNavigate is { } nav) { nav(+1); a.Handled = true; }
             }
             else if (a.KeyCode == Keys.Left)
             {
-                if (CloseSelf is { } closeSelf) { closeSelf(); a.Handled = true; }
+                if (ParentCascade is { } parent) { parent.CloseChild(); a.Handled = true; }
                 else if (OnNavigate is { } nav) { nav(-1); a.Handled = true; }
             }
         }
@@ -578,78 +573,59 @@ internal sealed class MenuFlyoutPresenter : Component
                 rows[i] = MenuFlyout.Separator(st, Parts);
                 continue;
             }
-            // Activation: a sub-menu row OPENS its cascade (WinUI MenuFlyoutSubItem click); other rows invoke + close.
+            if (it.Kind == MenuItemKind.Header)
+            {
+                rows[i] = MenuFlyout.HeaderRow(it, st);
+                continue;
+            }
+            // Activation: a sub-menu row OPENS its cascade (WinUI MenuFlyoutSubItem click, a touch or pen tap); other
+            // rows invoke + close.
             Action activate = it.Kind == MenuItemKind.SubMenu
-                ? () => OpenSub(idx, focusFirst: false)
+                ? () => cascade.Open(idx, focusFirst: false)
                 : () => { it.Invoke?.Invoke(); Close(); };
             rows[i] = MenuFlyout.Row(
                 it, i, activate, checkColumn, iconColumn,
                 highlighted: i == hi,
                 onKeyMove: Move,
                 onRowKey: OnRowKey,
-                onHover: _ => OnRowHover(idx),
-                onExit: () => OnRowExit(idx),
-                onRealized: h => rowNodes.Value[idx] = h,
+                onHover: _ => cascade.RowHover(idx),
+                onExit: () => cascade.RowExit(idx),
+                onRealized: h => _rowNodes[idx] = h,
                 st: st,
                 subOpen: i == subOpen,
                 parts: Parts,
                 size: Size);
         }
 
-        var children = new List<Element>(rows.Length + 2);
-        children.AddRange(rows);
-
-        // Cascade timers (mounted only while pending, keyed so a re-arm remounts a fresh countdown — a fresh mount is a
-        // fresh one-shot arm). ToolTipClock is the shared countdown primitive: one HostTimerQueue entry per mount,
-        // wall-accurate, no per-frame wake, cancelled by unmount.
-        if (pendingOpen >= 0)
-            children.Add(Embed.Comp(() => new ToolTipClock
-            {
-                DurationMs = MenuFlyout.SubMenuShowDelayMs,
-                OnElapsed = () => { if (pendingOpenIdx.Peek() >= 0) { OpenSub(pendingOpenIdx.Peek(), focusFirst: false); pendingOpenIdx.Value = -1; } },
-            }) with { Key = "submenu-open:" + pendingOpen });
-        if (closePending)
-            children.Add(Embed.Comp(() => new ToolTipClock
-            {
-                DurationMs = MenuFlyout.SubMenuShowDelayMs,
-                OnElapsed = () => { if (pendingClose.Peek()) CloseSub(); },
-            }) with { Key = "submenu-close" });
-
         var column = new BoxEl
         {
             Direction = 1,
             MinWidth = MinWidth,                                  // FlyoutThemeMinWidth; final width is content-driven
             OnCharInput = HandleChar,                             // first-letter jump (bubbles from the focused row)
-            Children = children.ToArray(),
+            // Every move over this level — the rows AND the gaps, separators and headers between them — feeds the
+            // cascade's aim (MenuCascade.Sample). A press on a gap moves no focus (the row under the keyboard keeps it).
+            OnPointerMoveWithin = _ => cascade.Sample(),
+            OnPointerExit = cascade.LevelExit,                    // left the gaps: maybe the whole menu
+            AllowFocusOnInteraction = false,
+            Children = rows,
         };
 
         // Size to content (the common case) and cap at MaxHeight with internal scroll, matching
         // MenuFlyoutPresenterScrollViewer. The layout engine content-sizes auto scroll viewports, then clamps by MaxHeight.
+        var parentCascade = ParentCascade;
         return new ScrollEl
         {
             Content = column,
             ContentSized = true,
             MinWidth = MinWidth,
             MaxHeight = MaxHeight,
-            OnRealized = OnRootRealized,   // cascade child reports its rect for the parent's safe-triangle
+            // This level's rect: its own "pointer left the menu" test, and for a cascaded level the level that opened it
+            // (the aim triangle's far edge, the chain test).
+            OnRealized = h =>
+            {
+                _selfNode = h;
+                parentCascade?.ChildMounted(cascade, h);
+            },
         };
     }
-}
-
-/// <summary>The submenu hover-intent polygon (WinUI/macOS "safe triangle"): a pointer travelling from the launch point
-/// (the sub-item that opened the cascade) toward the open submenu's near edge stays inside this triangle, so intervening
-/// sibling hovers don't close the cascade. A pure geometry test (deterministic, gate-checkable).</summary>
-internal static class MenuSafeTriangle
-{
-    /// <summary>True when <paramref name="p"/> lies inside (or on) triangle <paramref name="a"/>/<paramref name="b"/>/<paramref name="c"/>.</summary>
-    internal static bool Contains(Point2 a, Point2 b, Point2 c, Point2 p)
-    {
-        float d1 = Cross(p, a, b), d2 = Cross(p, b, c), d3 = Cross(p, c, a);
-        bool neg = d1 < 0f || d2 < 0f || d3 < 0f;
-        bool pos = d1 > 0f || d2 > 0f || d3 > 0f;
-        return !(neg && pos);   // all same sign (or a zero on an edge) ⇒ inside
-    }
-
-    private static float Cross(Point2 p, Point2 a, Point2 b)
-        => (p.X - b.X) * (a.Y - b.Y) - (a.X - b.X) * (p.Y - b.Y);
 }

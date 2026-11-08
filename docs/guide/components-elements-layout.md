@@ -619,8 +619,11 @@ Toast.CloseAll();       // hovering the strip PAUSES the remaining auto-dismiss 
 anchor's auto-hide *scope* is pinned — auto-hide logic (a chrome idle-hide, a ToolTip dismissal timer) consults
 `svc.IsAnchorPinned(scopeNode)` (true when an open pinning overlay is anchored inside that scope) and subscribes to
 `svc.PinEpoch` for reactivity, so a picker opened from inside an auto-hiding surface keeps it alive. **Submenu
-safe-triangle**: a `MenuFlyout` cascade stays open while the pointer travels from the opening item toward the submenu's
-near edge (the WinUI/macOS hover-intent polygon), so a passing sibling hover doesn't close it.
+aim**: a menu cascade (`MenuFlyout`, a `CommandBarFlyout`'s overflow) stays open while the pointer travels from the
+opening item toward the submenu's near edge (the macOS/Chrome hover-intent triangle), so passing sibling rows, gaps or
+the space between popups neither closes it nor opens a sibling; a pointer that stops over a sibling gets it after the
+WinUI MenuShowDelay. **Light dismiss is by bounds**: a press anywhere inside an input-blocking popup's card (padding,
+headers, gaps, disabled rows) never dismisses it; only a press outside, Escape, or deactivation does.
 
 ### Virtualization (10k+ rows, bounded live nodes)
 Every virtualized layout is a `RepeatLayout` preset; `ItemsView` (below) hosts them all. The low-level substrates:

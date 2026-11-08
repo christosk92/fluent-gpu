@@ -76,6 +76,8 @@ public sealed unsafe class WicImageCodec : IImageCodec, IDisposable
         // pointer until CopyPixels has pulled the last compressed byte. So the source stays pinned for the WHOLE decode and
         // the COM teardown; a pin around InitializeFromMemory alone lets a compacting GC on any thread move a pooled
         // small-object-heap fetch buffer mid-decode, and WIC then reads whatever sits at the old address.
+        // The crash region names a fault in the codec (issue 3 faulted in ucrtbase under CreateDecoderFromStream).
+        using var region = FluentGpu.Foundation.CrashTrail.Enter(FluentGpu.Foundation.NativeRegion.WicDecode, default, encoded.Length);
         fixed (byte* p = encoded)
         try
         {

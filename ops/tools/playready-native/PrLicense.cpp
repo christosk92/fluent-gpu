@@ -167,6 +167,178 @@ std::shared_ptr<fgpr::License> fgpr::LicenseByHandle(uint64_t license)
     return nullptr;
 }
 
+/// The key gate's question (CencMediaStream::m_keyPending, asked under a stream's lock on an MF thread): is the key for
+/// `kid` (the tenc form) still PENDING in this runtime? A usable licence for the KID anywhere in the table answers no - the
+/// key is in the CDM, whichever key session put it there; a pending one (and no usable one) answers yes. No entry, or only
+/// failed / expired / closed ones, answers no too: the gate never parks on a key nobody is fetching, so the pipeline reports
+/// that failure itself instead of waiting for nothing. The table's lock is a leaf (nothing is taken under it).
+bool fgpr::LicensePendingForKid(uint64_t runtime, const uint8_t kid[16])
+{
+    const std::wstring hex = KidToHex(kid);
+    bool pending = false;
+    std::lock_guard<std::mutex> g(Table().mx);
+    for (auto const& e : Table().entries)
+    {
+        if (e->runtime != runtime || e->kidHex != hex) continue;
+        const int32_t st = e->state.load(std::memory_order_acquire);
+        if (st == 1) return false;
+        if (st == 0 && !e->closed.load(std::memory_order_acquire)) pending = true;
+    }
+    return pending;
+}
+
+/// Is the key for `kid` USABLE in this runtime (a usable licence for it anywhere in the table)? Leaf lock.
+static bool LicenseUsableForKid(uint64_t runtime, const uint8_t kid[16])
+{
+    const std::wstring hex = fgpr::KidToHex(kid);
+    std::lock_guard<std::mutex> g(Table().mx);
+    for (auto const& e : Table().entries)
+        if (e->runtime == runtime && e->kidHex == hex && e->state.load(std::memory_order_acquire) == 1) return true;
+    return false;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//  The media session's content enabler, LEVEL-triggered.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// When the PlayReady ITA is asked for a decrypter while the KID's licence is still pending, the media session hands a
+// content enabler to the protection manager (PrRuntime.cpp BeginEnableContent), which passes it to the CDM
+// (SetContentEnabler). The CDM completes it on the NEXT key update for that KID - an edge. Our licences are acquired
+// proactively, in parallel with the topology, so the key can become usable BETWEEN the ITA's refusal and the enabler's
+// registration: on 2026-11-07 one open registered its enabler 3 ms after USABLE, the CDM never completed it, and playback
+// sat at Attaching until the managed 10 s start watchdog tore the open down. Chromium never meets this (its licence
+// request is CAUSED by the enabler, so the key always lands after it).
+// The fix makes completion a function of STATE: the CDM gets a forwarding result whose first completion wins (the CDM's
+// own, or ours), and ours fires as soon as every KID the attached source decrypts with is usable - checked under one lock
+// both at registration and on every licence that leaves Pending, so neither order can lose the wake-up.
+namespace
+{
+struct EnablerForward : winrt::implements<EnablerForward, IMFAsyncCallback>
+{
+    winrt::com_ptr<IMFAsyncResult> outer;   // the media session's own result (its callback + state)
+    uint64_t runtime = 0;
+    fgpr::EnableKeys keys{};
+    int64_t registeredQpc = 0;
+    std::atomic<bool> fired{ false };
+
+    /// Complete the session's enable operation, once. False when it was already completed.
+    bool Fire(HRESULT status, const char* by)
+    {
+        if (fired.exchange(true, std::memory_order_acq_rel)) return false;
+        outer->SetStatus(status);
+        const HRESULT hr = MFInvokeCallback(outer.get());
+        LogLine(std::string("[eme-pm] content enabler completed by ") + by + " kid=" +
+                (keys.count > 0 ? fgpr::Narrow(fgpr::KidToHex(keys.kid[0])) : std::string("-")) + " status=" + fgpr::Hex(status) +
+                " afterMs=" + std::to_string((long long)fgpr::MsSinceQpc(registeredQpc)) + " invokeHr=" + fgpr::Hex(hr));
+        return true;
+    }
+
+    IFACEMETHODIMP GetParameters(DWORD*, DWORD*) noexcept override { return E_NOTIMPL; }
+    IFACEMETHODIMP Invoke(IMFAsyncResult* inner) noexcept override
+    {
+        Fire(inner ? inner->GetStatus() : E_POINTER, "the CDM");
+        return S_OK;
+    }
+};
+
+struct EnablerWaits
+{
+    std::mutex mx;   // taken before the licence table's (leaf) lock, never under it
+    std::vector<winrt::com_ptr<EnablerForward>> waits;
+    // The last enabler completed at registration: a second one for the same KID right after means the ITA still refuses
+    // with the key usable (not this race). That one is left to the CDM, so a refusal can never become a busy loop.
+    uint64_t lastRuntime = 0;
+    uint8_t lastKid[16] = {};
+    int64_t lastQpc = 0;
+};
+EnablerWaits& Waits() { static EnablerWaits w; return w; }
+
+enum class KeysState { Usable, Pending, Neither };
+
+KeysState StateOf(uint64_t runtime, const fgpr::EnableKeys& keys)
+{
+    bool allUsable = keys.count > 0, anyPending = false;
+    for (int i = 0; i < keys.count; i++)
+    {
+        if (LicenseUsableForKid(runtime, keys.kid[i])) continue;
+        allUsable = false;
+        if (fgpr::LicensePendingForKid(runtime, keys.kid[i])) anyPending = true;
+    }
+    return allUsable ? KeysState::Usable : anyPending ? KeysState::Pending : KeysState::Neither;
+}
+
+/// A licence of `runtime` left Pending: every enabler waiting on keys that are now all usable completes; one whose keys
+/// will never come (failed / expired) is left to the CDM and the pipeline's own error.
+void ReleaseEnablers(uint64_t runtime)
+{
+    std::vector<winrt::com_ptr<EnablerForward>> due;
+    {
+        std::lock_guard<std::mutex> g(Waits().mx);
+        auto& v = Waits().waits;
+        for (size_t i = 0; i < v.size();)
+        {
+            EnablerForward& w = *v[i];
+            if (w.runtime != runtime) { i++; continue; }
+            const KeysState st = w.fired.load(std::memory_order_acquire) ? KeysState::Neither : StateOf(runtime, w.keys);
+            if (st == KeysState::Pending) { i++; continue; }
+            if (st == KeysState::Usable) due.push_back(v[i]);
+            v.erase(v.begin() + (ptrdiff_t)i);
+        }
+    }
+    for (auto const& w : due) w->Fire(S_OK, "the key turning usable");
+}
+}   // namespace
+
+HRESULT fgpr::LicenseEnableContent(uint64_t runtime, const EnableKeys& keys, IMFContentDecryptionModule* cdm,
+                                   IMFContentEnabler* enabler, IMFAsyncResult* outer)
+{
+    if (keys.count == 0) return cdm->SetContentEnabler(enabler, outer);   // nothing to judge it by: the CDM's own path
+    auto fwd = winrt::make_self<EnablerForward>();
+    fwd->outer.copy_from(outer);
+    fwd->runtime = runtime;
+    fwd->keys = keys;
+    fwd->registeredQpc = fgpr::QpcNow();
+    winrt::com_ptr<IMFAsyncResult> inner;
+    HRESULT hr = MFCreateAsyncResult(nullptr, fwd.get(), nullptr, inner.put());
+    if (FAILED(hr)) return hr;
+    // The CDM first: a failure here is reported synchronously and nothing may complete the operation afterwards.
+    hr = cdm->SetContentEnabler(enabler, inner.get());
+    if (FAILED(hr)) { fwd->fired.store(true, std::memory_order_release); return hr; }
+    KeysState st;
+    {
+        std::lock_guard<std::mutex> g(Waits().mx);
+        auto& v = Waits().waits;
+        v.erase(std::remove_if(v.begin(), v.end(), [](auto const& w) { return w->fired.load(std::memory_order_acquire); }), v.end());
+        st = StateOf(runtime, keys);
+        if (st == KeysState::Pending) v.push_back(fwd);
+        if (st == KeysState::Usable)
+        {
+            EnablerWaits& w = Waits();
+            const bool repeat = w.lastRuntime == runtime && std::memcmp(w.lastKid, keys.kid[0], 16) == 0 &&
+                                w.lastQpc != 0 && fgpr::MsSinceQpc(w.lastQpc) < 2000;
+            if (repeat) st = KeysState::Neither;
+            else { w.lastRuntime = runtime; std::memcpy(w.lastKid, keys.kid[0], 16); w.lastQpc = fgpr::QpcNow(); }
+            if (repeat) LogLine("[eme-pm] content enabler again for a usable key within 2 s: left to the CDM");
+        }
+    }
+    LogLine(std::string("[eme-pm] content enabler registered kid=") + fgpr::Narrow(fgpr::KidToHex(keys.kid[0])) + " key=" +
+            (st == KeysState::Usable ? "usable" : st == KeysState::Pending ? "pending" : "none"));
+    if (st == KeysState::Usable) fwd->Fire(S_OK, "registration (the key was already usable)");
+    return S_OK;
+}
+
+/// A licence just left Pending (usable, failed, killed, expired): the requests the key gate parked re-ask it. Posted to the
+/// runtime thread's Engine lane, never run here: the CDM's KeyStatusChanged thread and the managed relay's thread must not
+/// take a session's feed lock (PrSession.cpp SessionsKeySettled). A runtime already going away has nothing to release.
+/// A content enabler waiting on the key is completed here, at once (ReleaseEnablers takes no session lock).
+static void PostKeySettled(const fgpr::License& lic)
+{
+    ReleaseEnablers(lic.runtime);
+    std::shared_ptr<fgpr::Runtime> rt = fgpr::RuntimeFor(lic.runtime);
+    if (!rt) return;
+    fgpr::Runtime* raw = rt.get();
+    rt->queue.Post([raw] { fgpr::SessionsKeySettled(*raw); });
+}
+
 /// Mark an acquisition failed ONCE and say so. A license that was already usable is not downgraded by a late failure
 /// of a renewal round trip — its key is still in the CDM.
 static void FailLicense(fgpr::License& lic, HRESULT hr)
@@ -177,6 +349,7 @@ static void FailLicense(fgpr::License& lic, HRESULT hr)
     LogLine("[cdm] license kid=" + fgpr::Narrow(lic.kidHex) + " FAILED hr=" + fgpr::Hex(hr) + " after " +
             std::to_string((long long)fgpr::MsSinceQpc(lic.acquireQpc)) + "ms");
     Raise(lic.handle, FgPrEvent_LicenseFailed, (int64_t)(int32_t)hr, 0, lic.kidHex.c_str());
+    PostKeySettled(lic);   // a parked request is delivered: the pipeline reports the dead key rather than waiting on it
 }
 
 /// Close one key session (runtime thread). Idempotent.
@@ -237,6 +410,7 @@ static void KillLicense(const std::shared_ptr<fgpr::License>& lic, int32_t statu
     if (prev == 0) Raise(lic->handle, FgPrEvent_LicenseFailed, (int64_t)hr, 0, lic->kidHex.c_str());
     else Raise(lic->handle, FgPrEvent_LicenseRevoked, (int64_t)hr, (int64_t)status, lic->kidHex.c_str());
     EvictLicense(lic);
+    if (prev == 0) PostKeySettled(*lic);
 }
 
 // Read the key statuses and publish the transition. Runs on the CDM thread (KeyStatusChanged) and on the runtime
@@ -297,6 +471,7 @@ static void QueryKeyStatus(const std::shared_ptr<fgpr::License>& licPtr)
         LogLine("[cdm] license kid=" + fgpr::Narrow(lic.kidHex) + " USABLE in " + std::to_string((long long)ms) +
                 "ms expiresInMs=" + std::to_string((long long)expiresIn));
         Raise(lic.handle, FgPrEvent_LicenseUsable, ms, expiresIn, lic.kidHex.c_str());
+        PostKeySettled(lic);   // THE KEY GATE: the first encrypted sample of every source waiting on this KID goes now
     }
     else if (action == fgpr::licensing::KeyAction::BecomeExpired)
     {
@@ -304,6 +479,7 @@ static void QueryKeyStatus(const std::shared_ptr<fgpr::License>& licPtr)
         do { if (prev != 0 && prev != 1) return; }
         while (!lic.state.compare_exchange_weak(prev, 2, std::memory_order_acq_rel));
         Raise(lic.handle, FgPrEvent_LicenseExpired, 0, 0, lic.kidHex.c_str());
+        if (prev == 0) PostKeySettled(lic);
     }
 }
 

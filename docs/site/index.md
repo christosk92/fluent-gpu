@@ -1,6 +1,6 @@
 # FluentGpu
 
-A from-scratch, **near-zero-allocation, NativeAOT, GPU-rendered** UI framework for .NET 10. You write UI the way
+A from-scratch, **near-zero-allocation, NativeAOT, GPU-rendered** UI framework for .NET 11. You write UI the way
 [Microsoft.UI.Reactor](https://github.com/microsoft/microsoft-ui-reactor) does — immutable `Element` records assembled
 with a fluent C# DSL, rendered by `Component.Render()`, with co-located hooks and a keyed reconciler — but everything
 underneath is ours: a **signals-first** (Solid-style) reactive core that patches a retained struct-of-arrays render

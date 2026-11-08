@@ -262,7 +262,7 @@ public sealed partial class AnimEngine
         int s = Find(node, ch);
         if (s < 0)
         {
-            // SizeMode.Relayout keeps its declared shadow on the SizeW/SizeH row (the host pins this column to the interp
+            // SizeMode.Relayout keeps its declared shadow on the SizeW/SizeH row (the host lays the node's subtree out at the interp
             // each tick). File the re-declaration there so a retarget carries ground truth, but still answer false: the
             // reconciler must write the column so this commit's layout solves the destination AnimateBounds aims at.
             int rs = Find(node, ch == AnimChannel.LayoutW ? AnimChannel.SizeW : AnimChannel.SizeH);

@@ -506,7 +506,7 @@ inline size_t TrimBehindByTime(std::vector<cenc::Sample>& samples, size_t& next,
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-//  RepBook / FormatGenAt — which video format each buffered sample belongs to, pure so a console test exe can drive it.
+//  RepBook / FormatGenAt — which video format each buffered sample belongs to, pure.
 // ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //
 // A representation switch used to announce MEStreamFormatChanged when the new run was SPLICED, which is up to a whole
@@ -582,8 +582,8 @@ inline uint16_t FormatGenAt(const std::vector<cenc::Sample>& samples, size_t nex
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-//  SpliceSamples / IsAscending / ContiguousAheadMs — pure, lock-free, over just the vector + cursor, so a console
-//  test exe can exercise the splice policy without linking Media Foundation.
+//  SpliceSamples / IsAscending / ContiguousAheadMs — pure, lock-free, over just the vector + cursor, so the splice policy
+//  reads without Media Foundation.
 // ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //
 // ORDERING KEY DECISION: `samples` is kept ascending in `decodeTicks`, NOT `timeTicks`.
@@ -607,7 +607,7 @@ inline uint16_t FormatGenAt(const std::vector<cenc::Sample>& samples, size_t nex
 //     the identical pattern for the same reason.
 //   * "Already delivered" is a DECODE-order fact: delivery walks the vector and the vector is in decode order, so
 //     the straddle filter drops `decodeTicks < samples[next].decodeTicks`. (It first filtered on `timeTicks` and lost
-//     the B frames decoded after the cursor's P frame but displayed before it — FeedTests B18b.)
+//     the B frames decoded after the cursor's P frame but displayed before it.)
 //   * The truncating splice's STALENESS test alone stays on `timeTicks`: its run starts at a keyframe, the earliest
 //     presentation time of its GOP, and the boundary it is checked against was picked in presentation ms
 //     (`NextSampleTimeMs()` in PrSession.cpp) — a keyframe earlier than the cursor's presentation time would rewind
@@ -713,7 +713,7 @@ inline SpliceOutcome SpliceSamples(std::vector<cenc::Sample>& samples, size_t& n
         // the vector, and the vector is in DECODE order — so "already delivered" is a decode-time fact, not a
         // presentation-time one. Filtering on timeTicks (what this first did) also threw away the B frames that are
         // decoded AFTER the cursor's P frame but displayed BEFORE it: undelivered samples, two per GOP, silently lost
-        // (FeedTests B18b: 38 samples where 40 went in).
+        // (38 samples where 40 went in).
         const uint64_t deliveredDecode = samples[next].decodeTicks;
         incoming.erase(std::remove_if(incoming.begin(), incoming.end(),
                                       [&](const cenc::Sample& s) { return s.decodeTicks < deliveredDecode; }),
@@ -788,7 +788,7 @@ inline int64_t ContiguousAheadMs(const std::vector<cenc::Sample>& samples, size_
 /// + ~47 audio a second) and the walk above is O(buffered samples) under the stream lock the decoder's RequestSample
 /// needs. The answer only changes for two reasons: the buffer itself was mutated (an append, a trim, a flush: the
 /// stream bumps `version`) or the cursor moved. So the run found by one walk is cached and reused while the cursor
-/// walks through it, and the result is EXACTLY the fresh walk's (FeedTests C20b checks that against ContiguousAheadMs
+/// walks through it, and the result is EXACTLY the fresh walk's (the same answer as ContiguousAheadMs
 /// over every cursor of a B-frame buffer, with and without a hole), not an approximation:
 ///   * a walk anchored at `a` tracks a running reach that starts at samples[a].start. Before processing sample i it
 ///     equals max(start_a, ends of [a, i)). A walk anchored later at n sees only max(start_n, ends of [n, i)), and the

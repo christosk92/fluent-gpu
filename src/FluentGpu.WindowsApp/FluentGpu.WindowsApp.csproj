@@ -63,7 +63,7 @@
   </ItemGroup>
   <ItemGroup>
     <!-- OutputItemType=Analyzer loads the unified generator asm (FluentGpu.SourceGen) as an analyzer;
-         ReferenceOutputAssembly=false keeps the netstandard2.0 generator OUT of the net10.0 app's runtime references.
+         ReferenceOutputAssembly=false keeps the netstandard2.0 generator OUT of the net11.0 app's runtime references.
          The loc generator fires off the FluentGpuLocBase AdditionalFiles above; the [Validatable] generator stays
          dormant unless a `[FluentGpu.Forms.Validatable] partial` type is declared in this project. -->
     <ProjectReference Include="..\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"

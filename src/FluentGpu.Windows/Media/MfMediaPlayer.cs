@@ -200,6 +200,17 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
         string url = ResolveUrl(source) ?? throw new NotSupportedException(
             "MfMediaPlayer supports a file path or a URL source (FromFile/FromUri).");
 
+        // A local clip that loops forever plays as a GAPLESS loop: its sample tables repeated on one continuous timeline (Mp4LoopRemux:
+        // the engine's own loop seeks at the source's end and flushes the clip's last frames, a visible hitch every loop). Prepared off the
+        // caller; a file it cannot repeat keeps the engine's loop.
+        bool loop = IsInfiniteLoop(source);
+        double seamPeriod = 0;
+        if (loop && IsLocalFile(url) && await Task.Run(() => Mp4LoopRemux.TryPrepare(url), ct).ConfigureAwait(false) is { } gapless)
+        {
+            url = gapless.Path;
+            seamPeriod = gapless.ClipSeconds;
+        }
+
         ct.ThrowIfCancellationRequested();   // before an engine is leased; nothing below blocks
 
         IVideoEngine engine = LeaseEngine();
@@ -208,7 +219,8 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
         // A media element does not loop by default (the M3 harness kept a live frame via loop), but a source the caller
         // explicitly wrapped in .Loop() must. Only an INFINITE loop maps onto the MF media engine, whose loop flag is a
         // bool with no repeat count — a finite count would silently become infinite, so it stays unlooped instead.
-        engine.Commands.Post(VideoCommandKind.Loop, i: IsInfiniteLoop(source) ? 1 : 0);
+        // The gapless loop keeps it on as the backstop at the end of its repetitions, and names its clip length (the seam probe's period).
+        engine.Commands.Post(VideoCommandKind.Loop, a: seamPeriod, i: loop ? 1 : 0);
         // The play/pause intent goes out WITH the source: MF accepts Play() before the source resolves, and the Transport
         // slot is last-wins, so this overwrites the pause ReturnEngine left behind (a warm engine drains Detach, SetSource,
         // then Transport) instead of leaving the engine paused until the session's first post-metadata pump re-asserts it.
@@ -281,6 +293,10 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
         ClipSource c => IsInfiniteLoop(c.Inner),
         _ => false,
     };
+
+    /// <summary>A path on disk (not an http(s) or other scheme URL).</summary>
+    internal static bool IsLocalFile(string url)
+        => !url.Contains("://", StringComparison.Ordinal) && System.IO.Path.IsPathFullyQualified(url) && System.IO.File.Exists(url);
 
     /// <summary>Extract the MF source URL from a <see cref="MediaSource"/> (a local path is passed through; MF accepts
     /// both file paths and http(s) URLs). Returns null for a shape MF can't open by URL.</summary>

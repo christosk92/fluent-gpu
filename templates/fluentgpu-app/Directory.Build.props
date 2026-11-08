@@ -1,7 +1,7 @@
 <Project>
 
   <!-- The FluentGpu engine is a checkout next to this app, referenced through $(EngineRoot) (never a package here).
-       FluentGpu.App.props (at the engine root) brings the whole app baseline: net10 / GC posture, PublishAot for the
+       FluentGpu.App.props (at the engine root) brings the whole app baseline: net11 / GC posture, PublishAot for the
        exe, the engine ProjectReferences, the source generators and the NativeAOT vswhere fix. docs/guide/new-app.md.
 
        Pin a different checkout per machine or worktree in a git-ignored EngineRoot.local.props:

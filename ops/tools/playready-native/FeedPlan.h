@@ -1,5 +1,5 @@
-// FeedPlan.h — the feeder's segment-index arithmetic, pulled out of PrSession.cpp's PlanTrack so it can be exercised
-// by a dependency-free test exe (no <windows.h>, no WinRT, no CencMediaStream — just the numbers).
+// FeedPlan.h — the feeder's segment-index arithmetic, pulled out of PrSession.cpp's PlanTrack so it stays
+// pure (no <windows.h>, no WinRT, no CencMediaStream — just the numbers).
 //
 // THE PRODUCTION INCIDENT THIS FILE FIXES (proved from a warm-start log). A warm-start prefetch landed video segments
 // 0 and 1, leaving the progress guard at lastIdx=1, lastCovEnd=8007. The first ABR tick then ran a representation

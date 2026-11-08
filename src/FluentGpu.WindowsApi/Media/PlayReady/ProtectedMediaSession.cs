@@ -29,7 +29,7 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 /// a typed failure (Drm while the license is pending or the topology is being built, Network while the store is still
 /// empty). It is armed once at connect and disarmed by the first frame; it is a deadline, not a poll.</para>
 /// </summary>
-public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource
+public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource, IMediaClockSource
 {
     private readonly IProtectedVideoPlayer _player;
     private readonly ProtectedVideoRequest _request;
@@ -94,6 +94,10 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     // keeps only ViewportUpswitchRetainMs of the old representation's buffer instead of appending after all of it.
     private bool _viewportRaised;
     private long _viewportRaiseTicks;
+    // The user turned a pin back to Auto: ABR's first pick is the user's choice taking effect and shows the way a pin does
+    // (PinRetainMs), not after the whole buffer the pinned rung filled (a minute of 240p after "Auto", 2026-11-08).
+    private bool _autoRestored;
+    private long _autoRestoredTicks;
     private long _lastBytesDownloaded;
     private long _lastDownloadElapsedMs;
     private long _lastGrowthTicks;
@@ -130,6 +134,11 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             // source's ladder position, probe/climb state and viewport cap.
             _abr.ResetForNewSource();
             _qualitySelection = _abr.Selection;
+            // A pin the shared controller carries from the PREVIOUS source names that manifest's representation: one this
+            // track does not list can never be selected, and holding it as a pin would keep ABR off (Auto is the only
+            // selection the ladder runs under) and leave this source on its opening rung for good.
+            if (!_qualitySelection.IsAuto && FindRepresentation(_videoTrack, _qualitySelection.VariantId) is null)
+                _abr.Selection = _qualitySelection = QualitySelection.Auto;
             _activeQuality = FindInitialQuality(_videoTrack, request.InitUrl);
             _downloadingQualityId = _activeQuality?.Id;
             for (int i = 0; i < _qualityVariants.Length; i++)
@@ -209,6 +218,23 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         if (!_qualitySelection.IsAuto && _qualitySelection.VariantId is { } initialPin)
             RequestRepresentation(initialPin, PinRetainMs, Environment.TickCount64);
         RequestPump();
+    }
+
+    /// <summary>The native clock's latest sample (<see cref="IMediaClockSource"/>), between pumps. While a seek is published
+    /// the clock reads its target, stopped, exactly as <see cref="PumpState"/> holds the published position until the seek
+    /// lands. Any thread; no allocation.</summary>
+    public bool TryReadClock(out MediaClockSample sample)
+    {
+        sample = default;
+        if (_disposed) return false;
+        if (Volatile.Read(ref _seekPublished))
+        {
+            sample = new MediaClockSample(TimeSpan.FromMilliseconds(Volatile.Read(ref _seekTargetMs)), Stopwatch.GetTimestamp(), _rate, running: false);
+            return true;
+        }
+        if (!_player.TryReadClock(out long ms, out long qpc, out bool running)) return false;
+        sample = new MediaClockSample(TimeSpan.FromMilliseconds(ms), qpc, _rate, running);
+        return true;
     }
 
     private void OnPlayerPumpRequested() => RequestPump();
@@ -364,6 +390,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _qualitySelection = selection;
         if (_abr is not null) _abr.Selection = selection;
         _sink?.QualitySelection(selection, _activeQuality);
+        if (selection.IsAuto && !previous.IsAuto) { _autoRestored = true; _autoRestoredTicks = Environment.TickCount64; }
+        else if (!selection.IsAuto) _autoRestored = false;
         if (!selection.IsAuto && selection.VariantId is { } id)
         {
             _pendingRepresentationId = id;
@@ -833,6 +861,11 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             if (!isDecrease && now - _viewportRaiseTicks <= ViewportRaiseRetainWindowMs) retainMs = ViewportUpswitchRetainMs;
             if (!isDecrease) _viewportRaised = false;
         }
+        if (_autoRestored)
+        {
+            if (now - _autoRestoredTicks <= AutoRestoreWindowMs) retainMs = PinRetainMs;
+            _autoRestored = false;
+        }
         // Always-on, and only on an actual rung change: the sample that fed the estimate, both EWMAs, the buffer,
         // the cap and WHY — the one line that explains an "Auto · 240p" from a field log with no repro.
         _player.LogDiagnostic(
@@ -857,6 +890,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     /// <summary>The forward buffer an upswitch keeps after a viewport raise, and how long after the raise it applies.</summary>
     private const int ViewportUpswitchRetainMs = 25_000;
     private const long ViewportRaiseRetainWindowMs = 15_000;
+
+    /// <summary>How long after a pin is turned back to Auto ABR's first rung change still counts as the user's choice.</summary>
+    private const long AutoRestoreWindowMs = 15_000;
 
     /// <summary>A manual pin lands at the boundary right after the playhead: the user asked for that rung NOW.</summary>
     private const int PinRetainMs = 0;

@@ -694,6 +694,10 @@ public record struct InteractionAnim
     // lerp(lerp(1,HoverScale,HoverT),PressScale,PressT) — e.g. a slider/scrollbar thumb that grows on hover, shrinks on
     // press. Composited only: it never changes layout or hit-testing (HitTest reads Bounds, not the world transform).
     public float HoverScale, PressScale;
+    // The axes that scale acts on (Both, or WinUI's ScaleY-only pill squish), and the press fade's release duration
+    // (0 = snap back at release, a WinUI state change with no VisualTransition).
+    public ScaleAxes ScaleAxes;
+    public float PressReleaseMs;
     public const float ControlFasterMs = 83f;
     public const float ControlFastMs = 167f;
     public const float ControlNormalMs = 250f;
@@ -703,6 +707,7 @@ public record struct InteractionAnim
         PressScale = 1f,
         HoverDurationMs = ControlFasterMs,
         PressDurationMs = ControlFasterMs,
+        PressReleaseMs = ControlFasterMs,
         HoverEasing = Easing.FluentPopOpen,
         PressEasing = Easing.FluentPopOpen,
     };

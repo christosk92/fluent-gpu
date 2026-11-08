@@ -249,7 +249,9 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
 
     /// <summary>Idempotent, non-blocking preload of the native component, so the first protected open does not pay an
     /// implicit <c>LoadLibrary</c> of the DLL plus its whole MF/PlayReady dependency chain on the caller's thread. The
-    /// handle is DELIBERATELY kept loaded (freeing it drops the loader refcount and forfeits the warmup).</summary>
+    /// handle is DELIBERATELY kept loaded (freeing it drops the loader refcount and forfeits the warmup). It also starts the
+    /// PlayReady CDM prewarm (<see cref="PlayReadyCdmPrewarm"/>): the ~1.2 s once-per-process CDM initialisation the first
+    /// bring-up would otherwise wait on.</summary>
     public static void Warmup()
     {
         if (Interlocked.Exchange(ref s_warmupStarted, 1) != 0) return;
@@ -262,6 +264,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
             }
             catch { /* best-effort: absence is handled at the open */ }
         }, null);
+        PlayReadyCdmPrewarm.Start(softwareOnly: FluentGpu.Hosting.EngineSwitches.ForcePlayReadySl2000);
     }
 
     /// <summary>The native runtime handle, 0 when bring-up has not run or failed.</summary>
@@ -367,10 +370,6 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                 ulong rt;
                 try
                 {
-                    // F249: the engine's output format is read once, at bring-up: NV12 only behind --fg video-nv12 and only where the output's
-                    // overlay probe said NV12 can take a plane (an unprobed output, or the switch off, keeps BGRA).
-                    VideoOutputFormat outputFormat = VideoOverlayCaps.ChooseOutputFormat(FluentGpu.Hosting.EngineSwitches.Nv12VideoOutput, VideoOverlayCaps.Latest);
-                    _native.SetVideoOutputFormat((int)outputFormat);
                     // F022: the PlayReady security level is read once too. Default: probe hardware SL3000 and fall back to SL2000
                     // (native logs the negotiated level); `--fg playready-sl2000` forces the software request.
                     _native.SetSecurityPolicy(ChooseSecurityPolicy(FluentGpu.Hosting.EngineSwitches.ForcePlayReadySl2000));
@@ -1522,9 +1521,6 @@ internal interface IPrRuntimeNative
     /// <summary><c>FgPrRuntimeCreateOnAdapter</c> with the runtime's event thunk and <paramref name="ctx"/>. <paramref name="adapterLuid"/>
     /// (packed <c>(HighPart &lt;&lt; 32) | LowPart</c>, 0 = default adapter) is the adapter the D3D11 video device is created on.</summary>
     int RuntimeCreate(string storePath, nint ctx, long adapterLuid, out ulong runtime);
-    /// <summary><c>FgPrRuntimeSetVideoOutputFormat</c> (F249): the media engine's output format for the runtime the NEXT
-    /// <see cref="RuntimeCreate"/> brings up - 0 = BGRA (the default), 1 = NV12 (<see cref="VideoOutputFormat"/>).</summary>
-    void SetVideoOutputFormat(int format);
     /// <summary><c>FgPrRuntimeSetSecurityPolicy</c> (F022): the PlayReady security level the runtime the NEXT <see cref="RuntimeCreate"/>
     /// brings up asks for - <see cref="PrNative.SecurityProbe3000"/> (the default: probe hardware SL3000, fall back to SL2000) or
     /// <see cref="PrNative.SecurityForce2000"/>.</summary>
@@ -1553,7 +1549,7 @@ internal sealed unsafe class PrRuntimeNative : IPrRuntimeNative
     /// protected open, so it is reported as unavailable up front instead.</summary>
     internal static readonly string[] RequiredExports =
     [
-        "FgPrRuntimeCreateOnAdapter", "FgPrRuntimeDestroy", "FgPrRuntimeUptimeMs", "FgPrRuntimeSetVideoOutputFormat", "FgPrRuntimeSetSecurityPolicy",
+        "FgPrRuntimeCreateOnAdapter", "FgPrRuntimeDestroy", "FgPrRuntimeUptimeMs", "FgPrRuntimeSetSecurityPolicy",
         "FgPrLicenseAcquire", "FgPrLicenseState", "FgPrLicenseRelease",
         "FgPrSessionCreate", "FgPrSessionPrefetch", "FgPrSessionAttach", "FgPrSessionDetach", "FgPrSessionDestroy",
         "FgPrSessionPlay", "FgPrSessionPause", "FgPrSessionSeek", "FgPrSessionSetVolume", "FgPrSessionSetRate",
@@ -1608,7 +1604,6 @@ internal sealed unsafe class PrRuntimeNative : IPrRuntimeNative
         return hr;
     }
 
-    public void SetVideoOutputFormat(int format) => PrNative.FgPrRuntimeSetVideoOutputFormat(format);
     public void SetSecurityPolicy(int policy) => PrNative.FgPrRuntimeSetSecurityPolicy(policy);
 
     public void RuntimeDestroy(ulong runtime) => PrNative.FgPrRuntimeDestroy(runtime);

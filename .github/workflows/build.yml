@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '11.0.x'   # repo targets net10.0 but builds on the 11.x preview SDK (matches nuget.yml/msix.yml)
+          dotnet-version: '11.0.x'   # repo targets net11.0 on the 11.0 RC SDK pinned in src/global.json (matches nuget.yml/msix.yml)
           dotnet-quality: preview
 
       # The solution covers the engine, the control kit, the Windows backends, the source generator and the gallery.

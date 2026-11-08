@@ -1,5 +1,5 @@
 // WorkQueue.h — the runtime thread's event-driven queue, with two priority lanes. Standalone on purpose (std only, no
-// Windows, no FgPlayReady.h): tests\FeedTests.cpp includes it directly.
+// Windows, no FgPlayReady.h): it compiles on its own.
 //
 // WHY TWO LANES. Every verb, every media-engine event and every licence step used to be one item on ONE FIFO that the
 // runtime thread drains, and the licence steps (CreateSession, GenerateRequest, Update, Close) are PMP round trips into

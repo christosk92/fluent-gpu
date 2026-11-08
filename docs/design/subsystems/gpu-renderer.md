@@ -1195,24 +1195,37 @@ scroll or animation turn moves the video with the hole), and on a turn that move
 for its own GPU work and the placement is committed immediately after it (`threading-render-seam.md` §10, Stage B). They are still
 two flushes; the single-transaction form (one DComp visual holding hole and video) is a recorded follow-up, not built.
 
-**Overlay probe, NV12 output and overlay promotion (F249 / F087, both A/B arms, default off).** `D3D12Device.SamplePresentTopology` asks
-the output the window sits on, once per output (first resolve or monitor change, never per present), what it reports through
-`IDXGIOutput3::CheckOverlaySupport` for NV12, YUY2 and BGRA, and logs that verdict on the `[d3d12.present] topology=...` line
-(`overlay[nv12=direct+scaling yuy2=none bgra=direct] note=...`) in place of the old `direct-scan-out-path-available`, which was printed
-from adapter ownership alone. The verdict is `VideoOverlayCaps` (published process-wide; `default` = not probed, which claims nothing).
-`--fg video-nv12` drops the forced B8G8R8A8 `MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT` for NV12 on both engines (the clear engine at
-`CreateEngine`, the protected one through `FgPrRuntimeSetVideoOutputFormat`, called before the runtime create reads it) only when the
-probe reports NV12 as plane-capable; BGRA is the fallback. `--fg video-overlay` lets the video visual sit ABOVE the UI visual while
+**Overlay probe and overlay promotion (F087, A/B arm, default off); no forced engine output format.** `VideoOverlayProbe`
+(FluentGpu.Windows/Media) asks every output of the render adapter what `IDXGIOutput3::CheckOverlaySupport` reports for NV12, YUY2 and
+BGRA (plus, for the log, P010, `IDXGIOutput4::CheckOverlayColorSpaceSupport` for NV12 BT.709 studio and `IDXGIOutput6` hardware
+composition) and logs one `[video.overlay] probe output=... overlay[nv12=scaling yuy2=none bgra=none] ...` line per output. It must
+pass a D3D11 device as the concerned device: the D3D12 queue fails with E_NOINTERFACE and an `ID3D12Device` or an 11on12 device
+answers with every flag 0 (measured, Adreno X1-85 31.0.148.0; the queue probe that preceded it logged `overlay[unprobed]` on every
+window, so promotion never switched on). It reuses the clear engine's `MfVideoDevice` (at engine bring-up, once per process) or,
+when the overlay switch asks a presenter about a monitor not probed yet, leases that device on a background thread once; it never
+creates a device at startup or for an audio-only session. The `[d3d12.present] topology=...` line shows the cached verdict for its
+monitor. The verdict is `VideoOverlayCaps` (`default` = not probed, which claims nothing).
+Neither engine sets `MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT` any more. It is the frame-server render-target format; in windowless
+swap-chain mode the Simple Video Renderer (mfsvr.dll) ignores it. A presentation-manager probe of the clear engine (BGRA forced, NV12
+forced, unset: identical) shows SVR registering the decoder's own NV12 textures (`BIND_DECODER`, shared displayable) with the
+Composition Swapchain API (`IPresentationManager`), tagging them `DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709` with alpha ignored and
+presenting at the content rate: zero copies and no video-processor pass. SVR also chooses YUV vs RGB from its own composition feedback
+(`CompositionFrame` statistics: `ScanoutOnScreen` vs `ComposedOnScreen`). The forced BGRA and F249's `--fg video-nv12` arm were a
+no-op and are deleted (with `FgPrRuntimeSetVideoOutputFormat`); Chromium's MediaFoundationRenderer and the Microsoft MediaEngine
+samples set nothing here either.
+`--fg video-overlay` lets the video visual sit ABOVE the UI visual while
 nothing paints over its rect and the output reported a plane: the composite plan classifies every posed hole after the plan is laid out
 (`SliceRecorder.ClassifyVideoOcclusion` -> `VideoPosedHole.Unoccluded`: no op after the `DrawVideo` in its segment, and no later
 segment, slice, backdrop or hole in painter order overlaps the visible hole; judged on whole-segment painted bounds, so it only errs
 towards "covered". A hole is also never clear when its erase is partial (opacity below 1: the promoted visual has no opacity), when an
 in-stream rounded clip cuts it (the presenter rounds only by the element's own corner radius), or when it sits under a layer or group
-surface; detached fly snapshots sit in the root slice's tail and count as covering segments), and `VideoPlacementApplier` runs each surface through a `VideoOverlayGate` (promote at the first clear turn, demote
+surface; detached fly snapshots sit in the root slice's tail and count as covering segments). Only paint that is visible on the turn counts: an op whose folded opacity is 0 (a crossfaded-out poster; the fade re-records every step, so its last step re-scans the slot and re-classifies with no polling), a fill of alpha 0, anything inside a GroupAlpha-0 opacity/blur group (inline or composite-time) is skipped (`SliceRecorder.PaintsNothing`, `ScanSeg.Covers`, `SilentLayer`), and `VideoPlacementApplier` runs each surface through a `VideoOverlayGate` (promote at the first clear turn, demote
 the SAME turn something covers it, hold the underlay for 500 ms after a demotion so the visual's z-order never flaps). The hole itself
 stays punched in both modes (a video above it simply covers it), so promotion changes only the visual's z-order
-(`IVideoPresenter.SetOverlay`, `DCompVideoPresenter` re-inserts the parent above the UI visual). Measure with PresentMon before turning
-either switch on by default: `--fg video-overlay` and/or `--fg video-nv12` vs neither, on the Adreno box, comparing the PresentMode column
+(`IVideoPresenter.SetOverlay`, `DCompVideoPresenter` re-inserts the parent above the UI visual). A surface with a corner radius stays an
+underlay (DWM cannot put a rounded clip on a plane), and every z-order change logs `[video.surface] overlay ... above= reason=`
+(`clear`, `switch-off`, `no-plane`, `rounded`, `covered-or-hold`). Measure with PresentMon before turning the switch on by default:
+`--fg video-overlay` vs off, on the Adreno box, comparing the PresentMode column
 (Composed: Flip vs Hardware Composed: Independent Flip / MPO plane) and `MsBetweenDisplayChange` while a video plays fullscreen with
 the chrome hidden.
 
@@ -1775,10 +1788,14 @@ in a separate region-pin pool) is deleted; `backdrop-effects-animation.md` §FA-
   never staged): until then the draw shows the placeholder at final size and cross-fades on arrival, and a re-stage
   keeps the prior pixels until the new ones land. The CPU waits only when every allocator of the ring holds an
   unfinished batch.
-- **The image bake** (a blurred derivative — mosaic / hero backdrops) runs dual-Kawase COMPUTE shaders on a **COMPUTE
-  `UploadQueue`** (`BakedBlurCompositor.cs`: resample to the output size, then the `AcrylicKawaseMath` down/up chain, the
-  last pass writing an RGBA8 UAV derivative), published behind its batch fence (`ImageTextureStore.CommitDerived`); one
-  job per turn; until it lands the frame keeps drawing the unblurred pixels / placeholder — never a hole.
+- **The image bake** (a blurred derivative — mosaic / hero backdrops) runs dual-Kawase compute shaders as its own DIRECT
+  batch on the **frame's queue**, behind the batch's own fence (`BakedBlurCompositor.cs`: resample to the output size, then
+  the `AcrylicKawaseMath` down/up chain, the last pass writing an RGBA8 UAV derivative), published behind that fence
+  (`ImageTextureStore.CommitDerived`); one job per 33 ms; until it lands the frame keeps drawing the unblurred pixels /
+  placeholder — never a hole. **Never a COMPUTE queue** (2026-11-07): the Adreno X1-85's compute engine (node 4, driver
+  31.0.148.0) bugchecked the machine (0x119, a stale fence on its preemption path) on the first bake after a TDR, and the
+  bake was that engine's only user. The overlap a COMPUTE queue buys is worth nothing for a sub-millisecond batch every
+  33 ms (the class summary has the numbers).
 - **Glyph-atlas dirty bands stay on DIRECT** (a new glyph is visible the frame it appears; KB-sized), bracketed by
   their own timestamps (`GpuPassKind.GlyphBand`).
 - **`UploadBudget.BytesPerTurn`** (default 8 MiB, clamped to [64 KiB, 256 MiB]; live-tunable, never an environment

@@ -204,6 +204,11 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private uint _appliedStreamW, _appliedStreamH;
     private VideoEngineSnapshot _lastPublished;
     private long _lastRaiseTicks;
+    // Engine thread only: the source loops (the Loop command), the loop seam's measurement (LoopSeamProbe: its period is the gapless
+    // clip's length, 0 for the Media Engine's own loop), and the playhead the last refresh read (the near-seam cadence asks it).
+    private bool _loop;
+    private readonly LoopSeamProbe _seam = new();
+    private double _lastPosition;
 
     /// <inheritdoc/>
     public event Action? StateChanged;
@@ -272,7 +277,10 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         DisposeCom();
     }
 
-    private int RefreshIntervalMs() => !_hasSource ? ParkedRefreshMs : !_metadataTrusted || _playing || _liveLatched ? ActiveRefreshMs : ParkedRefreshMs;
+    private int RefreshIntervalMs()
+        => !_hasSource ? ParkedRefreshMs
+         : _loop && _playing && _metadataTrusted && _seam.Near(_lastPosition, _cachedDuration) ? LoopSeamProbe.NearMs
+         : !_metadataTrusted || _playing || _liveLatched ? ActiveRefreshMs : ParkedRefreshMs;
 
     private int CreateEngine()
     {
@@ -284,6 +292,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         _videoLease = lease;
         _d3d = lease.Device.D3d;
         _dxgiManager = lease.Device.Manager;
+        VideoOverlayProbe.ProbeIfEmpty(_d3d);   // F087: the output's plane verdict, asked with this D3D11 device (cold, once per process)
 
         // The CCW owns this GCHandle from here: it is freed when the struct's last reference goes (MediaEngineNotifyCcw.ReleaseRef).
         _notify = MediaEngineNotifyCcw.Create(GCHandle.ToIntPtr(GCHandle.Alloc(this)));
@@ -295,15 +304,12 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             if ((hr = MFCreateAttributes(&attrs, 4)) < 0) return Log("MFCreateAttributes", hr);
             Guid gCb = MF.MF_MEDIA_ENGINE_CALLBACK; attrs->SetUnknown(&gCb, (IUnknown*)_notify);
             if (_dxgiManager != null) { Guid gDm = MF.MF_MEDIA_ENGINE_DXGI_MANAGER; attrs->SetUnknown(&gDm, (IUnknown*)_dxgiManager); }
-            // F249: BGRA is the long-standing output (a video-processor NV12 -> BGRA pass per decoded frame). NV12 only behind --fg video-nv12
-            // and only where the output's overlay probe says NV12 can take a plane; the verdict is the newest published one (an engine is
-            // created after its window's output was probed), and an unprobed output keeps BGRA.
-            VideoOverlayCaps overlayCaps = VideoOverlayCaps.Latest;
-            VideoOutputFormat outputFormat = VideoOverlayCaps.ChooseOutputFormat(FluentGpu.Hosting.EngineSwitches.Nv12VideoOutput, in overlayCaps);
-            DXGI_FORMAT dxgiFormat = outputFormat == VideoOutputFormat.Nv12 ? DXGI_FORMAT.DXGI_FORMAT_NV12 : DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
-            if (FluentGpu.Hosting.EngineSwitches.Nv12VideoOutput)
-                Diag.Line($"[video] output format={(outputFormat == VideoOutputFormat.Nv12 ? "nv12" : "bgra")} overlay[{overlayCaps.Describe()}] (--fg video-nv12)");
-            Guid gFmt = MF.MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT; attrs->SetUINT32(&gFmt, (uint)dxgiFormat);
+            // No MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT: it is the FRAME-SERVER render-target format (MS Learn), and in windowless swap-chain
+            // mode the Simple Video Renderer ignores it. Measured (nv12 lane, presentation-manager probe, 1080p60 H.264, Adreno X1-85):
+            // with BGRA forced, NV12 forced or nothing set, SVR presents the decoder's own NV12 textures (BIND_DECODER, shared displayable)
+            // zero-copy through the Composition Swapchain API, tags them DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709 and picks YUV vs RGB
+            // from its own MPO feedback - no video-processor pass either way. Chromium's MediaFoundationRenderer and the Microsoft
+            // MediaEngine DComp samples set nothing here either; the forced BGRA (and F249's NV12 arm) were a no-op.
 
             Guid clsid = CLSID.CLSID_MFMediaEngineClassFactory;
             Guid iidF = IID.IID_IMFMediaEngineClassFactory;
@@ -459,9 +465,11 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             if (_engine != null) _engine->SetMuted(muted != 0);
         }
 
-        if (c.TryTake(VideoCommandKind.Loop, out _, out int loop, out _, out _))
+        if (c.TryTake(VideoCommandKind.Loop, out double seamPeriod, out int loop, out _, out _))
         {
-            if (_engine != null) _engine->SetLoop(loop != 0);
+            _loop = loop != 0;
+            _seam.Reset(_loop ? seamPeriod : 0);
+            if (_engine != null) _engine->SetLoop(_loop);
         }
 
         if (c.TryTake(VideoCommandKind.StreamRect, out _, out int w, out int h, out _))
@@ -516,6 +524,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         _handles.Retire(Environment.TickCount64);   // F198: the old source's handle is superseded; it is closed a replacement or a grace later
         _frames.Reset(); _frameWatch.Reset(); _nextStatsPollMs = 0; _frameStatsReadable = false;
         _cachedDuration = 0;
+        _seam.Reset(_seam.Period); _lastPosition = 0;
         // The source changed, so whatever swap-chain handle the old one produced is invalid, exactly like a native
         // FORMATCHANGE/RESOURCELOST — bump the same epoch so a consumer re-queries it.
         Interlocked.Increment(ref _presentationEpoch);
@@ -677,6 +686,14 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         }
         // A statistics read that fails or comes back empty is telemetry trouble, never a hang (Chromium skips its rendered-frame check
         // unless PopulateStatistics succeeded): the watch only counts time while the counters are actually readable.
+        // The loop seam's measurement: every refresh of a playing looping video samples the counters (the cadence tightens near a seam).
+        _lastPosition = position;
+        if (_loop && _playing && metadata && duration > 0 && _naturalW != 0 && _naturalH != 0 && _seam.Near(position, duration)
+            && TryReadFrameStats(out uint seamRendered, out uint seamDropped))
+        {
+            _frames.Observe(seamRendered, seamDropped);
+            if (_seam.Sample(Stopwatch.GetTimestamp(), position, duration, _frames.Rendered, _ordinal) is { } seamLine) Diag.Line(seamLine);
+        }
         if (_frameWatch.Observe(nowMs, videoPlaying && _frameStatsReadable, _frames.Rendered))
         {
             _error = true; _errorCode = MfMediaEngineErrDecode; _errorHr = HrNoRenderedFrame;

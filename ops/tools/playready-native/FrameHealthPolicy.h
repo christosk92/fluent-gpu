@@ -1,5 +1,5 @@
 // FrameHealthPolicy.h - the three pieces of rendered-frame health and swap-chain handle ownership that need no Windows header,
-// so tests/FeedTests.cpp can exercise them. Each mirrors a managed twin the clear engine runs (VideoEngineSeam.cs's
+// so they stay pure. Each mirrors a managed twin the clear engine runs (VideoEngineSeam.cs's
 // VideoFrameCounters / RenderedFrameWatch, SwapchainHandleLedger.cs), so both backends apply the same rules.
 //
 // WHY (F066). Nothing could tell whether the media engine was rendering at all: a black or frozen surface (a lost device, a dead

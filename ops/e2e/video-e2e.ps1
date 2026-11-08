@@ -33,7 +33,7 @@ $ErrorActionPreference = 'Stop'
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $proj = Join-Path $repo 'src\FluentGpu.WindowsApp'
-$exe  = Join-Path $proj 'bin\Release\net10.0\FluentGpu.WindowsApp.exe'
+$exe  = Join-Path $proj 'bin\Release\net11.0\FluentGpu.WindowsApp.exe'
 if (-not $OutRoot) { $OutRoot = Join-Path $PSScriptRoot 'out' }
 $stamp  = Get-Date -Format 'yyyyMMdd-HHmmss'
 $outDir = Join-Path $OutRoot $stamp

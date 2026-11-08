@@ -2,8 +2,8 @@
 
   <!-- FluentGpu solution-wide baseline. Per design/dotnet10-csharp14-zero-alloc.md §1. -->
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <LangVersion>14</LangVersion>
+    <TargetFramework>net11.0</TargetFramework>
+    <LangVersion>15</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -19,6 +19,12 @@
          conflicts) opt out per-csproj with a note; clear their backlog before removing the opt-out. -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RootNamespace>$(MSBuildProjectName)</RootNamespace>
+    <!-- An app solution (Wavee.slnx) lists only its own projects, so the engine projects are out-of-solution there. In a
+         solution build MSBuild then unsets Configuration/Platform on the engine's OWN references (WindowsApi -> Engine)
+         while the app references Engine with them set: two configurations of one project, both writing obj\...\debug,
+         raced (CS2012 / MSB3026 on FluentGpu.Engine.dll), and a Release solution build got a Debug engine through the
+         inner reference. Keep the parent's Configuration/Platform, as FluentGpu.App.props and Wavee's props already do. -->
+    <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
 
     <!-- Write source-generator output to disk so it is inspectable: obj/<cfg>/<tfm>/generated/<analyzer>/<generator>/*.g.cs.
          Roslyn keeps generated sources IN-MEMORY by default (they compile but never hit disk and the IDE's Analyzers node

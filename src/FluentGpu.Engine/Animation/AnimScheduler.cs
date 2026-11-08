@@ -629,6 +629,20 @@ public sealed partial class AnimEngine
         value = 0f; return false;
     }
 
+    /// <summary>Does a live (unsettled) row drive the node's pose: its opacity, translate or scale? An entrance cascade leaves such a
+    /// node to the track that owns it (its own mount Enter, a hover lift), since its paint is then not its authored rest.</summary>
+    internal bool DrivesPose(NodeHandle node)
+    {
+        for (int s = _slab.HeadOnNode((int)node.Raw.Index); s >= 0; s = _slab.At(s).NextOnNode)
+        {
+            ref readonly AnimValue r = ref _slab.At(s);
+            if (r.Has(AnimFlags.Done)) continue;
+            if (r.Channel is AnimChannel.Opacity or AnimChannel.TranslateX or AnimChannel.TranslateY or AnimChannel.ScaleX or AnimChannel.ScaleY)
+                return true;
+        }
+        return false;
+    }
+
     // ── chain helpers ────────────────────────────────────────────────────────────────────────────
     private int Find(NodeHandle node, AnimChannel ch)
     {

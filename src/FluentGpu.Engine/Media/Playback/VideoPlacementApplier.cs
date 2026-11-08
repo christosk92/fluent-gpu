@@ -41,11 +41,43 @@ internal struct VideoPosedHole
     public int Token;
     public RectF Hole;
     public RectF EffClip;
+    /// <summary>The ROUNDED clip that cuts a corner of the hole (window DIP; <see cref="RoundR"/> 0 = none): the innermost rounded clip in
+    /// effect over the hole (the stream's own, else an enclosing slice's), kept only when it reaches into the hole's visible rect
+    /// (<see cref="VideoRoundClip.Cuts"/>). The video visual composites outside the UI back buffer, so it must take this rounding
+    /// itself: wherever the UI is transparent outside the arc (a Mica window's clear, beyond a floating pane's rounded corner) a square
+    /// video would show through.</summary>
+    public RectF RoundRect;
+    public float RoundR;
     /// <summary>F087 occlusion verdict of this turn's composite: nothing paints over the visible part of the hole after the video's own
     /// <c>DrawVideo</c> (not a later op of its segment, not a later segment, slice, backdrop or hole in painter order). False is the
     /// conservative answer - anything the recorder cannot prove clear (a hole inside an inline group layer, a fully clipped hole, a
     /// default value) - and keeps the video an underlay. Judged on the painted bounds of whole segments, so it can only err towards "covered".</summary>
     public bool Unoccluded;
+}
+
+/// <summary>A rect under a uniform ROUNDED clip (a rounded box <c>roundRect</c> of radius <c>r</c>, the recorder's tier-2 clip: its SDF box
+/// is extended past a fully square side, so that side's corners fall outside the visible clip): the corner radii that keep the rect inside
+/// the clip's arcs. A rect corner inset (dx, dy) from the box's corner takes the radius r - max(dx, dy): concentric with the box's arc
+/// when dx = dy, and inside it otherwise; a corner inset by r or more is square. Pure, allocation-free.</summary>
+internal static class VideoRoundClip
+{
+    /// <summary>The corner radii (in the rect's units) that keep <paramref name="rect"/> inside the rounded box.</summary>
+    public static CornerRadius4 CornerRadii(in RectF rect, in RectF roundRect, float r)
+    {
+        if (r <= 0f || rect.IsEmpty) return default;
+        float l = MathF.Max(0f, rect.X - roundRect.X), t = MathF.Max(0f, rect.Y - roundRect.Y);
+        float rt = MathF.Max(0f, roundRect.Right - rect.Right), b = MathF.Max(0f, roundRect.Bottom - rect.Bottom);
+        return new CornerRadius4(Corner(r, l, t), Corner(r, rt, t), Corner(r, rt, b), Corner(r, l, b));
+    }
+
+    /// <summary>Does the rounded box cut any corner of <paramref name="rect"/>?</summary>
+    public static bool Cuts(in RectF rect, in RectF roundRect, float r)
+    {
+        CornerRadius4 c = CornerRadii(in rect, in roundRect, r);
+        return c.TopLeft > 0f || c.TopRight > 0f || c.BottomRight > 0f || c.BottomLeft > 0f;
+    }
+
+    private static float Corner(float r, float dx, float dy) => MathF.Max(0f, r - MathF.Max(dx, dy));
 }
 
 /// <summary>What one <see cref="VideoPlacementApplier.ApplyTurn"/> may touch.</summary>
@@ -102,6 +134,8 @@ internal sealed class VideoPlacementApplier
         public bool Placed;                 // the presenter has been given a placement at least once
         public float AppliedDx, AppliedDy, AppliedScale;
         public RectF AppliedClip;           // the composite clip the placement was last cut by (Infinite = none)
+        public RectF AppliedRound;          // the rounded clip that cut a corner of the hole at the last placement (window DIP)
+        public float AppliedRoundR;         // its radius (0 = none)
         public VideoOverlayGate Overlay;    // F087: the promotion state the next placement applies (above the UI plane or below it)
         public bool AppliedOverlay;         // the z-order the presenter was last given
     }
@@ -135,6 +169,14 @@ internal sealed class VideoPlacementApplier
     // Promotion needs the switch and a presenter that says its output can take a plane; _drainedBy is the presenter of the last apply
     // (null before the first one: nothing is promoted until a presenter has been seen).
     private bool OverlayEligible() => OverlayEnabled && _drainedBy is { SupportsOverlay: true };
+
+    // Why a surface is where it is, for the change line only (cold): the gate's inputs in the order they are checked.
+    private string OverlayReason(in Slot s, IVideoPresenter presenter)
+        => s.Overlay.Above ? "clear"
+         : !OverlayEnabled ? "switch-off"
+         : !presenter.SupportsOverlay ? "no-plane"
+         : s.Intent.RadiusDip > 0f || s.AppliedRoundR > 0f ? "rounded"
+         : "covered-or-hold";
 
     /// <summary>Counter (render thread writes): applies that moved an already-placed surface.</summary>
     internal long MotionTurns { get; private set; }
@@ -265,18 +307,22 @@ internal sealed class VideoPlacementApplier
             ref Slot s = ref _slots[i];
             if (!s.InUse || !s.Placed || !s.HasGeometry || s.SurfaceId.IsNone || s.Intent.ReleasePending) continue;
             float dx = 0f, dy = 0f;
-            RectF clip = RectF.Infinite;
+            RectF clip = RectF.Infinite, round = default;
+            float roundR = 0f;
             bool unoccluded = false;
             if (s.Intent.HasHoleOrigin && TryGetPosed(posed, in s.Intent, out VideoPosedHole ph))
             {
                 dx = ph.Hole.X - s.Intent.HoleX;
                 dy = ph.Hole.Y - s.Intent.HoleY;
                 clip = ph.EffClip;
+                round = ph.RoundRect; roundR = ph.RoundR;
                 unoccluded = ph.Unoccluded;
             }
-            bool overlayChanged = s.Overlay.Update(overlayEligible, unoccluded, now) != s.AppliedOverlay;
+            // A rounded surface stays an underlay: DWM cannot put a rounded-clipped visual on a hardware plane, so promoting it would only
+            // move it above the UI to be composed all the same (the fallback is composition either way; the reason is logged on change).
+            bool overlayChanged = s.Overlay.Update(overlayEligible && s.Intent.RadiusDip <= 0f && roundR <= 0f, unoccluded, now) != s.AppliedOverlay;
             bool poseSame = MathF.Abs(dx - s.AppliedDx) <= PoseEpsilonDip && MathF.Abs(dy - s.AppliedDy) <= PoseEpsilonDip
-                && s.AppliedScale == scale && clip == s.AppliedClip;
+                && s.AppliedScale == scale && clip == s.AppliedClip && round == s.AppliedRound && roundR == s.AppliedRoundR;
             if (poseSame && !overlayChanged) continue;
             s.Dirty = true;
             if (!poseSame) s.GeomDirty = true;
@@ -491,13 +537,15 @@ internal sealed class VideoPlacementApplier
         // The posed travel of the hole this surface sits behind: the same slice pose the composite just applied, so the video moves
         // exactly as far as the hole. Only a presenting turn poses (the early drain places at the published rect).
         float dx = 0f, dy = 0f;
-        RectF clip = RectF.Infinite;
+        RectF clip = RectF.Infinite, round = default;
+        float roundR = 0f;
         bool posedHole = false;
         if (scope == VideoApplyScope.Full && it.HasHoleOrigin && TryGetPosed(posed, in it, out VideoPosedHole ph))
         {
             dx = ph.Hole.X - it.HoleX;
             dy = ph.Hole.Y - it.HoleY;
             clip = ph.EffClip;
+            round = ph.RoundRect; roundR = ph.RoundR;
             posedHole = true;
         }
         RectF rectDip = it.RectDip;
@@ -525,7 +573,20 @@ internal sealed class VideoPlacementApplier
         presenter.SetContentSize(s.SurfaceId, it.ContentW, it.ContentH);   // so it scales the frame to fill `dev` (not 1:1-cropped)
         presenter.Place(s.SurfaceId, dev, 1f, it.Z);
         if (!viewportEmpty) presenter.SetViewport(s.SurfaceId, viewportDev);
-        presenter.SetCornerRadius(s.SurfaceId, it.RadiusDip * scale);
+        // The corners: the element's own radius, and wherever a rounded clip over the hole cuts a corner of what the video shows (the clip the
+        // presenter applies: the viewport within the rect), that clip's arc - the erase spares the UI outside the arc, so a square visual
+        // would show through it where the UI is transparent (a Mica window's clear beyond a floating pane's rounded corner).
+        float own = it.RadiusDip * scale;
+        CornerRadius4 radii = new(own, own, own, own);
+        if (roundR > 0f && !viewportEmpty)
+        {
+            RectF shown = viewportDev.Intersect(dev);
+            CornerRadius4 arc = VideoRoundClip.CornerRadii(in shown,
+                new RectF(round.X * scale, round.Y * scale, round.W * scale, round.H * scale), roundR * scale);
+            radii = new CornerRadius4(MathF.Max(own, arc.TopLeft), MathF.Max(own, arc.TopRight),
+                MathF.Max(own, arc.BottomRight), MathF.Max(own, arc.BottomLeft));
+        }
+        presenter.SetCornerRadii(s.SurfaceId, radii);
         presenter.SetVisible(s.SurfaceId, visible);
         // F087: the z-order the turn's verdict chose (above the UI plane only while nothing paints over the rect), given to the
         // presenter on a change only, so a default-off run makes no extra presenter call at all.
@@ -533,13 +594,13 @@ internal sealed class VideoPlacementApplier
         {
             presenter.SetOverlay(s.SurfaceId, s.Overlay.Above);
             s.AppliedOverlay = s.Overlay.Above;
-            Diag.Line($"[video.surface] overlay token={i + 1} id={s.SurfaceId.Value} above={(s.AppliedOverlay ? "true" : "false")}");
+            Diag.Line($"[video.surface] overlay token={i + 1} id={s.SurfaceId.Value} above={(s.AppliedOverlay ? "true" : "false")} reason={OverlayReason(in s, presenter)}");
         }
 
         if (s.Placed && s.GeomDirty) _lastTurnMoved = true;
         s.Placed = true;
         s.GeomDirty = false;
-        s.AppliedDx = dx; s.AppliedDy = dy; s.AppliedScale = scale; s.AppliedClip = clip;
+        s.AppliedDx = dx; s.AppliedDy = dy; s.AppliedScale = scale; s.AppliedClip = clip; s.AppliedRound = round; s.AppliedRoundR = roundR;
         // Only on the apply that created/bound (a resize re-places every frame; that stays Debug-only below).
         if (announce)
             Diag.Line($"[video.surface] place token={i + 1} id={s.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) content={it.ContentW}x{it.ContentH} visible={visible} scale={scale:0.##}");

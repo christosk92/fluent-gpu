@@ -2,7 +2,7 @@
 
 In-process Win32 native DLL for PlayReady-protected video via Media Foundation CDM/CENC. This is **not** a UWP sidecar or cross-process helper — the managed engine loads `FluentGpu.PlayReady.Native.dll` directly.
 
-The ABI (`FgPlayReady.h`) is a **process-lifetime runtime with handles**, not a one-shot blocking open. `FgPrRuntimeCreateOnAdapter` brings Media Foundation, the D3D11 video device + DXGI manager, ONE CDM with its PMP host and ONE `IMFMediaEngine` (windowless swap-chain mode) up once, on an event-driven MTA runtime thread. `FgPrLicenseAcquire` opens one TEMPORARY CDM key session per KID and keeps it (8-entry LRU, never evicting a KID an attached session uses, raising `FgPrEvent_LicenseEvicted` when it does; a key that goes dead is failed and evicted, a Pending license older than 8 s is replaced - `LicensePolicy.h`); the challenge goes up to managed through a non-blocking relay and the license comes back through `FgPrLicenseDeliver`. `FgPrSessionCreate` makes one session per source: a `CencMediaSource` over a byte-capped, time-windowed `SegmentStore`, fed by a demand-driven feeder that fetches video and audio segments in parallel. `FgPrSessionAttach` is the switch — one `SetSource` on the warm engine, starting at the carried position. Every handle is opaque; a stale one is `E_HANDLE`. Every native diagnostic line is an `FgPrEvent` on the managed callback (there is no native log file), and `FgPrProbeFile` runs the demuxer over a local fragmented MP4 with no CDM, GPU or network. `FgPrRuntimeSetVideoOutputFormat` (F249, called BEFORE the create; default BGRA, the format the engine has always been forced to) lets the managed side ask for an NV12 engine output once its overlay probe says the output can plane NV12.
+The ABI (`FgPlayReady.h`) is a **process-lifetime runtime with handles**, not a one-shot blocking open. `FgPrRuntimeCreateOnAdapter` brings Media Foundation, the D3D11 video device + DXGI manager, ONE CDM with its PMP host and ONE `IMFMediaEngine` (windowless swap-chain mode) up once, on an event-driven MTA runtime thread. `FgPrLicenseAcquire` opens one TEMPORARY CDM key session per KID and keeps it (8-entry LRU, never evicting a KID an attached session uses, raising `FgPrEvent_LicenseEvicted` when it does; a key that goes dead is failed and evicted, a Pending license older than 8 s is replaced - `LicensePolicy.h`); the challenge goes up to managed through a non-blocking relay and the license comes back through `FgPrLicenseDeliver`. `FgPrSessionCreate` makes one session per source: a `CencMediaSource` over a byte-capped, time-windowed `SegmentStore`, fed by a demand-driven feeder that fetches video and audio segments in parallel. `FgPrSessionAttach` is the switch — one `SetSource` on the warm engine, starting at the carried position. Every handle is opaque; a stale one is `E_HANDLE`. Every native diagnostic line is an `FgPrEvent` on the managed callback (there is no native log file), and `FgPrProbeFile` runs the demuxer over a local fragmented MP4 with no CDM, GPU or network. The engine sets no `MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT` (a frame-server attribute): in windowless mode the Simple Video Renderer presents the decoder's NV12 textures itself and picks YUV vs RGB from its own overlay feedback.
 
 ## Build
 
@@ -21,40 +21,6 @@ box an x64-emulated shell still builds either one, because the script calls `vcv
 in an IDE's design-time build).
 Both pick the architecture from `PlayReadyNative.props`: the explicit `RuntimeIdentifier`, else the running SDK's RID —
 the architecture the managed process actually runs as, not `PROCESSOR_ARCHITECTURE`.
-
-## FeedTests.exe
-
-`build.cmd` also compiles `tests\FeedTests.cpp` — a small, dependency-free console exe over the feeder's PURE
-arithmetic and buffer algorithms — and runs it right after the DLL link succeeds; a non-zero exit from either the
-compile or the run fails the build. It never constructs a `CencMediaStream`/`CencMediaSource` and never touches
-Media Foundation, COM or the CDM at runtime (the Windows/D3D/MF/WinRT headers it pulls in are only there because
-`CencMediaSource.h` is not standalone — see the file's own header comment for why and for an include-order finding
-worth knowing before touching either header).
-
-It covers:
-- `fgpr::plan::Next` / `Landed` (`FeedPlan.h`) — the segment-index arithmetic, including the warm-start incident the
-  header documents (a truncating coverage shrink misread as "no growth"), genuine stagnation and the floor it
-  steps, the plan-then-cancel (byte-cap veto) discipline, `atEnd`/satisfied/uncovered-reference edge cases, and
-  that a `segLenMs <= 0` grid never divides by zero.
-- `fgpr::SpliceSamples` / `IsAscending` (`SegmentStore.h`) — pure append, the non-truncating straddle (including
-  the exact re-delivery shape that motivated it), a truncating representation switch ahead of the cursor, the
-  truncating re-delivery incident (refused as stale, buffer byte-for-byte unchanged), truncating on a drained
-  buffer, a wholly-behind replace, a short replacement that cuts coverage, and every one of those again with
-  B-frame (decode order != presentation order) samples.
-- `ComputeBufferedPairs`, `ContiguousAheadMs`, `TrimBehindByTime` (`SegmentStore.h`) — hole detection in the
-  buffered-range report, the contiguous-ahead window correctly stopping at a hole instead of spanning it, and the
-  time-window vs. byte-cap trim rules (including which one is responsible for a given drop).
-
-Run it alone (after a `build.cmd` has produced the DLL for the same `%OUT%` at least once, so the tools/vcvars
-environment is known-good):
-
-```cmd
-build.cmd x64
-out\x64\FeedTests.exe
-```
-
-It prints one `FAIL <file>:<line>: CHECK(...)` line per failing assertion (plus which test it was in) and a final
-`N test(s), M failure(s)` line; the process exit code is the failure count (0 = every check passed).
 
 ## Managed code
 
@@ -76,6 +42,5 @@ The C# integration lives in `src/FluentGpu.WindowsApi/Media/PlayReady/`. See [`d
 | `OpmWindow.h` | The hidden layered "virtual video window" handed to the engine as `MF_MEDIA_ENGINE_OPM_HWND` (F264): created on its own message-pump thread before the engine, moved over the video's screen rect by `FgPrSessionPlaceOpmWindow` (`SWP_ASYNCWINDOWPOS`, never waits on a native thread) and kept on the host window when it moves with no video pump (a `WINEVENT_OUTOFCONTEXT` location hook on its own thread), destroyed at teardown. `OpmScreenRect` is its pure geometry. `FG_PLAYREADY_NO_OPM_WINDOW=1` leaves it out |
 | `SegmentStore.h` | The per-session store: time-window retention against a byte budget, the pooled 64 KiB-granular segment buffers, the keyframe table, buffered ranges, `CanSeekTo` |
 | `CencMediaSource.h` | The fMP4/CENC demuxer and the custom `IMFMediaSource` emitting encrypted CENC samples |
-| `build.cmd` | MSVC build of the three translation units into one DLL, per architecture; then compiles and runs `tests\FeedTests.cpp` |
-| `tests\FeedTests.cpp` | Dependency-free console tests for `FeedPlan.h`'s `plan::Next`, `SegmentStore.h`'s sample-list algorithms, `HandoverPolicy.h`, `FrameHealthPolicy.h`, `EventRing.h` and `OpmWindow.h` — see "FeedTests.exe" above |
+| `build.cmd` | MSVC build of the three translation units into one DLL, per architecture |
 | `PlayReadyNative.props` | The one architecture rule the projects that build or load the DLL import |

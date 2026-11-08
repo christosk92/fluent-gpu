@@ -442,7 +442,8 @@ publishes, the same node switches to the persistent derived texture. Steady pain
 scroll changes only its transform — no `PushLayer`, intermediate RT, subtree replay, or Gaussian work.
 
 The D3D12 lane (AS-BUILT 2026-09, `gpu-renderer.md` §13.1f) runs at most one bake per primary-swapchain submit on
-its own **COMPUTE queue**, never the frame's direct list: the source resampled to the output size, then the
+its own DIRECT batch on the frame's queue, behind its own fence, never inside the frame's list (and never on a COMPUTE
+queue: the Adreno X1-85's compute engine bugchecked the machine on 2026-11-07, see `gpu-renderer.md` §13.1f): the source resampled to the output size, then the
 `AcrylicKawaseMath` dual-Kawase down/up chain as compute shaders, the last pass writing an RGBA8 UAV derivative that
 `ImageTextureStore` publishes behind the batch's fence. Readiness is a fence compare, never a wait — until the bake
 lands the node keeps drawing the crisp source. The

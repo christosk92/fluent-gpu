@@ -80,9 +80,6 @@ public static class SceneRecorder
     public static void ConfigureScrollbarArrowGlyphs(SceneStore scene, StringId up, StringId down, StringId left, StringId right, StringId iconFamily)
         => scene.Recording.ConfigureScrollbarArrowGlyphs(up, down, left, right, iconFamily);
 
-    public static bool RectOverVideoHole(SceneStore scene, in RectF worldRect, float minCoveredFraction = 0.5f)
-        => scene.Recording.RectOverVideoHole(in worldRect, minCoveredFraction);
-
 
     public static (RectF DrawRect, RectF Uv) ImageContentFit(ImageFit fit, in RectF box, int srcW, int srcH, float focusX = 0.5f, float focusY = 0.5f,
                                                              float frameX = 0.5f, float frameY = 0.5f)
@@ -168,18 +165,6 @@ internal sealed partial class SceneRecordingContext
     internal void RetainConfigurationStrings(SceneRecordingSnapshot scene, StringTable strings)
         => scene.RetainStrings(strings, [_sbUpGlyph, _sbDownGlyph, _sbLeftGlyph, _sbRightGlyph, _sbIconFamily]);
 
-    internal int CopyVideoRects(Span<RectF> destination)
-    {
-        int count = Math.Min(destination.Length, _publishedVideoRectCount);
-        _publishedVideoRects.AsSpan(0, count).CopyTo(destination);
-        return count;
-    }
-
-    internal void ImportVideoRects(ReadOnlySpan<RectF> source)
-    {
-        _publishedVideoRectCount = Math.Min(source.Length, _publishedVideoRects.Length);
-        source[.._publishedVideoRectCount].CopyTo(_publishedVideoRects);
-    }
     private SceneRecordingSnapshot? _inlineScene;
     private SceneStore? _inlineCapturedScene;
     private ImageCache? _inlineCapturedImages;
@@ -262,17 +247,6 @@ internal sealed partial class SceneRecordingContext
     // record-side band agree on how far AA slop reaches.
     internal const float RepaintAaPadDip = 8f;
 
-    // A DrawVideo punches a hole the compositor fills from a DComp visual. The hole set is read off the placed composite
-    // plan (window space, every slice at its current pose, kept slices included — SliceRecorder.VideoRects); capacity is
-    // tiny because a frame has at most a handful.
-    private const int VideoRectCap = 8;
-
-    // The last COMPLETED main-window flatten's video Dst set, published so UI-thread code that runs BETWEEN records
-    // (host phase 7.1 - the overlay lifecycle/placement pass) can ask "is this rect sitting on top of a video hole?".
-    // Fixed capacity, no allocation — identical discipline to the scratch it copies.
-    private readonly RectF[] _publishedVideoRects = new RectF[VideoRectCap];
-    private int _publishedVideoRectCount;
-
     // The vacated extent of a SPAN-LESS node (a top band: the drag ghost, connected overlays, the drag chip, and rootless
     // orphans), indexed by node index. Those walks have no span table to recover a prior from, so each one stamps the
     // window-space extent it presented at, with its generation and the host pass that wrote it. A slot is only trusted
@@ -291,52 +265,6 @@ internal sealed partial class SceneRecordingContext
 
     /// <summary>The holes of the last completed record or composite, with the pose the composite applied (F070).</summary>
     internal ReadOnlySpan<FluentGpu.Media.VideoPosedHole> PosedVideoHoles => _publishedPosedHoles.AsSpan(0, _publishedPosedHoleCount);
-
-    /// <summary>
-    /// Does <paramref name="worldRect"/> sit on top of a video hole punch? True when a single <c>DrawVideo</c> Dst from
-    /// the last completed record covers at least <paramref name="minCoveredFraction"/> of its area.
-    /// <para>
-    /// The point of the question is that a hole punch is a <b>DestOut erase</b> whose pixels are premultiplied ZERO, and
-    /// the video itself is a sibling DComp visual z-BELOW the UI swapchain - so an ACRYLIC plate placed over a hole
-    /// blurs nothing at all (it samples transparent black) while still costing a backdrop pass (a mini-composite of
-    /// everything beneath it, blurred, every frame the video under it changes). Callers use this to drop the acrylic for
-    /// a flat fallback fill - a visual no-op there.
-    /// </para>
-    /// <para>Answers from the PREVIOUS frame's geometry by construction (it is asked before this frame is recorded).
-    /// That is the correct latency: a hole that just appeared or moved costs one frame of the old answer, and the answer
-    /// only ever selects between two visually-equivalent paints, never between correct and incorrect pixels.</para>
-    /// <para><b>Limitation 1 — the published rect is not the same rect every frame, so the answer can FLIP with no
-    /// scene change.</b> (Historical: the hole set was fed by three recorder sites that did not agree on granularity; it is now read off the flattened stream's exact Dst rects.) A
-    /// fresh walk publishes the exact <c>DrawVideo</c> Dst (the <c>VisualKind.Video</c> case below), while a clean-span
-    /// reuse publishes the whole <c>span.SubtreeBounds</c> of the span that CONTAINED the DrawVideo — letterbox floor,
-    /// transport chrome and shadow halos folded in — and a rebased reuse publishes that same coarse box translated.
-    /// For a query rect well inside the Dst the two agree; for one straddling the Dst's edge they do not, and which
-    /// path serves the video's subtree changes frame to frame (a paint-dirty write anywhere in it disables reuse).
-    /// A caller that cannot tolerate an answer flipping under it must LATCH the first affirmative rather than re-ask
-    /// — which is what <c>OverlayHost.SyncWindowedMenuBackdrop</c> does, because each flip there costs a full-window
-    /// repaint. Not fixed by aligning the sites: the coarse box is the correct repaint-damage extent for a reused span,
-    /// which is what the hole set primarily exists to feed.</para>
-    /// <para><b>Limitation 2 — coverage is tested PER RECT and never unioned.</b> The loop returns true only when a
-    /// SINGLE hole covers <paramref name="minCoveredFraction"/> of the query rect, so two adjacent holes each covering
-    /// 40% of it answer <c>false</c> even though 80% of the rect is over video. Deliberate for the sizes involved (a
-    /// frame has at most a handful of holes and a popup plate normally straddles one), but a caller placing a plate
-    /// across a multi-video wall must not read a <c>false</c> as "no video underneath".</para>
-    /// </summary>
-    public bool RectOverVideoHole(in RectF worldRect, float minCoveredFraction = 0.5f)
-    {
-        if (_publishedVideoRectCount == 0 || worldRect.W <= 0f || worldRect.H <= 0f) return false;
-        float area = worldRect.W * worldRect.H;
-        for (int i = 0; i < _publishedVideoRectCount; i++)
-        {
-            RectF hole = _publishedVideoRects[i];
-            float x0 = MathF.Max(worldRect.X, hole.X), y0 = MathF.Max(worldRect.Y, hole.Y);
-            float x1 = MathF.Min(worldRect.Right, hole.Right), y1 = MathF.Min(worldRect.Bottom, hole.Bottom);
-            if (x1 <= x0 || y1 <= y0) continue;
-            if ((x1 - x0) * (y1 - y0) >= area * minCoveredFraction) return true;
-        }
-        return false;
-    }
-
 
     // Effect-halo allowance for an extent captured OUTSIDE the recorder — a freed node's model rect, a structural-cancel
     // seed. Those carry no shadow/blur information, whereas every extent the recorder itself produces already does:
@@ -958,8 +886,6 @@ internal sealed partial class SceneRecordingContext
         // since the last turn adds its old ∪ new footprint to the repaint set.
         slices.Place(scene, ref stats.Repaint);
 
-        // Publish this record's hole set for the between-frames RectOverVideoHole query (see that method).
-        PublishVideoRects(slices.VideoRects);
         PublishPosedHoles(slices.PosedHoles);
         if (standalone)
         {
@@ -976,16 +902,8 @@ internal sealed partial class SceneRecordingContext
         RepaintDamageRegion repaint = default;
         slices.Place(scene, ref repaint);
         slices.NoteCompositeOnly();
-        PublishVideoRects(slices.VideoRects);
         PublishPosedHoles(slices.PosedHoles);
         return repaint;
-    }
-
-    private void PublishVideoRects(ReadOnlySpan<RectF> holes)
-    {
-        int n = Math.Min(holes.Length, _publishedVideoRects.Length);
-        for (int v = 0; v < n; v++) _publishedVideoRects[v] = holes[v];
-        _publishedVideoRectCount = n;
     }
 
     private void PublishPosedHoles(ReadOnlySpan<FluentGpu.Media.VideoPosedHole> holes)
@@ -1629,7 +1547,9 @@ internal sealed partial class SceneRecordingContext
             float hs = 1f + (localInteraction.HoverScale - 1f) * useH;
             float isc = hs + (localInteraction.PressScale - hs) * useP;
             if (MathF.Abs(isc - 1f) > 0.0008f)
-                world = world.Translate(ox, oy).Multiply(Affine2D.Scale(isc, isc)).Translate(-ox, -oy);
+                world = world.Translate(ox, oy)
+                    .Multiply(Affine2D.Scale(localInteraction.ScaleAxes == ScaleAxes.Y ? 1f : isc, localInteraction.ScaleAxes == ScaleAxes.X ? 1f : isc))
+                    .Translate(-ox, -oy);
         }
         // ScaleCorrect counter-scale: a child that opted out of an ancestor's animated scale applies the inverse (about
         // its centre) so it stays undistorted, and passes an un-scaled factor to ITS children (Framer-Motion projection).

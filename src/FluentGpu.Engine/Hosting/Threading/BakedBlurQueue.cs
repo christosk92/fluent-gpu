@@ -14,8 +14,12 @@ public sealed class BakedBlurQueue
 
     public readonly record struct Job(int Id, int SourceId, int OutputW, int OutputH, float SigmaTexels, int Generation,
                                       bool IsUpgrade = false, Quality Quality = Quality.High);
+    /// <summary>A job's outcome. <paramref name="SourcePending"/> (with <c>Ok = false</c>): the job is current but its
+    /// source's pixels are not resident in the backend's store yet — admitted Ready on the UI a frame ahead of the render
+    /// thread's staging, and held there by the per-turn upload budget or the post-recovery upload throttle — so the cache
+    /// queues the bake again instead of failing it (<c>ImageCache.MaxBakeDeferrals</c>).</summary>
     public readonly record struct Result(int Id, int Generation, bool Ok, int W, int H,
-                                         Quality Quality = Quality.High, bool IsUpgrade = false);
+                                         Quality Quality = Quality.High, bool IsUpgrade = false, bool SourcePending = false);
 
     private readonly record struct QueuedJob(Job Job, long EligibleTicks);
     private readonly record struct WorkKey(int Id, int Generation, bool IsUpgrade);

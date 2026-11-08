@@ -73,7 +73,7 @@ public enum PopupChrome : byte { Flyout, Raw, Modal, TeachingTip, Popup, Dropdow
 public sealed record PopupPlate
 {
     /// <summary>The resting fill. With an <see cref="Acrylic"/> layer this is its fallback (painted where the layer cannot run:
-    /// a secondary swapchain, a video hole); with no layer it is the plate's whole, solid body.</summary>
+    /// a secondary swapchain, transparency effects off); with no layer it is the plate's whole, solid body.</summary>
     public ColorF Fill { get; init; } = Tok.AcrylicFlyout.Fallback;
     /// <summary>The frosted layer (WinUI AcrylicInAppFillColorDefault); null = a solid <see cref="Fill"/> plate with no backdrop pass.</summary>
     public AcrylicSpec? Acrylic { get; init; } = Tok.AcrylicFlyout;
@@ -165,10 +165,11 @@ public readonly record struct PopupOptions(
     public bool FreezeAtLastRect { get; init; }
 
     /// <summary>DECLARE: this popup sits over content the acrylic compositor cannot sample (a video hole) — paint the
-    /// flat plate and never take the acrylic path. It is the deterministic form of the geometric question
-    /// <c>SceneRecorder.RectOverVideoHole</c> answers: a caller that KNOWS its popup is over the video (a media
-    /// transport's own quality/speed/captions pickers) states it once at open time, so the plate is solid from frame
-    /// ONE with no geometry query, no frame of latency, and no chance of the answer flipping under it.
+    /// flat plate and never take the acrylic path. Only the caller can know this: a media transport's own
+    /// quality/speed/captions pickers, which always open over the video they control, state it once at open time. Nothing
+    /// infers it from geometry — a popup that merely overlaps a hole's rect often sits over UI painted ON TOP of the hole
+    /// (a Canvas cut to its panel under an opaque ground), where the flat plate's see-through share shows that UI
+    /// crisp and unblurred.
     /// <para>No inverted backing field here (unlike <see cref="ConstrainToRootBounds"/>/<see cref="PinsAnchor"/>, whose
     /// storage is inverted only because their DEFAULT is true): this flag defaults FALSE, so a plain auto-property
     /// leaves <c>default(PopupOptions)</c> — and the <c>options.Equals(default)</c> "caller configured nothing" probes
@@ -270,6 +271,7 @@ internal sealed class NullOverlayService : IOverlayService
 
 internal sealed class OverlayEntry
 {
+    public OverlayServiceImpl? Service;   // the service that opened it (a press inside its surface reports back to it)
     public int Id;
     public required Func<NodeHandle> Anchor;
     public Func<RectF>? AnchorRect;   // rect-anchored open (derived/pointer rect, live-followed) — wins over Anchor when set
@@ -302,9 +304,6 @@ internal sealed class OverlayEntry
     public bool FreezeAtLastRect;     // opt-in: dead-anchor holds last rect instead of BeginClose
     public bool OpaqueSurface;        // PopupOptions.OpaqueSurface: declared over a video hole — flat plate, never acrylic
     public bool ScrimVisual = true;   // PopupOptions.ScrimVisual: Modal only — false keeps blocking/trap but paints the scrim transparent
-    /// <summary>One-way latch: <c>SceneRecorder.RectOverVideoHole</c> has answered TRUE for this entry's backdrop node
-    /// at least once. Once set it never clears — see the reasoning at the query site in SyncWindowedMenuBackdrop.</summary>
-    public bool VideoHoleLatched;
     /// <summary>One-way latch: the host declined a popup-window lease for this entry, so stop asking. The refusal is a
     /// property of the HOST (its device/async-render-loop configuration), not of this popup's placement, so it cannot
     /// become a grant later in this entry's life — see the lease site.</summary>
@@ -408,6 +407,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
         var handle = new OverlayHandle { IsOpen = true };
         var entry = new OverlayEntry
         {
+            Service = this,
             Id = _nextId++, Anchor = anchor, AnchorRect = anchorRect, Content = content, Placement = placement, Handle = handle,
             FocusTrap = options.FocusTrap,
             PreserveFocusOnOpen = options.PreserveFocusOnOpen,
@@ -516,6 +516,21 @@ internal sealed class OverlayServiceImpl : IOverlayService
     {
         for (int i = Entries.Count - 1; i >= 0; i--)
             if (Entries[i].Phase != OverlayPhase.Closing) { BeginClose(Entries[i], cause); return; }
+    }
+
+    /// <summary>A press landed inside <paramref name="e"/>'s own bounds on nothing interactive (FlyoutSurface.OwnPresses):
+    /// <paramref name="e"/> stays open. The topmost input-blocking popup ABOVE it, if any, is outside the press: a
+    /// light-dismiss one closes (its cascade with it), the scrim's old outside-press rule; a modal one keeps it.</summary>
+    internal void PressInside(OverlayEntry e)
+    {
+        for (int i = Entries.Count - 1; i >= 0; i--)
+        {
+            var top = Entries[i];
+            if (ReferenceEquals(top, e)) return;
+            if (top.Phase == OverlayPhase.Closing || top.DismissBehavior == DismissBehavior.None) continue;
+            if (top.DismissBehavior == DismissBehavior.LightDismiss) BeginClose(top, OverlayCloseCause.LightDismiss);
+            return;
+        }
     }
 
     internal void CloseTopInputBlocking(OverlayCloseCause cause)
@@ -819,10 +834,14 @@ internal sealed class OverlayServiceImpl : IOverlayService
             bool windowed = e.PopupWindowToken >= 0;
             bool viewportResized = !windowed
                 && (MathF.Abs(ViewportRect.W - e.LastViewport.W) >= 0.5f || MathF.Abs(ViewportRect.H - e.LastViewport.H) >= 0.5f);
-            if (!resized && !viewportResized
-                && MathF.Abs(aRect.X - e.LastAnchorRect.X) < 0.5f && MathF.Abs(aRect.Y - e.LastAnchorRect.Y) < 0.5f
-                && MathF.Abs(aRect.W - e.LastAnchorRect.W) < 0.5f && MathF.Abs(aRect.H - e.LastAnchorRect.H) < 0.5f)
+            bool anchorStill = MathF.Abs(aRect.X - e.LastAnchorRect.X) < 0.5f && MathF.Abs(aRect.Y - e.LastAnchorRect.Y) < 0.5f
+                && MathF.Abs(aRect.W - e.LastAnchorRect.W) < 0.5f && MathF.Abs(aRect.H - e.LastAnchorRect.H) < 0.5f;
+            if (!resized && !viewportResized && anchorStill)
                 continue;
+            // A popup whose CONTENT grew or shrank under a still anchor and viewport keeps the side it opened on (its effective placement
+            // leads the fallback): re-running the requested placement let a flyout that had fallen back to Left jump below its anchor
+            // the moment a shorter body fitted there. It still moves when that side no longer fits (the fallback runs from it).
+            var request = resized && !viewportResized && anchorStill ? e.EffectivePlacement : e.Placement;
 
             e.LastAnchorRect = aRect;
             e.LastViewport = ViewportRect;
@@ -833,7 +852,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
                 container = workArea(new Point2(aRect.X + aRect.W * 0.5f, aRect.Y + aRect.H * 0.5f));
 
             var place = OverlayHost.ApplyAnchorOffsetX(
-                FlyoutPositioner.Place(in aRect, in popupSize, in container, e.Placement, isWindowed: windowed),
+                FlyoutPositioner.Place(in aRect, in popupSize, in container, request, isWindowed: windowed),
                 e.AnchorOffsetX, in aRect);
             if (windowed)
                 Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, e.MeasuredW, e.MeasuredH), place.OpensUp,
@@ -1038,8 +1057,9 @@ public sealed class OverlayHost : Component
     /// @ .85 (Explorer near-opaque, kills the bleed-through); dark InAppDefault (Lum .96 / Tint .15) ⇒ #2C2C2C @ ~.97
     /// (a dark, faintly-translucent card). Used wherever the engine acrylic LAYER cannot run but the surface must still
     /// read as the same material: an OS-backed popup (DWM supplies the blur, but its system tint alone is far too weak
-    /// — in light theme the app content bleeds straight through the menu), and a plate over a video hole (below).
-    /// Matches the in-window acrylic, so all three states read the same.</summary>
+    /// — in light theme the app content bleeds straight through the menu), and a plate DECLARED over a video hole
+    /// (<see cref="PopupOptions.OpaqueSurface"/>). Its see-through share is unblurred: right only over the video itself,
+    /// which no backdrop pass can sample, never over UI.</summary>
     private static ColorF FlatAcrylicFill(in AcrylicSpec a)
     {
         float coverage = 1f - (1f - a.LuminosityOpacity) * (1f - a.TintOpacity);
@@ -1063,12 +1083,6 @@ public sealed class OverlayHost : Component
     /// shadow, and both hold.</para></summary>
     private static ColorF OsBackedTintFill(in AcrylicSpec a) => a.Tint with { A = a.TintOpacity };
 
-    /// <summary>How much of a popup plate has to sit inside a video hole before its acrylic is dropped. Half: a plate
-    /// mostly over the video blurs mostly nothing, and the fraction that DOES overlap real content is what the flat
-    /// fill approximates. Deliberately not 1.0 — a plate that clears the hole by a few pixels would otherwise keep
-    /// costing the whole window.</summary>
-    private const float VideoHoleCoverage = 0.5f;
-
     /// <summary>Which node carries a chrome's acrylic + drop shadow. MENU chrome carries them on its stretch PLATE;
     /// every other frosted chrome is a single-card SURFACE (FlyoutSurface's non-menu branch). Raw / Modal / TeachingTip
     /// are chrome-less (a transparent transform host) and have nothing to reconcile.</summary>
@@ -1087,13 +1101,14 @@ public sealed class OverlayHost : Component
     /// AND the engine drop shadow (the window's own chrome owns both: DWM's system backdrop + its rounded-window shadow,
     /// or CompositionBackdrop's acrylic group + masked drop shadow in the fallback regime) and paint only
     /// <see cref="OsBackedTintFill"/> — the presenter's residual tint — over it.</item>
-    /// <item><b>Over a video hole</b> — clear the acrylic, keep the shadow, paint <see cref="FlatAcrylicFill"/>. The
-    /// acrylic there is pure loss: <c>DrawOp.DrawVideo</c> is a DestOut erase and the video is a sibling DComp visual
-    /// z-BELOW the UI swapchain, so the backdrop the plate samples is premultiplied ZERO — it blurs NOTHING — while the
-    /// composite still pays a backdrop pass (a mini-composite of everything beneath, blurred) every frame the video
-    /// under it changes. Dropping it is a visual no-op and saves that pass on every frame a menu is up over playing
-    /// video.</item>
-    /// <item><b>Ordinary in-window</b> — the engine acrylic + drop shadow, with the authored resting fill restored.</item>
+    /// <item><b>Declared over a video hole</b> (<see cref="PopupOptions.OpaqueSurface"/>) — clear the acrylic, keep the
+    /// shadow, paint <see cref="FlatAcrylicFill"/>.</item>
+    /// <item><b>Ordinary in-window</b> — the engine acrylic + drop shadow, with the authored resting fill restored. This
+    /// includes a plate that overlaps a video hole: the acrylic stays right there too. Where the hole shows the video,
+    /// its erased pixels reach the blur as premultiplied zero and the acrylic recipe (backdrop over the opaque
+    /// FallbackColor) paints its solid fallback; where UI is painted over the hole (a Canvas cut to the Now playing
+    /// panel under its opaque ground and text), it frosts that UI. The flat fill is no stand-in for either: its
+    /// see-through share (15% in light) shows whatever is under the plate crisp and unblurred.</item>
     /// </list></summary>
     internal static void SyncWindowedMenuBackdrop(SceneStore scene, OverlayEntry e)
     {
@@ -1104,25 +1119,11 @@ public sealed class OverlayHost : Component
         // OS-backed window simply covers the window's material), and its shadow only where the stock card has one.
         var plate = e.PlateStyle ?? PopupPlate.Fluent();
         bool osBacked = e.PopupWindowToken >= 0;
-        // Asked of the LAST completed record's hole set, which is exactly right here: this runs at host phase 7.1,
-        // before this frame is recorded, and the answer only ever picks between two visually equivalent paints.
-        //
-        // The answer is LATCHED, one-way, per entry, because the recorder's published hole rect is NOT stable
-        // frame-to-frame: SceneRecorder publishes the exact DrawVideo Dst on a fresh walk, but the whole
-        // `span.SubtreeBounds` — letterbox floor, transport chrome and shadow halos folded in — whenever the video's
-        // subtree is served by a clean-span reuse. A plate straddling the Dst's bottom edge therefore fails the
-        // coverage test against one rect and passes against the other, and flips with NO scene change at all. Each
-        // flip mutates the plate (paint-dirty), which changes which subtrees are span-reused next frame, which flips
-        // the answer back: self-sustaining, and each flip re-records the popup's slice and re-rasters its tiles.
-        // Latching kills the loop, and it is also the CORRECT answer: the hole does not move under a pinned anchor for
-        // the popup's lifetime, so the first affirmative is the right one for the whole life of the entry. The latch
-        // dies with the entry — a re-open re-asks.
-        if (!osBacked && !e.VideoHoleLatched
-            && FluentGpu.Render.SceneRecorder.RectOverVideoHole(scene, scene.AbsoluteRect(target), VideoHoleCoverage))
-            e.VideoHoleLatched = true;
-        // OpaqueSurface is the caller's DECLARED form of the same fact (a media transport knows its pickers are over
-        // the video), so it wins from frame one without waiting for a geometry answer.
-        bool overVideo = !osBacked && (e.OpaqueSurface || e.VideoHoleLatched);
+        // Only the caller's DECLARATION drops the acrylic for the flat plate (a media transport knows its pickers are
+        // over the video). Geometry cannot tell: a hole's rect says where the video was punched, not whether it still
+        // shows — the Classic/WinUI/Zune Canvas is cut to the panel and painted over by its ground, meta and lyrics, so a
+        // plate over that panel "covers the hole" while it sits over UI the acrylic samples fine.
+        bool overVideo = !osBacked && e.OpaqueSurface;
         // The WinUI fallback policy (Materials.AcrylicEnabled: transparency off / slow effects / energy saver). The
         // recorder already refuses to emit the layer; clearing the scene-side spec too keeps the host's own view of the
         // surface honest — otherwise every frame would author an acrylic nothing consumes, and the plate would keep the
@@ -1151,12 +1152,12 @@ public sealed class OverlayHost : Component
         //   • Where it DOES run, the acrylic composites opaquely inside the plate, so the solid fill underneath is
         //     invisible — it costs a pixel of nothing.
         //   • Where it does NOT run, it is the only thing between the user and floating text: a non-primary swapchain
-        //     (the detached video pop-out window) where the D3D12 backend silently drops PushLayer, or a video hole
-        //     whose backdrop is premultiplied ZERO so the layer composites nothing at all.
+        //     (the detached video pop-out window) where the D3D12 backend silently drops PushLayer.
         // Restoring Transparent here — as this line used to, on the false premise that the host authored those two
         // chromes transparent-over-acrylic — stripped exactly the fallback FlyoutSurface's comment says must never be
         // stripped, and over a fullscreen video hole produced a menu that was nothing but its 1px ring and its item
-        // text. Combined with the frame-to-frame flip above, that is the flyout that alternated solid/invisible.
+        // text. Combined with the frame-to-frame flip of a geometric over-video query (since removed), that was the
+        // flyout that alternated solid/invisible.
         // An OS-backed plate is the ONE case where a near-opaque resting fill is wrong rather than merely redundant:
         // its backdrop is the window's, underneath this swapchain, so the fill does not sit on top of a layer that
         // might not run — it sits on top of the material itself and hides it.
@@ -1672,6 +1673,11 @@ public sealed class OverlayHost : Component
 
     static BoxEl Positioned(OverlayEntry e) => e.Chrome == PopupChrome.Modal ? PositionedModal(e) : PositionedAnchored(e);
 
+    // An input-blocking entry's surface owns the presses inside its bounds (FlyoutSurface.OnPressInside); a caller-owned
+    // one (ToolTip, DismissBehavior.None) owns none. The service is the entry's own (OverlayEntry.Service).
+    static Action<Point2>? PressInsideFor(OverlayEntry e)
+        => e.DismissBehavior == DismissBehavior.None || e.Service is not { } svc ? null : _ => svc.PressInside(e);
+
     // BOTH positioning hosts are full-bleed layers above the scrim and the page: they must gate their SUBTREE with
     // HitTestVisible (a closing popup goes inert) but must never take a hit THEMSELVES (HitTestPassThrough = self
     // yields, children keep). A handler-less full-bleed wrapper is invisible to the interaction-gated Hit walk, but
@@ -1698,6 +1704,7 @@ public sealed class OverlayHost : Component
                 Body = e.Content,
                 Chrome = e.Chrome,
                 Plate = e.Plate,
+                OnPressInside = PressInsideFor(e),
                 OnSurface = h => e.SurfaceNode = h,
                 OnPlateStyle = p => e.PlateStyle = p,
             }),
@@ -1731,6 +1738,7 @@ public sealed class OverlayHost : Component
                         Body = () => Ctx.Provide(Overlay.Placement, e.PlacementInfo, e.Content()),
                         Chrome = e.Chrome,
                         Plate = e.Plate,
+                        OnPressInside = PressInsideFor(e),
                         OnSurface = h => e.SurfaceNode = h,
                         OnPlateStyle = p => e.PlateStyle = p,
                         OnPlate = h => e.PlateNode = h,
@@ -1759,6 +1767,24 @@ internal sealed class FlyoutSurface : Component
     /// <summary>Reports the <see cref="PopupPlate"/> this render built the card from (frosted chromes only), so the host's
     /// per-frame backdrop sync and its corner squaring read the same card without resolving the style table every frame.</summary>
     public Action<PopupPlate>? OnPlateStyle;
+    /// <summary>Set for an input-blocking entry (light-dismiss or modal): a press that lands inside this popup's bounds and
+    /// that nothing inside it takes. See <see cref="OwnPresses"/>.</summary>
+    public Action<Point2>? OnPressInside;
+
+    /// <summary>WinUI light dismiss is a question of BOUNDS: the light-dismiss layer only receives a press the popup's
+    /// visual tree did not hit-test, and a presenter with a background hit-tests across its whole card
+    /// (CPopupRoot::OnPointerPressed closes only for a press the popup did not take). The engine's click walk is
+    /// INTERACTION-gated instead (InputDispatcher.Hit: a handler-less box is no hit target), so a press on a popup's
+    /// padding, a section header, a gap between rows, a caption or a disabled row found nothing inside the popup and fell
+    /// through to the full-bleed light-dismiss scrim beneath it, which closed the flyout. The surface therefore takes the
+    /// press itself wherever no row inside it does (a pointer handler makes it a hit target; it is never auto-tinted, see
+    /// SceneRecorder.AutoTints) and never moves focus off the row the keyboard is on (AllowFocusOnInteraction = false).
+    /// The popup stays; a popup opened ABOVE it (its cascade, a dropdown opened from it) is outside that press and light
+    /// dismisses exactly as the scrim used to (<see cref="OverlayServiceImpl.PressInside"/>). A caller-owned entry (a
+    /// ToolTip, DismissBehavior.None) keeps the pass-through: it never swallows input meant for the page beneath it.</summary>
+    BoxEl OwnPresses(BoxEl surface) => OnPressInside is { } pressInside
+        ? surface with { HitTestPassThrough = false, OnPointerDown = pressInside, AllowFocusOnInteraction = false }
+        : surface;
 
     /// <summary>The corners of a card of radius <paramref name="radius"/> whose <paramref name="join"/> edge abuts its anchor.</summary>
     public static CornerRadius4 CornersFor(CornerJoin join, float radius) => join switch
@@ -1788,7 +1814,7 @@ internal sealed class FlyoutSurface : Component
         if (Chrome == PopupChrome.Raw || Chrome == PopupChrome.Modal || Chrome == PopupChrome.TeachingTip)
         {
             bool modal = Chrome == PopupChrome.Modal;
-            return new BoxEl
+            return OwnPresses(new BoxEl
             {
                 Direction = 1,
                 AlignSelf = modal ? FlexAlign.Center : FlexAlign.Start,
@@ -1810,7 +1836,7 @@ internal sealed class FlyoutSurface : Component
                 // A dialog WITH scrollable Content is unaffected — that inner scroller is a descendant, found first.
                 BlocksBackgroundScroll = modal,
                 Children = [Body()],
-            };
+            });
         }
 
         // The frosted popup card. Every WinUI transient surface carries the ONE default acrylic recipe
@@ -1846,7 +1872,7 @@ internal sealed class FlyoutSurface : Component
             // "menu overlaps the button" mid-open artifact).
             var menuPlate = Plate ?? PlateFor(Chrome);
             OnPlateStyle?.Invoke(menuPlate);
-            return new BoxEl
+            return OwnPresses(new BoxEl
             {
                 ZStack = true,
                 AlignSelf = FlexAlign.Start,
@@ -1883,13 +1909,13 @@ internal sealed class FlyoutSurface : Component
                         Children = [Body()],
                     },
                 ],
-            };
+            });
         }
 
         // The stock card pads 0,2,0,2 for every frosted chrome but the generic Popup flyout (see PlateFor).
         var plate = Plate ?? PlateFor(Chrome);
         OnPlateStyle?.Invoke(plate);
-        return new BoxEl
+        return OwnPresses(new BoxEl
     {
         Direction = 1,
         AlignSelf = FlexAlign.Start,
@@ -1906,6 +1932,6 @@ internal sealed class FlyoutSurface : Component
 
         OnRealized = h => OnSurface?.Invoke(h),
         Children = [Body()],
-    };
+    });
     }
 }

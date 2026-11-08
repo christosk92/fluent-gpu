@@ -592,7 +592,6 @@ struct Runtime
     uint64_t handle = 0;
     std::wstring storePath;
     int64_t adapterLuid = 0;             // (HighPart << 32) | LowPart of the adapter the D3D11 device is created on; 0 = default
-    int32_t videoOutputFormat = 0;       // FgPrVideoOutput the engine is created with (Reg().videoOutputFormat as of the create; F249)
     int32_t securityPolicy = 0;          // FgPrSecurityPolicy the CDM is created under (Reg().securityPolicy as of the create; F022)
     int32_t securityLevel = 2000;        // runtime thread: the PlayReady security level the CDM was provisioned at (2000 or 3000; F022)
     int64_t createdQpc = 0;
@@ -636,9 +635,6 @@ struct Runtime
     /// input may make PMP reject the ITA proxy for another KID, so the default stays one trusted input per attach until
     /// the on-box check (two KIDs, then a re-attach) has passed. Runtime thread only.
     bool trustedInputReuse = false;
-    /// FG_PLAYREADY_LICENSE_BEFORE_ATTACH=1 (read once at bring-up; F217): the attach verb starts its own licence's key session BEFORE
-    /// CompleteAttach (the old order) instead of queueing it right after the SetSource. Runtime thread only.
-    bool licenseBeforeAttach = false;
 
     /// The session whose source the engine is playing — or is about to play, while its init segments are still on the
     /// wire (PrSession.cpp CompleteAttach). Written on the runtime thread, read by the notify sink on MF threads.
@@ -784,6 +780,18 @@ struct Session
     uint64_t flushSeq = 0;                        // feedMx — the seek that last FLUSHED the streams (an unbuffered seek);
                                                   //   a fetch planned under an older seq must not splice into the flushed buffer
     int64_t seekPostedQpc = 0;                    // runtime thread
+    // One engine seek at a time (PrSession.cpp FgPrSessionSeek). Runtime thread: a SetCurrentTime the engine is running the
+    // seek algorithm for has not reached its SEEKED yet; a user seek posted meanwhile waits in `deferredSeek` (latest wins)
+    // and SessionSeekLanded runs it from that SEEKED. Both reset at every attach / detach (the engine's seek dies with it).
+    bool engineSeekInFlight = false;
+    struct DeferredSeek
+    {
+        bool valid = false;
+        int64_t targetMs = 0;
+        int32_t mode = FgPrSeekMode_Exact;
+        int64_t keyframeMs = -1;
+        int64_t postedQpc = 0;
+    } deferredSeek;
 
     // ── attach / transport (runtime thread) ─────────────────────────────────────────────────────────────────────────
     uint64_t license = 0;
@@ -844,7 +852,6 @@ struct Registry
 {
     std::mutex mx;
     std::shared_ptr<Runtime> runtime;                                   // one per process
-    std::atomic<int32_t> videoOutputFormat{ 0 };                        // FgPrVideoOutput for the NEXT runtime (FgPrRuntimeSetVideoOutputFormat; F249)
     std::atomic<int32_t> securityPolicy{ 0 };                           // FgPrSecurityPolicy for the NEXT runtime (FgPrRuntimeSetSecurityPolicy; F022; 0 = probe SL3000)
     std::unordered_map<uint64_t, std::shared_ptr<Session>> sessions;
 };
@@ -893,6 +900,12 @@ void RuntimeItaPreflight(Runtime& rt);                    // runtime thread: the
 void LicenseBind(uint64_t license, int delta);            // attach (+1) / detach (-1); closes a released KID at 0
 void LicenseStartIfPending(Runtime& rt, uint64_t license);   // runtime thread: run the not-yet-started acquisition now (the attach verb)
 std::shared_ptr<License> LicenseByHandle(uint64_t license);
+bool LicensePendingForKid(uint64_t runtime, const uint8_t kid[16]);   // any thread, leaf lock: the key gate (CencMediaStream::m_keyPending)
+struct EnableKeys { int count = 0; uint8_t kid[2][16] = {}; };         // the KIDs the attached source decrypts with (video, audio)
+/// BeginEnableContent (an MF thread): hand the enabler to the CDM and complete it, level-triggered, once every KID in `keys`
+/// is usable (at once when it already is). See PrLicense.cpp "The media session's content enabler".
+HRESULT LicenseEnableContent(uint64_t runtime, const EnableKeys& keys, IMFContentDecryptionModule* cdm,
+                             IMFContentEnabler* enabler, IMFAsyncResult* outer);
 void LicensesShutdown(Runtime& rt);                       // runtime thread, FgPrRuntimeDestroy: close every key session
 
 // PrSession.cpp
@@ -901,6 +914,8 @@ void SessionPublishHandle(Runtime& rt, Session& s, bool reRaise);      // runtim
 void SessionOnFormatChange(Runtime& rt, Session& s);                   // runtime thread: a size report, never a re-publication
 void SessionSamplePosition(Runtime& rt, Session& s, bool raiseNow);    // runtime thread
 void SessionOnCanPlay(Runtime& rt, Session& s);                        // runtime thread
+bool SessionSeekLanded(Runtime& rt, Session& s);                       // runtime thread, SEEKED: true = a deferred seek now runs
 void SessionsShutdown(Runtime& rt);                                    // runtime thread, FgPrRuntimeDestroy
+void SessionsKeySettled(Runtime& rt);                                  // runtime thread: a licence left Pending, re-ask the key gate
 
 }   // namespace fgpr
