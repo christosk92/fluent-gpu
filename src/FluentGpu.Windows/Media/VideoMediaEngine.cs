@@ -204,6 +204,11 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private uint _appliedStreamW, _appliedStreamH;
     private VideoEngineSnapshot _lastPublished;
     private long _lastRaiseTicks;
+    // Engine thread only: the source loops (the Loop command), the loop seam's measurement (LoopSeamProbe: its period is the gapless
+    // clip's length, 0 for the Media Engine's own loop), and the playhead the last refresh read (the near-seam cadence asks it).
+    private bool _loop;
+    private readonly LoopSeamProbe _seam = new();
+    private double _lastPosition;
 
     /// <inheritdoc/>
     public event Action? StateChanged;
@@ -272,7 +277,10 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         DisposeCom();
     }
 
-    private int RefreshIntervalMs() => !_hasSource ? ParkedRefreshMs : !_metadataTrusted || _playing || _liveLatched ? ActiveRefreshMs : ParkedRefreshMs;
+    private int RefreshIntervalMs()
+        => !_hasSource ? ParkedRefreshMs
+         : _loop && _playing && _metadataTrusted && _seam.Near(_lastPosition, _cachedDuration) ? LoopSeamProbe.NearMs
+         : !_metadataTrusted || _playing || _liveLatched ? ActiveRefreshMs : ParkedRefreshMs;
 
     private int CreateEngine()
     {
@@ -457,9 +465,11 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             if (_engine != null) _engine->SetMuted(muted != 0);
         }
 
-        if (c.TryTake(VideoCommandKind.Loop, out _, out int loop, out _, out _))
+        if (c.TryTake(VideoCommandKind.Loop, out double seamPeriod, out int loop, out _, out _))
         {
-            if (_engine != null) _engine->SetLoop(loop != 0);
+            _loop = loop != 0;
+            _seam.Reset(_loop ? seamPeriod : 0);
+            if (_engine != null) _engine->SetLoop(_loop);
         }
 
         if (c.TryTake(VideoCommandKind.StreamRect, out _, out int w, out int h, out _))
@@ -514,6 +524,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         _handles.Retire(Environment.TickCount64);   // F198: the old source's handle is superseded; it is closed a replacement or a grace later
         _frames.Reset(); _frameWatch.Reset(); _nextStatsPollMs = 0; _frameStatsReadable = false;
         _cachedDuration = 0;
+        _seam.Reset(_seam.Period); _lastPosition = 0;
         // The source changed, so whatever swap-chain handle the old one produced is invalid, exactly like a native
         // FORMATCHANGE/RESOURCELOST — bump the same epoch so a consumer re-queries it.
         Interlocked.Increment(ref _presentationEpoch);
@@ -675,6 +686,14 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         }
         // A statistics read that fails or comes back empty is telemetry trouble, never a hang (Chromium skips its rendered-frame check
         // unless PopulateStatistics succeeded): the watch only counts time while the counters are actually readable.
+        // The loop seam's measurement: every refresh of a playing looping video samples the counters (the cadence tightens near a seam).
+        _lastPosition = position;
+        if (_loop && _playing && metadata && duration > 0 && _naturalW != 0 && _naturalH != 0 && _seam.Near(position, duration)
+            && TryReadFrameStats(out uint seamRendered, out uint seamDropped))
+        {
+            _frames.Observe(seamRendered, seamDropped);
+            if (_seam.Sample(Stopwatch.GetTimestamp(), position, duration, _frames.Rendered, _ordinal) is { } seamLine) Diag.Line(seamLine);
+        }
         if (_frameWatch.Observe(nowMs, videoPlaying && _frameStatsReadable, _frames.Rendered))
         {
             _error = true; _errorCode = MfMediaEngineErrDecode; _errorHr = HrNoRenderedFrame;
