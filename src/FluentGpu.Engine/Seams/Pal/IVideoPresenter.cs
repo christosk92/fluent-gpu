@@ -67,11 +67,12 @@ public interface IVideoPresenter
     /// </summary>
     void SetContentSize(VideoSurfaceId id, uint width, uint height) { }
 
-    /// <summary>Round the composited surface's corners by <paramref name="radiusPx"/> (device px, uniform on all four
-    /// corners; <c>0</c> = square, the default). The compositor clips the CONTENT, which a UI-side rounded parent
-    /// cannot do — a video child visual composites outside the UI back buffer, so it ignores the caller's ClipToBounds.
-    /// Half the shorter side gives a circle. Default no-op so headless/test presenters need not implement it.</summary>
-    void SetCornerRadius(VideoSurfaceId id, float radiusPx) { }
+    /// <summary>Round the corners of the composited surface's clip (the viewport within the placed rect) by <paramref name="radiiPx"/>
+    /// (device px, per corner; all <c>0</c> = square, the default). The compositor clips the CONTENT, which a UI-side rounded parent
+    /// cannot do — a video child visual composites outside the UI back buffer, so it ignores the caller's ClipToBounds. The caller
+    /// passes the element's own radius and, at a corner a rounded ancestor clip cuts, that clip's arc. Half the shorter side gives a
+    /// circle. Default no-op so headless/test presenters need not implement it.</summary>
+    void SetCornerRadii(VideoSurfaceId id, CornerRadius4 radiiPx) { }
 
     /// <summary>True when this presenter's output reported overlay-plane support for the video (F087: the Windows probe,
     /// <see cref="FluentGpu.Media.VideoOverlayCaps"/>), so a surface may be promoted ABOVE the UI plane through

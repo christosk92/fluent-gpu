@@ -1860,7 +1860,7 @@ public sealed partial class SliceRecorder
             // composites (gpu-renderer.md §7.3 "Emit order"): the segment's tile already holds the hole with every later op
             // of the segment — transport, captions, a strip, a ✕ — painted back over it, so an erase after it would wipe
             // that chrome every frame.
-            PlaceVideoErases(slot, k, accDx, accDy, in effClip, VideoEraseOrder.BeforeSegment);
+            PlaceVideoErases(slot, k, accDx, accDy, in effClip, in round, roundR, VideoEraseOrder.BeforeSegment);
 
             ref Plan e = ref NewPlan(PlanKind.Seg);
             e.Slot = slot; e.Segment = k; e.AccDx = accDx; e.AccDy = accDy; e.Clip = segClip; e.RoundRect = round; e.RoundR = roundR;
@@ -1876,7 +1876,7 @@ public sealed partial class SliceRecorder
             // A hole punched inside an inline group layer erased only that layer's scratch: the tile still holds this
             // segment's earlier content under it, so its erase follows the segment (`e` is not touched past this point —
             // NewPlan may grow the plan array).
-            PlaceVideoErases(slot, k, accDx, accDy, in effClip, VideoEraseOrder.AfterSegment);
+            PlaceVideoErases(slot, k, accDx, accDy, in effClip, in round, roundR, VideoEraseOrder.AfterSegment);
 
             if (k < marks)
             {
@@ -1890,27 +1890,40 @@ public sealed partial class SliceRecorder
 
     /// <summary>The composite ERASE of every video hole segment <paramref name="k"/> of <paramref name="slot"/> punched whose
     /// <see cref="VideoEraseOrder"/> is <paramref name="order"/>: its rect at the slot's posed offset (window DIP), cut to the
-    /// slot's composite clip, published as a hole (<see cref="VideoRects"/>) and signed into the composite hash.</summary>
-    private void PlaceVideoErases(int slot, int k, float accDx, float accDy, in RectF effClip, VideoEraseOrder order)
+    /// slot's composite clip, published as a hole (<see cref="VideoRects"/>) and signed into the composite hash.
+    /// <paramref name="round"/>/<paramref name="roundR"/> is the rounded clip the slot inherits from its enclosing slices (window DIP; a
+    /// floating pane's rounded corners): the hole takes the innermost rounded clip in effect, the stream's own before that one.</summary>
+    private void PlaceVideoErases(int slot, int k, float accDx, float accDy, in RectF effClip, in RectF round, float roundR, VideoEraseOrder order)
     {
         for (int v = 0; v < _scanVideoCount[slot]; v++)
         {
             ref ScanVideo sv = ref _scanVideos[slot][v];
             if (sv.Seg != k || sv.Order != order) continue;
             RectF wr = Offset(sv.Rect, accDx, accDy);
+            if (!effClip.IsInfinite) wr = wr.Intersect(effClip);
+            // The rounded clip over the hole, kept only where an arc reaches into what the composite clip leaves of it: there the erase
+            // must spare the UI outside the arc, and the video visual must be rounded alike (it composites outside the back buffer, so a
+            // square one shows through wherever the UI is transparent past the arc - a Mica window's clear beyond a pane's corner).
+            RectF holeRound = default;
+            float holeRoundR = 0f;
+            if (sv.RoundR > 0f) { holeRound = Offset(sv.RoundRect, accDx, accDy); holeRoundR = sv.RoundR; }
+            else if (roundR > 0f) { holeRound = round; holeRoundR = roundR; }
+            if (holeRoundR > 0f && !FluentGpu.Media.VideoRoundClip.Cuts(in wr, in holeRound, holeRoundR)) { holeRound = default; holeRoundR = 0f; }
             // F070: the posed hole as the video placement follows it - the unclipped rect and the clip that cuts it, recorded BEFORE the
             // clip empties the erase, so a hole scrolled fully under a header still tells the applier to hide the video there.
             int posedAt = -1;
             if (sv.SurfaceId > 0 && _posedHoleCount < _posedHoles.Length)
             {
                 posedAt = _posedHoleCount++;
-                _posedHoles[posedAt] = new FluentGpu.Media.VideoPosedHole { Token = sv.SurfaceId, Hole = Offset(sv.Hole, accDx, accDy), EffClip = effClip };
+                _posedHoles[posedAt] = new FluentGpu.Media.VideoPosedHole
+                {
+                    Token = sv.SurfaceId, Hole = Offset(sv.Hole, accDx, accDy), EffClip = effClip, RoundRect = holeRound, RoundR = holeRoundR,
+                };
                 _posedMeta[posedAt] = new PosedMeta
                 {
                     PlanIdx = -1, Slot = slot, Seg = k, After = Offset(sv.After, accDx, accDy), Inline = order == VideoEraseOrder.AfterSegment,
                 };
             }
-            if (!effClip.IsInfinite) wr = wr.Intersect(effClip);
             if (wr.IsEmpty) continue;
             ref Plan ve = ref NewPlan(PlanKind.Video);
             if (posedAt >= 0) _posedMeta[posedAt].PlanIdx = _planCount - 1;
@@ -1919,14 +1932,14 @@ public sealed partial class SliceRecorder
             ve.Hole = Offset(sv.Hole, accDx, accDy);
             ve.Radii = sv.Radii;
             ve.Alpha = sv.Strength;
-            if (sv.RoundR > 0f) { ve.RoundRect = Offset(sv.RoundRect, accDx, accDy); ve.RoundR = sv.RoundR; }
+            if (holeRoundR > 0f) { ve.RoundRect = holeRound; ve.RoundR = holeRoundR; }
             if (_videoRectCount < _videoRects.Length) _videoRects[_videoRectCount++] = wr;
             MixRect(ref _compositeHash, wr);
             Mix(ref _compositeHash, sv.Strength);
             MixRect(ref _compositeHash, ve.Hole);
             Mix(ref _compositeHash, sv.Radii.TopLeft); Mix(ref _compositeHash, sv.Radii.TopRight);
             Mix(ref _compositeHash, sv.Radii.BottomRight); Mix(ref _compositeHash, sv.Radii.BottomLeft);
-            if (sv.RoundR > 0f) { MixRect(ref _compositeHash, ve.RoundRect); Mix(ref _compositeHash, sv.RoundR); }
+            if (holeRoundR > 0f) { MixRect(ref _compositeHash, holeRound); Mix(ref _compositeHash, holeRoundR); }
         }
     }
 
@@ -1936,9 +1949,9 @@ public sealed partial class SliceRecorder
     /// and hole. Bounds are per whole segment, so a segment that merely has paint somewhere over the hole's rect counts as covering it: the
     /// verdict can only err towards "covered" (underlay), never towards a video hiding UI. A hole inside an inline group layer, or one the
     /// clip emptied, is never clear. Neither is a hole whose erase is PARTIAL (<see cref="Plan.Alpha"/> below 1: the underlay leaves part of
-    /// the UI over the video, a promoted visual has no opacity and would show at full strength over it), one an in-stream rounded clip cuts
-    /// (<see cref="Plan.RoundR"/> above 0: the presenter rounds only by the element's own corner radius, a promoted video would show square
-    /// corners over the UI outside the ancestor's rounded clip), or one that sits under a layer or group surface (an ancestor's opacity /
+    /// the UI over the video, a promoted visual has no opacity and would show at full strength over it), one whose corner a rounded clip cuts
+    /// (<see cref="Plan.RoundR"/> above 0: the presenter then rounds the visual too, and DWM cannot put a rounded-clipped visual on a
+    /// hardware plane, so it stays an underlay), or one that sits under a layer or group surface (an ancestor's opacity /
     /// fade / blur composites the UI over the underlay the same way). Detached fly snapshots are recorded into the root slice's tail, so they
     /// are plan segments like any other and count as covering. Allocation-free; runs only when the plan holds a hole.</summary>
     private void ClassifyVideoOcclusion()

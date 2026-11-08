@@ -40,12 +40,12 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         public IDCompositionVisual* Child;   // the video child visual under Parent: scale transform + content (owned)
         public IDCompositionVisual* Backing; // opaque black backing under Child (owned; null if the shared content could not be created)
         public IUnknown* Content;            // the surface wrapped from the external handle (owned)
-        public IDCompositionRectangleClip* RoundClip;   // owned; created lazily, only while Radius > 0
+        public IDCompositionRectangleClip* RoundClip;   // owned; created lazily, only while a corner of Radii is above 0
         public RectF Rect;
         public RectF Viewport;
         public uint ContentW, ContentH;      // the content's native pixel size (decoder swapchain) — scale source (0 = unknown → 1:1)
         public float Opacity;
-        public float Radius;                 // device-px corner radius (0 = square → the plain rect clip)
+        public CornerRadius4 Radii;          // device-px corner radii of the clip (all 0 = square → the plain rect clip)
         public int Z;
         public bool Visible;
         public bool Overlay;                 // F087: promoted above the UI visual (default: the underlay below it)
@@ -238,13 +238,14 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
     }
 
-    public void SetCornerRadius(VideoSurfaceId id, float radiusPx)
+    public void SetCornerRadii(VideoSurfaceId id, CornerRadius4 radiiPx)
     {
         _device.AssertRenderThread();
         ref Slot s = ref Get(id);
-        float r = radiusPx > 0f ? radiusPx : 0f;
-        if (s.Radius == r) return;
-        s.Radius = r;
+        var r = new CornerRadius4(MathF.Max(0f, radiiPx.TopLeft), MathF.Max(0f, radiiPx.TopRight),
+            MathF.Max(0f, radiiPx.BottomRight), MathF.Max(0f, radiiPx.BottomLeft));
+        if (s.Radii == r) return;
+        s.Radii = r;
         if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
     }
 
@@ -422,37 +423,38 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         float bottom = Math.Clamp(viewport.Y + viewport.H - s.Rect.Y, top, rh);
         D2D_RECT_F clip = new D2D_RECT_F { left = left, top = top, right = right, bottom = bottom };
 
-        if (s.Radius <= 0f)
+        CornerRadius4 radii = s.Radii;
+        if (radii.TopLeft <= 0f && radii.TopRight <= 0f && radii.BottomRight <= 0f && radii.BottomLeft <= 0f)
         {
             if (s.RoundClip != null) { s.Parent->SetClip((IDCompositionClip*)null); s.RoundClip->Release(); s.RoundClip = null; }
             if (!Ok(s.Parent->SetClip(&clip), "video parent SetClip")) s.PlacementFaulted = true;
             return;
         }
 
-        // Rounded: the clip is in device px on the untransformed parent, so the device-px radius applies directly (no
-        // division by the content scale) and a circle stays circular whatever the scale. The parent's SOFT border mode
-        // anti-aliases the corner arcs.
+        // Rounded: the clip is in device px on the untransformed parent, so the device-px radii apply directly (no
+        // division by the content scale) and a circle stays circular whatever the scale. Per corner: the element's own
+        // radius, or the arc of a rounded ancestor clip that cuts that corner (a floating pane's). The parent's SOFT border
+        // mode anti-aliases the corner arcs.
         if (s.RoundClip == null)
         {
             IDCompositionRectangleClip* created;   // via a local: s is a ref into the slot array, so &s.RoundClip is unfixed
             if (!Ok(Dcomp->CreateRectangleClip(&created), "CreateRectangleClip(video parent)")) { s.PlacementFaulted = true; return; }
             s.RoundClip = created;
         }
-        float rx = MathF.Min(s.Radius, (clip.right - clip.left) * 0.5f);
-        float ry = MathF.Min(s.Radius, (clip.bottom - clip.top) * 0.5f);
+        float hw = (clip.right - clip.left) * 0.5f, hh = (clip.bottom - clip.top) * 0.5f;
         var rc = s.RoundClip;
         if (!Ok(rc->SetLeft(clip.left), "round clip SetLeft")) { s.PlacementFaulted = true; return; }
         if (!Ok(rc->SetTop(clip.top), "round clip SetTop")) { s.PlacementFaulted = true; return; }
         if (!Ok(rc->SetRight(clip.right), "round clip SetRight")) { s.PlacementFaulted = true; return; }
         if (!Ok(rc->SetBottom(clip.bottom), "round clip SetBottom")) { s.PlacementFaulted = true; return; }
-        if (!Ok(rc->SetTopLeftRadiusX(rx), "round clip TL x")) { s.PlacementFaulted = true; return; }
-        if (!Ok(rc->SetTopLeftRadiusY(ry), "round clip TL y")) { s.PlacementFaulted = true; return; }
-        if (!Ok(rc->SetTopRightRadiusX(rx), "round clip TR x")) { s.PlacementFaulted = true; return; }
-        if (!Ok(rc->SetTopRightRadiusY(ry), "round clip TR y")) { s.PlacementFaulted = true; return; }
-        if (!Ok(rc->SetBottomLeftRadiusX(rx), "round clip BL x")) { s.PlacementFaulted = true; return; }
-        if (!Ok(rc->SetBottomLeftRadiusY(ry), "round clip BL y")) { s.PlacementFaulted = true; return; }
-        if (!Ok(rc->SetBottomRightRadiusX(rx), "round clip BR x")) { s.PlacementFaulted = true; return; }
-        if (!Ok(rc->SetBottomRightRadiusY(ry), "round clip BR y")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetTopLeftRadiusX(MathF.Min(radii.TopLeft, hw)), "round clip TL x")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetTopLeftRadiusY(MathF.Min(radii.TopLeft, hh)), "round clip TL y")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetTopRightRadiusX(MathF.Min(radii.TopRight, hw)), "round clip TR x")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetTopRightRadiusY(MathF.Min(radii.TopRight, hh)), "round clip TR y")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetBottomLeftRadiusX(MathF.Min(radii.BottomLeft, hw)), "round clip BL x")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetBottomLeftRadiusY(MathF.Min(radii.BottomLeft, hh)), "round clip BL y")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetBottomRightRadiusX(MathF.Min(radii.BottomRight, hw)), "round clip BR x")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetBottomRightRadiusY(MathF.Min(radii.BottomRight, hh)), "round clip BR y")) { s.PlacementFaulted = true; return; }
         if (!Ok(s.Parent->SetClip((IDCompositionClip*)rc), "video parent SetClip(rounded)")) s.PlacementFaulted = true;
     }
 
