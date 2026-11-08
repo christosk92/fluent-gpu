@@ -55,6 +55,33 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
                                               // cleared at the top of the next ApplyPlacement attempt)
     }
 
+    // ── frosted plates (SetBackdrops) ─────────────────────────────────────────────────────────────────────────────────
+    // Per slot up to MaxPlates plates, each a four-visual chain under the slot's PARENT, inserted directly above the video child (so
+    // it inherits the parent's offset and viewport clip): Clip (the plate's rounded clip in parent-local device px, and its opacity)
+    // -> Fx (a Gaussian blur, then a colour matrix: the acrylic's luminosity step, the video's lightness pulled to the tint's) -> Inner (a square clip at the plate grown by the blur's reach: the blur's input stays the plate's
+    // neighbourhood, not the whole frame) -> Content (the same video surface as the child, scaled like it). The compositor blurs the
+    // video under each plate every frame it composes; the managed side touches nothing until a plate moves. Effects need a Windows 10
+    // family device (D3D12Device.EnsureDComp); without one SetBackdrops is a no-op.
+    private const int MaxPlates = 8;   // the engine's VideoHoleBackdrops.Max: the plates one hole can list
+    private const float MaxBlurSigma = 250f;   // D2D's Gaussian blur ceiling
+
+    private struct Plate
+    {
+        public IDCompositionVisual3* Clip, Fx;          // owned
+        public IDCompositionVisual* Inner, Content;     // owned
+        public IDCompositionGaussianBlurEffect* Blur;   // owned
+        public IDCompositionColorMatrixEffect* Matrix;  // owned: the luminosity step, fed by Blur
+        public IDCompositionRectangleClip* Round;       // owned
+        public bool InTree;
+    }
+
+    private readonly Plate[] _plates = new Plate[MaxSurfaces * MaxPlates];
+    private readonly VideoBackdropPx[] _want = new VideoBackdropPx[MaxSurfaces * MaxPlates];
+    private readonly int[] _wantCount = new int[MaxSurfaces];
+    private readonly bool[] _platesDirty = new bool[MaxSurfaces];
+    private IDCompositionDevice3* _dcomp3;   // owned (QI of the shared device), null until the first plate
+    private bool _noEffects;                 // the device refused IDCompositionDevice3: plates stay off
+
     private readonly D3D12Device _device;
     private readonly Slot[] _slots = new Slot[MaxSurfaces];
     private int _dirtyCount;
@@ -162,6 +189,7 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         }
         if (s.Content != null) s.Content->Release();
         s.Content = surface;
+        RebindPlateContent((int)id.Value - 1, surface);
         if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
         return true;
     }
@@ -172,7 +200,212 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
     {
         Ok(s.Child->SetContent((IUnknown*)null), "video child SetContent(null)");
         if (s.Content != null) { s.Content->Release(); s.Content = null; }
+        for (int i = 0; i < MaxSurfaces; i++)
+            if (_slots[i].InUse && _slots[i].Child == s.Child) { RebindPlateContent(i, null); break; }
         if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
+    }
+
+    public void SetBackdrops(VideoSurfaceId id, ReadOnlySpan<VideoBackdropPx> backdrops)
+    {
+        _device.AssertRenderThread();
+        ref Slot s = ref Get(id);
+        if (_noEffects) return;
+        int idx = (int)id.Value - 1, n = Math.Min(backdrops.Length, MaxPlates);
+        bool same = n == _wantCount[idx];
+        for (int k = 0; same && k < n; k++) same = _want[idx * MaxPlates + k] == backdrops[k];
+        if (same) return;
+        if (n != _wantCount[idx]) Diag.Line($"[video.presenter] plates id={id.Value} n={n}");   // cold: a plate comes or goes, never per move
+        for (int k = 0; k < n; k++) _want[idx * MaxPlates + k] = backdrops[k];
+        _wantCount[idx] = n;
+        _platesDirty[idx] = true;
+        if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
+    }
+
+    // The new content (or none) on every plate the slot has built: the blurred copy shows the same frame as the child.
+    private void RebindPlateContent(int idx, IUnknown* content)
+    {
+        for (int k = 0; k < MaxPlates; k++)
+        {
+            ref Plate p = ref _plates[idx * MaxPlates + k];
+            if (p.Content != null) Ok(p.Content->SetContent(content), "plate content SetContent");
+        }
+    }
+
+    private bool EnsureEffects()
+    {
+        if (_dcomp3 != null) return true;
+        if (_noEffects) return false;
+        IDCompositionDevice3* d3;
+        Guid iid = IID.IID_IDCompositionDevice3;
+        if ((int)Dcomp->QueryInterface(&iid, (void**)&d3) < 0)
+        {
+            _noEffects = true;   // a v1 device (the fallback in D3D12Device.EnsureDComp): plates stay off, the veil lies over the sharp video
+            Diag.Line("[video.presenter] no IDCompositionDevice3: frosted plates over video are off");
+            return false;
+        }
+        _dcomp3 = d3;
+        return true;
+    }
+
+    private IDCompositionVisual3* CreateVisual3(string what)
+    {
+        IDCompositionVisual* v;
+        if (!Ok(Dcomp->CreateVisual(&v), what)) return null;
+        IDCompositionVisual3* v3;
+        Guid iid = IID.IID_IDCompositionVisual3;
+        HRESULT hr = v->QueryInterface(&iid, (void**)&v3);
+        v->Release();
+        return Ok(hr, what + " (Visual3)") ? v3 : null;
+    }
+
+    // Build one plate of a slot (cold: once per plate for the slot's life). False leaves nothing half-built.
+    private bool BuildPlate(ref Slot s, ref Plate p)
+    {
+        if (!EnsureEffects()) return false;
+        IDCompositionVisual* inner = null, content = null;
+        IDCompositionGaussianBlurEffect* blur = null;
+        IDCompositionColorMatrixEffect* matrix = null;
+        IDCompositionRectangleClip* round = null;
+        IDCompositionVisual3* clip = CreateVisual3("CreateVisual(plate clip)");
+        IDCompositionVisual3* fx = clip != null ? CreateVisual3("CreateVisual(plate fx)") : null;
+        bool ok = fx != null
+            && Ok(Dcomp->CreateVisual(&inner), "CreateVisual(plate inner)")
+            && Ok(Dcomp->CreateVisual(&content), "CreateVisual(plate content)")
+            && Ok(_dcomp3->CreateGaussianBlurEffect(&blur), "CreateGaussianBlurEffect(plate)")
+            && Ok(_dcomp3->CreateColorMatrixEffect(&matrix), "CreateColorMatrixEffect(plate)")
+            && Ok(Dcomp->CreateRectangleClip(&round), "CreateRectangleClip(plate)")
+            && Ok(blur->SetBorderMode(D2D1_BORDER_MODE.D2D1_BORDER_MODE_HARD), "plate blur SetBorderMode(HARD)")
+            && Ok(matrix->SetInput(0, (IUnknown*)blur, 0), "plate matrix SetInput(blur)")
+            && Ok(matrix->SetClampOutput(BOOL.TRUE), "plate matrix SetClampOutput")
+            && Ok(fx->SetEffect((IDCompositionEffect*)matrix), "plate fx SetEffect")
+            && Ok(((IDCompositionVisual*)clip)->SetClip((IDCompositionClip*)round), "plate SetClip(rounded)")
+            && Ok(((IDCompositionVisual*)clip)->AddVisual((IDCompositionVisual*)fx, BOOL.FALSE, null), "plate clip.AddVisual(fx)")
+            && Ok(((IDCompositionVisual*)fx)->AddVisual(inner, BOOL.FALSE, null), "plate fx.AddVisual(inner)")
+            && Ok(inner->AddVisual(content, BOOL.FALSE, null), "plate inner.AddVisual(content)");
+        if (!ok)
+        {
+            if (round != null) round->Release();
+            if (matrix != null) matrix->Release();
+            if (blur != null) blur->Release();
+            if (content != null) content->Release();
+            if (inner != null) inner->Release();
+            if (fx != null) fx->Release();
+            if (clip != null) clip->Release();
+            return false;
+        }
+        Ok(content->SetBitmapInterpolationMode(DCOMPOSITION_BITMAP_INTERPOLATION_MODE.DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR), "plate content SetBitmapInterpolationMode");
+        Ok(((IDCompositionVisual*)clip)->SetBorderMode(DCOMPOSITION_BORDER_MODE.DCOMPOSITION_BORDER_MODE_SOFT), "plate clip SetBorderMode(SOFT)");
+        if (s.Content != null) Ok(content->SetContent(s.Content), "plate content SetContent");
+        p = new Plate { Clip = clip, Fx = fx, Inner = inner, Content = content, Blur = blur, Matrix = matrix, Round = round };
+        return true;
+    }
+
+    // Place every wanted plate of slot idx under its parent (relative to the placed rect) and take the rest out of the tree.
+    private void ApplyPlates(int idx, ref Slot s)
+    {
+        _platesDirty[idx] = false;
+        int want = _wantCount[idx];
+        bool scaled = s.ContentW > 0 && s.ContentH > 0 && s.Rect.W > 0f && s.Rect.H > 0f;
+        float sx = scaled ? s.Rect.W / s.ContentW : 1f, sy = scaled ? s.Rect.H / s.ContentH : 1f;
+        float rw = MathF.Max(0f, s.Rect.W), rh = MathF.Max(0f, s.Rect.H);
+        for (int k = 0; k < MaxPlates; k++)
+        {
+            ref Plate p = ref _plates[idx * MaxPlates + k];
+            if (k >= want)
+            {
+                if (p.InTree) { s.Parent->RemoveVisual((IDCompositionVisual*)p.Clip); p.InTree = false; _graphDirty = true; }
+                continue;
+            }
+            if (p.Clip == null && !BuildPlate(ref s, ref p)) return;
+            VideoBackdropPx b = _want[idx * MaxPlates + k];
+            float l = b.Rect.X - s.Rect.X, t = b.Rect.Y - s.Rect.Y, r = l + b.Rect.W, bt = t + b.Rect.H;
+            float hw = b.Rect.W * 0.5f, hh = b.Rect.H * 0.5f;
+            var rc = p.Round;
+            Ok(rc->SetLeft(l), "plate clip SetLeft"); Ok(rc->SetTop(t), "plate clip SetTop");
+            Ok(rc->SetRight(r), "plate clip SetRight"); Ok(rc->SetBottom(bt), "plate clip SetBottom");
+            Ok(rc->SetTopLeftRadiusX(MathF.Min(b.Radii.TopLeft, hw)), "plate TL x"); Ok(rc->SetTopLeftRadiusY(MathF.Min(b.Radii.TopLeft, hh)), "plate TL y");
+            Ok(rc->SetTopRightRadiusX(MathF.Min(b.Radii.TopRight, hw)), "plate TR x"); Ok(rc->SetTopRightRadiusY(MathF.Min(b.Radii.TopRight, hh)), "plate TR y");
+            Ok(rc->SetBottomRightRadiusX(MathF.Min(b.Radii.BottomRight, hw)), "plate BR x"); Ok(rc->SetBottomRightRadiusY(MathF.Min(b.Radii.BottomRight, hh)), "plate BR y");
+            Ok(rc->SetBottomLeftRadiusX(MathF.Min(b.Radii.BottomLeft, hw)), "plate BL x"); Ok(rc->SetBottomLeftRadiusY(MathF.Min(b.Radii.BottomLeft, hh)), "plate BL y");
+            Ok(p.Clip->SetOpacity(Math.Clamp(b.Opacity, 0f, 1f)), "plate SetOpacity");
+            float sigma = Math.Clamp(b.Sigma, 0f, MaxBlurSigma);
+            Ok(p.Blur->SetStandardDeviation(sigma), "plate blur SetStandardDeviation");
+            D2D_MATRIX_5X4_F lm = LuminosityMatrix(b.Tint, b.Luminosity);
+            Ok(p.Matrix->SetMatrix(&lm), "plate matrix SetMatrix");
+            // The blur's input: the plate's neighbourhood within the frame (3 sigma reaches 99.7 % of the kernel), never the whole frame, and
+            // never into another plate: the compositor culls a blurred plate that another plate's blur region overlaps from above (measured
+            // on hardware: the full-screen stage's Up next column vanished under its drawer tab's region), so the reach stops short of every
+            // other plate. Plates that touch get no reach; the edge then clamps (HARD), which reads the same at a plate's own border.
+            float reach = PlateReach(idx, k, want, 3f * sigma);
+            D2D_RECT_F ic = new D2D_RECT_F
+            {
+                left = Math.Clamp(l - reach, 0f, rw), top = Math.Clamp(t - reach, 0f, rh),
+                right = Math.Clamp(r + reach, 0f, rw), bottom = Math.Clamp(bt + reach, 0f, rh),
+            };
+            Ok(p.Inner->SetClip(&ic), "plate inner SetClip");
+            D2D_MATRIX_3X2_F m = default;
+            m.m11 = sx; m.m22 = sy;
+            Ok(p.Content->SetTransform(&m), "plate content SetTransform(scale)");
+            if (!p.InTree && Ok(s.Parent->AddVisual((IDCompositionVisual*)p.Clip, BOOL.TRUE, s.Child), "Parent.AddVisual(plate, above video)"))
+            {
+                p.InTree = true;
+                _graphDirty = true;
+            }
+        }
+    }
+
+    // How far plate k's blur input may reach past its rect without touching another wanted plate of the slot (at most `max`).
+    private float PlateReach(int idx, int k, int want, float max)
+    {
+        RectF a = _want[idx * MaxPlates + k].Rect;
+        float reach = max;
+        for (int j = 0; j < want; j++)
+        {
+            if (j == k) continue;
+            RectF o = _want[idx * MaxPlates + j].Rect;
+            float gx = MathF.Max(o.X - (a.X + a.W), a.X - (o.X + o.W));   // separation along x (negative: the projections overlap)
+            float gy = MathF.Max(o.Y - (a.Y + a.H), a.Y - (o.Y + o.H));
+            float room = MathF.Max(gx, gy) - 2f;                          // the inflated rect stays 2 px clear of the other plate
+            reach = MathF.Min(reach, MathF.Max(0f, room));
+        }
+        return reach;
+    }
+
+    // The acrylic recipe's LUMINOSITY step as a colour matrix (AcrylicSpec.CompositeOver: the tint's lightness at LuminosityOpacity, the
+    // backdrop's hue and saturation kept). A true luminosity blend is not linear; scaling RGB toward black (a dark tint) or toward white (a
+    // light one) moves lightness while keeping hue and saturation, which is that blend's intent, by the factor that takes a typical video's
+    // lightness (LumRef) to the tint's: out = in * s (+ (1 - s) toward white). Pure, allocation-free.
+    private const float LumRef = 0.45f;
+
+    private static D2D_MATRIX_5X4_F LuminosityMatrix(FluentGpu.Foundation.ColorF tint, float luminosity)
+    {
+        float l = Math.Clamp(luminosity, 0f, 1f);
+        float lt = Math.Clamp(0.2126f * tint.R + 0.7152f * tint.G + 0.0722f * tint.B, 0f, 1f);
+        float s, off;
+        if (lt <= LumRef) { s = 1f - l * (1f - lt / LumRef); off = 0f; }
+        else { s = 1f - l * (1f - (1f - lt) / (1f - LumRef)); off = 1f - s; }
+        D2D_MATRIX_5X4_F m = default;
+        m._11 = s; m._22 = s; m._33 = s; m._44 = 1f;
+        m._51 = off; m._52 = off; m._53 = off;
+        return m;
+    }
+
+    private void ReleasePlates(int idx)
+    {
+        for (int k = 0; k < MaxPlates; k++)
+        {
+            ref Plate p = ref _plates[idx * MaxPlates + k];
+            if (p.Round != null) p.Round->Release();
+            if (p.Matrix != null) p.Matrix->Release();
+            if (p.Blur != null) p.Blur->Release();
+            if (p.Content != null) p.Content->Release();
+            if (p.Inner != null) p.Inner->Release();
+            if (p.Fx != null) p.Fx->Release();
+            if (p.Clip != null) p.Clip->Release();
+            p = default;
+        }
+        _wantCount[idx] = 0;
+        _platesDirty[idx] = false;
     }
 
     public void Place(VideoSurfaceId id, RectF deviceRect, float opacity, int z)
@@ -264,6 +497,7 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         ref Slot s = ref Get(id);
         DetachChild(ref s);
         _graphDirty = true;
+        ReleasePlates((int)id.Value - 1);
         if (s.RoundClip != null) { s.RoundClip->Release(); s.RoundClip = null; }
         if (s.Content != null) { s.Content->Release(); s.Content = null; }
         if (s.Backing != null) { s.Backing->Release(); s.Backing = null; }
@@ -289,6 +523,8 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
             ref Slot s = ref _slots[i];
             if (!s.InUse || !s.Dirty) continue;
             ApplyPlacement(ref s);
+            // the plates follow the placed rect (they live in parent-local px) and the content scale
+            if (_wantCount[i] > 0 || _platesDirty[i]) ApplyPlates(i, ref s);
             s.Dirty = false;
         }
         _dirtyCount = 0;
@@ -473,6 +709,7 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
             ref Slot s = ref _slots[i];
             if (!s.InUse) continue;
             DetachChild(ref s);
+            ReleasePlates(i);
             if (s.RoundClip != null) { s.RoundClip->Release(); s.RoundClip = null; }
             if (s.Content != null) { s.Content->Release(); s.Content = null; }
             if (s.Backing != null) { s.Backing->Release(); s.Backing = null; }
@@ -481,6 +718,7 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
             s.InUse = false;
         }
         _dirtyCount = 0;
+        if (_dcomp3 != null) { _dcomp3->Release(); _dcomp3 = null; }
     }
 
     /// <summary>

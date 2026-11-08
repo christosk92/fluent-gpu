@@ -1441,7 +1441,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         AssertSubmitThread();   // seam: the DComp device is render-thread-confined once a render thread exists (no-op in pure single-thread)
         if (_dcomp != null) return;
         IDCompositionDevice* dc;
-        Check(DCompositionCreateDevice(null, __uuidof<IDCompositionDevice>(), (void**)&dc), "DCompositionCreateDevice");
+        // DCompositionCreateDevice3 hands back the SAME v1 interface every caller uses (targets, visuals, surfaces from handles), but a
+        // device of the Windows 10 family: its visuals answer IDCompositionVisual3 and it answers IDCompositionDevice3, whose effects
+        // the video presenter's frosted-plate blur needs (DCompVideoPresenter.SetBackdrops). A v1 DCompositionCreateDevice device
+        // refuses that QueryInterface (E_NOINTERFACE, measured), so it stays only as the fallback: the plates are then a veil over
+        // the sharp video, nothing else changes.
+        if ((int)DCompositionCreateDevice3(null, __uuidof<IDCompositionDevice>(), (void**)&dc) < 0)
+            Check(DCompositionCreateDevice(null, __uuidof<IDCompositionDevice>(), (void**)&dc), "DCompositionCreateDevice");
         _dcomp = dc;
     }
 

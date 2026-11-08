@@ -53,6 +53,36 @@ internal struct VideoPosedHole
     /// conservative answer - anything the recorder cannot prove clear (a hole inside an inline group layer, a fully clipped hole, a
     /// default value) - and keeps the video an underlay. Judged on the painted bounds of whole segments, so it can only err towards "covered".</summary>
     public bool Unoccluded;
+    /// <summary>The frosted plates the composite placed over this hole after it in painter order (window DIP), at most
+    /// <see cref="VideoHoleBackdrops.Max"/>: the presenter shows the video blurred beneath each (<see cref="IVideoPresenter.SetBackdrops"/>).</summary>
+    public VideoHoleBackdrops Backdrops;
+    public int BackdropCount;
+}
+
+/// <summary>One frosted plate over a video hole (<see cref="VideoPosedHole.Backdrops"/>), window DIP: the plate's rect cut to its
+/// composite clip, its corner radii, the acrylic's blur sigma, its tint and luminosity opacity (the compositor's luminosity step) and the
+/// plate's composite opacity.</summary>
+internal struct VideoHoleBackdrop
+{
+    public RectF Rect;
+    public CornerRadius4 Radii;
+    public float Sigma;
+    public ColorF Tint;
+    public float Luminosity;
+    public float Opacity;
+
+    public readonly bool Same(in VideoHoleBackdrop o)
+        => Rect == o.Rect && Radii == o.Radii && Sigma == o.Sigma && Tint == o.Tint && Luminosity == o.Luminosity
+           && MathF.Abs(Opacity - o.Opacity) < 0.002f;
+}
+
+/// <summary>The fixed inline set of plates one hole carries (no allocation: the posed holes are copied by value every turn).</summary>
+[System.Runtime.CompilerServices.InlineArray(Max)]
+internal struct VideoHoleBackdrops
+{
+    /// <summary>Plates per hole: the full-screen stage's transport card, Up next column and its tab, the pivot bar, a now-playing card, a menu.</summary>
+    public const int Max = 8;
+    private VideoHoleBackdrop _e0;
 }
 
 /// <summary>A rect under a uniform ROUNDED clip (a rounded box <c>roundRect</c> of radius <c>r</c>, the recorder's tier-2 clip: its SDF box
@@ -138,6 +168,42 @@ internal sealed class VideoPlacementApplier
         public float AppliedRoundR;         // its radius (0 = none)
         public VideoOverlayGate Overlay;    // F087: the promotion state the next placement applies (above the UI plane or below it)
         public bool AppliedOverlay;         // the z-order the presenter was last given
+        public VideoHoleBackdrops AppliedBackdrops;   // the frosted plates over the hole the presenter was last given (window DIP)
+        public int AppliedBackdropCount;
+    }
+
+    private readonly VideoBackdropPx[] _backdropScratch = new VideoBackdropPx[VideoHoleBackdrops.Max];
+
+    private static bool SameBackdrops(in Slot s, ReadOnlySpan<VideoPosedHole> posed)
+    {
+        int at = BackdropHole(posed, s.Intent.Token);
+        int n = at < 0 ? 0 : posed[at].BackdropCount;
+        if (s.AppliedBackdropCount != n) return false;
+        for (int k = 0; k < n; k++)
+            if (!s.AppliedBackdrops[k].Same(in posed[at].Backdrops[k])) return false;
+        return true;
+    }
+
+    // The plates' rects and opacities for the change line (cold: only when a plate comes or goes).
+    private static string PlateList(ReadOnlySpan<VideoPosedHole> posed, int at, int n)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int k = 0; k < n; k++)
+        {
+            ref readonly VideoHoleBackdrop b = ref posed[at].Backdrops[k];
+            sb.Append($" [{b.Rect.X:0},{b.Rect.Y:0},{b.Rect.W:0}x{b.Rect.H:0} a={b.Opacity:0.##}]");
+        }
+        return sb.ToString();
+    }
+
+    // The hole of this token that carries frosted plates (-1: none). By token alone, never through the pose lookup: a UniformToFill surface
+    // (the stage's canvas) places a rect larger than its hole node, so it has no hole origin and no pose, yet its hole has plates. Two holes
+    // sharing a token (the fullscreen hand-off) list their plates on whichever was painted under them; the first that has any wins.
+    private static int BackdropHole(ReadOnlySpan<VideoPosedHole> posed, int token)
+    {
+        for (int k = 0; k < posed.Length; k++)
+            if (posed[k].Token == token && posed[k].BackdropCount > 0) return k;
+        return -1;
     }
 
     private readonly VideoSurfaceRegistry _registry;
@@ -310,6 +376,7 @@ internal sealed class VideoPlacementApplier
             RectF clip = RectF.Infinite, round = default;
             float roundR = 0f;
             bool unoccluded = false;
+            bool backdropsSame = SameBackdrops(in s, posed);
             if (s.Intent.HasHoleOrigin && TryGetPosed(posed, in s.Intent, out VideoPosedHole ph))
             {
                 dx = ph.Hole.X - s.Intent.HoleX;
@@ -321,8 +388,11 @@ internal sealed class VideoPlacementApplier
             // A rounded surface stays an underlay: DWM cannot put a rounded-clipped visual on a hardware plane, so promoting it would only
             // move it above the UI to be composed all the same (the fallback is composition either way; the reason is logged on change).
             bool overlayChanged = s.Overlay.Update(overlayEligible && s.Intent.RadiusDip <= 0f && roundR <= 0f, unoccluded, now) != s.AppliedOverlay;
+            // A frosted plate that moved, resized or faded over the hole is a geometry move too: its blurred copy must land with the
+            // flip that carries the plate's veil (Stage B), or the blur trails the card it sits under by a frame.
             bool poseSame = MathF.Abs(dx - s.AppliedDx) <= PoseEpsilonDip && MathF.Abs(dy - s.AppliedDy) <= PoseEpsilonDip
-                && s.AppliedScale == scale && clip == s.AppliedClip && round == s.AppliedRound && roundR == s.AppliedRoundR;
+                && s.AppliedScale == scale && clip == s.AppliedClip && round == s.AppliedRound && roundR == s.AppliedRoundR
+                && backdropsSame;
             if (poseSame && !overlayChanged) continue;
             s.Dirty = true;
             if (!poseSame) s.GeomDirty = true;
@@ -587,6 +657,25 @@ internal sealed class VideoPlacementApplier
                 MathF.Max(own, arc.BottomRight), MathF.Max(own, arc.BottomLeft));
         }
         presenter.SetCornerRadii(s.SurfaceId, radii);
+        // The frosted plates over the hole (an acrylic card the composite drew after it): the presenter blurs the video beneath each,
+        // in device px on the same grid as the hole. Only a presenting turn knows them (the early drain keeps what it has).
+        if (scope == VideoApplyScope.Full)
+        {
+            int at = BackdropHole(posed, it.Token);
+            int n = at < 0 ? 0 : posed[at].BackdropCount;
+            if (n != s.AppliedBackdropCount) Diag.Line($"[video.surface] plates token={i + 1} n={n}" + PlateList(posed, at, n));   // cold: a plate comes or goes
+            for (int k = 0; k < n; k++)
+            {
+                ref readonly VideoHoleBackdrop b = ref posed[at].Backdrops[k];
+                _backdropScratch[k] = new VideoBackdropPx(
+                    VideoSurfaceRegistry.SnapToDevicePixels(new RectF(b.Rect.X * scale, b.Rect.Y * scale, b.Rect.W * scale, b.Rect.H * scale)),
+                    new CornerRadius4(b.Radii.TopLeft * scale, b.Radii.TopRight * scale, b.Radii.BottomRight * scale, b.Radii.BottomLeft * scale),
+                    b.Sigma * scale, b.Tint, b.Luminosity, b.Opacity);
+                s.AppliedBackdrops[k] = b;
+            }
+            s.AppliedBackdropCount = n;
+            presenter.SetBackdrops(s.SurfaceId, _backdropScratch.AsSpan(0, n));
+        }
         presenter.SetVisible(s.SurfaceId, visible);
         // F087: the z-order the turn's verdict chose (above the UI plane only while nothing paints over the rect), given to the
         // presenter on a change only, so a default-off run makes no extra presenter call at all.

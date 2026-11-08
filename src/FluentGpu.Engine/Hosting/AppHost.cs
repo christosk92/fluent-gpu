@@ -7367,7 +7367,7 @@ public sealed partial class AppHost : IDisposable
             // this UI-side drain must skip it too, or GetVideoPresenter's AssertSubmitThread trips on the UI thread.
             if (_renderThread is null && _parentRenderThread is null)
             {
-                if (_device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, _window.Scale);
+                if (_device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, _window.Scale, _scene.Recording.PosedVideoHoles);
                 // F101: the settle sync runs only now, AFTER the placement commit above — a flush between the present and that
                 // commit composed the new hole one frame ahead of the new video geometry. The UI thread is the presenting
                 // thread here, so blocking one vblank starves no other target.

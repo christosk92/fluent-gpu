@@ -39,11 +39,22 @@ public enum CompositeKind : byte { Tiles, Region, EraseVideoHole, Group, Backdro
 
 /// <summary>An in-app acrylic recipe applied at composite time (§A.5): the source is a mini-composite of the slices
 /// beneath the item's clip, blurred by <see cref="BlurSigma"/> (device px) then tinted, luminosity-washed and noised —
-/// the same terms the PushLayer acrylic carries today. The default value is "no acrylic".</summary>
+/// the same terms the PushLayer acrylic carries today. The default value is "no acrylic".
+/// <para><see cref="OverVideo"/>: the plate sits over a video hole erased earlier in painter order (set per turn by the composite
+/// plan, never recorded). The mini-composite cannot see video pixels (they are a DirectComposition visual below the swapchain), so
+/// the backdrop there is transparent and the recipe's opaque fallback filled it flat. Over video the backend draws the frost's
+/// translucent veil instead (<see cref="VeilAlpha"/>) and the video presenter shows the recipe's first half beneath the plate
+/// (<see cref="FluentGpu.Pal.IVideoPresenter.SetBackdrops"/>): the compositor blurs the video and pulls its lightness to the tint's
+/// (the luminosity step, as a colour matrix that keeps the video's hue and saturation); the swapchain adds the colour step over it.</para></summary>
 public readonly record struct AcrylicRecipe(ColorF Tint, ColorF Fallback, float TintOpacity, float BlurSigma,
-    float NoiseOpacity, float LuminosityOpacity, float FeatherFrac = 0f)
+    float NoiseOpacity, float LuminosityOpacity, float FeatherFrac = 0f, bool OverVideo = false)
 {
     public bool IsNone => BlurSigma <= 0f && TintOpacity <= 0f && LuminosityOpacity <= 0f && NoiseOpacity <= 0f;
+
+    /// <summary>The opacity of the tint veil an <see cref="OverVideo"/> plate draws over the compositor's blurred, luminosity-pinned video:
+    /// the recipe's colour step (the tint's hue at the pinned lightness, at <see cref="TintOpacity"/>) as one SourceOver of the tint, which
+    /// keeps that lightness because the compositor already pulled the video to the tint's.</summary>
+    public float VeilAlpha => System.Math.Clamp(TintOpacity, 0f, 1f);
 }
 
 /// <summary>One painter-ordered composite draw (§A.5). <see cref="SliceId"/> names the slice whose surfaces the item

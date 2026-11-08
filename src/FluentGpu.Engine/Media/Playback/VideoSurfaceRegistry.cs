@@ -727,10 +727,16 @@ public sealed class VideoSurfaceRegistry
     /// present stood down (cloaked / minimized / occluded: nothing visible): only token releases are applied (a hidden window
     /// must not hold its slots), every placement stays pending for the next real present.</para></summary>
     public bool Drain(IVideoPresenter presenter, float scale, bool deferCommit = false, bool placement = true)
+        => Drain(presenter, scale, default, deferCommit, placement);
+
+    /// <summary><see cref="Drain(IVideoPresenter, float, bool, bool)"/> against the holes the frame just recorded (<paramref name="posed"/>,
+    /// the single-thread host's own recorder): the placement follows their pose and clip as the threaded host's does, and the frosted plates
+    /// over them (<see cref="VideoPosedHole.Backdrops"/>) reach the presenter.</summary>
+    internal bool Drain(IVideoPresenter presenter, float scale, ReadOnlySpan<VideoPosedHole> posed, bool deferCommit = false, bool placement = true)
     {
         int version = StructuralVersion;
         _shimCount = SnapshotInto(_shimIntents);
-        return Shim.ApplyTurn(presenter, _shimIntents.AsSpan(0, _shimCount), default, scale,
+        return Shim.ApplyTurn(presenter, _shimIntents.AsSpan(0, _shimCount), posed, scale,
             placement ? VideoApplyScope.Full : VideoApplyScope.ReleasesOnly, deferCommit, version);
     }
 

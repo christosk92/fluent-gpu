@@ -2002,6 +2002,54 @@ public sealed partial class SliceRecorder
     private static bool SilentLayer(in Plan e)
         => e.HasLayer && e.Layer.Kind is (int)LayerKind.Opacity or (int)LayerKind.Blur && e.Layer.GroupAlpha <= 0f;
 
+    /// <summary>A frosted plate (backdrop plan entry <paramref name="idx"/>) over a video hole erased EARLIER in painter order: its
+    /// mini-composite sees transparency there (the video is a compositor visual below the swapchain), so the plate is marked
+    /// <see cref="AcrylicRecipe.OverVideo"/> (the backend draws the frost's veil, not the opaque fallback) and listed on the hole
+    /// (<see cref="FluentGpu.Media.VideoPosedHole.Backdrops"/>) for the video presenter to blur the video beneath it. The plate's
+    /// opacity is its own times every enclosing opacity group's (an entering card fades its blur with its veil). Zero allocation.</summary>
+    private void NoteBackdropOverVideo(int idx)
+    {
+        ref Plan b = ref _plan[idx];
+        RectF plate = b.Clip.IsInfinite ? b.Rect : b.Rect.Intersect(b.Clip);
+        if (plate.IsEmpty) return;
+        bool over = false;
+        float alpha = -1f;
+        for (int h = 0; h < _posedHoleCount; h++)
+        {
+            int at = _posedMeta[h].PlanIdx;
+            if (at < 0 || at >= idx) continue;   // no erase this turn, or not under the plate in painter order
+            RectF hole = _plan[at].Rect;          // what the composite clip leaves of the hole
+            if (hole.IsEmpty || !hole.Overlaps(in plate)) continue;
+            over = true;
+            ref FluentGpu.Media.VideoPosedHole ph = ref _posedHoles[h];
+            if (ph.BackdropCount >= FluentGpu.Media.VideoHoleBackdrops.Max) continue;
+            if (alpha < 0f) alpha = b.Alpha * EnclosingGroupAlpha(idx);
+            ph.Backdrops[ph.BackdropCount++] = new FluentGpu.Media.VideoHoleBackdrop
+            {
+                Rect = plate, Radii = b.Radii, Sigma = b.Acrylic.BlurSigma, Tint = b.Acrylic.Tint, Luminosity = b.Acrylic.LuminosityOpacity, Opacity = alpha,
+            };
+        }
+        if (over) b.Acrylic = b.Acrylic with { OverVideo = true };
+    }
+
+    /// <summary>The product of the group alphas of every opacity group open around plan entry <paramref name="idx"/> (1 outside any).</summary>
+    private float EnclosingGroupAlpha(int idx)
+    {
+        float a = 1f;
+        int depth = 0;
+        for (int j = idx - 1; j >= 0; j--)
+        {
+            ref Plan e = ref _plan[j];
+            if (e.Kind == PlanKind.GroupClose) depth++;
+            else if (e.Kind == PlanKind.GroupOpen)
+            {
+                if (depth > 0) { depth--; continue; }
+                if (e.HasLayer && e.Layer.Kind == (int)LayerKind.Opacity) a *= e.Layer.GroupAlpha;
+            }
+        }
+        return a;
+    }
+
     /// <summary>Is plan entry <paramref name="idx"/> inside an open GROUP (a layer slice with children composited through one surface)?</summary>
     private bool InsideGroup(int idx)
     {
@@ -2271,6 +2319,7 @@ public sealed partial class SliceRecorder
             b.Alpha = c.AcrylicAlpha;
             b.Clip = clip;
             MixRect(ref _compositeHash, b.Rect); Mix(ref _compositeHash, b.Alpha);
+            if (_posedHoleCount > 0) NoteBackdropOverVideo(_planCount - 1);
         }
 
         ScanSlot(child);

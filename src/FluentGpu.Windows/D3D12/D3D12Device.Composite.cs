@@ -1778,11 +1778,12 @@ public sealed unsafe partial class D3D12Device
         var k = _compositor.K;
         float tw = _surfaces!.ScratchW(s), th = _surfaces.ScratchH(s);
         k[8] = region.Left - ox; k[9] = region.Top - oy; k[10] = 1f / tw; k[11] = 1f / th;
-        k[12] = it.Alpha; k[13] = it.Acrylic.FeatherFrac; k[14] = it.ClipRadii.TopLeft; k[15] = 0f;
+        // k[15]: over a video hole (AcrylicRecipe.OverVideo) the frost is the translucent veil k[31] over the compositor's blurred video
+        k[12] = it.Alpha; k[13] = it.Acrylic.FeatherFrac; k[14] = it.ClipRadii.TopLeft; k[15] = it.Acrylic.OverVideo ? 1f : 0f;
         k[16] = rect.X; k[17] = rect.Y; k[18] = rect.Right; k[19] = rect.Bottom;
         k[20] = it.Acrylic.Tint.R; k[21] = it.Acrylic.Tint.G; k[22] = it.Acrylic.Tint.B; k[23] = it.Acrylic.Tint.A;
         k[24] = it.Acrylic.Fallback.R; k[25] = it.Acrylic.Fallback.G; k[26] = it.Acrylic.Fallback.B; k[27] = it.Acrylic.Fallback.A;
-        k[28] = it.Acrylic.TintOpacity; k[29] = it.Acrylic.LuminosityOpacity; k[30] = it.Acrylic.NoiseOpacity; k[31] = 0f;
+        k[28] = it.Acrylic.TintOpacity; k[29] = it.Acrylic.LuminosityOpacity; k[30] = it.Acrylic.NoiseOpacity; k[31] = it.Acrylic.VeilAlpha;
         int w = region.Right - region.Left, h = region.Bottom - region.Top;
         k[32] = (w - 0.5f) / tw; k[33] = (h - 0.5f) / th; k[34] = 0.5f / tw; k[35] = 0.5f / th;
         _compositor.Draw(_cmdList, SliceCompositor.Pso.Acrylic, _surfaces.ScratchSrv(s));

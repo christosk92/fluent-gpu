@@ -1,3 +1,4 @@
+using System;
 using FluentGpu.Foundation;
 
 namespace FluentGpu.Pal;
@@ -27,6 +28,12 @@ public readonly record struct VideoSurfaceId(uint Value)
 /// (quarantine 0). Steady-state <see cref="Place"/>/<see cref="Commit"/> are 0 managed alloc (POD args, a
 /// preallocated id→visual table); the only allocations are cold ComPtr roots on first surface creation.
 /// </remarks>
+/// <summary>One frosted plate over a video surface (<see cref="IVideoPresenter.SetBackdrops"/>), in device px: the plate's rect and
+/// corner radii (window space), the blur's standard deviation, the acrylic's tint and luminosity opacity (the presenter pulls the
+/// blurred video's lightness to the tint's by that much, keeping its hue: the recipe's luminosity step) and the plate's opacity (an
+/// entering or leaving plate fades its blur with its veil). POD, so a turn passes a span of them without allocating.</summary>
+public readonly record struct VideoBackdropPx(RectF Rect, CornerRadius4 Radii, float Sigma, ColorF Tint, float Luminosity, float Opacity);
+
 public interface IVideoPresenter
 {
     /// <summary>Allocate a video child visual (hidden until <see cref="BindSurfaceHandle"/> + <see cref="Place"/>).</summary>
@@ -88,6 +95,14 @@ public interface IVideoPresenter
     /// like every other mutation. Default no-op so headless/test presenters need not implement it.
     /// </summary>
     void SetOverlay(VideoSurfaceId id, bool above) { }
+
+    /// <summary>The frosted plates over this surface's hole (an acrylic surface composited after the hole in painter order): show a
+    /// BLURRED copy of the video beneath each, clipped to the plate, so the swapchain's translucent veil over the hole reads as acrylic
+    /// over the video instead of a flat fill (<see cref="FluentGpu.Rhi.AcrylicRecipe.OverVideo"/>). The UI back buffer cannot sample
+    /// video pixels, so the blur is the compositor's. An empty span removes them all. Queued for the next <see cref="Commit"/>; a
+    /// presenter compares with what it shows and does nothing when nothing changed. Default no-op: a headless / test presenter, or one
+    /// whose compositor has no effects, keeps the plain video (the veil then lies over the sharp frame).</summary>
+    void SetBackdrops(VideoSurfaceId id, ReadOnlySpan<VideoBackdropPx> backdrops) { }
 
     /// <summary>Tear down one surface (removes the child visual, releases its content). Cold path.</summary>
     void Destroy(VideoSurfaceId id);
