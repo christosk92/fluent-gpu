@@ -73,7 +73,7 @@ public enum PopupChrome : byte { Flyout, Raw, Modal, TeachingTip, Popup, Dropdow
 public sealed record PopupPlate
 {
     /// <summary>The resting fill. With an <see cref="Acrylic"/> layer this is its fallback (painted where the layer cannot run:
-    /// a secondary swapchain, a video hole); with no layer it is the plate's whole, solid body.</summary>
+    /// a secondary swapchain, transparency effects off); with no layer it is the plate's whole, solid body.</summary>
     public ColorF Fill { get; init; } = Tok.AcrylicFlyout.Fallback;
     /// <summary>The frosted layer (WinUI AcrylicInAppFillColorDefault); null = a solid <see cref="Fill"/> plate with no backdrop pass.</summary>
     public AcrylicSpec? Acrylic { get; init; } = Tok.AcrylicFlyout;
@@ -165,10 +165,11 @@ public readonly record struct PopupOptions(
     public bool FreezeAtLastRect { get; init; }
 
     /// <summary>DECLARE: this popup sits over content the acrylic compositor cannot sample (a video hole) — paint the
-    /// flat plate and never take the acrylic path. It is the deterministic form of the geometric question
-    /// <c>SceneRecorder.RectOverVideoHole</c> answers: a caller that KNOWS its popup is over the video (a media
-    /// transport's own quality/speed/captions pickers) states it once at open time, so the plate is solid from frame
-    /// ONE with no geometry query, no frame of latency, and no chance of the answer flipping under it.
+    /// flat plate and never take the acrylic path. Only the caller can know this: a media transport's own
+    /// quality/speed/captions pickers, which always open over the video they control, state it once at open time. Nothing
+    /// infers it from geometry — a popup that merely overlaps a hole's rect often sits over UI painted ON TOP of the hole
+    /// (a Canvas cut to its panel under an opaque ground), where the flat plate's see-through share shows that UI
+    /// crisp and unblurred.
     /// <para>No inverted backing field here (unlike <see cref="ConstrainToRootBounds"/>/<see cref="PinsAnchor"/>, whose
     /// storage is inverted only because their DEFAULT is true): this flag defaults FALSE, so a plain auto-property
     /// leaves <c>default(PopupOptions)</c> — and the <c>options.Equals(default)</c> "caller configured nothing" probes
@@ -303,9 +304,6 @@ internal sealed class OverlayEntry
     public bool FreezeAtLastRect;     // opt-in: dead-anchor holds last rect instead of BeginClose
     public bool OpaqueSurface;        // PopupOptions.OpaqueSurface: declared over a video hole — flat plate, never acrylic
     public bool ScrimVisual = true;   // PopupOptions.ScrimVisual: Modal only — false keeps blocking/trap but paints the scrim transparent
-    /// <summary>One-way latch: <c>SceneRecorder.RectOverVideoHole</c> has answered TRUE for this entry's backdrop node
-    /// at least once. Once set it never clears — see the reasoning at the query site in SyncWindowedMenuBackdrop.</summary>
-    public bool VideoHoleLatched;
     /// <summary>One-way latch: the host declined a popup-window lease for this entry, so stop asking. The refusal is a
     /// property of the HOST (its device/async-render-loop configuration), not of this popup's placement, so it cannot
     /// become a grant later in this entry's life — see the lease site.</summary>
@@ -1059,8 +1057,9 @@ public sealed class OverlayHost : Component
     /// @ .85 (Explorer near-opaque, kills the bleed-through); dark InAppDefault (Lum .96 / Tint .15) ⇒ #2C2C2C @ ~.97
     /// (a dark, faintly-translucent card). Used wherever the engine acrylic LAYER cannot run but the surface must still
     /// read as the same material: an OS-backed popup (DWM supplies the blur, but its system tint alone is far too weak
-    /// — in light theme the app content bleeds straight through the menu), and a plate over a video hole (below).
-    /// Matches the in-window acrylic, so all three states read the same.</summary>
+    /// — in light theme the app content bleeds straight through the menu), and a plate DECLARED over a video hole
+    /// (<see cref="PopupOptions.OpaqueSurface"/>). Its see-through share is unblurred: right only over the video itself,
+    /// which no backdrop pass can sample, never over UI.</summary>
     private static ColorF FlatAcrylicFill(in AcrylicSpec a)
     {
         float coverage = 1f - (1f - a.LuminosityOpacity) * (1f - a.TintOpacity);
@@ -1084,12 +1083,6 @@ public sealed class OverlayHost : Component
     /// shadow, and both hold.</para></summary>
     private static ColorF OsBackedTintFill(in AcrylicSpec a) => a.Tint with { A = a.TintOpacity };
 
-    /// <summary>How much of a popup plate has to sit inside a video hole before its acrylic is dropped. Half: a plate
-    /// mostly over the video blurs mostly nothing, and the fraction that DOES overlap real content is what the flat
-    /// fill approximates. Deliberately not 1.0 — a plate that clears the hole by a few pixels would otherwise keep
-    /// costing the whole window.</summary>
-    private const float VideoHoleCoverage = 0.5f;
-
     /// <summary>Which node carries a chrome's acrylic + drop shadow. MENU chrome carries them on its stretch PLATE;
     /// every other frosted chrome is a single-card SURFACE (FlyoutSurface's non-menu branch). Raw / Modal / TeachingTip
     /// are chrome-less (a transparent transform host) and have nothing to reconcile.</summary>
@@ -1108,13 +1101,14 @@ public sealed class OverlayHost : Component
     /// AND the engine drop shadow (the window's own chrome owns both: DWM's system backdrop + its rounded-window shadow,
     /// or CompositionBackdrop's acrylic group + masked drop shadow in the fallback regime) and paint only
     /// <see cref="OsBackedTintFill"/> — the presenter's residual tint — over it.</item>
-    /// <item><b>Over a video hole</b> — clear the acrylic, keep the shadow, paint <see cref="FlatAcrylicFill"/>. The
-    /// acrylic there is pure loss: <c>DrawOp.DrawVideo</c> is a DestOut erase and the video is a sibling DComp visual
-    /// z-BELOW the UI swapchain, so the backdrop the plate samples is premultiplied ZERO — it blurs NOTHING — while the
-    /// composite still pays a backdrop pass (a mini-composite of everything beneath, blurred) every frame the video
-    /// under it changes. Dropping it is a visual no-op and saves that pass on every frame a menu is up over playing
-    /// video.</item>
-    /// <item><b>Ordinary in-window</b> — the engine acrylic + drop shadow, with the authored resting fill restored.</item>
+    /// <item><b>Declared over a video hole</b> (<see cref="PopupOptions.OpaqueSurface"/>) — clear the acrylic, keep the
+    /// shadow, paint <see cref="FlatAcrylicFill"/>.</item>
+    /// <item><b>Ordinary in-window</b> — the engine acrylic + drop shadow, with the authored resting fill restored. This
+    /// includes a plate that overlaps a video hole: the acrylic stays right there too. Where the hole shows the video,
+    /// its erased pixels reach the blur as premultiplied zero and the acrylic recipe (backdrop over the opaque
+    /// FallbackColor) paints its solid fallback; where UI is painted over the hole (a Canvas cut to the Now playing
+    /// panel under its opaque ground and text), it frosts that UI. The flat fill is no stand-in for either: its
+    /// see-through share (15% in light) shows whatever is under the plate crisp and unblurred.</item>
     /// </list></summary>
     internal static void SyncWindowedMenuBackdrop(SceneStore scene, OverlayEntry e)
     {
@@ -1125,25 +1119,11 @@ public sealed class OverlayHost : Component
         // OS-backed window simply covers the window's material), and its shadow only where the stock card has one.
         var plate = e.PlateStyle ?? PopupPlate.Fluent();
         bool osBacked = e.PopupWindowToken >= 0;
-        // Asked of the LAST completed record's hole set, which is exactly right here: this runs at host phase 7.1,
-        // before this frame is recorded, and the answer only ever picks between two visually equivalent paints.
-        //
-        // The answer is LATCHED, one-way, per entry, because the recorder's published hole rect is NOT stable
-        // frame-to-frame: SceneRecorder publishes the exact DrawVideo Dst on a fresh walk, but the whole
-        // `span.SubtreeBounds` — letterbox floor, transport chrome and shadow halos folded in — whenever the video's
-        // subtree is served by a clean-span reuse. A plate straddling the Dst's bottom edge therefore fails the
-        // coverage test against one rect and passes against the other, and flips with NO scene change at all. Each
-        // flip mutates the plate (paint-dirty), which changes which subtrees are span-reused next frame, which flips
-        // the answer back: self-sustaining, and each flip re-records the popup's slice and re-rasters its tiles.
-        // Latching kills the loop, and it is also the CORRECT answer: the hole does not move under a pinned anchor for
-        // the popup's lifetime, so the first affirmative is the right one for the whole life of the entry. The latch
-        // dies with the entry — a re-open re-asks.
-        if (!osBacked && !e.VideoHoleLatched
-            && FluentGpu.Render.SceneRecorder.RectOverVideoHole(scene, scene.AbsoluteRect(target), VideoHoleCoverage))
-            e.VideoHoleLatched = true;
-        // OpaqueSurface is the caller's DECLARED form of the same fact (a media transport knows its pickers are over
-        // the video), so it wins from frame one without waiting for a geometry answer.
-        bool overVideo = !osBacked && (e.OpaqueSurface || e.VideoHoleLatched);
+        // Only the caller's DECLARATION drops the acrylic for the flat plate (a media transport knows its pickers are
+        // over the video). Geometry cannot tell: a hole's rect says where the video was punched, not whether it still
+        // shows — the Classic/WinUI/Zune Canvas is cut to the panel and painted over by its ground, meta and lyrics, so a
+        // plate over that panel "covers the hole" while it sits over UI the acrylic samples fine.
+        bool overVideo = !osBacked && e.OpaqueSurface;
         // The WinUI fallback policy (Materials.AcrylicEnabled: transparency off / slow effects / energy saver). The
         // recorder already refuses to emit the layer; clearing the scene-side spec too keeps the host's own view of the
         // surface honest — otherwise every frame would author an acrylic nothing consumes, and the plate would keep the
@@ -1172,12 +1152,12 @@ public sealed class OverlayHost : Component
         //   • Where it DOES run, the acrylic composites opaquely inside the plate, so the solid fill underneath is
         //     invisible — it costs a pixel of nothing.
         //   • Where it does NOT run, it is the only thing between the user and floating text: a non-primary swapchain
-        //     (the detached video pop-out window) where the D3D12 backend silently drops PushLayer, or a video hole
-        //     whose backdrop is premultiplied ZERO so the layer composites nothing at all.
+        //     (the detached video pop-out window) where the D3D12 backend silently drops PushLayer.
         // Restoring Transparent here — as this line used to, on the false premise that the host authored those two
         // chromes transparent-over-acrylic — stripped exactly the fallback FlyoutSurface's comment says must never be
         // stripped, and over a fullscreen video hole produced a menu that was nothing but its 1px ring and its item
-        // text. Combined with the frame-to-frame flip above, that is the flyout that alternated solid/invisible.
+        // text. Combined with the frame-to-frame flip of a geometric over-video query (since removed), that was the
+        // flyout that alternated solid/invisible.
         // An OS-backed plate is the ONE case where a near-opaque resting fill is wrong rather than merely redundant:
         // its backdrop is the window's, underneath this swapchain, so the fill does not sit on top of a layer that
         // might not run — it sits on top of the material itself and hides it.

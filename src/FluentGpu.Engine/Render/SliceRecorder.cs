@@ -1780,8 +1780,6 @@ public sealed partial class SliceRecorder
 
     private Plan[] _plan = new Plan[64];
     private int _planCount;
-    private readonly RectF[] _videoRects = new RectF[8];
-    private int _videoRectCount;
     // F070: each hole's UNCLIPPED rect at the slot's posed offset, keyed by the registry token its DrawVideo carries - what the render
     // thread's VideoPlacementApplier follows, so a composite-only scroll or animation turn moves the video exactly as far as the hole.
     private readonly FluentGpu.Media.VideoPosedHole[] _posedHoles = new FluentGpu.Media.VideoPosedHole[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
@@ -1791,10 +1789,6 @@ public sealed partial class SliceRecorder
     private struct PosedMeta { public int PlanIdx, Slot, Seg; public RectF After; public bool Inline; }
     private readonly PosedMeta[] _posedMeta = new PosedMeta[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
     private ulong _compositeHash;
-
-    /// <summary>Video hole rects (window DIP) the last <see cref="Place"/> placed — the published answer for
-    /// <c>RectOverVideoHole</c> and the video presenter's feedback.</summary>
-    internal ReadOnlySpan<RectF> VideoRects => _videoRects.AsSpan(0, _videoRectCount);
 
     /// <summary>The holes the last <see cref="Place"/> placed as the video placement must follow them (F070): the unclipped posed rect and
     /// the composite clip that cut it, per registry token. A hole the composite clipped away entirely is still listed (its clip is what
@@ -1818,7 +1812,6 @@ public sealed partial class SliceRecorder
     public void Place(SceneRecordingSnapshot scene, ref RepaintDamageRegion repaint)
     {
         _planCount = 0;
-        _videoRectCount = 0;
         _posedHoleCount = 0;
         _compositeHash = 14695981039346656037UL;
         if (_slotCount == 0 || !_recs[RootSlot].Live) return;
@@ -1890,7 +1883,7 @@ public sealed partial class SliceRecorder
 
     /// <summary>The composite ERASE of every video hole segment <paramref name="k"/> of <paramref name="slot"/> punched whose
     /// <see cref="VideoEraseOrder"/> is <paramref name="order"/>: its rect at the slot's posed offset (window DIP), cut to the
-    /// slot's composite clip, published as a hole (<see cref="VideoRects"/>) and signed into the composite hash.
+    /// slot's composite clip, and signed into the composite hash.
     /// <paramref name="round"/>/<paramref name="roundR"/> is the rounded clip the slot inherits from its enclosing slices (window DIP; a
     /// floating pane's rounded corners): the hole takes the innermost rounded clip in effect, the stream's own before that one.</summary>
     private void PlaceVideoErases(int slot, int k, float accDx, float accDy, in RectF effClip, in RectF round, float roundR, VideoEraseOrder order)
@@ -1933,7 +1926,6 @@ public sealed partial class SliceRecorder
             ve.Radii = sv.Radii;
             ve.Alpha = sv.Strength;
             if (holeRoundR > 0f) { ve.RoundRect = holeRound; ve.RoundR = holeRoundR; }
-            if (_videoRectCount < _videoRects.Length) _videoRects[_videoRectCount++] = wr;
             MixRect(ref _compositeHash, wr);
             Mix(ref _compositeHash, sv.Strength);
             MixRect(ref _compositeHash, ve.Hole);

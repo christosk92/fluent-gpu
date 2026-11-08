@@ -2427,7 +2427,6 @@ public sealed partial class AppHost : IDisposable
                     CommandCount = direct ? _renderCommands.CommandCount : _renderSlices.TotalCommandCount,
                     RecordMs = recordMs,
                 };
-                feedback.VideoCount = sceneFrame.Scene.Recording.CopyVideoRects(feedback.VideoRects);
                 int headerSize = System.Runtime.CompilerServices.Unsafe.SizeOf<Threading.RecordingFeedback>();
                 int size = headerSize + poses.Length * System.Runtime.CompilerServices.Unsafe.SizeOf<CompositorAnimationPose>();
                 if (_feedbackBytes.Length < size) Array.Resize(ref _feedbackBytes, Math.Max(size, _feedbackBytes.Length * 2));
@@ -2860,7 +2859,6 @@ public sealed partial class AppHost : IDisposable
         var poses = MemoryMarshal.Cast<byte, CompositorAnimationPose>(poseBytes)[..feedback.PoseCount];
         _anim.ApplyCompositorFeedback(poses);
         foreach (ref readonly var pose in poses) if (pose.Done) { _frameNeeded = true; break; }
-        _scene.Recording.ImportVideoRects(((ReadOnlySpan<RectF>)feedback.VideoRects)[..feedback.VideoCount]);
         // A popup stays hidden until the render thread recorded its first coherent scene publication AND that
         // publication's popup pass actually PRESENTED content into the popup's composition surface
         // (ISwapchain.HasPresentedContent). The sequence alone is not evidence of painted pixels: the feedback is
