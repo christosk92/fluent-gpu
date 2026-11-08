@@ -2766,6 +2766,11 @@ public sealed partial class SliceRecorder
             {
                 case PlanKind.GroupOpen:
                 {
+                    // A video hole inside a group punches only the group's surface: the group then composites over the back buffer
+                    // with that hole transparent, so whatever earlier items drew under it (the panel's ground, the page) still covers
+                    // the video. Erase the back buffer under every hole the group encloses first, at the group's position in painter
+                    // order; the group's own erase keeps clearing its content under the hole, and its chrome over it survives.
+                    if (groupDepth == 0) EraseUnderGroup(i, scale);
                     if (groupDepth == _groupOpenAt.Length) Array.Resize(ref _groupOpenAt, _groupOpenAt.Length * 2);
                     _groupOpenAt[groupDepth++] = _itemCount;
                     LayerParams(in e.Layer, e.InnerClip, scale, out float gAlpha, out float gSigma, out EdgeFeather gFeather, out RectF gSrc);
@@ -2803,29 +2808,8 @@ public sealed partial class SliceRecorder
                         default, 0f, e.Acrylic, 0, ScalePx(e.Rect, scale)), default, default, in e);
                     continue;
                 case PlanKind.Video:
-                {
-                    // F078 + pixel rule R (F073): the erase quad is the hole's rect cut to the composite clip, each edge rounded
-                    // to the nearest device pixel (the same rule the DirectComposition video rect uses, so the erase and the
-                    // video share one edge); its strength is the punch's (VideoReady x opacity); and its shape is the hole's own
-                    // rounded rect (per-corner radii) - or, when the hole is square, the in-stream rounded clip it sits under.
-                    RectF erasePx = WholePx(ScalePx(e.Rect, scale));
-                    if (erasePx.IsEmpty) continue;
-                    RectF roundPx = default;
-                    CornerRadius4 radiiPx = default;
-                    if (e.Radii.TopLeft > 0f || e.Radii.TopRight > 0f || e.Radii.BottomRight > 0f || e.Radii.BottomLeft > 0f)
-                    {
-                        roundPx = WholePx(ScalePx(e.Hole, scale));
-                        radiiPx = new CornerRadius4(e.Radii.TopLeft * scale, e.Radii.TopRight * scale, e.Radii.BottomRight * scale, e.Radii.BottomLeft * scale);
-                    }
-                    else if (e.RoundR > 0f)
-                    {
-                        roundPx = RoundPx(e.RoundRect, e.RoundR, scale);
-                        radiiPx = RadiiPx(e.RoundR, scale);
-                    }
-                    AddItem(new CompositeItem(-1, CompositeKind.EraseVideoHole, Affine2D.Identity, e.Alpha, erasePx,
-                        radiiPx, default, 0f, default, 0, roundPx), default, default, in e);
+                    AddVideoErase(in e, scale, 1f, 0f, 0f);
                     continue;
-                }
             }
 
             // ── a segment ──
@@ -3071,6 +3055,70 @@ public sealed partial class SliceRecorder
             _rasterDone.AsSpan(0, _rasterCount), _itemInherited.AsSpan(0, 2 * _itemCount),
             EvRasterFlags(_rasterCount), EvItemFlags(_itemCount), table.TrimmedSurfaces,   // the textures the table released (§13.1g)
             table.OwnerId, _inlineOps.AsSpan(0, _inlineOpCount), _rowInlineRange.AsSpan(0, 2 * _rowCount));
+    }
+
+    /// <summary>The composite ERASE item of video plan entry <paramref name="e"/>. F078 + pixel rule R (F073): the erase quad is the
+    /// hole's rect cut to the composite clip, each edge rounded to the nearest device pixel (the same rule the DirectComposition
+    /// video rect uses, so the erase and the video share one edge); its strength is the punch's (VideoReady x opacity) times
+    /// <paramref name="alphaMul"/>; and its shape is the hole's own rounded rect (per-corner radii) - or, when the hole is
+    /// square, the in-stream rounded clip it sits under. (<paramref name="dx"/>, <paramref name="dy"/>) moves it by the poses of
+    /// the slide groups it is hoisted out of (window DIP).</summary>
+    private void AddVideoErase(in Plan e, float scale, float alphaMul, float dx, float dy)
+    {
+        RectF rect = dx != 0f || dy != 0f ? Offset(e.Rect, dx, dy) : e.Rect;
+        RectF erasePx = WholePx(ScalePx(rect, scale));
+        if (erasePx.IsEmpty) return;
+        RectF roundPx = default;
+        CornerRadius4 radiiPx = default;
+        if (e.Radii.TopLeft > 0f || e.Radii.TopRight > 0f || e.Radii.BottomRight > 0f || e.Radii.BottomLeft > 0f)
+        {
+            roundPx = WholePx(ScalePx(dx != 0f || dy != 0f ? Offset(e.Hole, dx, dy) : e.Hole, scale));
+            radiiPx = new CornerRadius4(e.Radii.TopLeft * scale, e.Radii.TopRight * scale, e.Radii.BottomRight * scale, e.Radii.BottomLeft * scale);
+        }
+        else if (e.RoundR > 0f)
+        {
+            roundPx = RoundPx(dx != 0f || dy != 0f ? Offset(e.RoundRect, dx, dy) : e.RoundRect, e.RoundR, scale);
+            radiiPx = RadiiPx(e.RoundR, scale);
+        }
+        AddItem(new CompositeItem(-1, CompositeKind.EraseVideoHole, Affine2D.Identity, e.Alpha * alphaMul, erasePx,
+            radiiPx, default, 0f, default, 0, roundPx), default, default, in e);
+    }
+
+    /// <summary>Before the outermost group opened at plan entry <paramref name="open"/>: one back-buffer erase per video hole it
+    /// encloses, at that hole's on-screen place (moved by the slide poses of the groups around it) and at its punch strength
+    /// times the alpha of every group around it, so a group fading in reveals the video as it fades. Allocation-free.</summary>
+    private void EraseUnderGroup(int open, float scale)
+    {
+        int depth = 0;
+        float alpha = 1f, dx = 0f, dy = 0f;
+        Span<float> alphas = stackalloc float[16];
+        Span<float> slides = stackalloc float[32];
+        for (int j = open; j < _planCount; j++)
+        {
+            ref Plan p = ref _plan[j];
+            if (p.Kind == PlanKind.GroupOpen)
+            {
+                LayerParams(in p.Layer, p.InnerClip, scale, out float a, out _, out _, out _);
+                for (int k = 0; k < p.Dist.Count; k++)
+                {
+                    LayerParams(k == 0 ? p.Dist.A : p.Dist.B, default, scale, out float da, out _, out _, out _);
+                    a *= da;
+                }
+                if (depth < 16) { alphas[depth] = alpha; slides[2 * depth] = dx; slides[2 * depth + 1] = dy; }
+                alpha *= Math.Clamp(a, 0f, 1f);
+                dx += p.SlideDx; dy += p.SlideDy;
+                depth++;
+                continue;
+            }
+            if (p.Kind == PlanKind.GroupClose)
+            {
+                depth--;
+                if (depth <= 0) return;
+                if (depth < 16) { alpha = alphas[depth]; dx = slides[2 * depth]; dy = slides[2 * depth + 1]; }
+                continue;
+            }
+            if (p.Kind == PlanKind.Video && alpha > 0f) AddVideoErase(in p, scale, alpha, dx, dy);
+        }
     }
 
     private void AddItem(in CompositeItem item, in PushLayerCmd layer, in Inherit dist, in Plan e)
