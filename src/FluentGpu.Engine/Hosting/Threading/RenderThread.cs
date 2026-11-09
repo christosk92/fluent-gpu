@@ -79,6 +79,9 @@ public sealed class RenderThread : IDisposable
     // (needsTick true, this false) only keeps the loop at display rate while extraDrain presents the child on ITS own swapchain
     // (F094). Null ⇒ every motion is the parent's own (tests / hosts without children).
     private readonly Func<bool>? _ownMotion;
+    // How long until the live render motion can next change a pixel (ms, measured on the turn clock; <= 0 = every tick), asked
+    // right after _needsTick said motion is live (AppHost.RenderMotionDueMs). Null => every motion is due every tick.
+    private readonly Func<double>? _motionDueInMs;
     // The [render.pace] line's child= section: BEGIN opens every child's window with the line's, REPORT formats them (null/empty ⇒ none).
     private readonly Action? _childPaceBegin;
     private readonly Func<string?>? _childPaceReport;
@@ -242,8 +245,9 @@ public sealed class RenderThread : IDisposable
                         Action<nint>? submitAbortHandleSink = null, Func<bool>? ownMotion = null,
                         Action? childPaceBegin = null, Func<string?>? childPaceReport = null,
                         Func<PresentSplit>? presentSplit = null, Action? preTurn = null, Action? postTurn = null,
-                        Func<long, int>? idleTrim = null, Func<bool>? tickPresented = null)
+                        Func<long, int>? idleTrim = null, Func<bool>? tickPresented = null, Func<double>? motionDueInMs = null)
     {
+        _motionDueInMs = motionDueInMs;
         _idleTrim = idleTrim;
         _idleTrimWaitMs = idleTrim is null ? -1 : 0;   // due at once: the first clean-idle wait times out into the first pass
         _presentSplit = presentSplit;
@@ -298,6 +302,18 @@ public sealed class RenderThread : IDisposable
 
     private long PeriodQpc() => Math.Max(1, _tickPeriod?.Invoke() ?? Stopwatch.Frequency / 60);
 
+    /// <summary>How long the loop may sleep before the next turn that can change a pixel: the motion's due time less one refresh period
+    /// (so the tick that lands it is not missed), or 0 when that saves less than a period (the ordinary tick wait).</summary>
+    private int MotionSleepMs()
+    {
+        if (_motionDueInMs is null) return 0;
+        double dueIn = _motionDueInMs();
+        if (!(dueIn > 0) || double.IsPositiveInfinity(dueIn)) return 0;
+        double periodMs = PeriodQpc() * 1000.0 / Stopwatch.Frequency;
+        double sleep = dueIn - periodMs;
+        return sleep >= periodMs ? (int)sleep : 0;
+    }
+
     /// <summary>The bound (ms) of an UNPACED turn's liveness take: <c>max(2 x refresh, 34 ms)</c> (F208). It replaces the plain
     /// 1 s liveness wait: a slot that never opens costs two refreshes, then the turn proceeds with the credit held, exactly as
     /// the 1 s wait did. Chromium's DComp pacing wait is bounded the same way.</summary>
@@ -341,8 +357,13 @@ public sealed class RenderThread : IDisposable
         {
             long waitStart = FrameLedger.Enabled ? Stopwatch.GetTimestamp() : 0;   // the ledger's turn record only
             bool motionDue = _needsTick?.Invoke() == true;
-            if (!motionDue) { _motionRun.Break(); _catchUp.Break(); }   // idle is not a missed tick: the next paced present starts a new run
-            _displayClock?.SetActive(motionDue);
+            // MOTION THAT WAITS: every live row holds until a known instant (a cadence row between its periods, a window under its power
+            // ceiling), so the ticks before it would only re-enter, hold and elide. Sleep to one period before it, with the display clock
+            // parked, instead of waking at every compositor tick (and every vblank-waiter tick) for nothing. A fresh publication is
+            // never made to wait: the sleep is skipped while one is pending, and a publish wake ends it.
+            int motionSleepMs = motionDue && !_publisher.HasPendingFrame ? MotionSleepMs() : 0;
+            if (!motionDue || motionSleepMs > 0) { _motionRun.Break(); _catchUp.Break(); }   // idle is not a missed tick: the next paced present starts a new run
+            _displayClock?.SetActive(motionDue && motionSleepMs == 0);
             // A publication still pending with no motion live is unpaced work (a skip above left it when motion ended
             // in the same turn): present it now instead of blocking on a wake that already happened.
             // Events are coalescing nudges, not the state of a request. Recovery (or an idle-trim callback) can consume
@@ -351,6 +372,11 @@ public sealed class RenderThread : IDisposable
                 || (_deviceLost is { } pendingLoss && pendingLoss.RecoverRequest != 0 && pendingLoss.RecoverDone == 0);
             if (!controlPending && !(!motionDue && _publisher.HasPendingFrame))
             {
+                if (motionSleepMs > 0)
+                {
+                    _wake.WaitOne(motionSleepMs);   // a publish, a control or the due instant ends it; then the tick wait below takes the turn
+                    continue;
+                }
                 if (motionDue && _displayClock?.IsAvailable == true)
                     WaitHandle.WaitAny(_displayWaits!, BackstopMs());   // the tick is the turn (or a wake / the backstop)
                 else if (motionDue)

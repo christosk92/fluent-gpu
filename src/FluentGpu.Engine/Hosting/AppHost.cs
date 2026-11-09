@@ -584,6 +584,7 @@ public sealed partial class AppHost : IDisposable
             _renderWasPaused = paused;
         }
         bool active = false;
+        double due = double.PositiveInfinity;
         if (RenderMotionMayRun(paused, _renderFailed, _hasActiveRenderFrame && _renderSeam.IsCurrentTarget(_activeRenderFrame)))
         {
             var frame = _renderSeam.Scene(_activeRenderFrame);
@@ -591,16 +592,46 @@ public sealed partial class AppHost : IDisposable
             // exception is the retry of the frame that failed the faithful-frame gate, which is exactly what the loop must keep
             // ticking for. Not "paused": the compositor clocks keep running, so the first presented frame is on time, and the
             // app-wide occlusion signal is untouched (a held frame is not a covered window).
-            active = _renderHeld
+            bool everyTick = _renderHeld
                 ? _holdRetryOwed
-                : _renderAnimations.HasActive || _renderPoser.HasActive || RenderPlanUnposed
+                : _renderPoser.HasActive || RenderPlanUnposed
                     || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame))
                     || RenderDissolveActive(in _activeRenderFrame)   // the theme dissolve runs on this thread's clock (AppHost.Freeze.cs)
                     || HasOwnLiveFeedback;   // a feedback trail (F6) advances with no scene change while it settles
+            bool rows = !_renderHeld && _renderAnimations.HasActive;
+            active = everyTick || rows;
+            // Only compositor rows know when they next move (their cadence, the power ceiling); everything else is due every tick.
+            if (active) due = everyTick ? 0 : _renderAnimations.NextDueMs();
         }
+        _renderMotionDueMs = due;
         Volatile.Write(ref _renderMotionActive, active ? 1 : 0);
         return active;
     }
+
+    // Render-thread-owned, written by every HasOwnRenderMotion: when this host's live render motion can next change a pixel, on the
+    // turn clock (absolute ms of RenderPresentSec); 0 = every tick, +inf = none. See RenderMotionDueMs.
+    private double _renderMotionDueMs = double.PositiveInfinity;
+
+    /// <summary>The render loop's sleep hint (render thread, right after <see cref="HasRenderMotion"/>): the earliest instant, on the turn
+    /// clock, at which this host's or any detached child's live render motion can change a pixel. 0 = due every tick (the loop keeps
+    /// the display clock); a later instant lets it sleep to one period before it instead of waking at every compositor tick for turns
+    /// that would hold their rows and elide (a cadence row between its periods, a window under its power ceiling). A child owing a
+    /// present (a deferred slot, a refused present) is due now.</summary>
+    private double RenderMotionDueMs()
+    {
+        double due = HasOwnRenderMotion() ? _renderMotionDueMs : double.PositiveInfinity;
+        foreach (var child in Volatile.Read(ref _childRenderSources))
+        {
+            if (due <= 0) break;
+            if (child._slotDeferred || child._presentOwed) return 0;
+            if (child.HasOwnRenderMotion() && child._renderMotionDueMs < due) due = child._renderMotionDueMs;
+        }
+        return due;
+    }
+
+    /// <summary>The turn clock for a turn taken NOW (ms): the present time such a turn would pose its rows at (RenderPresentSec), the
+    /// domain of <see cref="RenderMotionDueMs"/>.</summary>
+    private double RenderTurnClockNowMs() => RenderPresentSec(0) * 1000.0;
 
     // F242: why each render-thread submit ran (fresh publication / compositor animation / scroll pose / crossfade) and whether it
     // RECORDED or only re-composed retained slices. Render thread writes (one Note per submit), the UI-thread [wake] census reads.
@@ -3845,6 +3876,7 @@ public sealed partial class AppHost : IDisposable
         => new Threading.RenderThread(_renderSeam, rf => SubmitPresentOnRenderThread(rf), async: async,
             deviceLost: _deviceLost, recover: _deviceLost is null ? null : RecoverDeviceAfterDump, windowWake: _deviceLost is null ? null : _window.Wake,
             extraDrain: DrainChildRenderSources, needsTick: HasRenderMotion, tick: RenderMotion,
+            motionDueInMs: () => RenderMotionDueMs() - RenderTurnClockNowMs(),
             tickPeriod: RenderPeriodTicks, displayClock: displayClock,
             takePresentSlot: _device.TryTakePresentSlot, paceHost: SamplePaceHostState,
             submitAbortHandleSink: _device.SetSubmitAbortHandle,

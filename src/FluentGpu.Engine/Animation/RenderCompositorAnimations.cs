@@ -104,7 +104,12 @@ public sealed class RenderCompositorAnimations
     public void Adopt(CompositorAnimationSnapshot desired, SceneRecordingSnapshot scene, double nowMs)
     {
         if (_paused) nowMs = _pausedAtMs;
-        _ceilingHeld = CeilingHolds(nowMs);
+        // A fresh publication reaches the glass whatever the ceiling says, so its turn advances every row and restarts the ceiling's
+        // interval there: the render-only advances then fall at least one interval after the last present, and a capped window's UI
+        // frames and its render-owned motion share ONE rate instead of interleaving on two lattices into a faster combined one
+        // (measured 2026-11-09: a mini window's 30 fps lyrics face presented 34-40/s).
+        _ceilingHeld = false;
+        if (CeilingPeriodMs > 0f && !_paused) _lastCeilingAdvanceMs = nowMs;
         double capturedAtMs = _paused ? Math.Min(desired.CapturedAtMs, _pausedAtMs) : desired.CapturedAtMs;
         SceneRecordingSnapshot.Grow(ref _nextStates, desired.Count);
         SceneRecordingSnapshot.Grow(ref _feedback, desired.Count);
@@ -349,6 +354,35 @@ public sealed class RenderCompositorAnimations
             if (op <= 0f) return false;
         }
         return true;
+    }
+
+    /// <summary>The earliest instant (the turn clock's absolute ms, the domain <see cref="Tick"/> takes) at which a live row can
+    /// pose a new value: 0 = some row is due every turn (no cadence of its own and no ceiling); +inf = nothing live. A row with
+    /// its own period (<c>Cadence.At</c>) is due one period after its last advance, and the power ceiling (<see cref="CeilingPeriodMs"/>)
+    /// pushes every row to one interval after the last turn that advanced. The render loop sleeps until shortly before it instead
+    /// of waking at every compositor tick for turns that would only hold and elide (a mini window's progress line stepping a pixel
+    /// every half second, a 30 fps lyric wipe on a 120 Hz panel). Render thread only, after a turn's <see cref="Tick"/> or
+    /// <see cref="Adopt"/>.</summary>
+    public double NextDueMs()
+    {
+        if (!HasActive || _paused) return double.PositiveInfinity;
+        double due = double.PositiveInfinity;
+        for (int i = 0; i < _count && due > 0; i++)
+        {
+            ref readonly var s = ref _states[i];
+            if (s.Done || s.Parked) continue;
+            ref readonly var row = ref s.Desired.Row;
+            if (row.Has(AnimFlags.Hold | AnimFlags.Paused)) continue;
+            if (s.Hidden && row.Has(AnimFlags.Loop)) continue;   // an unreachable loop asks for no turns (TickCore's HasActive)
+            if (s.StartPending) return 0;
+            ushort period = s.Desired.PeriodMs;
+            double rowDue = period > 0 && s.LastAdvanceMs > 0d ? s.LastAdvanceMs + period - AnimEngine.CadenceSlackMs : 0;
+            if (rowDue < due) due = rowDue;
+        }
+        float ceiling = CeilingPeriodMs;
+        if (ceiling > 0f && !double.IsNaN(_lastCeilingAdvanceMs) && !double.IsPositiveInfinity(due))
+            due = Math.Max(due, _lastCeilingAdvanceMs + ceiling - AnimEngine.CadenceSlackMs);
+        return due;
     }
 
     /// <summary>POWER CEILING (<see cref="CeilingPeriodMs"/>): does this turn fall inside the interval since the last turn that
