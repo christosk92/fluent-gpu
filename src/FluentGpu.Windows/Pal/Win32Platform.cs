@@ -1395,7 +1395,25 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         POINT pt = new() { x = (short)(lp & 0xFFFF), y = (short)((lp >> 16) & 0xFFFF) };
         ScreenToClient(hWnd, &pt);
         if (IsZoomed(hWnd) && pt.y < 0) pt.y = 0;   // maximized: the caption row sits at negative client y — fold to row 0
-        return NcHitFromCode(HitTestRegions(pt.x, pt.y, buttonsOnly: false));
+        return NcHitFromCode(RegionOrInertHit(pt.x, pt.y));
+    }
+
+    /// <summary>The client-pixel answer WM_NCHITTEST gives below its caption buttons and top resize band, and the one the NC
+    /// pointer stream classifies its messages with: the engine regions first (first match wins), then, on a drag-anywhere
+    /// window (<see cref="CaptionWhereInert"/>), HTCAPTION over an inert pixel; 0 when neither claims it. One test for both
+    /// sides: when the NC stream re-derived from the regions alone, a drag-anywhere pixel answered HTCAPTION to the OS but
+    /// read as Client here, so its hover was parked offscreen instead of moved to the real point (the mini player's hover
+    /// chrome showed only after the pointer crossed a button).</summary>
+    private int RegionOrInertHit(int px, int py)
+    {
+        int hit = HitTestRegions(px, py, buttonsOnly: false);
+        if (hit != 0) return hit;
+        if (CaptionWhereInert is { } inert && px >= 0 && py >= 0 && px < _w && py < _h)
+        {
+            float sc = _scale <= 0f ? 1f : _scale;
+            if (inert(new Point2(px / sc, py / sc))) return HTCAPTION;
+        }
+        return 0;
     }
 
     /// <summary>An NC message's SCREEN position (lParam) as client DIP — the real point a caption-region hover is
@@ -2567,14 +2585,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                         return true;
                     }
                 }
-                int hit = HitTestRegions(pt.x, pt.y, buttonsOnly: false);
+                // The engine regions, then drag anywhere: an inert client pixel is the caption (the edges stay
+                // DefWindowProc's resize borders).
+                int hit = RegionOrInertHit(pt.x, pt.y);
                 if (hit != 0) { result = (LRESULT)hit; return true; }
-                // Drag anywhere: an inert client pixel is the caption (the edges stay DefWindowProc's resize borders).
-                if (CaptionWhereInert is { } inert && pt.x >= 0 && pt.y >= 0 && pt.x < _w && pt.y < _h)
-                {
-                    float sc = _scale <= 0f ? 1f : _scale;
-                    if (inert(new Point2(pt.x / sc, pt.y / sc))) { result = (LRESULT)HTCAPTION; return true; }
-                }
                 if (_resizable) return false;
                 result = NoResizeHit(DefWindowProcW(hWnd, msg, wParam, lParam));
                 return true;
@@ -2937,12 +2951,16 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         if (under == HWND.NULL) return false;
         HWND root = GetAncestor(under, 2 /* GA_ROOT */);
         if (!IsOwnWindow(root)) return false;
-        // Onto the owner it is a handover only over its CLIENT content: its caption, frame and resize borders are the
-        // non-client stream's (WM_NCPOINTER*, its own synthetic pointer), which the park hands them to as before.
+        // Onto the owner it is a handover over its CLIENT content and over a caption pixel (a drag band, or any inert pixel
+        // of a drag-anywhere window): the non-client stream hovers a caption pixel at its real point too (NcHover), so
+        // parking it would only undo that move when this leave lands after the NC stream's first update (the two arrive
+        // in either order), dropping the hover of a pointer that rests just past a button. Its caption buttons, frame and
+        // resize borders park as before: the NC stream hovers those at a button centre or not at all.
         if (root == _hwnd)
         {
             nint lp = (nint)(((pi.ptPixelLocation.y & 0xFFFF) << 16) | (pi.ptPixelLocation.x & 0xFFFF));
-            if ((nint)SendMessageW(_hwnd, WM_NCHITTEST, default, (LPARAM)lp) != HTCLIENT) return false;
+            nint ht = (nint)SendMessageW(_hwnd, WM_NCHITTEST, default, (LPARAM)lp);
+            if (ht != HTCLIENT && ht != HTCAPTION) return false;
         }
         EmitPointerMove(in pi);
         PaintRequested?.Invoke();   // the handover can land while the frame loop idles
