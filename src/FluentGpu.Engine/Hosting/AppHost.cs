@@ -614,7 +614,7 @@ public sealed partial class AppHost : IDisposable
 
     /// <summary>The render loop's sleep hint (render thread, right after <see cref="HasRenderMotion"/>): the earliest instant, on the turn
     /// clock, at which this host's or any detached child's live render motion can change a pixel. 0 = due every tick (the loop keeps
-    /// the display clock); a later instant lets it sleep to one period before it instead of waking at every compositor tick for turns
+    /// the display clock); a later instant lets it sleep until then instead of waking at every compositor tick for turns
     /// that would hold their rows and elide (a cadence row between its periods, a window under its power ceiling). A child owing a
     /// present (a deferred slot, a refused present) is due now.</summary>
     private double RenderMotionDueMs()
@@ -808,6 +808,15 @@ public sealed partial class AppHost : IDisposable
     // ── Hidden-window memory (HiddenMemoryPolicy) ─────────────────────────────────────────────────────────────────
     private HiddenMemoryPolicy _hidden;          // UI thread, primary host only (a detached child owns no tiles and no pools)
     private int _renderHiddenStage;              // the stage the UI wants the render side to be in (HiddenStage); UI writes, render reads
+    private int _renderShrinkSwapchain;          // UI writes 1 with a Shallow request for a HIDDEN window; the render side's Shallow step consumes it
+
+    /// <summary>Release a HIDDEN main window's back buffers with its Shallow stage (they shrink to 1 x 1 px): three buffers of the client
+    /// size that nothing can show while the window is off the screen (37 MB at 2160 x 1440). Only for a hidden window, never a
+    /// minimized one (the taskbar thumbnail and the restore animation show its content), and only where every show-from-hidden
+    /// repaints before it reveals: the reveal gate (<see cref="BeginRevealGate"/>) un-parks the hidden window, the first frame's
+    /// size check (EnsureSize) resizes the buffers back, and the window appears on that frame's present. The Windows entry point
+    /// turns it on with <c>AppOptions.RevealOnFirstPresent</c>. UI thread.</summary>
+    public bool ShrinkSwapchainWhenHidden { get; set; }
     private int _renderHiddenApplied;            // the stage the render side (or the UI inline in SingleThread) has applied; only its applier touches it
     private readonly HashSet<int> _hiddenChildHeld = new();
     // Render-thread-owned (the UI thread, inline, in SingleThread): the HELD latch. True from the Deep step (and from the first
@@ -889,6 +898,14 @@ public sealed partial class AppHost : IDisposable
                 evicted = _images.ReleaseUnpinnedGpu(_hiddenChildHeld);
                 _hiddenChildHeld.Clear();
                 _pixelPool.Trim();
+            }
+            // A HIDDEN window's back buffers go with the first stage (ShrinkSwapchainWhenHidden): the size check of the first frame back
+            // (EnsureSize, the reveal gate's repaint) sees a size it never presented at and resizes them before anything is shown.
+            if (before == HiddenStage.Visible && ShrinkSwapchainWhenHidden && !_window.IsVisible && _window.State != WindowState.Minimized
+                && OwningRenderThread is not null && _swapchain.SizePx.Width > 1)
+            {
+                Volatile.Write(ref _renderShrinkSwapchain, 1);
+                _lastSize = default;
             }
             if (stage == HiddenStage.Shallow)
             {
@@ -1192,8 +1209,19 @@ public sealed partial class AppHost : IDisposable
                 _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);
                 DrainImageJobsOffFrame();
                 _device.ReleaseHiddenResources(HiddenStage.Shallow, shared);   // the drain freed textures: the pools / levels they emptied go too
+                // ShrinkSwapchainWhenHidden: the hidden window's back buffers. Frames published at the old size are dropped (the
+                // target epoch moves); the reveal's first frame resizes them back, through EnsureSize, under the loop's park.
+                if (Interlocked.Exchange(ref _renderShrinkSwapchain, 0) != 0)
+                {
+                    _renderSeam.InvalidateTarget();
+                    _swapchain.Resize(new Size2(1, 1));
+                }
             }
-            else _device.ReleaseHiddenResources(HiddenStage.Visible);
+            else
+            {
+                Volatile.Write(ref _renderShrinkSwapchain, 0);   // shown again before the Shallow step ran: nothing to shrink
+                _device.ReleaseHiddenResources(HiddenStage.Visible);
+            }
         }
         finally { Volatile.Write(ref _renderHiddenApplied, (int)stage); }
     }

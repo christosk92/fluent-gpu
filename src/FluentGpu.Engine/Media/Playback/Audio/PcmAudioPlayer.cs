@@ -1199,7 +1199,7 @@ public sealed partial class PcmAudioSession : IMediaSession, IMediaClockSource
             Volatile.Write(ref _mixerCmdTail, next);
         }
         if (_feed is null) DrainMixerCmds();
-        else _feed.WakeOutput();
+        else _feed.WakeRender();
         return true;
     }
 

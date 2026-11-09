@@ -108,6 +108,11 @@ public sealed class AudioFeedThread : IDisposable
     /// <summary>Wake paused/output-capacity waits for transport commands.</summary>
     public void WakeOutput() { if (!_disposed) { SignalWake(_outputWake); SignalWake(_clockWake); } }
 
+    /// <summary>Wake the RT feed thread alone: a mixer command it applies at its next block. The clock thread is not woken for it: it ticks
+    /// at its own period (PcmAudioSession.ControlPeriodMs), and a mixer command posted from a tick must not re-tick the clock at once
+    /// (a visualizer face drove it at ~140 wakes/s that way).</summary>
+    public void WakeRender() { if (!_disposed) SignalWake(_outputWake); }
+
     // Control/RT callers can have passed a disposed check before the final successful join closes a handle.
     // Match RingAudioSource.WakeProducer: a late signal is harmless, never an escaping teardown exception.
     private static void SignalWake(AutoResetEvent wake)

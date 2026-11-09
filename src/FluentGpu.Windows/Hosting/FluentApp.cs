@@ -600,6 +600,8 @@ public static class FluentApp
         // watchdog fires) - no white/black flash, no fallback-glyph first frame. It needs a composited swapchain (a non-composited
         // target stands a hidden window's presents down), so a non-Mica window keeps today's show-first behaviour.
         s_reveal = null;
+        // Every show-from-hidden repaints before it reveals under the gate, so a hidden window's back buffers can go while it is hidden.
+        host.ShrinkSwapchainWhenHidden = o.RevealOnFirstPresent && composited;
         if (o.RevealOnFirstPresent && composited)
             s_reveal = new RevealGateOptions { FirstFrameReady = o.FirstFrameReady, TimeoutMs = o.RevealTimeoutMs };
         else if (o.RevealOnFirstPresent)

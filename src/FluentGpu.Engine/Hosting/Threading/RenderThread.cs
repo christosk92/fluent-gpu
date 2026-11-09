@@ -302,16 +302,15 @@ public sealed class RenderThread : IDisposable
 
     private long PeriodQpc() => Math.Max(1, _tickPeriod?.Invoke() ?? Stopwatch.Frequency / 60);
 
-    /// <summary>How long the loop may sleep before the next turn that can change a pixel: the motion's due time less one refresh period
-    /// (so the tick that lands it is not missed), or 0 when that saves less than a period (the ordinary tick wait).</summary>
+    /// <summary>How long the loop may sleep before the next turn that can change a pixel: until the motion's due time (measured on the turn
+    /// clock, which already runs the present latency ahead of the wall clock), so the first tick after it poses the change; 0 when it is
+    /// due now (the ordinary tick wait). Waking a period earlier only bought a tick whose pose still held.</summary>
     private int MotionSleepMs()
     {
         if (_motionDueInMs is null) return 0;
         double dueIn = _motionDueInMs();
-        if (!(dueIn > 0) || double.IsPositiveInfinity(dueIn)) return 0;
-        double periodMs = PeriodQpc() * 1000.0 / Stopwatch.Frequency;
-        double sleep = dueIn - periodMs;
-        return sleep >= periodMs ? (int)sleep : 0;
+        if (!(dueIn >= 1.0) || double.IsPositiveInfinity(dueIn)) return 0;
+        return (int)Math.Ceiling(dueIn);
     }
 
     /// <summary>The bound (ms) of an UNPACED turn's liveness take: <c>max(2 x refresh, 34 ms)</c> (F208). It replaces the plain
@@ -358,7 +357,7 @@ public sealed class RenderThread : IDisposable
             long waitStart = FrameLedger.Enabled ? Stopwatch.GetTimestamp() : 0;   // the ledger's turn record only
             bool motionDue = _needsTick?.Invoke() == true;
             // MOTION THAT WAITS: every live row holds until a known instant (a cadence row between its periods, a window under its power
-            // ceiling), so the ticks before it would only re-enter, hold and elide. Sleep to one period before it, with the display clock
+            // ceiling), so the ticks before it would only re-enter, hold and elide. Sleep until it, with the display clock
             // parked, instead of waking at every compositor tick (and every vblank-waiter tick) for nothing. A fresh publication is
             // never made to wait: the sleep is skipped while one is pending, and a publish wake ends it.
             int motionSleepMs = motionDue && !_publisher.HasPendingFrame ? MotionSleepMs() : 0;
