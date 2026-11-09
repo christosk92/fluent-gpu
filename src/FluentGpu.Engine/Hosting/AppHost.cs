@@ -2986,6 +2986,7 @@ public sealed partial class AppHost : IDisposable
     // says the hide is deliberate, so the handle reports IsParked and Unpark knows the host is reusable. Cleared by Unpark.
     private bool _warmParked;
     private bool _revealTopmost;          // the always-on-top state to apply when the window is shown (kept current by the handle's SetTopmost)
+    private bool _revealNoActivate;       // detached child: reveal with ShowNoActivate (the request's NoActivate), never stealing the focus
     private long _revealDeadlineQpc;
     private long _openStartQpc;           // the QPC the open began (OpenDetachedWindow entry): FirstPresentMs counts from here
     private double _openFirstFrameMs = -1;   // the child's first RunFrame, timed once (-1 = not run yet)
@@ -3261,7 +3262,10 @@ public sealed partial class AppHost : IDisposable
         // always creates WS_OVERLAPPEDWINDOW and the OS caption (icon/title/min/max/close) shows on top of the video.
         var desc = new WindowDesc(request.Title,
             new Size2(request.InitialSizeDip.Width * scale, request.InitialSizeDip.Height * scale), scale,
-            Composited: true, CustomFrame: true, SkipDropAndTouchpad: true);   // a video pop-out takes no file drop (F110)
+            Composited: true, CustomFrame: true, SkipDropAndTouchpad: true,   // a video pop-out takes no file drop (F110)
+            // Born topmost when asked (WS_EX_TOPMOST at creation), not only after the reveal's SetWindowPos: the window is in the
+            // topmost band from its first z-order placement, whatever activation happens around the reveal.
+            Topmost: request.AlwaysOnTop, ToolWindow: request.ToolWindow);
         var win = _app.CreateWindow(desc);
 
         // A 16:9-ish client floor so the mini-player can never be dragged down to an unusable sliver (caller-overridable).
@@ -3334,7 +3338,11 @@ public sealed partial class AppHost : IDisposable
         // TryRevealDetached shows the window after its first present (or the timeout).
         child.BeginDetachedReveal(request.AlwaysOnTop, openStartQpc,
             QpcToMs(ctorStartQpc - openStartQpc), QpcToMs(ctorEndQpc - ctorStartQpc));
+        child._revealNoActivate = request.NoActivate;
         AdoptDetachedChild(child);
+        // AFTER the adoption (it copies the parent's Mica flag): a window with its own material owns its ground.
+        if (request.Material is { } material) child.SetDetachedMaterial(material, request.MaterialDark);
+        child.PowerCapFps = Math.Max(0, request.PowerCapFps);
         // Register the child as a render source for the parent's render loop (a no-op reader when there is no render thread —
         // the pure single-thread parent leaves the child on the inline present path). A copy-on-write publish: no park, and
         // an in-flight DrainChildRenderSources keeps the snapshot it took.
@@ -3375,7 +3383,7 @@ public sealed partial class AppHost : IDisposable
         bool presented = _swapchain.HasPresentedContent;
         if (!DetachedRevealGate.Due(presented, now, _revealDeadlineQpc)) return false;
         _revealPending = false;
-        _window.Show();
+        if (_revealNoActivate) _window.ShowNoActivate(); else _window.Show();
         if (_revealTopmost) _window.SetTopmost(true);
         // Only the FIRST composited present is exempt from the IsHwndCovered stand-down, so a motion present, or the frame
         // published between that first present and this Show, was dropped while the window was hidden. Re-present now that it
@@ -3524,6 +3532,19 @@ public sealed partial class AppHost : IDisposable
         // A pop-out opened while this window is hidden shares the cache: what it requests must land and stay, not be parked for a
         // restore of a window it is not part of.
         if (_images.HiddenStage != HiddenStage.Visible && ReferenceEquals(child._images, _images)) _images.HiddenKeepLandings = true;
+    }
+
+    /// <summary>Detached CHILD, UI thread: give the window its own backdrop. The ground follows: a backdrop on a composited window clears
+    /// transparent while active and to the theme's solid ground while inactive (the main window's Mica parity), and
+    /// <see cref="WindowMaterial.None"/> clears to the theme's opaque ground, so a secondary window is never see-through.</summary>
+    internal void SetDetachedMaterial(WindowMaterial material, bool dark)
+    {
+        if (!_isDetachedChild) return;
+        _window.SetMaterial(material, dark);
+        _micaWindow = _window.Composited && material != WindowMaterial.None;
+        _childWindowBackground = _micaWindow && _window.IsActive ? ColorF.Transparent : Tok.T.WindowBackground;
+        _lastPresentedDrawListHash = 0;
+        RequestFullRepaintOnce();
     }
 
     /// <summary>The frame clear colour (test seam for the host-local Mica backdrop).</summary>
@@ -3914,6 +3935,8 @@ public sealed partial class AppHost : IDisposable
         // A pop-out still waiting for its reveal (F115) applies the LATEST always-on-top choice when it is shown, so a toggle made
         // while it was hidden is not overwritten by the open request's value.
         public void SetTopmost(bool topmost) { _child._revealTopmost = topmost; _window.SetTopmost(topmost); }
+        public void SetMaterial(WindowMaterial material, bool dark) { if (!_window.IsClosed) _child.SetDetachedMaterial(material, dark); }
+        public int PowerCapFps { get => _child.PowerCapFps; set => _child.PowerCapFps = Math.Max(0, value); }
         public DetachedOpenTiming OpenTiming => _child.OpenTiming;
         public Action<DetachedOpenTiming>? OnRevealed { get => _child.OnRevealed; set => _child.OnRevealed = value; }
         public double FirstVideoBindMs => _child.FirstVideoBindMs;

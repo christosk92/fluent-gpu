@@ -122,9 +122,15 @@ public static class VideoCompositor
 /// picks a picture-in-picture home at the bottom-right of the parent's monitor. A restored rect is still clamped to a
 /// visible monitor, so a window remembered on a display that is now gone still opens where the user can see it.</param>
 /// <param name="MinClientSizeDip">Optional minimum client size (DIP). Empty ⇒ the host's 16:9-ish default floor.</param>
+/// <param name="NoActivate">Reveal the window without activating it (no focus steal); a click still activates it.</param>
+/// <param name="Material">The window's own system backdrop (null: none written, the ground follows the main window's as before).</param>
+/// <param name="MaterialDark">The dark attribute written with <paramref name="Material"/>.</param>
+/// <param name="PowerCapFps">A frame-rate ceiling for this window's motion (0 = none, the default): <c>AppHost.PowerCapFps</c>.</param>
+/// <param name="ToolWindow">No taskbar button and no Alt+Tab entry (<see cref="WindowDesc.ToolWindow"/>).</param>
 public readonly record struct DetachedWindowRequest(
     string Title, FluentGpu.Foundation.Size2 InitialSizeDip, Component Content, bool AlwaysOnTop = true,
-    FluentGpu.Foundation.RectF InitialBoundsPx = default, FluentGpu.Foundation.Size2 MinClientSizeDip = default);
+    FluentGpu.Foundation.RectF InitialBoundsPx = default, FluentGpu.Foundation.Size2 MinClientSizeDip = default,
+    bool NoActivate = false, WindowMaterial? Material = null, bool MaterialDark = true, int PowerCapFps = 0, bool ToolWindow = false);
 
 /// <summary>Where a pop-out open spent its time, split so a slow open names its stage (F110). The window is created hidden and
 /// revealed once its first frame has presented, so the four stages are separate costs and only the first two are paid
@@ -168,6 +174,11 @@ public interface IDetachedVideoWindow
     bool IsOpen { get; }
     /// <summary>Toggle persistent always-on-top.</summary>
     void SetTopmost(bool topmost);
+    /// <summary>Change this window's own system backdrop and dark attribute (a theme switch): the ground follows (a backdrop clears
+    /// transparent while active, <see cref="WindowMaterial.None"/> clears to the theme's opaque ground). Default: no-op.</summary>
+    void SetMaterial(WindowMaterial material, bool dark) { }
+    /// <summary>This window's motion frame-rate ceiling (0 = none): <c>AppHost.PowerCapFps</c>. Default: ignored.</summary>
+    int PowerCapFps { get => 0; set { } }
     /// <summary>Move/resize the window (outer rect, physical virtual-screen px).</summary>
     void SetBounds(FluentGpu.Foundation.RectF outerBoundsPx);
     /// <summary>Move the window's outer origin WITHOUT touching its size (<see cref="Pal.IPlatformWindow.MoveToPx"/>) —

@@ -196,6 +196,49 @@ public sealed unsafe partial class Win32App : IPlatformApp
         return true;
     }
 
+    // ── global hot keys (RegisterHotKey) ────────────────────────────────────────────────────────────────────────────
+    // A system-wide shortcut (Wavee's Ctrl+Alt+M) is registered against the MAIN window, so WM_HOTKEY lands in its
+    // Handle32 on the UI thread whether or not the app has the focus. Static bridge, the single-window rationale above.
+    private static Action<int>? s_hotKeyPressed;
+    private static nint s_hotKeyWindow;
+
+    /// <summary>Fired on the UI thread with the id of a pressed global hot key (<see cref="TryRegisterHotKey"/>).</summary>
+    public static event Action<int>? HotKeyPressed
+    {
+        add => s_hotKeyPressed += value;
+        remove => s_hotKeyPressed -= value;
+    }
+
+    /// <summary>Register a system-wide hot key (<paramref name="modifiers"/>: MOD_ALT 1, MOD_CONTROL 2, MOD_SHIFT 4, MOD_WIN 8;
+    /// MOD_NOREPEAT is added) against <paramref name="hwnd"/>. False when another app holds the combination (or no window): the
+    /// caller fails quietly. UI thread.</summary>
+    public static bool TryRegisterHotKey(nint hwnd, int id, uint modifiers, uint virtualKey)
+    {
+        if (hwnd == 0) return false;
+        s_hotKeyWindow = hwnd;
+        return RegisterHotKeyNative(hwnd, id, modifiers | 0x4000u /*MOD_NOREPEAT*/, virtualKey) != 0;
+    }
+
+    /// <summary>Release a hot key <see cref="TryRegisterHotKey"/> took. UI thread.</summary>
+    public static void UnregisterHotKey(int id)
+    {
+        if (s_hotKeyWindow != 0) UnregisterHotKeyNative(s_hotKeyWindow, id);
+    }
+
+    [System.Runtime.InteropServices.LibraryImport("user32.dll", EntryPoint = "RegisterHotKey")]
+    private static partial int RegisterHotKeyNative(nint hwnd, int id, uint modifiers, uint vk);
+    [System.Runtime.InteropServices.LibraryImport("user32.dll", EntryPoint = "UnregisterHotKey")]
+    private static partial int UnregisterHotKeyNative(nint hwnd, int id);
+
+    /// <summary>Raise <see cref="HotKeyPressed"/>. Called by <see cref="Win32Window"/>'s WM_HOTKEY case.</summary>
+    internal static bool RaiseHotKey(int id)
+    {
+        var handler = s_hotKeyPressed;
+        if (handler is null) return false;
+        handler(id);
+        return true;
+    }
+
     // ── taskbar button created (IPlatformApp.TaskbarButtonCreated) ──────────────────────────────────────────────────
     // The registered "TaskbarButtonCreated" message lands in Win32Window.Handle32 (runtime msg id, not a WM_* const)
     // and routes here. Callers re-add thumbnail buttons after explorer restart.
@@ -953,6 +996,20 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// <summary><c>SW_HIDE</c>: the window leaves the screen, the taskbar and Alt+Tab, and keeps its HWND, swapchain and
     /// scene. The host parks on the next frame (<see cref="WindowStatus.Parked"/>); <see cref="Show"/> brings it back.</summary>
     public void Hide() => ShowWindow(_hwnd, SW_HIDE);
+
+    /// <inheritdoc cref="IPlatformWindow.ShowNoActivate"/>
+    public void ShowNoActivate()
+    {
+        ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
+        UpdateWindow(_hwnd);
+    }
+
+    /// <inheritdoc cref="IPlatformWindow.SetMaterial"/>
+    public void SetMaterial(WindowMaterial material, bool dark)
+    {
+        Win32Theme.ApplyWindowMaterial((nint)_hwnd, dark, material, _composited, _customFrame);
+        Win32Theme.ApplyRoundCorners((nint)_hwnd);
+    }
 
     /// <summary>The live <c>WS_VISIBLE</c> style — not a field mirrored from <see cref="Show"/>/<see cref="Hide"/>, so a
     /// window an app shows through its own <c>ShowWindow</c> call is never left parked.</summary>
@@ -2401,6 +2458,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // — cheap reject first so those take DefWindowProc with zero alloc (no string, no delegate alloc).
                 if (((nuint)wParam >> 16) != THBN_CLICKED) return false;
                 Win32App.RaiseThumbButtonClicked(unchecked((int)((nuint)wParam & 0xFFFF)));
+                result = (LRESULT)0;
+                return true;
+            case 0x0312:   // WM_HOTKEY: a global hot key registered against this window (Win32App.TryRegisterHotKey)
+                if (!Win32App.RaiseHotKey(unchecked((int)(nint)wParam))) return false;
                 result = (LRESULT)0;
                 return true;
             case WM_APPCOMMAND:

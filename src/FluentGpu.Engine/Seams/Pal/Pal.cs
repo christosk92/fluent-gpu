@@ -728,6 +728,13 @@ public interface IPlatformWindow : IDisposable
     void SetCursor(CursorId id);                                   // L10 cursor seam
     void SetTitle(StringId title);
     void Show();
+    /// <summary>Show the window WITHOUT activating it (Win32 <c>SW_SHOWNOACTIVATE</c>): a window that appears on its own (a mini
+    /// player's reveal) must not take the keyboard focus from the app the user is typing in. A click on it still activates it.
+    /// Default: <see cref="Show"/>.</summary>
+    void ShowNoActivate() => Show();
+    /// <summary>Give this window its own system backdrop (<paramref name="material"/>) and dark attribute, and ask for the rounded
+    /// window corners: a secondary window has none of the main window's startup material. Default: no-op (headless).</summary>
+    void SetMaterial(WindowMaterial material, bool dark) { }
 
     /// <summary>Hide the window without destroying it (Win32 <c>SW_HIDE</c>: no taskbar button, no Alt+Tab entry, the
     /// HWND and every engine resource stay alive). <see cref="Show"/> brings it back in the placement it had. While
