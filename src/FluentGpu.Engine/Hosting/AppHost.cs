@@ -3988,6 +3988,13 @@ public sealed partial class AppHost : IDisposable
         public bool Unpark(DetachedWindowRequest request) => _parent.UnparkDetachedChild(_child, request);
         public Action? OnRenderFailed { get => _renderFailedCallback; set { _child.OnRenderFailed -= _renderFailedCallback; _renderFailedCallback = value; if (value != null) _child.OnRenderFailed += value; } }
         private Action? _renderFailedCallback;
+        // The child host's own per-frame event (one subscriber: the owner's), so an app can tick its frame-driven work off this window.
+        public Action<FrameStats>? FrameCompleted
+        {
+            get => _frameCallback;
+            set { if (_frameCallback is not null) _child.FrameCompleted -= _frameCallback; _frameCallback = value; if (value is not null) _child.FrameCompleted += value; }
+        }
+        private Action<FrameStats>? _frameCallback;
     }
 
     /// <summary>Probe/diagnostic only: a live shared-element (connected-animation) key, so a harness can trigger a REAL Hero fly.</summary>

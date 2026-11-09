@@ -258,6 +258,11 @@ public interface IDetachedVideoWindow
     /// treat this like <see cref="OnClosed"/>'s sibling — typically marshal to the UI thread and close the pop-out
     /// (it can no longer present) rather than leave a frozen/blank window around. Default no-op.</summary>
     Action? OnRenderFailed { get; set; }
+    /// <summary>Fired on the UI thread at the end of every frame THIS window's host renders, with its stats (the child's own
+    /// <see cref="FluentGpu.Hosting.AppHost.FrameCompleted"/>; <c>FluentApp.FrameCompleted</c> forwards the main window's only).
+    /// An app whose per-frame work rides the main window's frames (a fetch drain, a debounce clock) attaches it here while the
+    /// main window is hidden and this one is the only surface. Default: ignored.</summary>
+    Action<FluentGpu.Hosting.FrameStats>? FrameCompleted { get => null; set { } }
 }
 
 public sealed class InputHooks

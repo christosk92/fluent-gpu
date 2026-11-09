@@ -1633,16 +1633,21 @@ public sealed class OverlayHost : Component
         // vp literal is therefore captured at the launch size and goes STALE on every later resize — FlexLayout.Run(root,
         // window) then reads the stale root li.Height (FlexLayout.cs:39-40) and lays the whole app out at the PRE-resize
         // size (player bar off-screen, sidebar/content clipped). Leaving the size indefinite (NaN) keeps the root tracking
-        // the live window each frame. A tall popup still overflows freely: every node from the root down is sized by
-        // Run(root, window) + cross-stretch, so the stack stays window-sized regardless of a tall child (no page reflow).
-        // Reproduced + guarded by the real-Win32 resize harness; do not re-add the pin.
+        // the live window each frame. A tall popup still overflows freely, but only because both stacks also SHRINK: a
+        // ZStack measures to its tallest layer, and the transparent provider anchors above it (Overlay.Service, the app's
+        // theme providers) lay their one child out as a flex line whose base is that measure. With the default Shrink 0
+        // an open popup taller than the window (a menu that escapes a small window into a popup HWND: the mini player's)
+        // grew the whole stack, the app's content with it, to the popup's height: everything laid out against the window's
+        // foot (a card's seek and transport rows) went off-screen while the menu was open. Shrink 1 hands the window's size
+        // back down (no min: the stack is never smaller than the window, only never larger). Reproduced + guarded by the
+        // real-Win32 resize harness; do not re-add the pin.
         // Toast lane (WS3 P6): auto-mount one top-Z, hit-test-transparent toast lane above the popup stack, always
         // present (index-stable, so opening/closing a popup never remounts it) and registering itself as the
         // process-default for the static Toast API. Dormant (an inert full-bleed pass-through) when no toasts are live.
-        var inner = Ui.ZStack(layers.ToArray()) with { Grow = 1 };
+        var inner = Ui.ZStack(layers.ToArray()) with { Grow = 1, Shrink = 1 };
         bool isPrimary = IsPrimaryToastHost;
         return Ctx.Provide(Overlay.Service, (IOverlayService)svc,
-            Ui.ZStack(inner, Embed.Comp(() => new ToastHost { RegisterAsDefault = isPrimary })) with { Grow = 1 });
+            Ui.ZStack(inner, Embed.Comp(() => new ToastHost { RegisterAsDefault = isPrimary })) with { Grow = 1, Shrink = 1 });
     }
 
     /// <summary>Cascading-menu overlap (CascadingMenuHelper.cpp:678 — sub-menu lands at owner edge − 4): nudge the
