@@ -5550,6 +5550,30 @@ public sealed partial class TreeReconciler
         return new EnterRest(b.OffsetX, b.OffsetY, b.ScaleX, b.ScaleY, op, b.Blur);
     }
 
+    /// <summary>Did <paramref name="b"/> own its node's matrix: a bound <c>Transform</c>, a static one, or a non-identity
+    /// OffsetX/Y, ScaleX/Y or Rotation? A reused node reconciled from such an element to one declaring none is reset to
+    /// identity (the owner→identity hand-off in <see cref="WriteColumns"/>).</summary>
+    private static bool DeclaresTransform(BoxEl b)
+        => b.Transform.IsBound || b.Transform.Value != default
+           || b.OffsetX != 0f || b.OffsetY != 0f || b.ScaleX != 1f || b.ScaleY != 1f || b.Rotation != 0f;
+
+    /// <summary>A reused node whose new element declares no hover/press scale, durations or easings: put the authored half
+    /// of its <see cref="InteractionAnim"/> row back to the defaults a fresh row carries, keeping the live progress
+    /// (HoverT/PressT and their targets, which the hover/press colour fades ride). Without it the previous element's
+    /// HoverScale/PressScale kept scaling the node on hover. Writes only when a row exists and differs.</summary>
+    private void ResetInteractAuthoring(NodeHandle node)
+    {
+        if ((_scene.Flags(node) & NodeFlags.InteractionAnim) == 0 || !_scene.TryGetInteract(node, out InteractionAnim cur)) return;
+        InteractionAnim d = InteractionAnim.Default;
+        if (cur.HoverScale == d.HoverScale && cur.PressScale == d.PressScale && cur.ScaleAxes == d.ScaleAxes
+            && cur.HoverDurationMs == d.HoverDurationMs && cur.PressDurationMs == d.PressDurationMs && cur.PressReleaseMs == d.PressReleaseMs
+            && cur.HoverEasing == d.HoverEasing && cur.PressEasing == d.PressEasing) return;
+        ref InteractionAnim ia = ref _scene.InteractRef(node);
+        ia.HoverScale = d.HoverScale; ia.PressScale = d.PressScale; ia.ScaleAxes = d.ScaleAxes;
+        ia.HoverDurationMs = d.HoverDurationMs; ia.PressDurationMs = d.PressDurationMs; ia.PressReleaseMs = d.PressReleaseMs;
+        ia.HoverEasing = d.HoverEasing; ia.PressEasing = d.PressEasing;
+    }
+
     /// <summary>A parent's <see cref="FluentGpu.Dsl.Element.Stagger"/> delays each ENTERING child's Enter by (its ordinal
     /// among the children entering in that diff × stagger ms): a list/shelf whose new items reveal in sequence. A diff
     /// appends new children after every old one (removal comes later), so inside the diff in flight the walk is rebased
@@ -5668,7 +5692,8 @@ public sealed partial class TreeReconciler
                 // A video hole outranks every surface kind: the node ERASES rather than paints, so any fill it declares is
                 // irrelevant (see BoxEl.VideoHole). The slot token rides ImageId — the IconLayer PathId pun.
                 paint.VisualKind = b.VideoHole ? VisualKind.Video : b.TabShape ? VisualKind.TabShape : hasSurface ? VisualKind.Box : VisualKind.None;
-                if (b.VideoHole) paint.ImageId = b.VideoSurfaceId;
+                // Cleared when the hole goes: a reused box keeps no surface token a fresh one would not carry.
+                paint.ImageId = b.VideoHole ? b.VideoSurfaceId : 0;
 
                 // Implicit BrushTransition (WinUI, 83ms): a LIVE node re-rendered with a different fill/border cross-fades
                 // from the previously-DISPLAYED color (mid-flight retargets stay continuous) instead of snapping.
@@ -5785,15 +5810,16 @@ public sealed partial class TreeReconciler
                     paint.LocalTransform = tf;
                     restTf = tf;
                 }
-                // Static→identity hand-off: when the PREVIOUS element declared a static transform and this one
-                // declares none, clear the stale static — the in-place differ can morph e.g. a rail (OffsetY=14)
-                // into a plain track box, which otherwise keeps painting/hit-testing 14px off forever (the ranged-
-                // slider tooltip hover flap). Identity-declared elements still leave ANIM-owned matrices alone:
-                // this writes only on the declared-static → declared-identity transition, never per re-render.
-                // Covers BOTH static spellings, so dropping an authored matrix clears it exactly like dropping OffsetY.
-                else if (tfUnbound && old is BoxEl ob && !ob.Transform.IsBound
-                         && (ob.Transform.Value != default
-                             || ob.OffsetX != 0f || ob.OffsetY != 0f || ob.ScaleX != 1f || ob.ScaleY != 1f || ob.Rotation != 0f))
+                // Owner→identity hand-off: when the PREVIOUS element owned the matrix (a static transform in either
+                // spelling, or a BOUND Transform) and this one declares none, reset it to identity, as a fresh node
+                // would hold. The in-place differ can morph e.g. a rail (OffsetY=14) into a plain track box, which
+                // otherwise keeps painting/hit-testing 14px off forever (the ranged-slider tooltip hover flap); and a
+                // bound→static flip relies on this write, because RewireBinds disposes the channel's effect right after
+                // WriteColumns and nothing else ever writes the matrix again: a progress fill's bound x-scale stayed on
+                // the reused node when an identity box took its unkeyed slot (Wavee's mini seek wave, squeezed).
+                // Identity-declared elements still leave ANIM-owned matrices alone: this writes only on the owner →
+                // identity transition, never per re-render.
+                else if (tfUnbound && old is BoxEl ob && DeclaresTransform(ob))
                 {
                     paint.LocalTransform = Affine2D.Identity;
                 }
@@ -5825,6 +5851,7 @@ public sealed partial class TreeReconciler
                     // HandlerMask — "is it its own interaction scope?" — and the handler-mask writes have not run yet.
                     seedHoverOnMount = isMount;
                 }
+                else if (!isMount) ResetInteractAuthoring(node);   // the previous element's hover/press scale must not outlive it
                 // A declarative WhileHover follows its container the same way (the hover cascade's third leg), but owns
                 // no InteractionAnim row, so it opts into the deferred seed on its own: a decorative child mounting under
                 // an already-hovered card would otherwise sit at rest, since no new container edge fires until the
@@ -6305,6 +6332,10 @@ public sealed partial class TreeReconciler
                     if (pl.ScaleX != 1f || pl.ScaleY != 1f) tf = tf.Multiply(Affine2D.Scale(pl.ScaleX, pl.ScaleY));
                     paint.LocalTransform = tf;
                 }
+                // The BoxEl owner→identity hand-off: a dropped static pose resets, an identity re-render leaves anim owners alone.
+                else if (old is PolylineStrokeEl opl
+                         && (opl.OffsetX != 0f || opl.OffsetY != 0f || opl.Rotation != 0f || opl.ScaleX != 1f || opl.ScaleY != 1f))
+                    paint.LocalTransform = Affine2D.Identity;
 
                 if (pl.HoverScale != 1f || pl.PressScale != 1f)
                 {
@@ -6312,6 +6343,7 @@ public sealed partial class TreeReconciler
                     ia.HoverScale = pl.HoverScale;
                     ia.PressScale = pl.PressScale;
                 }
+                else if (!isMount) ResetInteractAuthoring(node);
 
                 _scene.SetPolylineStroke(node, new PolylineStrokeSpec(
                     pl.P0, pl.P1, pl.P2, pl.P3, pl.PointCount,
@@ -6342,6 +6374,10 @@ public sealed partial class TreeReconciler
                     if (pe.ScaleX != 1f || pe.ScaleY != 1f) tf = tf.Multiply(Affine2D.Scale(pe.ScaleX, pe.ScaleY));
                     paint.LocalTransform = tf;
                 }
+                // The BoxEl owner→identity hand-off: a dropped static pose resets, an identity re-render leaves anim owners alone.
+                else if (old is PathEl ope
+                         && (ope.OffsetX != 0f || ope.OffsetY != 0f || ope.Rotation != 0f || ope.ScaleX != 1f || ope.ScaleY != 1f))
+                    paint.LocalTransform = Affine2D.Identity;
 
                 if (pe.HoverScale != 1f || pe.PressScale != 1f)
                 {
@@ -6349,6 +6385,7 @@ public sealed partial class TreeReconciler
                     ia.HoverScale = pe.HoverScale;
                     ia.PressScale = pe.PressScale;
                 }
+                else if (!isMount) ResetInteractAuthoring(node);
 
                 _scene.SetPath(node, new PathSpec(pe.Geometry, pe.Fill, pe.Rule, pe.StrokeColor, pe.Stroke,
                     pe.TrimStart, pe.TrimEnd, pe.TrimMode, pe.ViewBoxW, pe.ViewBoxH, pe.HitTestGeometry));
@@ -6415,10 +6452,18 @@ public sealed partial class TreeReconciler
 
                 bool hasClick = lr.OnCellClick is not null;
                 _scene.SetRowCellClickHandler(node, lr.OnCellClick);   // mount-static; rewritten unconditionally, cheap
+                // The placeholder flag a bound Placeholder owns is the one the row holds (its effect wrote it): a static Cells
+                // rewrite must keep it, not reset it to false between the bind's fires.
+                bool heldRow = _scene.TryGetRowCells(node, out _, out bool heldPlaceholder, out ColorF heldPlaceholderColor);
+                bool placeholder = lr.Placeholder.IsBound ? heldRow && heldPlaceholder : lr.Placeholder.Value;
                 if (!lr.Cells.IsBound)
-                    WriteRowCells(node, lr.Cells.Value.AsSpan(), lr.Placeholder.ValueOr(false), lr.PlaceholderColor, hasClick);
+                    WriteRowCells(node, lr.Cells.Value.AsSpan(), placeholder, lr.PlaceholderColor, hasClick);
                 // else: the bound path defers to BindListRowCells's mount-time Effect (runNow: true — same deferral
-                // SpanTextEl's bound Spans uses).
+                // SpanTextEl's bound Spans uses). On reuse the row already exists and that effect re-runs only when its
+                // Cells payload changes, so a static Placeholder (a bound→static flip included) or a new PlaceholderColor
+                // is written here, as a fresh node's first Cells write would carry it.
+                else if (heldRow && (placeholder != heldPlaceholder || heldPlaceholderColor != lr.PlaceholderColor))
+                    _scene.SetRowPlaceholder(node, placeholder, lr.PlaceholderColor);
 
                 ref LayoutInput li = ref _scene.Layout(node);
                 li.Width = lr.Width; li.Height = lr.Height;
