@@ -344,7 +344,7 @@ public sealed class PcmAudioPlayer : IMediaBackend, IPreparableBackend
 /// SYNCHRONOUSLY (never blocks/deadlocks; the pump realizes the state) — mirroring the M0/M1 fix. <see cref="RenderBlock"/>
 /// is the pure, alloc-free "pull one block through the full graph" op the golden-PCM + zero-alloc gates drive.
 /// </summary>
-public sealed partial class PcmAudioSession : IMediaSession
+public sealed partial class PcmAudioSession : IMediaSession, IMediaClockSource
 {
     private static readonly double s_qpcTo100ns = 1e7 / Stopwatch.Frequency;
 
@@ -2428,6 +2428,60 @@ public sealed partial class PcmAudioSession : IMediaSession
     internal bool ControlIdle => !_playRequested && !_started && !_seekRebufferActive
         && _state is PlaybackState.Paused or PlaybackState.Ended or PlaybackState.Ready;
 
+    /// <summary>The clock thread's period while it ticks (ms). <see cref="ActiveControlPeriodMs"/> while anything is in motion that a
+    /// late tick would show: a start, a pause fade, a stall, a seek's rebuffer, the last seconds before the end, a visualizer reading
+    /// the level or the FFT (the meters and the analyser faces are drawn at the frame rate). Otherwise steady playback, where a tick
+    /// only republishes the position and re-reads the effects: <see cref="SteadyControlPeriodMs"/>. Every transport command wakes
+    /// the thread at once (<see cref="AudioFeedThread.WakeOutput"/>), and readers of the position extrapolate from the stamped
+    /// sample (<see cref="TryReadClock"/>), so the slower publication costs no accuracy (measured 2026-11-09: 66 wakes/s to ~10).</summary>
+    internal int ControlPeriodMs => SteadyPlayback ? SteadyControlPeriodMs : ActiveControlPeriodMs;
+    internal const int ActiveControlPeriodMs = 15, SteadyControlPeriodMs = 100;
+    /// <summary>How close to the content's end a session ticks at the active period again (the Ended edge, a hand-off).</summary>
+    const long NearEndTicks = 3 * TimeSpan.TicksPerSecond;
+
+    private bool SteadyPlayback
+        => _state == PlaybackState.Playing && _playRequested && !_transportHoldRequested && _started
+           && Volatile.Read(ref _transportPhase) == 0 && _starvationPhase == 0 && !_seekRebufferActive
+           && (_liveEffects is not AudioEffects ae || ae.VisualizerDemand(Volatile.Read(ref _visualizerSource)) == 0)
+           && _duration > TimeSpan.Zero && _duration.Ticks - Volatile.Read(ref _clockSamplePositionTicks) > NearEndTicks;
+
+    // ── the stamped clock sample (IMediaClockSource): written by PublishPosition on the clock thread, read on any thread ──
+    // A seqlock: odd while a write is in progress. The position is the CONTENT position Position publishes, stamped with the QPC
+    // instant it was projected for, so a reader between two ticks extrapolates instead of reading up to a period stale.
+    private int _clockSampleSeq;
+    private long _clockSamplePositionTicks, _clockSampleQpc;
+    private double _clockSampleRate = 1.0;
+    private bool _clockSampleRunning, _clockSampleValid;
+
+    private void StampClockSample(TimeSpan position, long qpc, bool running)
+    {
+        Interlocked.Increment(ref _clockSampleSeq);
+        Volatile.Write(ref _clockSamplePositionTicks, position.Ticks);
+        _clockSampleQpc = qpc;
+        _clockSampleRate = Volatile.Read(ref _rate);
+        _clockSampleRunning = running;
+        _clockSampleValid = true;
+        Interlocked.Increment(ref _clockSampleSeq);
+    }
+
+    /// <inheritdoc/>
+    public bool TryReadClock(out MediaClockSample sample)
+    {
+        for (int attempt = 0; attempt < 4; attempt++)
+        {
+            int seq = Volatile.Read(ref _clockSampleSeq);
+            if ((seq & 1) != 0) { Thread.SpinWait(8); continue; }
+            bool valid = _clockSampleValid;
+            var s = new MediaClockSample(TimeSpan.FromTicks(Volatile.Read(ref _clockSamplePositionTicks)), _clockSampleQpc, _clockSampleRate, _clockSampleRunning);
+            Interlocked.MemoryBarrier();
+            if (Volatile.Read(ref _clockSampleSeq) != seq) continue;
+            sample = s;
+            return valid && !_disposed;
+        }
+        sample = default;
+        return false;
+    }
+
     /// <summary>The listener wants sound: play was requested or the session is playing. The device controller keeps a slow
     /// retry going past its ladder while this holds and <see cref="OutputLive"/> does not.</summary>
     internal bool WantsOutput => _playRequested || _state == PlaybackState.Playing;
@@ -3013,11 +3067,16 @@ public sealed partial class PcmAudioSession : IMediaSession
         _position.Sample(_presentationClock);
         if (_presentationClock.TryGetPlayed(out long played, out _))
             Interlocked.Exchange(ref _playedFrames, Math.Clamp(played, 0, SubmittedFrames));
+        long nowQpc = Stopwatch.GetTimestamp();
         double clockFrame = _position.Project(NowTicks100ns()).TotalSeconds * _format.SampleRate;
         var rateSource = Volatile.Read(ref _activeRateSource);
         double contentFrame = rateSource is null ? clockFrame
             : _clockAnchorPosition + _activeMixerStart + ContentFrameAt(clockFrame) - rateSource.InitialSourceFrame;
-        sink.Position(TimeSpan.FromSeconds(Math.Max(0, contentFrame) / _format.SampleRate));
+        var position = TimeSpan.FromSeconds(Math.Max(0, contentFrame) / _format.SampleRate);
+        sink.Position(position);
+        // The stamped twin (TryReadClock). A synthetic clock (the headless arm) does not run on QPC time: no sample, readers keep Position.
+        if (_clock is not SyntheticAudioClock)
+            StampClockSample(position, nowQpc, _position.IsAdvancing && _state == PlaybackState.Playing && _starvationPhase == 0);
     }
 
     private long NowTicks100ns()

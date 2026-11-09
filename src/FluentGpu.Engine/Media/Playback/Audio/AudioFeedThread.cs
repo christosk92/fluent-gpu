@@ -640,8 +640,10 @@ public sealed class AudioFeedThread : IDisposable
                 // Position/state publication is a control-rate concern, not an audio-rate spin loop. While nothing is playing
                 // or requested there is nothing to publish: block until a command signals _clockWake (a signal that landed
                 // between the idle check and the wait is retained by the AutoResetEvent, so no command is ever delayed).
+                // While it runs, at the session's own period (PcmAudioSession.ControlPeriodMs: 15 ms in motion, 100 ms in steady playback),
+                // on the same wake event, so a command lands at once instead of after the rest of a sleep.
                 if (_session.ControlIdle) _clockWake.WaitOne(IdleClockWaitMs);
-                else Thread.Sleep(15);
+                else _clockWake.WaitOne(_session.ControlPeriodMs);
             }
         }
         finally { LoopExited(); }
