@@ -448,6 +448,7 @@ public sealed partial class AppHost : IDisposable
     private RectF _lastBoundsPx;
     private int _boundsSettleFrames;
     private bool _boundsDirty;
+    private bool _boundsGestureEnded;   // an OS move/size loop ended since the last sample (SampleDetachedBounds)
 
     // E4 windowed out-of-bounds popups: one slot per leased popup window (see PopupWindowSlot).
     private readonly List<PopupWindowSlot> _popupWindows = new(2);
@@ -3654,10 +3655,18 @@ public sealed partial class AppHost : IDisposable
         child.FinishDispose();   // the window and the process-wide seams: UI work, after the render thread is running again
     }
 
+    private void OnWindowMoveSizeEnded()
+    {
+        _boundsGestureEnded = true;
+        _inputHooks.NotifyWindowMoveSizeEnded();
+    }
+
     // Detached CHILD host, UI thread: sample the window rect and raise BoundsChanged once it has SETTLED. Only runs while
     // a detached window is open, and only when someone is listening — one cheap GetWindowRect per frame in that case.
     private void SampleDetachedBounds()
     {
+        bool gestureEnded = _boundsGestureEnded;
+        _boundsGestureEnded = false;
         if (BoundsChanged is null) return;
         var now = _window.OuterBoundsPx;
         if (now.W <= 1f || now.H <= 1f) return;   // backend cannot report bounds → nothing to settle
@@ -3666,12 +3675,18 @@ public sealed partial class AppHost : IDisposable
             _lastBoundsPx = now;
             _boundsSettleFrames = 0;
             _boundsDirty = true;
-            return;
+            if (!gestureEnded) return;
         }
         if (!_boundsDirty) return;
-        // ~10 frames of stillness = the gesture is over. Anything shorter fires mid-drag; anything much longer loses the
-        // last position if the app exits immediately after a move.
-        if (++_boundsSettleFrames < 10) return;
+        // Inside an OS move/size loop nothing has settled, however long the pointer rests: a report here would let the
+        // listener move the window under the user's hand.
+        if (_window.InModalLoop) return;
+        // The end of that loop (WM_EXITSIZEMOVE) IS the settle: report at once. A window that draws few frames (a resting
+        // mini player, a video pop-out) would otherwise wait on ten frames that may never come, and its listener would
+        // never learn the drag is over. Any other change (a keyboard snap, SetBoundsPx) has no such edge:
+        // ~10 frames of stillness = it is over. Anything much longer loses the last position if the app exits
+        // immediately after a move.
+        if (!gestureEnded && ++_boundsSettleFrames < 10) return;
         _boundsDirty = false;
         _boundsSettleFrames = 0;
         BoundsChanged?.Invoke(now);
@@ -5225,7 +5240,7 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.IsWindowFullscreen = () => _window.IsFullscreen;
         _inputHooks.WindowSetFullscreen = _window.SetFullscreen;
         _dispatcher.OnWindowMoveSizeBegan = _inputHooks.NotifyWindowMoveSizeBegan; // …learns when an OS move/size loop begins
-        _dispatcher.OnWindowMoveSizeEnded = _inputHooks.NotifyWindowMoveSizeEnded; // …learns when an OS move/size loop is over
+        _dispatcher.OnWindowMoveSizeEnded = OnWindowMoveSizeEnded; // …learns when an OS move/size loop is over
         _inputHooks.WindowClose = _window.CloseWindow;
         _inputHooks.OpenDetachedWindow = OpenDetachedWindow;   // pop-out video window (guarded: a child host / async / headless returns null)
         // The same guard, askable in advance, so an affordance can offer or withhold the option instead of dead-clicking.
