@@ -110,7 +110,10 @@ public sealed unsafe partial class Win32App : IPlatformApp
     /// <summary>Work area (desktop minus taskbar) of the monitor containing the point, in physical virtual-screen px.
     /// The same data WinUI's windowed popups place against (FlyoutBase_Partial.cpp:3382-3388 monitor bounds;
     /// Popup.cpp windowed placement) — <c>MonitorFromPoint(MONITOR_DEFAULTTONEAREST)</c> + <c>GetMonitorInfoW().rcWork</c>.</summary>
-    public RectF GetWorkArea(Point2 screenPointPx)
+    public RectF GetWorkArea(Point2 screenPointPx) => WorkAreaAt(screenPointPx);
+
+    /// <summary>The static form of <see cref="GetWorkArea"/> (it reads no instance state), for app code that places its own windows.</summary>
+    public static RectF WorkAreaAt(Point2 screenPointPx)
     {
         POINT pt = new() { x = (int)MathF.Round(screenPointPx.X), y = (int)MathF.Round(screenPointPx.Y) };
         HMONITOR mon = MonitorFromPoint(pt, MonitorDefaultToNearest);
@@ -996,6 +999,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// <summary><c>SW_HIDE</c>: the window leaves the screen, the taskbar and Alt+Tab, and keeps its HWND, swapchain and
     /// scene. The host parks on the next frame (<see cref="WindowStatus.Parked"/>); <see cref="Show"/> brings it back.</summary>
     public void Hide() => ShowWindow(_hwnd, SW_HIDE);
+
+    /// <inheritdoc cref="IPlatformWindow.CaptionWhereInert"/>
+    public Func<Point2, bool>? CaptionWhereInert { get; set; }
 
     /// <inheritdoc cref="IPlatformWindow.ShowNoActivate"/>
     public void ShowNoActivate()
@@ -2563,6 +2569,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 }
                 int hit = HitTestRegions(pt.x, pt.y, buttonsOnly: false);
                 if (hit != 0) { result = (LRESULT)hit; return true; }
+                // Drag anywhere: an inert client pixel is the caption (the edges stay DefWindowProc's resize borders).
+                if (CaptionWhereInert is { } inert && pt.x >= 0 && pt.y >= 0 && pt.x < _w && pt.y < _h)
+                {
+                    float sc = _scale <= 0f ? 1f : _scale;
+                    if (inert(new Point2(pt.x / sc, pt.y / sc))) { result = (LRESULT)HTCAPTION; return true; }
+                }
                 if (_resizable) return false;
                 result = NoResizeHit(DefWindowProcW(hWnd, msg, wParam, lParam));
                 return true;

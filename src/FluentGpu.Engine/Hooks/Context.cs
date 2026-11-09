@@ -127,10 +127,12 @@ public static class VideoCompositor
 /// <param name="MaterialDark">The dark attribute written with <paramref name="Material"/>.</param>
 /// <param name="PowerCapFps">A frame-rate ceiling for this window's motion (0 = none, the default): <c>AppHost.PowerCapFps</c>.</param>
 /// <param name="ToolWindow">No taskbar button and no Alt+Tab entry (<see cref="WindowDesc.ToolWindow"/>).</param>
+/// <param name="DragAnywhere">Every inert pixel moves the window (<see cref="IPlatformWindow.CaptionWhereInert"/>).</param>
 public readonly record struct DetachedWindowRequest(
     string Title, FluentGpu.Foundation.Size2 InitialSizeDip, Component Content, bool AlwaysOnTop = true,
     FluentGpu.Foundation.RectF InitialBoundsPx = default, FluentGpu.Foundation.Size2 MinClientSizeDip = default,
-    bool NoActivate = false, WindowMaterial? Material = null, bool MaterialDark = true, int PowerCapFps = 0, bool ToolWindow = false);
+    bool NoActivate = false, WindowMaterial? Material = null, bool MaterialDark = true, int PowerCapFps = 0, bool ToolWindow = false,
+    bool DragAnywhere = false);
 
 /// <summary>Where a pop-out open spent its time, split so a slow open names its stage (F110). The window is created hidden and
 /// revealed once its first frame has presented, so the four stages are separate costs and only the first two are paid

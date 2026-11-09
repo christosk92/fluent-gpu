@@ -3343,6 +3343,7 @@ public sealed partial class AppHost : IDisposable
         // AFTER the adoption (it copies the parent's Mica flag): a window with its own material owns its ground.
         if (request.Material is { } material) child.SetDetachedMaterial(material, request.MaterialDark);
         child.PowerCapFps = Math.Max(0, request.PowerCapFps);
+        if (request.DragAnywhere) win.CaptionWhereInert = child.IsInertAt;
         // Register the child as a render source for the parent's render loop (a no-op reader when there is no render thread —
         // the pure single-thread parent leaves the child on the inline present path). A copy-on-write publish: no park, and
         // an in-flight DrainChildRenderSources keeps the snapshot it took.
@@ -3545,6 +3546,19 @@ public sealed partial class AppHost : IDisposable
         _childWindowBackground = _micaWindow && _window.IsActive ? ColorF.Transparent : Tok.T.WindowBackground;
         _lastPresentedDrawListHash = 0;
         RequestFullRepaintOnce();
+    }
+
+    /// <summary>UI thread (WM_NCHITTEST, between frames): true when nothing interactive is under <paramref name="pointDip"/> (client
+    /// DIP): no click target or pointer-down handler on the hit node or its ancestors. The drag-anywhere probe.</summary>
+    internal bool IsInertAt(Point2 pointDip)
+    {
+        var node = _dispatcher.HitTest(pointDip);
+        for (int guard = 0; !node.IsNull && guard < 64; guard++)
+        {
+            if (_scene.GetClickHandler(node) is not null || _scene.GetPointerDown(node) is not null) return false;
+            node = _scene.Parent(node);
+        }
+        return true;
     }
 
     /// <summary>The frame clear colour (test seam for the host-local Mica backdrop).</summary>

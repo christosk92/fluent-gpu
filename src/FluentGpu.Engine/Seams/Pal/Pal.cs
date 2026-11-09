@@ -735,6 +735,10 @@ public interface IPlatformWindow : IDisposable
     /// <summary>Give this window its own system backdrop (<paramref name="material"/>) and dark attribute, and ask for the rounded
     /// window corners: a secondary window has none of the main window's startup material. Default: no-op (headless).</summary>
     void SetMaterial(WindowMaterial material, bool dark) { }
+    /// <summary>Drag anywhere (a custom-frame window with no caption band, such as the mini player): a client point where no titlebar
+    /// region matched and this probe answers true (no click target, pointer handler or focusable element under it; client DIP) is
+    /// reported as the caption, so the OS move loop, Aero Snap and monitor hops own the press. Null (the default) = off.</summary>
+    Func<Point2, bool>? CaptionWhereInert { get => null; set { } }
 
     /// <summary>Hide the window without destroying it (Win32 <c>SW_HIDE</c>: no taskbar button, no Alt+Tab entry, the
     /// HWND and every engine resource stay alive). <see cref="Show"/> brings it back in the placement it had. While
