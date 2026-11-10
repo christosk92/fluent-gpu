@@ -184,6 +184,20 @@ float4 PSAcrylic(V i) : SV_Target
         float4 veil = float4(K[5].rgb * va, va);
         float4 o = veil + src * ((1.0 - va) * (1.0 - K[7].y));
         o.rgb += (nz - 0.5) * K[7].z * o.a;
+        // A plate that only PARTLY covers the hole (a menu or the search suggestions over the page AND the video panel): where the
+        // mini-composite is opaque there is no video beneath, only the UI, and the translucent veil let that UI show through sharp
+        // (the plate is blended over the back buffer, which already holds it). There the plate is the ordinary frost of the blurred
+        // UI, opaque; the veil remains where the backdrop is the video (transparent, or under a scrim). The switch follows the
+        // backdrop's own alpha, so it is smooth across the blurred edge of the hole.
+        float opaque = smoothstep(0.9, 1.0, src.a);
+        if (opaque > 0.0)
+        {
+            float3 ui = src.rgb / max(src.a, 1e-4);
+            float3 uiLum = lerp(ui, SetLum(ui, Lum(K[5].rgb)), K[7].y);
+            float3 uiCol = lerp(uiLum, SetLum(K[5].rgb, Lum(uiLum)), K[7].x);
+            uiCol += (nz - 0.5) * K[7].z;
+            o = lerp(o, float4(uiCol, 1.0), opaque);
+        }
         return o * cov;
     }
     float3 B = src.rgb + K[6].rgb * saturate(1.0 - src.a);
