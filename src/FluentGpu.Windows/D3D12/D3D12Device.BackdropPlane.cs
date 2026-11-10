@@ -46,7 +46,7 @@ public sealed unsafe partial class D3D12Device
     private int _planeWarm, _planeAbsent;
     private bool _planePresentPending;
     private string? _planeReason;
-    private long _planeTurns, _planeEngagedTurns, _planeFed, _planePresents, _planePresentFail;
+    private long _planeTurns, _planeEngagedTurns, _planeFed, _planePresents, _planePresentFail, _planeDmgSkipped;
     private uint _planePresentFailHr, _planeCommitFailHr, _planeMediaFailHr;
 
     private static string Inv(long v) => v.ToString(CultureInfo.InvariantCulture);
@@ -342,7 +342,7 @@ public sealed unsafe partial class D3D12Device
     private void PlaneCensus()
     {
         Console.Error.WriteLine("[backdrop.plane] census turns=" + Inv(_planeTurns) + " engaged=" + Inv(_planeEngagedTurns) + " fed=" + Inv(_planeFed)
-            + " presents=" + Inv(_planePresents) + " presentFail=" + Inv(_planePresentFail));
+            + " presents=" + Inv(_planePresents) + " presentFail=" + Inv(_planePresentFail) + " dmgSkipped=" + Inv(_planeDmgSkipped));
         if (_planeSc == null) return;
         IDXGISwapChainMedia* media = null;
         HRESULT hr = _planeSc->QueryInterface(__uuidof<IDXGISwapChainMedia>(), (void**)&media);

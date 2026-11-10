@@ -135,6 +135,11 @@ public sealed unsafe partial class D3D12Device
                 RectF r = rects[k];
                 var px = new PixelRect((int)MathF.Floor(r.X * _frameScale) - 1, (int)MathF.Floor(r.Y * _frameScale) - 1,
                     (int)MathF.Ceiling(r.Right * _frameScale) + 1, (int)MathF.Ceiling(r.Bottom * _frameScale) + 1);
+                // --fg backdrop-plane SPIKE SHORTCUT: with the plane engaged, a window-covering rect is attributed to the backdrop
+                // (its pixels live on the plane, not in this buffer). The region carries no source attribution, so this also
+                // swallows every other node's damage that turn; production needs the recorder to keep the plane boundary's own
+                // damage out of the UI's region (per-boundary attribution).
+                if (_planeItem >= 0 && px.Left <= 0 && px.Top <= 0 && px.Right >= (int)_w && px.Bottom >= (int)_h) { _planeDmgSkipped++; continue; }
                 PpInlineDirty(PpIntersect(in px, in foot), "inline-damage");
             }
         }
