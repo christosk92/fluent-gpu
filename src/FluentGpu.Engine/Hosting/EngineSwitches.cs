@@ -50,6 +50,7 @@ public enum ImageAtlasExperiment : byte
 /// <item><c>no-vsync</c> — present at sync-interval 0 (diagnose present cap vs frame cost).</item>
 /// <item><c>present-nowait</c> — a detached pop-out presents with DXGI_PRESENT_DO_NOT_WAIT and re-presents a refused frame on
 /// a later turn instead of ever blocking the shared render thread in Present (A/B arm, default off).</item>
+/// <item><c>backdrop-plane</c> — the full-window low-resolution backdrop on its own DComp plane below the UI (a measurement spike, default off).</item>
 /// <item><c>gpu-timing</c> — start with the pass-granular GPU timeline on (<c>AppHost.GpuPassTimingEnabled</c>, the
 /// same runtime toggle the Wavee Diagnostics "Tiles" card flips).</item>
 /// <item><c>playready-sl2000</c> — the protected runtime never probes hardware PlayReady SL3000 (the <c>.3000</c> key system with a
@@ -140,6 +141,10 @@ public static class EngineSwitches
     /// content-dirty, as before (a slice root recorded pose-free re-walks on every pose tick): the A/B reference arm.</summary>
     public static bool PoseContentAll;
     public static bool SubmitSplit;
+    /// <summary><c>--fg backdrop-plane</c>: a measurement spike, default off. The stage's full-window low-resolution backdrop item
+    /// is presented on its own small opaque DComp plane below the UI (D3D12Device.BackdropPlane.cs) and the UI back buffer writes
+    /// it transparent, so it no longer dirties the UI frame every turn. Read every composite.</summary>
+    public static bool BackdropPlane;
     public static bool PaceLog;
     public static bool AllocDiag;
     public static bool AllocTypes;
@@ -267,6 +272,7 @@ public static class EngineSwitches
             case "fps": FpsLog = true; return true;
             case "pace": PaceLog = true; return true;
             case "sub-split": SubmitSplit = true; return true;
+            case "backdrop-plane": BackdropPlane = true; return true;
             case "scroll-pose-mark-all": ScrollPoseMarkAll = true; return true;
             case "pose-trail-all": PoseTrailAll = true; return true;
             case "pose-content-all": PoseContentAll = true; return true;

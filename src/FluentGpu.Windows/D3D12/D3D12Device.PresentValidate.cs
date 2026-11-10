@@ -168,7 +168,9 @@ public sealed unsafe partial class D3D12Device
         bool clipOn = _frameClipOn;
         _frameClipOn = false;
         int draws0 = GpuDrawCount.Frame, passes0 = _frameRenderPasses;
+        _planeMainPass = _planeItem >= 0;   // --fg backdrop-plane: the shadow composites what the back buffer got
         if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, 0, frame.Items.Length, 0, 0, w, h, -1);
+        _planeMainPass = false;
         int shadowDraws = GpuDrawCount.Frame - draws0;
         int passes = _frameRenderPasses - passes0;
         bool stillOnShadow = _inRenderPass && _passRtv.ptr == _pvShadowRtv.ptr;

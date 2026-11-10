@@ -342,6 +342,8 @@ public sealed unsafe partial class D3D12Device
                         // place, and what changed inside it was dirtied op by op (PpInlineDiff) — never its whole footprint for a
                         // seek-bar step or a damage rect that only touches it.
                     }
+                    else if (i == _planeItem)
+                        Mix(ref s, PlaneSignature);   // --fg backdrop-plane: the UI writes it as a constant transparent copy
                     else if (_itemKey[i] != 0 && (it.Kind != CompositeKind.Direct || it.LowResDown > 1))
                         Mix(ref s, _itemRendered[i] ? fresh : _itemKey[i]);   // a re-render under the same key may differ by an LSB
                     else if (it.Kind == CompositeKind.Direct && it.BlurSigma <= 0f && !PpDamaged(in frame, in foot) && RowOf(it.SliceId) is int row and >= 0)
@@ -513,7 +515,9 @@ public sealed unsafe partial class D3D12Device
             }
             else _ppCoveredRects++;
             Sd(SdCompCover, ref sdr);
+            _planeMainPass = _planeItem >= 0;
             if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, Math.Max(from, 0), n, 0, 0, (int)_w, (int)_h, -1);
+            _planeMainPass = false;
             Sd(SdCompDraw, ref sdr);
         }
         _frameClipOn = false;

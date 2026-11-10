@@ -186,6 +186,7 @@ public sealed unsafe partial class D3D12Device
         PassBoundary(GpuPassKind.Offscreen, (int)_w, (int)_h);
         WorkPhase(1);
         PrepareTop(in frame);   // PrepareRange per top-level item + occlusion (D3D12Device.Occlusion.cs)
+        if (EngineSwitches.BackdropPlane) PlaneDecide(in frame, sc);   // --fg backdrop-plane (D3D12Device.BackdropPlane.cs)
         Ss(SsPrepTop);
         // 3. the composite pass
         PassBoundary(GpuPassKind.Composite, (int)sc.W, (int)sc.H);
@@ -216,7 +217,9 @@ public sealed unsafe partial class D3D12Device
             // A window-covering opaque ground fill becomes the clear colour and is not drawn (D3D12Device.ClearFold.cs).
             BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, ClearFoldDecide(in frame));
             BindCompositor((int)_w, (int)_h);
+            _planeMainPass = _planeItem >= 0;
             if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, 0, frame.Items.Length, 0, 0, (int)_w, (int)_h, -1);
+            _planeMainPass = false;
             _foldItem = -1; _foldPending = false;
         }
         EndPassIfOpen();
@@ -1580,6 +1583,7 @@ public sealed unsafe partial class D3D12Device
                         rebind = true;
                         break;
                     }
+                    if (_planeMainPass && i == _planeItem) { PlaneClearItem(in it, i, ox, oy); break; }   // --fg backdrop-plane
                     DrawSurfaceItem(in it, i, ox, oy, feathers);
                     break;
                 case CompositeKind.Image:

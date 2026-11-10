@@ -3608,6 +3608,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Seam (DIM on-screen fix): bind the DirectComposition graph on the PRESENTING thread the first time this composited
         // swapchain presents — deferred out of the UI-thread InitSwapChain so DComp is owned by the thread that Presents.
         if (target.Composited && target.DcompBindPending) BindDComp(target);
+        // --fg backdrop-plane: the plane's copied buffer (the composite's list already executed) presents first, on every path
+        if (_planePresentPending && ReferenceEquals(target, _primarySwapchain)) PlanePresent();
         target.Frame.LastPresentStoodDown = false;
         target.Frame.LastPresentRefused = false;
         target.Frame.LastPresentHeld = false;
@@ -5289,6 +5291,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // The presenters' backing visuals are gone with them; the shared black backing content was built on the queue
         // released below, so drop it too — the next video slot recreates it (EnsureVideoBacking) on the new device.
         ReleaseVideoBacking();
+        ReleaseBackdropPlane();   // --fg backdrop-plane: its visual / swapchain belong to the dying DComp device and queue
         // 2. Release device-level ComPtrs + pipelines (null the pipe fields so EnsurePipelines re-runs). NO WaitForGpu.
         ReleaseGpuTimingResources();
         ReleaseFrameDissolveResources();   // E2: a frozen window's snapshot died with the device; its thaw presents the frame as it is
@@ -5393,6 +5396,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (sc != 0) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release((void*)sc);
         _testSurfaceSwapchains.Clear();
         ReleaseVideoBacking();   // after every presenter (their backing visuals share this content), before the DComp device
+        ReleaseBackdropPlane();  // --fg backdrop-plane
         if (_dcomp != null) { _dcomp->Release(); _dcomp = null; }
         _glyphs?.Dispose(); _glyphs = null;
         _imagePipe?.Dispose(); _imagePipe = null;
