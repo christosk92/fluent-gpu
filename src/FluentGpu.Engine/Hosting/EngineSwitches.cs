@@ -129,6 +129,10 @@ public static class EngineSwitches
     /// <summary>Print every <c>[render.pace]</c> window (<c>--fg pace</c>); by default only anomalous ones are printed.</summary>
     /// <summary><c>--fg sub-split</c>: a <c>[sub.split]</c> line on stderr every 256 composite submits, the mean CPU microseconds of
     /// each phase of the device's submit (D3D12Device.SubmitSplit.cs).</summary>
+    /// <summary><c>--fg scroll-pose-mark-all</c>: the render-side scroll poser marks every non-transform effect row it reports
+    /// changed (every row of each newly adopted publication), as before the same-value test (the A/B reference arm of
+    /// SnapshotScrollPoseSink).</summary>
+    public static bool ScrollPoseMarkAll;
     public static bool SubmitSplit;
     public static bool PaceLog;
     public static bool AllocDiag;
@@ -257,6 +261,7 @@ public static class EngineSwitches
             case "fps": FpsLog = true; return true;
             case "pace": PaceLog = true; return true;
             case "sub-split": SubmitSplit = true; return true;
+            case "scroll-pose-mark-all": ScrollPoseMarkAll = true; return true;
             case "alloc": AllocDiag = true; return true;
             case "alloc-types": AllocTypes = true; return true;
             case "mem":
