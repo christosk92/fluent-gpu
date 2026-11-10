@@ -67,7 +67,14 @@ public static class Mp4LoopRemux
         try { fi = new FileInfo(path); if (!fi.Exists) return null; }
         catch { return null; }
         string key = fi.FullName + "|" + fi.Length.ToString(CultureInfo.InvariantCulture) + "|" + fi.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture);
-        if (s_cache.TryGetValue(key, out var hit)) return hit;
+        if (s_cache.TryGetValue(key, out var hit))
+        {
+            // A remembered loop is only as good as its file: Prune (below) deletes old loops to make room, and a player handed a
+            // path that is gone opens nothing and shows a frozen poster for the whole track. Gone: forget it and build it again.
+            if (hit is not { } known || Reuse(known.Path)) return hit;
+            s_cache.TryRemove(key, out _);
+            Diag.Line("[video] loop.gapless rebuilt file=" + fi.Name + " why=pruned");
+        }
         Result? result = null;
         var sw = Stopwatch.StartNew();
         try { result = Prepare(fi, key, out string why); if (result is null) Diag.Line("[video] loop.gapless skip file=" + fi.Name + " why=" + why); }
@@ -89,13 +96,27 @@ public static class Mp4LoopRemux
         if (plan is null) return null;
         string target = System.IO.Path.Combine(dir, hash + "-x" + plan.Repeats.ToString(CultureInfo.InvariantCulture) + ".mp4");
         var result = new Result(target, plan.ClipSeconds, plan.Repeats);
-        if (File.Exists(target)) return result;
+        if (Reuse(target)) return result;
         Directory.CreateDirectory(dir);
         Prune(dir, plan.OutputBytes);
         string tmp = target + "." + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + ".tmp";
         plan.Write(tmp);
         File.Move(tmp, target, overwrite: true);
         return result;
+    }
+
+    /// <summary>Is the loop file at <paramref name="target"/> still there? A file that is gets its write time renewed, so
+    /// <see cref="Prune"/> (oldest write first) evicts by last USE: a loop played an hour ago outlives one made yesterday and never
+    /// played since.</summary>
+    private static bool Reuse(string target)
+    {
+        try
+        {
+            if (!File.Exists(target)) return false;
+            try { File.SetLastWriteTimeUtc(target, DateTime.UtcNow); } catch { }   // held open by a player: it stays put anyway
+            return true;
+        }
+        catch { return false; }
     }
 
     /// <summary>Make room for <paramref name="incoming"/> bytes under <see cref="FolderBytes"/>: the least recently written loops go first
