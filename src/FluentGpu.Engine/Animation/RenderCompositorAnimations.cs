@@ -38,10 +38,16 @@ public sealed class RenderCompositorAnimations
         /// for it, so the frame shows whatever it last recorded. The tick it can reach pixels again re-poses it as a
         /// change, whatever its value.</summary>
         public bool Hidden;
+        /// <summary>The last pose landed in an overlay row. False after a tick the row pool overflowed on: the node
+        /// presented its AUTHORED value then, so the next pose that lands is a change whatever its value.</summary>
+        public bool Landed;
+        /// <summary>The pose changed on a turn no record has consumed yet (<see cref="NoteRecorded"/>): the node's slice
+        /// still holds the older value, so the row keeps laying its dirty trail until a record runs.</summary>
+        public bool Unrecorded;
     }
     /// <summary>One node's folded pose for this tick, plus whether ANY of its channels actually moved. Folded per node
     /// rather than per row because a node with a TranslateX and an Opacity row must damage once, not twice.</summary>
-    private struct NodeAcc { public AnimEngine.Accum Acc; public bool Changed, OpacityMoving, OpacityPosed, Hidden; }
+    private struct NodeAcc { public AnimEngine.Accum Acc; public bool Changed, Content, Trail, OpacityMoving, OpacityPosed, Hidden; }
     private State[] _states = [], _nextStates = [];
     // Per row, this tick: evaluated on a live, un-parked node (pass 1), and whether that row moved to a new Done.
     private bool[] _rowLive = [], _rowDoneEdge = [];
@@ -311,14 +317,36 @@ public sealed class RenderCompositorAnimations
             state.HasPosed = true;
             state.Hidden = false;
             ChangedThisTick |= changed;
+            // The slice re-records only while it does not hold this value: the pose just changed, a change no record has
+            // consumed yet, or the last pose never landed (then this one, if it lands, is a change the node shows).
+            if (changed) state.Unrecorded = true;
+            bool lands = changed || !state.Landed;
+            bool trail = state.Unrecorded || FluentGpu.Hosting.EngineSwitches.PoseTrailAll;
             if (row.Channel is AnimChannel.HoverFade or AnimChannel.PressFade)
-                scene.SetCompositorInteraction(row.Node, row.Channel == AnimChannel.PressFade, state.Value, changed);
-            else if (row.Channel == AnimChannel.BrushFade) scene.SetCompositorBrush(row.Node, state.Value, changed);
-            else if (row.Channel == AnimChannel.GlyphWipeSplit) scene.SetCompositorGlyphWipe(row.Node, posed, changed);
-            else CollectionsMarshal.GetValueRefOrNullRef(_accumulators, row.Node).Changed |= changed;   // any channel moving damages the node once
+                NoteLanded(ref state, scene.SetCompositorInteraction(row.Node, row.Channel == AnimChannel.PressFade, state.Value, lands, trail));
+            else if (row.Channel == AnimChannel.BrushFade) NoteLanded(ref state, scene.SetCompositorBrush(row.Node, state.Value, lands, trail));
+            else if (row.Channel == AnimChannel.GlyphWipeSplit) NoteLanded(ref state, scene.SetCompositorGlyphWipe(row.Node, posed, lands, trail));
+            else
+            {
+                ref NodeAcc acc = ref CollectionsMarshal.GetValueRefOrNullRef(_accumulators, row.Node);
+                acc.Changed |= lands;   // any channel moving damages the node once
+                // a change of anything but the node's transform changes its recorded bytes (opacity, blur, a size)
+                acc.Content |= lands && !(row.Channel is AnimChannel.TranslateX or AnimChannel.TranslateY or AnimChannel.ScaleX
+                    or AnimChannel.ScaleY or AnimChannel.Rotation);
+                acc.Trail |= trail;
+            }
             HasActive |= !_paused && !state.Done && !row.Has(AnimFlags.Hold | AnimFlags.Paused);   // a held or paused row asks for no frames
         }
-        foreach (var entry in _accumulators) if (!entry.Value.Hidden) Compose(scene, entry.Key, entry.Value.Acc, entry.Value.Changed);
+        foreach (var entry in _accumulators) if (!entry.Value.Hidden) Compose(scene, entry.Key, entry.Value.Acc, entry.Value.Changed, entry.Value.Trail,
+            entry.Value.Changed && !entry.Value.Content && !FluentGpu.Hosting.EngineSwitches.PoseContentAll);
+        // the folded rows learn whether their node's pose landed (the side-table rows learned it from their setter)
+        for (int i = 0; i < _count; i++)
+        {
+            if (!_rowLive[i]) continue;
+            ref var state = ref _states[i];
+            if (state.Hidden || IsSideTable(state.Desired.Row.Channel)) continue;
+            NoteLanded(ref state, scene.OverlayRowHeld(state.Desired.Row.Node));
+        }
         // Drain the reverts LAST, so a node that both lost a row and kept another is damaged by whichever ran first
         // and not twice — MarkCompositorSelfChanged is idempotent within an epoch.
         for (int i = 0; i < _revertedCount; i++)
@@ -485,9 +513,23 @@ public sealed class RenderCompositorAnimations
         state.Velocity = 0; // The existing eased/keyframe engine carries velocity only for analytical springs.
     }
 
-    private static void Compose(SceneRecordingSnapshot scene, NodeHandle node, in AnimEngine.Accum accumulator, bool changed)
+    /// <summary>A pose that lands after one that did not is a change the node shows: this turn must record and present it.</summary>
+    private void NoteLanded(ref State state, bool landed)
     {
-        ref var paint = ref scene.CompositorPaint(node, changed);
+        if (landed && !state.Landed) ChangedThisTick = true;
+        state.Landed = landed;
+    }
+
+    /// <summary>A record consumed this tick's poses: every slice a moved row dirtied now holds the row's value, so a row
+    /// that re-poses it lays no trail (render thread, right after the turn's record).</summary>
+    public void NoteRecorded()
+    {
+        for (int i = 0; i < _count; i++) _states[i].Unrecorded = false;
+    }
+
+    private static void Compose(SceneRecordingSnapshot scene, NodeHandle node, in AnimEngine.Accum accumulator, bool changed, bool trail, bool transformOnly)
+    {
+        ref var paint = ref scene.CompositorPaint(node, changed, trail, transformOnly);
         var transform = Affine2D.Translation(accumulator.Tx, accumulator.Ty);
         if (accumulator.Rot != 0) transform = transform.Multiply(Affine2D.Rotation(accumulator.Rot * (MathF.PI / 180)));
         if (accumulator.Sx != 1 || accumulator.Sy != 1) transform = transform.Multiply(Affine2D.Scale(accumulator.Sx, accumulator.Sy));

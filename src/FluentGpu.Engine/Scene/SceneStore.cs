@@ -1182,7 +1182,9 @@ public sealed partial class SceneStore : ISceneBackend
     {
         if (!_brushAnims.TryGet(idx, out var ba)) return;
         if (_gen[idx] == 0) { RemoveBrushAnim(idx); return; }
-        ba.T = t < 0f ? 0f : (t > 1f ? 1f : t);
+        t = t < 0f ? 0f : (t > 1f ? 1f : t);
+        if (ba.T == t && t < 1f) return;   // the same progress again (a held or paused fade's feedback): nothing to redraw
+        ba.T = t;
         _flags[idx] |= NodeFlags.PaintDirty;
         MarkRecordDirty(idx);
         if (ba.T >= 1f) RemoveBrushAnim(idx);
@@ -1307,7 +1309,9 @@ public sealed partial class SceneStore : ISceneBackend
     {
         int idx = (int)h.Raw.Index;
         if (!_glyphWipes.TryGet(idx, out var w)) return;
-        _glyphWipes.GetOrAdd(idx) = w with { Split = split < 0f ? 0f : (split > 1f ? 1f : split) };
+        split = split < 0f ? 0f : (split > 1f ? 1f : split);
+        if (w.Split == split) return;   // a held row's feedback re-sends the value it holds: nothing to redraw
+        _glyphWipes.GetOrAdd(idx) = w with { Split = split };
         _flags[idx] |= NodeFlags.PaintDirty;
         MarkRecordDirty(idx);
     }
@@ -2166,6 +2170,8 @@ public sealed partial class SceneStore : ISceneBackend
     public void SetInteractT(NodeHandle node, bool press, float t)
     {
         if (!IsLive(node)) return;
+        // the same progress again (a held fade's feedback): nothing to redraw, and no write intent on the side table
+        if (_interact.TryGet((int)node.Raw.Index, out InteractionAnim held) && (press ? held.PressT : held.HoverT) == t) return;
         ref InteractionAnim ia = ref InteractRef(node);
         if (press) ia.PressT = t; else ia.HoverT = t;
         Mark(node, NodeFlags.PaintDirty);

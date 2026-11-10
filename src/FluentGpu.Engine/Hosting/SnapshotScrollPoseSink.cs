@@ -20,6 +20,8 @@ internal sealed class SnapshotScrollPoseSink : IScrollPoseSink
     // it differs from the snapshot's authored column. Bounded by the scene's node capacity times the channels; an entry
     // of a freed node costs at most one spare re-record of the node that reuses its index.
     private readonly Dictionary<ulong, float> _posed = new();
+    // A pose moved on a turn no record has consumed yet: until one does, an unchanged re-pose keeps its dirty trail.
+    private bool _unrecorded;
 
     /// <summary>A non-transform channel changed on the tick since <see cref="Bind"/>.</summary>
     public bool RecordRequired { get; private set; }
@@ -73,10 +75,17 @@ internal sealed class SnapshotScrollPoseSink : IScrollPoseSink
         bool moved = _posed.TryGetValue(key, out float last) ? last != value : write;
         _posed[key] = value;
         if (!write && !moved) return;
-        ref NodePaint p = ref scene.CompositorPaint(h, moved);
+        if (moved) _unrecorded = true;
+        // `write` without `moved`: the overlay must hold the value again (it is rebuilt every tick), but the slice was
+        // recorded with it, unless a move no record has consumed yet is still owed.
+        ref NodePaint p = ref scene.CompositorPaint(h, moved, trail: _unrecorded);
         AppHost.ApplyEffectChannel(ref p, channel, value);
+        if (!scene.OverlayRowHeld(h)) _posed.Remove(key);   // it did not land: the node shows its authored value, the next pose is a move
         if (moved) RecordRequired = true;
     }
+
+    /// <summary>A record consumed the moves posed so far (render thread, right after the turn's record).</summary>
+    public void NoteRecorded() => _unrecorded = false;
 
     public void PoseTransform(int node, in EffectTransform transform, bool changed)
     {

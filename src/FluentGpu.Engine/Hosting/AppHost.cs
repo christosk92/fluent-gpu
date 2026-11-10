@@ -2333,6 +2333,8 @@ public sealed partial class AppHost : IDisposable
                     if (!fresh) sceneFrame.Scene.ConsumeUiDirt();
                     stats = sceneFrame.Record(_renderCommands, _renderSpans, direct ? null : _renderSlices, publicationGap);
                     _lastRecordedScene = rf.PublishSeq;
+                    _renderAnimations.NoteRecorded();   // the slices now hold every pose of this tick
+                    _renderSink.NoteRecorded();
                 }
                 splitRecorded = Stopwatch.GetTimestamp();
                 double recordMs = ToMs(splitRecorded - recordStart);

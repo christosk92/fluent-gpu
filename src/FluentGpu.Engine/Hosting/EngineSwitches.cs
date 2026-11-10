@@ -133,6 +133,12 @@ public static class EngineSwitches
     /// changed (every row of each newly adopted publication), as before the same-value test (the A/B reference arm of
     /// SnapshotScrollPoseSink).</summary>
     public static bool ScrollPoseMarkAll;
+    /// <summary><c>--fg pose-trail-all</c>: a render-owned animation row that re-poses an unchanged value lays its dirty trail
+    /// on every tick, as before (its slice re-walks on every recorded turn): the A/B reference arm.</summary>
+    public static bool PoseTrailAll;
+    /// <summary><c>--fg pose-content-all</c>: a render-owned pose that only moves / scales / rotates its node marks it
+    /// content-dirty, as before (a slice root recorded pose-free re-walks on every pose tick): the A/B reference arm.</summary>
+    public static bool PoseContentAll;
     public static bool SubmitSplit;
     public static bool PaceLog;
     public static bool AllocDiag;
@@ -262,6 +268,8 @@ public static class EngineSwitches
             case "pace": PaceLog = true; return true;
             case "sub-split": SubmitSplit = true; return true;
             case "scroll-pose-mark-all": ScrollPoseMarkAll = true; return true;
+            case "pose-trail-all": PoseTrailAll = true; return true;
+            case "pose-content-all": PoseContentAll = true; return true;
             case "alloc": AllocDiag = true; return true;
             case "alloc-types": AllocTypes = true; return true;
             case "mem":
