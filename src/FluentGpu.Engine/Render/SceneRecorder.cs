@@ -3043,10 +3043,15 @@ internal sealed partial class SceneRecordingContext
                     }
                     bool bandClip = itemBandClipChanged && !itemBandClip.IsEmpty;
                     bool bandFade = !itemBandClip.IsEmpty && itemBandTopFade > 0.5f;
-                    // One offscreen group feathers the contiguous recyclable suffix. The prefix is emitted outside this
+                    // One edge fade feathers the contiguous recyclable suffix. The prefix is emitted outside this
                     // scope (and a pinned prefix is replayed after it), so sticky chrome stays crisp while rows dissolve
                     // at the exact hard paint/input boundary. Group alpha remains 1: child opacity is already carried by
                     // each Walk, and multiplying it again here would double-dim a translucent list.
+                    // The fade is DISTRIBUTABLE (a pure top fade at alpha 1): a band that holds child slices (a row's
+                    // repaint boundary, such as the playing row's meter) composites its tiles and those slices each under
+                    // the analytic feather whenever none of them overlap inside the fade strip, and through one group
+                    // surface only on the turns they do (SliceRecorder.Distributable). Without the flag every such band
+                    // was one page-sized group surface, repaired on every turn a row's slice changed.
                     float bandPx = itemBandTopFade * MathF.Abs(parentScaleY);
                     if (contentSlice && (bandClip || bandFade) && stats.InlineLayerDepth == 0
                         && (bandSlot = stats.Slices!.FindOrCreate((int)node.Raw.Index, node.Raw.Gen, SliceRole.Band, SliceKind.Scroll)) >= 0)
@@ -3054,7 +3059,7 @@ internal sealed partial class SceneRecordingContext
                         var sl = stats.Slices!;
                         int bflags = (int)CompositeSliceFlags.ParamsUp
                             | (bandClip ? (int)CompositeSliceFlags.OuterClip : 0)
-                            | (bandFade ? (int)CompositeSliceFlags.Layer : 0);
+                            | (bandFade ? (int)CompositeSliceFlags.Layer | (int)CompositeSliceFlags.DistributeFade : 0);
                         PushLayerCmd bandLayer = bandFade
                             ? DrawList.EdgeFadeLayerCmd(itemBandClip, itemBandClip, default, 1f, (int)EdgeMask.Top,
                                 0f, bandPx, 0f, 0f, (int)FadeFalloff.Smoothstep, 1f, 0f)

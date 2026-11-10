@@ -53,7 +53,7 @@ internal sealed unsafe class SurfacePool : IDisposable
         public ulong LastUseFence;
         public uint Serial;          // bumped on every raster into the slot (content identity for derived caches)
         public bool InUse;           // scratch: leased this frame
-        public int SrvStamp;         // the turn whose bank holds this entry's SRV
+        public uint SrvBanks;        // bit b: SRV bank b's descriptor describes Res (cleared whenever Res changes)
         public bool Retained;        // scratch: holds a content-keyed result across turns
         public ulong RetainKey;
         public int RetainAux;        // what the result needs to be drawn again (e.g. its downsample factor)
@@ -119,8 +119,6 @@ internal sealed unsafe class SurfacePool : IDisposable
         _srvGpuStart = _srvHeap->GetGPUDescriptorHandleForHeapStart();
         _srvInc = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         D3D12MemoryDiagnostics.Track(_srvHeap, "Tiles.SrvHeap", (ulong)sh.NumDescriptors * _srvInc);
-        for (int i = 0; i < _tiles.Length; i++) _tiles[i].SrvStamp = int.MinValue;
-        for (int i = 0; i < _scratch.Length; i++) _scratch[i].SrvStamp = int.MinValue;
         if (FluentGpu.Render.Tiles.TileMemory.PlacedTiles) _heaps = new TileHeapPool(device);
     }
 
@@ -363,7 +361,7 @@ internal sealed unsafe class SurfacePool : IDisposable
             e.Res = m.New;
             e.HeapSlot = m.NewHeapSlot; e.Block = m.NewBlock;
             e.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-            e.SrvStamp = int.MinValue;   // the next turn writes the new texture's SRV into its own bank
+            e.SrvBanks = 0;   // the next turn writes the new texture's SRV into its own bank
             e.LastUseFence = Math.Max(e.LastUseFence, fence);   // the copy writes the NEW texture at that fence: no retire before it
             _device->CreateRenderTargetView(e.Res, null, Rtv(m.Slot));
             PlacedCreated++;
@@ -406,13 +404,13 @@ internal sealed unsafe class SurfacePool : IDisposable
 
     private void Retire(ref Entry e)
     {
-        if (e.Res == null) { e = default; e.SrvStamp = int.MinValue; return; }
+        if (e.Res == null) { e = default; e.SrvBanks = 0; return; }
         long retiredBytes = LayerTargetBucket.Bytes(e.W, e.H);
         _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence, Bytes = retiredBytes, HeapSlot = e.HeapSlot, Block = e.Block, Blocks = e.Blocks });
         Interlocked.Add(ref _retiredBytes, retiredBytes);
         Interlocked.Increment(ref _retiredCount);
         e = default;
-        e.SrvStamp = int.MinValue;
+        e.SrvBanks = 0;
     }
 
     /// <summary>Retire every texture (device recovery / teardown — the caller has drained the GPU).</summary>
@@ -422,13 +420,13 @@ internal sealed unsafe class SurfacePool : IDisposable
             if (_tiles[i].Res != null)
             {
                 if (_tiles[i].HeapSlot == 0) D3D12MemoryDiagnostics.Release(_tiles[i].Res, "Tiles.Surface");
-                _tiles[i].Res->Release(); _tiles[i] = default; _tiles[i].SrvStamp = int.MinValue;
+                _tiles[i].Res->Release(); _tiles[i] = default; _tiles[i].SrvBanks = 0;
             }
         for (int i = 0; i < _scratch.Length; i++)
             if (_scratch[i].Res != null)
             {
                 if (_scratch[i].HeapSlot == 0) D3D12MemoryDiagnostics.Release(_scratch[i].Res, "Tiles.Surface");
-                _scratch[i].Res->Release(); _scratch[i] = default; _scratch[i].SrvStamp = int.MinValue;
+                _scratch[i].Res->Release(); _scratch[i] = default; _scratch[i].SrvBanks = 0;
             }
         foreach (var r in _retired) { if (r.HeapSlot == 0) D3D12MemoryDiagnostics.Release(r.Res, "Tiles.Surface"); r.Res->Release(); }
         _retired.Clear();
@@ -762,7 +760,12 @@ internal sealed unsafe class SurfacePool : IDisposable
     private D3D12_GPU_DESCRIPTOR_HANDLE Srv(ref Entry e, int index)
     {
         int slot = _bank * (_tileCap + ScratchCap) + index;
-        if (e.SrvStamp != _turn)
+        // A bank's descriptor of this entry is written once per texture, not once per turn: it describes the same resource
+        // until the entry's texture is replaced (Retire, a heap compaction), which clears the mask. A bank is the submission
+        // ring's slot, reused only after the frame that read it retired, so rewriting it then was never needed for safety;
+        // it cost one CreateShaderResourceView per placed surface per turn, whatever the turn changed.
+        uint bank = 1u << _bank;
+        if ((e.SrvBanks & bank) == 0)
         {
             var cpu = _srvCpuStart;
             cpu.ptr += (nuint)slot * _srvInc;
@@ -772,7 +775,7 @@ internal sealed unsafe class SurfacePool : IDisposable
             sd.Shader4ComponentMapping = 0x1688;   // D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING
             sd.Anonymous.Texture2D.MipLevels = 1;
             _device->CreateShaderResourceView(e.Res, &sd, cpu);
-            e.SrvStamp = _turn;
+            e.SrvBanks |= bank;
         }
         var gpu = _srvGpuStart;
         gpu.ptr += (ulong)slot * _srvInc;

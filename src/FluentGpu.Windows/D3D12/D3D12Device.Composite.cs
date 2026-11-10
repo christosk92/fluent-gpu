@@ -1714,6 +1714,10 @@ public sealed unsafe partial class D3D12Device
         for (int k = 0; k < n; k++)
         {
             ref readonly FeatherPiece p = ref pieces[k];
+            // A piece wholly outside the scissor shades no pixel (a pixel is covered by its centre, and every centre the piece
+            // covers lies outside it): not drawn. In a partial composite the scissor is the repaint rect, so a tiled item draws
+            // the placements and feather pieces that reach the rect, not every tile it holds.
+            if (p.X1 <= _itemScissor.Left || p.X0 >= _itemScissor.Right || p.Y1 <= _itemScissor.Top || p.Y0 >= _itemScissor.Bottom) continue;
             _compositor!.Begin(p.X0, p.Y0, p.X1, p.Y1);
             if (sample) _compositor.SampleMap(float.IsNaN(mapX0) ? x0 : mapX0, float.IsNaN(mapY0) ? y0 : mapY0, sampleSx, sampleSy);
             if (clampU > 0f) _compositor.SampleClamp(clampU, clampV);

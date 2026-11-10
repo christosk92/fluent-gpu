@@ -2455,10 +2455,11 @@ public sealed partial class SliceRecorder
     /// May the edge fade on <paramref name="child"/>'s marker be DISTRIBUTED — composited as an analytic feather on every
     /// item below it instead of through a group surface? For premultiplied source-over, feather(A over B) equals
     /// feather(A) over feather(B) at a pixel iff f·αA·αB·(1−f) = 0, so it is exact when: the layer is a pure fade
-    /// (<see cref="CompositeSliceFlags.DistributeFade"/>: fade mode, no blur, alpha ≈ 1); the slice paints nothing of its
-    /// own this turn (every own segment's painted bounds empty — a fill / border / expanded scrollbar track makes it a
-    /// group); no acrylic backdrop or video hole lies below it; every item below carries at most two feathers (a third
-    /// makes the fade a group); and no two item footprints overlap inside the band strips where 0 &lt; f &lt; 1. The test runs
+    /// (<see cref="CompositeSliceFlags.DistributeFade"/>: fade mode, no blur, alpha ≈ 1); no acrylic backdrop or video
+    /// hole lies below it; every item below carries at most two feathers (a third makes the fade a group); and no two item
+    /// footprints overlap inside the band strips where 0 &lt; f &lt; 1 — the slice's OWN segments are items of that test
+    /// too (a virtual list's item band paints its rows itself and holds the rows' repaint boundaries as child slices: it
+    /// distributes unless one of them meets a row's paint inside the strip). The test runs
     /// per placement: a turn that fails it composites the fade as a group (≤ 1/255 apart — the group surface's 8-bit
     /// quantization), which the group cache then keeps.
     /// </summary>
@@ -2479,8 +2480,9 @@ public sealed partial class SliceRecorder
     /// appended to <see cref="_fp"/> from <paramref name="n"/>; <paramref name="ok"/> = false when the subtree holds an
     /// acrylic backdrop, a video hole, an item that would carry a third feather, or more items than the scratch holds.
     /// <paramref name="feathers"/> = the distributed feathers every item here already carries; <paramref name="halo"/> =
-    /// a self-blur's reach (DIP) the items' pixels spread by. <paramref name="root"/> = the fade's own slot (its own
-    /// segments must paint nothing).</summary>
+    /// a self-blur's reach (DIP) the items' pixels spread by. <paramref name="root"/> = the fade's own slot: its own
+    /// segments are items like any other (they are placed under the same feather, <see cref="PlaceSlot"/>'s
+    /// <c>dist</c>), so its own paint keeps the fade distributable wherever it overlaps nothing else inside the band.</summary>
     private void CollectFootprints(int slot, SceneRecordingSnapshot scene, float accDx, float accDy, float parentAccDx, float parentAccDy,
         in RectF clip, int feathers, float halo, bool root, in RectF ownSticky, ref int n, ref bool ok)
     {
@@ -2495,7 +2497,6 @@ public sealed partial class SliceRecorder
             if (!sb.IsEmpty && !ownSticky.IsInfinite && Offset(sb, accDx, accDy).Intersect(ownSticky).IsEmpty) sb = default;
             if (!sb.IsEmpty)
             {
-                if (root) { ok = false; return; }   // the fade's own paint overlaps its content inside the band
                 RectF fp = Offset(sb, accDx, accDy);
                 if (halo > 0f) fp = new RectF(fp.X - halo, fp.Y - halo, fp.W + 2f * halo, fp.H + 2f * halo);
                 if (!clip.IsInfinite) fp = fp.Intersect(clip);
