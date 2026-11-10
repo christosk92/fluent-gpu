@@ -137,6 +137,7 @@ public sealed unsafe partial class D3D12Device
         TargetFrameState f = sc.Frame;
         // Tiles and region scratches can exceed a small window: the stencil DSV covers max(window, tile).
         _stencilFloorW = TileGrid.W; _stencilFloorH = TileGrid.H;
+        SsBegin(in frame);
         int slot = OpenSubmit(sc, f);
         _frameScale = frame.Info.Scale <= 0f ? 1f : frame.Info.Scale;
         _imageClockMs = frame.Info.ImageClockMs;
@@ -148,12 +149,15 @@ public sealed unsafe partial class D3D12Device
         for (int i = 0; i < frame.Placements.Length; i++) maxSurface = Math.Max(maxSurface, frame.Placements[i].Surface + 1);
         EnsureCompositeResources(maxSurface);
         if (_compositeOwner == 0) _compositeOwner = frame.OwnerToken;
+        Ss(SsOpen);
         MapRows(in frame);
         RcBeginSubmit();
         long rcGlyph0 = Stopwatch.GetTimestamp();
         PrepareCompositeGlyphs(in frame);
         _rcGlyphTicks += Stopwatch.GetTimestamp() - rcGlyph0;
+        Ss(SsMap);
         BeginRecording(sc, f, slot, isPrimaryTarget: true);
+        Ss(SsRecUploads);
         ResetFrameCounters();
         _frameFeatherItems = 0; _frameFeatherPx = 0; _frameBlurCacheHits = 0; _frameTilesRastered = 0; _frameRenderPasses = 0; _frameInlineGroups = 0; _frameDirectRegions = 0; _frameInlineItems = 0; _frameInlineReopens = 0; _frameResumes = 0; _passSites = 0; _framePassDrawsMax = 0; _framePassesOverBinning = 0; Array.Clear(_frameInlineByKind); _frameInlineBlurred = 0;
         _frameLostPlacements = 0;
@@ -168,6 +172,7 @@ public sealed unsafe partial class D3D12Device
         LogRenderPassesOnce();
         f.TextRepaintPending = false;
         EnsureItemScratch(frame.Items.Length);
+        Ss(SsFrameBegin);
 
         // 1. tiles (any scratch leased here is an inline folded layer inside a tile)
         PassBoundary(GpuPassKind.TileRaster, TileGrid.W, TileGrid.H);
@@ -176,10 +181,12 @@ public sealed unsafe partial class D3D12Device
         RasterTiles(in frame);
         if (TileDamage.PhaseValidate || TileDamage.FootprintValidate) QueuePhaseChecks(in frame);
         _offInlineN += _surfaces.ScratchLeases - inl0; _offInlinePx += _surfaces.ScratchPx - inlPx0;
+        Ss(SsRaster);
         // 2. offscreen
         PassBoundary(GpuPassKind.Offscreen, (int)_w, (int)_h);
         WorkPhase(1);
         PrepareTop(in frame);   // PrepareRange per top-level item + occlusion (D3D12Device.Occlusion.cs)
+        Ss(SsPrepTop);
         // 3. the composite pass
         PassBoundary(GpuPassKind.Composite, (int)sc.W, (int)sc.H);
         ID3D12Resource* backBuffer = sc.BackBuffers[f.FrameIndex];
@@ -189,14 +196,17 @@ public sealed unsafe partial class D3D12Device
         // Partial present (D3D12Device.PartialPresent.cs): what changed since this back buffer last received a frame.
         PpComputeDirty(in frame, sc);
         PpPlanRepaint(sc, f);
+        Ss(SsDirty);
         // the work census (D3D12Device.WorkCensus.cs): the composite phase's query, or on a census frame one query per item
         if (ItemCensusDecide()) WorkPhaseEnd(); else WorkPhase(2);
         _compositeCensusOn = _passOn;
         if (_ppPartial)
         {
             // PRESERVE: the buffer already holds every pixel outside the repaint rects; each rect is cleared and recomposited.
+            long sdc = SdNow();
             BeginPass(rtv, (int)_w, (int)_h, PassLoad.Preserve);
             BindCompositor((int)_w, (int)_h);
+            Sd(SdCompBind, ref sdc);
             PpCompositeRects(in frame);
         }
         else
@@ -210,6 +220,7 @@ public sealed unsafe partial class D3D12Device
             _foldItem = -1; _foldPending = false;
         }
         EndPassIfOpen();
+        Ss(SsComposite);
         _compositeCensusOn = false;
         WorkPhaseEnd();
         ItemCensusResolve();
@@ -229,7 +240,10 @@ public sealed unsafe partial class D3D12Device
         Diag.Set("d3d12", "directRegions", _frameDirectRegions);
         Diag.Set("d3d12", "blurCacheHits", _frameBlurCacheHits);
         RcEndSubmit();
+        Ss(SsTail);
         EndRecording(sc, f, slot, RepaintRoute.Composite, _frameBackBufferTransitions);
+        Ss(SsEndTail);
+        SsEnd();
     }
 
     /// <summary>Edge-gated, always-on: a composite that skipped a placement because its slot held no texture (a valid tile
@@ -524,6 +538,7 @@ public sealed unsafe partial class D3D12Device
         {
             ref readonly CompositeItem it = ref items[i];
             int n0 = pool.ScratchLeases; long px0 = pool.ScratchPx;
+            long sd = SdNow();
             switch (it.Kind)
             {
                 case CompositeKind.Group:
@@ -566,6 +581,7 @@ public sealed unsafe partial class D3D12Device
                     }
                     break;
             }
+            Sd(it.Kind switch { CompositeKind.Group => SdGroup, CompositeKind.Backdrop => SdBackdrop, CompositeKind.Direct => SdDirect, _ => SdTiles }, ref sd);
         }
     }
 

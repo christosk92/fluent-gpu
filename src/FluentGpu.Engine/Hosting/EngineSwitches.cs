@@ -127,6 +127,9 @@ public static class EngineSwitches
     public static bool DiagConsole;
     public static bool FpsLog;
     /// <summary>Print every <c>[render.pace]</c> window (<c>--fg pace</c>); by default only anomalous ones are printed.</summary>
+    /// <summary><c>--fg sub-split</c>: a <c>[sub.split]</c> line on stderr every 256 composite submits, the mean CPU microseconds of
+    /// each phase of the device's submit (D3D12Device.SubmitSplit.cs).</summary>
+    public static bool SubmitSplit;
     public static bool PaceLog;
     public static bool AllocDiag;
     public static bool AllocTypes;
@@ -253,6 +256,7 @@ public static class EngineSwitches
                 return true;
             case "fps": FpsLog = true; return true;
             case "pace": PaceLog = true; return true;
+            case "sub-split": SubmitSplit = true; return true;
             case "alloc": AllocDiag = true; return true;
             case "alloc-types": AllocTypes = true; return true;
             case "mem":

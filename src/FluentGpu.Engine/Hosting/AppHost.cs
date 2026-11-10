@@ -1898,8 +1898,11 @@ public sealed partial class AppHost : IDisposable
         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
         _device.SubmitComposite(in frame, _swapchain);
         if (_device.HeapReleaseDue) _renderThread?.RequestIdleTrimThisTurn();   // freed tile heaps above the cap: release after this present
+        long spE = SplitSpans.Now();
         slices.EndComposite(tiles, in frame);
+        SplitSpans.Add(SplitSpans.EndComposite, ref spE);
         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (EngineSwitches.SubmitSplit) SplitSpans.Ticks[SplitSpans.Build] += t1 - t0;
         _evBuildTicks = t1 - t0; _evSubmitTicks = t2 - t1;
         NoteTileCensus(slices, tiles);
         _ledgerTurnTiles += slices.LastRasteredTiles;
@@ -2262,7 +2265,7 @@ public sealed partial class AppHost : IDisposable
                     _renderAnimations.Adopt(sceneFrame.Animations, sceneFrame.Scene, nowMs);
                     _lastSettledPoseCount = 0;
                 }
-                else _renderAnimations.Tick(sceneFrame.Scene, nowMs);
+                else { long spA = SplitSpans.Now(); _renderAnimations.Tick(sceneFrame.Scene, nowMs); SplitSpans.Add(SplitSpans.AnimTick, ref spA); }
                 bool scrollPosed = TickRenderScroll(sceneFrame, fresh, presentSec);
                 bool scrollNeedsRecord = _renderSink.RecordRequired;
                 _activeRenderFrame = rf;

@@ -55,11 +55,13 @@ public sealed unsafe partial class D3D12Device
             ref readonly CompositeItem it = ref items[j];
             int end = it.Kind == CompositeKind.Group ? Math.Min(items.Length, j + 1 + it.GroupCount) : j + 1;
             PrepareRange(in frame, j, end);
+            long sdo = SdNow();
             if (on && it.Opaque.W > 0f && it.Opaque.H > 0f && it.Kind != CompositeKind.Group && OccluderRect(in frame, j, out PixelRect occ))
             {
                 _occRect[j] = occ;
                 Occlude(in frame, j, in occ);
             }
+            Sd(SdOcclude, ref sdo);
             j = end - 1;
         }
     }

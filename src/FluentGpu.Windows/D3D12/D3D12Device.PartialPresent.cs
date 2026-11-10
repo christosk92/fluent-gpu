@@ -498,6 +498,7 @@ public sealed unsafe partial class D3D12Device
         int n = frame.Items.Length;
         for (int k = 0; k < _ppRepaintN; k++)
         {
+            long sdr = SdNow();
             PixelRect r = _ppRepaint[k];
             _frameClip = r;
             _frameClipOn = true;
@@ -511,7 +512,9 @@ public sealed unsafe partial class D3D12Device
                 _compositor.Draw(_cmdList, SliceCompositor.Pso.FillCopy, default);
             }
             else _ppCoveredRects++;
+            Sd(SdCompCover, ref sdr);
             if ((_frameKnockouts & GpuKnockouts.ClearOnly) == 0) DrawRange(in frame, Math.Max(from, 0), n, 0, 0, (int)_w, (int)_h, -1);
+            Sd(SdCompDraw, ref sdr);
         }
         _frameClipOn = false;
     }

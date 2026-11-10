@@ -618,7 +618,9 @@ internal sealed partial class SceneRecordingContext
         for (int i = 0; i < pendingStructuralDamage.Length; i++)
             stats.AddRepaintWindow(RepaintBand(pendingStructuralDamage[i], RepaintUnknownHaloDip));
         uint spanFrame = spans?.BeginFrame(scene.Capacity) ?? 0;
+        long sp = FluentGpu.Hosting.SplitSpans.Now();
         slices.BeginPass(scene);
+        FluentGpu.Hosting.SplitSpans.Add(FluentGpu.Hosting.SplitSpans.RecBeginPass, ref sp);
         // Unmount/removal damage: a freed subtree stops covering the band it presented at, and — unlike a move — nothing
         // re-touches that band, so a region-aware repaint would freeze last frame's pixels there. The span table holds the
         // EXACT extent it presented at (halos folded in) under its pre-free (index, gen), in the space of the slice it was
@@ -750,6 +752,7 @@ internal sealed partial class SceneRecordingContext
         stats.CurGen = slices.CurGen(SliceRecorder.RootSlot);
         stats.PriorGen = slices.PriorGen(SliceRecorder.RootSlot);
         stats.SliceDepth = -1;
+        FluentGpu.Hosting.SplitSpans.Add(FluentGpu.Hosting.SplitSpans.RecSetup, ref sp);
         Walk(scene, rootDl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
             1f, 1f, false, false, default, skips[..skipCount], spans, spanFrame, spanReuseOff, spanStoreOn, ref stats);
         stats.SelfNode = NodeHandle.Null;
@@ -880,11 +883,14 @@ internal sealed partial class SceneRecordingContext
         // The detached fly snapshots: the topmost band (after every scene band), in the root slice's tail.
         if (!detached.IsEmpty) RecordDetachedNodes(rootDl, images, detached, scene.OverlayClip);
 
+        FluentGpu.Hosting.SplitSpans.Add(FluentGpu.Hosting.SplitSpans.RecWalk, ref sp);
         slices.EndPass(keptAll);
+        FluentGpu.Hosting.SplitSpans.Add(FluentGpu.Hosting.SplitSpans.RecEndPass, ref sp);
 
         // Lay out the composite plan at the scene's current poses (no stream is written). A slice whose placement moved
         // since the last turn adds its old ∪ new footprint to the repaint set.
         slices.Place(scene, ref stats.Repaint);
+        FluentGpu.Hosting.SplitSpans.Add(FluentGpu.Hosting.SplitSpans.RecPlace, ref sp);
 
         PublishPosedHoles(slices.PosedHoles);
         if (standalone)

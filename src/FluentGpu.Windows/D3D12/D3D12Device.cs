@@ -1885,8 +1885,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _frameImageUploads = 0; _frameUploadBytes = 0; _frameBakedBlurJobs = _turnBakedBlurJobs; _turnBakedBlurJobs = 0;
         _frameBackBuffer = sc.BackBuffers[f.FrameIndex];
         ID3D12CommandAllocator* allocator = _ring.Allocators[slot];
+        Ss(SsRecPre);
         Check(allocator->Reset(), "allocator.Reset");
         Check(_cmdList->Reset(allocator, null), "cmdList.Reset");
+        Ss(SsRecReset);
         Rec(RecordedOp.ListReset, (uint)slot, sc.W << 16 | (sc.H & 0xFFFF), aux: (ushort)f.FrameIndex);
         InvalidateCmdState();   // fresh command list — nothing is bound
         _inRenderPass = false;
@@ -1973,8 +1975,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             gpuExecutionResolved = true;
         }
         PassEnd(sc);
+        Ss(SsEndPre);
         HRESULT closeHr;
         using (CrashTrail.Enter(NativeRegion.D3D12Close)) closeHr = _cmdList->Close();
+        Ss(SsClose);
         if ((int)closeHr < 0)
         {
             DrainDebugLayerMessages();
@@ -2003,9 +2007,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         ID3D12CommandList* execList = (ID3D12CommandList*)_cmdList;
         global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.ExecuteCommandLists(_queue, 1, (void**)&execList);   // GEN-COM (wired)
+        Ss(SsExecute);
         // One monotonic device fence value, stamped into BOTH ledgers — the target's own back-buffer-keyed FenceValues
         // and the ring's slot-keyed Fence.
         ulong v = SignalNext();
+        Ss(SsSignal);
         f.FenceValues[f.FrameIndex] = v;
         f.LastSubmitFence = v;
         ulong gpuExecutionSubmitSequence = sc.NoteGpuSubmit();
@@ -3596,6 +3602,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // the frame owed, and the shared render thread ticking, to retry a swapchain that is gone).
         target.Frame.LastPresentRefused = false;
         if (target.Disposed) return;
+        long sdp = SdNow();
         AssertSubmitThread();   // seam Step 0: when render-confined (force-sync/async), only the render thread may present
         BeginTargetFrame(target.Frame);
         // Seam (DIM on-screen fix): bind the DirectComposition graph on the PRESENTING thread the first time this composited
@@ -3674,6 +3681,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Whole-frame Present: the swapchain is FLIP_DISCARD, which refuses partial presentation (Present1 with dirty
         // rects is DXGI_ERROR_INVALID_CALL — pinned by ComAbiBindingTests), and the composite rewrites the whole back
         // buffer every frame anyway (docs/plans/scroll-gpu-retained-tiles-implementation.md, P2 status).
+        Sd(SdPresPre, ref sdp);
         HRESULT pr;
         byte pvMode = target.SequentialFlip && target.PpPresentCount > 0 && !target.PpNeedFullPresent ? (byte)2 : (byte)1;
         if (target.SequentialFlip && target.PpPresentCount > 0 && !target.PpNeedFullPresent)
@@ -3690,6 +3698,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         else
             pr = (HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChainVtbl.Present(target.SwapChain, interval, flags);   // GEN-COM (wired)
+        Sd(SdPresCall, ref sdp);
         // REFUSED (DXGI_ERROR_WAS_STILL_DRAWING, only possible with DO_NOT_WAIT): the queue was still full, so NOTHING was queued
         // and no credit was spent. Like a stand-down, return without touching LatencyCreditHeld - the slot this turn reserved is
         // still free, and the next submit must not wait for it twice. The frame sits drawn in the current back buffer (no flip
@@ -3727,6 +3736,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // target, never a device-wide wait (F117). Skipped when the present failed: the device may be gone, and the recover path
         // drains everything.
         if ((int)pr >= 0 && _fence != null) target.Frame.LastPresentFence = SignalNext();
+        Sd(SdPresSignal, ref sdp);
         // DXGI_STATUS_OCCLUDED (0x087A0001) is a SUCCESS code — previously dropped by the `< 0` check. Composition
         // swapchains often never return it; when they do, latch and stand down (next frame probes with PRESENT_TEST).
         if ((int)pr == DxgiStatusOccluded)
@@ -3764,7 +3774,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             // a resident-memory regression without a live capture. One line, one string, at one instant.
             FluentGpu.Foundation.Diag.Line("[d3d12.mem] first-present " + D3D12MemoryDiagnostics.BreakdownLine(10));
         }
+        sdp = SdNow();
         PublishVideoMemorySnapshot();
+        Sd(SdPresMem, ref sdp);
         // A Present that actually ran (the stand-down / TEST / covered paths returned above) feeds the attested ledger.
         // Every target's attested ledger is fed from ITS OWN swapchain's frame statistics (pacing evidence is per target); only the
         // primary also takes the 1 Hz DWM sample, which is main-monitor-global and would be counted twice from a second target.
