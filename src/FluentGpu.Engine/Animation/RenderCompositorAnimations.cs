@@ -53,6 +53,7 @@ public sealed class RenderCompositorAnimations
     private bool[] _rowLive = [], _rowDoneEdge = [];
     // Render tick bookkeeping for the pending-start hold: the previous tick's instant and the interval before it.
     private double _lastTickMs;
+    private float _deviceScale = 1f;   // the scene's DIP-to-device factor as of the last tick: the device-pixel spring rest's unit
     private float _tickIntervalMs;
     private Dictionary<ulong, int> _indices = new(), _nextIndices = new();
     private CompositorAnimationPose[] _feedback = [];
@@ -246,6 +247,7 @@ public sealed class RenderCompositorAnimations
             _tickIntervalMs = interval > 0 && interval <= AnimClock.MaxDeltaMs ? (float)interval : 0f;
             _lastTickMs = nowMs;
         }
+        if (scene.DeviceScale > 0f) _deviceScale = scene.DeviceScale;
         scene.BeginCompositorOverlay();
         _accumulators.Clear();
         HasActive = false;
@@ -497,8 +499,11 @@ public sealed class RenderCompositorAnimations
         ref readonly var row = ref state.Desired.Row;
         if (row.Kind == GenKind.Spring)
         {
-            float restDelta = row.Channel is AnimChannel.SizeW or AnimChannel.SizeH ? .5f : Generators.RestDelta;
-            var value = Generators.EvalSpring(in row.Gen, row.To, state.ElapsedMs, restDelta, Generators.RestSpeed, out var velocity);
+            // The UI tick's rest (AnimEngine.RestDeltaFor): positions and extents in DIP rest in device pixels.
+            bool px = Generators.IsDipPositionChannel(row.Channel);
+            float restDelta = px ? Generators.DipRest(Generators.DevicePxRestDelta, _deviceScale) : Generators.RestDelta;
+            float restSpeed = px ? Generators.DipRest(Generators.DevicePxRestSpeed, _deviceScale) : Generators.RestSpeed;
+            var value = Generators.EvalSpring(in row.Gen, row.To, state.ElapsedMs, restDelta, restSpeed, out var velocity);
             state.Value = value.Value; state.Velocity = velocity; state.Done = value.Done;
             return;
         }
