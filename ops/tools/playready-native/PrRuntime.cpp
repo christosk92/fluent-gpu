@@ -434,6 +434,7 @@ struct MediaEngineNotify : public IMFMediaEngineNotify
             case MF_MEDIA_ENGINE_EVENT_SEEKED:
             case MF_MEDIA_ENGINE_EVENT_PLAYING:
             case MF_MEDIA_ENGINE_EVENT_PAUSE:
+            case MF_MEDIA_ENGINE_EVENT_FRAMESTEPCOMPLETED:   // the transport re-applies the play intent a frame step undid
             case MF_MEDIA_ENGINE_EVENT_ENDED:
             case MF_MEDIA_ENGINE_EVENT_ERROR:
             case MF_MEDIA_ENGINE_EVENT_FORMATCHANGE:
@@ -851,6 +852,9 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
                 // One engine seek at a time (PrSession.cpp FgPrSessionSeek): this SEEKED ends the one in flight. A user seek
                 // that waited behind it runs now, `seeking` stays raised, and ITS SEEKED is the one reported.
                 if (fgpr::SessionSeekLanded(rt, s)) break;
+                // The landed seek leaves the engine at the latest intent (a frame step or the engine's own pause never changes
+                // it); internal seeks too.
+                fgpr::SessionApplyIntent(rt, s, "seek");
                 if (v.internal)
                 {
                     if (v.clearsSeeking) s.seeking.store(0, std::memory_order_release);
@@ -865,13 +869,47 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
             fgpr::SessionSamplePosition(rt, s, false);
             if (s.waitGate.Clear()) Raise(h, FgPrEvent_Resumed, s.positionMs.load(std::memory_order_acquire));
             Raise(h, FgPrEvent_Playing);
+            s.intentReasserts = 0;
             break;
         case MF_MEDIA_ENGINE_EVENT_PAUSE:
             if (!s.metadataSeen) break;   // a predecessor's late PAUSE: this source has not even loaded yet
             s.state.store(FgPrState_Paused, std::memory_order_release);
             fgpr::SessionSamplePosition(rt, s, false);
             Raise(h, FgPrEvent_Paused);
+            // The engine paused on its own (a frame step's pause, in whatever order it arrives) while play is wanted: re-apply
+            // the intent. Bounded, so an engine that keeps refusing cannot make an event loop. Never at the natural end (the
+            // engine's PAUSE before ENDED): see fgpr::SessionApplyIntent.
+            if (s.wantPlay && rt.engine->IsPaused() && !rt.engine->IsEnded())
+            {
+                if (s.intentReasserts < 3)
+                {
+                    ++s.intentReasserts;
+                    HRESULT hr = rt.engine->Play();
+                    fgpr::RaiseLog(h, "[transport] PLAY hr=" + fgpr::Hex(hr) + " (intent after an engine pause, frameStep=" +
+                                      (s.frameStepInFlight ? "1" : "0") + ")");
+                }
+                else if (s.intentReasserts == 3)
+                {
+                    ++s.intentReasserts;   // logged once
+                    fgpr::RaiseLog(h, "[transport] the engine pauses although play is wanted (3 re-applies): left paused");
+                }
+            }
             break;
+        case MF_MEDIA_ENGINE_EVENT_FRAMESTEPCOMPLETED:
+        {
+            // IMFMediaEngineEx::FrameStep completes asynchronously and leaves the engine paused: a Play made while the step was in
+            // flight was undone by it. Play is re-applied whatever IsPaused reads (the engine may enter the paused state just after this).
+            s.frameStepInFlight = false;
+            const bool ended = rt.engine->IsEnded();
+            fgpr::RaiseLog(h, std::string("[transport] frame step completed paused=") + (rt.engine->IsPaused() ? "1" : "0") +
+                              " wantPlay=" + (s.wantPlay ? "1" : "0") + " ended=" + (ended ? "1" : "0"));
+            if (s.wantPlay && !ended)   // never on an ended engine: see fgpr::SessionApplyIntent
+            {
+                HRESULT hr = rt.engine->Play();
+                fgpr::RaiseLog(h, "[transport] PLAY hr=" + fgpr::Hex(hr) + " (intent after frame step)");
+            }
+            break;
+        }
         case MF_MEDIA_ENGINE_EVENT_ENDED:
             // Natural end of media. This was the whole track-end deadlock: without an ENDED state the managed
             // side only ever saw "paused", so auto-advance never fired, FgPlayReadyStop was never called, and

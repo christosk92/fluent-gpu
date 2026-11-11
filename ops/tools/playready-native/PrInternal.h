@@ -803,6 +803,8 @@ struct Session
     fgpr::plan::WaitGate waitGate;                // the engine's WAITING state (FgPrEvent_Waiting / FgPrEvent_Resumed edges)
     int64_t startCorrectionMs = 0;                // how far behind the carried start the engine clock was at CANPLAY (0 = adopted it)
     bool wantPlay = true;                         // the transport level to apply at attach / after a paused open
+    bool frameStepInFlight = false;               // a FrameStep was issued and its FRAMESTEPCOMPLETED has not arrived (per attach)
+    int intentReasserts = 0;                      // engine pauses answered with a Play since the last PLAYING / verb (bound: 3)
     std::atomic<int64_t> volumeMicro{ 1000000 };
     std::atomic<int64_t> rateMicro{ 1000000 };
     int32_t streamWidth = 0, streamHeight = 0;    // FgPrSessionSetStreamSize (0×0 = natural)
@@ -935,6 +937,7 @@ void SessionOnFormatChange(Runtime& rt, Session& s);                   // runtim
 void SessionSamplePosition(Runtime& rt, Session& s, bool raiseNow);    // runtime thread
 void SessionOnCanPlay(Runtime& rt, Session& s);                        // runtime thread
 bool SessionSeekLanded(Runtime& rt, Session& s);                       // runtime thread, SEEKED: true = a deferred seek now runs
+void SessionApplyIntent(Runtime& rt, Session& s, const char* after);  // runtime thread: the engine's level := wantPlay
 void SessionsShutdown(Runtime& rt);                                    // runtime thread, FgPrRuntimeDestroy
 void SessionsKeySettled(Runtime& rt);                                  // runtime thread: a licence left Pending, re-ask the key gate
 

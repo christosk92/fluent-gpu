@@ -1400,10 +1400,13 @@ static void ApplySeekToEngine(Runtime& rt, Session& s)
         s.engineSeekInFlight = runsSeek;   // FgPrSessionSeek defers every later seek until this one's SEEKED
         // At rate 0 the MF video renderer does not pre-roll, so a seek issued while PAUSED decodes nothing and the
         // surface keeps showing the pre-seek frame forever. One frame step forces the new frame out (Chromium's
-        // shipped workaround for the same renderer behaviour).
-        if (rt.engine->IsPaused())
+        // shipped workaround for the same renderer behaviour). Paused means the INTENT (wantPlay), not what the engine reads:
+        // an engine that reads paused while play is wanted is not a paused seek; its picture comes from the Play the SEEKED
+        // re-applies (SessionApplyIntent).
+        if (!s.wantPlay)
         {
             HRESULT hrStep = rt.engineEx->FrameStep(TRUE);
+            if (SUCCEEDED(hrStep)) s.frameStepInFlight = true;
             fgpr::RaiseLog(s.handle, "[transport] paused seek -> FrameStep hr=" + fgpr::Hex(hrStep));
         }
     }
@@ -1766,6 +1769,8 @@ static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
     RebaseFrameStats(rt, s);   // F066
     s.swapchainBuilds = 0;     // the "[cenc] swapchain build=" count is per attach
     s.lastSwapchainBuildQpc = 0;
+    s.frameStepInFlight = false;   // a step of an earlier attach completes for nobody
+    s.intentReasserts = 0;
     s.streamProbe = Session::StreamProbe{};
     ++s.streamProbeGen;
     Raise(s.handle, FgPrEvent_Attached, attachMs);
@@ -2140,6 +2145,7 @@ void fgpr::SessionOnCanPlay(Runtime& rt, Session& s)
         // An open PAUSED (FgPrOpenDesc.startPaused): at rate 0 the MF video renderer does not pre-roll, so nothing would
         // ever be presented. One frame step forces the first frame out and FIRSTFRAMEREADY follows.
         HRESULT hs = rt.engineEx->FrameStep(TRUE);
+        if (SUCCEEDED(hs)) s.frameStepInFlight = true;
         fgpr::RaiseLog(s.handle, "[transport] paused open -> FrameStep hr=" + fgpr::Hex(hs));
     }
 }
@@ -2453,10 +2459,12 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionPlay(FgPrRuntime rtHandle, Fg
     return PostVerb(rtHandle, sh, [](Runtime& rt, const std::shared_ptr<Session>& sp) {
         Session& s = *sp;
         s.wantPlay = true;
+        s.intentReasserts = 0;
         if (!IsLive(rt, s)) return;   // applied at attach
         HRESULT hr = rt.engine->Play();
         fgpr::RaiseLog(s.handle, "[transport] PLAY hr=" + fgpr::Hex(hr) + " posMs=" +
-                                 std::to_string((long long)s.positionMs.load(std::memory_order_acquire)));
+                                 std::to_string((long long)s.positionMs.load(std::memory_order_acquire)) +
+                                 (s.frameStepInFlight ? " (frame step in flight)" : ""));
     });
 }
 
@@ -2465,6 +2473,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionPause(FgPrRuntime rtHandle, F
     return PostVerb(rtHandle, sh, [](Runtime& rt, const std::shared_ptr<Session>& sp) {
         Session& s = *sp;
         s.wantPlay = false;
+        s.intentReasserts = 0;
         if (!IsLive(rt, s)) return;
         HRESULT hr = rt.engine->Pause();
         fgpr::RaiseLog(s.handle, "[transport] PAUSE hr=" + fgpr::Hex(hr) + " posMs=" +
@@ -2611,6 +2620,30 @@ bool fgpr::SessionSeekLanded(Runtime& rt, Session& s)
                              std::to_string((long long)fgpr::MsSinceQpc(d.postedQpc)) + "ms)");
     RunSeek(rt, s, d.targetMs, d.mode, d.keyframeMs, d.postedQpc);
     return true;
+}
+
+/// The transport's level is the latest intent (`wantPlay`), whatever the engine did on its own: a seek never changes it, and
+/// the state after any frame step or seek completes is the latest intent. Needed because IMFMediaEngineEx::FrameStep completes
+/// asynchronously and leaves the engine PAUSED (FRAMESTEPCOMPLETED, then the paused state): a Play made while a step is in
+/// flight is undone when the step completes, and an engine left paused that way frame-stepped every later seek and stayed
+/// paused although play was requested. Runtime thread; logs only when it changes the engine.
+/// No re-applied Play on an ENDED engine, anywhere (here, the PAUSE re-assert and FRAMESTEPCOMPLETED in PrRuntime.cpp): at the
+/// natural end the engine sets paused and raises PAUSE, then ENDED, with play still wanted; a Play there restarts the media
+/// from the start and ENDED never sticks.
+void fgpr::SessionApplyIntent(Runtime& rt, Session& s, const char* after)
+{
+    if (!IsLive(rt, s) || !s.metadataSeen) return;
+    const bool paused = rt.engine->IsPaused();
+    if (s.wantPlay && paused && !rt.engine->IsEnded())
+    {
+        HRESULT hr = rt.engine->Play();
+        fgpr::RaiseLog(s.handle, "[transport] PLAY hr=" + fgpr::Hex(hr) + " (intent after " + after + ")");
+    }
+    else if (!s.wantPlay && !paused)
+    {
+        HRESULT hr = rt.engine->Pause();
+        fgpr::RaiseLog(s.handle, "[transport] PAUSE hr=" + fgpr::Hex(hr) + " (intent after " + after + ")");
+    }
 }
 
 __declspec(dllexport) int32_t __stdcall FgPrSessionSeek(FgPrRuntime rtHandle, FgPrSession sh, int64_t targetMs, int32_t mode,
