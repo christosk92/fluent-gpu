@@ -8587,6 +8587,66 @@ public sealed partial class AppHost : IDisposable
         return shifted;
     }
 
+    private readonly List<NodeHandle> _contentReflowScratch = new(16);
+
+    /// <summary>The content follow of <see cref="RunReflowLayout"/>: each reflow node this tick wrote whose HEIGHT row eases toward an auto height its
+    /// own content sets (declared NaN, no share of a column's free space, not stretched across a row, not filling a z-stack) is re-aimed at the
+    /// height its content measures now (<see cref="FlexLayout.MeasureNatural"/>, a pure query, at the width the row's box is laid out at), over
+    /// the time the row has left (<see cref="AnimEngine.ReaimReflow"/>). The row pins the box's height, so no layout ever shows that height
+    /// while it flies: without this it landed on the height of the commit that seeded it and the settle's continuation glided on to the real
+    /// one in a second motion. An enter reflow is re-aimed from its child extent instead (the natural-extent retarget below), and a box with a
+    /// live reflow under it is left alone: its content measures at that row's interp, which the row's own target already accounts for.</summary>
+    private void FollowContentReflows(List<NodeHandle> roots)
+    {
+        bool collected = false;
+        for (int i = 0; i < roots.Count; i++)
+        {
+            NodeHandle r = roots[i];
+            if (!_scene.IsLive(r) || (_scene.Flags(r) & NodeFlags.Exiting) != 0) continue;
+            if (!_anim.TryGetLiveReflow(r, AnimChannel.LayoutH, out float to, out bool natural, out float declared) || natural || !float.IsNaN(declared)) continue;
+            if (!HeightFromContent(r)) continue;
+            if (!collected) { _anim.CollectLiveReflowNodes(_contentReflowScratch); collected = true; }
+            if (HasLiveReflowBelow(r)) continue;
+            ref LayoutInput li = ref _scene.Layout(r);
+            float pinned = li.Height;
+            li.Height = float.NaN;
+            float wants;
+            try { wants = _layout.MeasureNatural(r, float.IsNaN(li.Width) ? _scene.Bounds(r).W : li.Width).Height; }
+            finally { li.Height = pinned; }
+            if (wants <= 0.5f || MathF.Abs(wants - to) < 0.5f) continue;
+            if (s_motionDiag) System.Console.Error.WriteLine($"[motion-diag]   content-reflow node={r.Raw.Index} key={_scene.DebugKeyOf(r)} to={to:0.0} wants={wants:0.0}");
+            _anim.ReaimReflow(r, AnimChannel.LayoutH, wants);
+        }
+        _contentReflowScratch.Clear();
+    }
+
+    /// <summary>Does <paramref name="n"/>'s height come from its own content in its parent: no share of a column's free space, not stretched across
+    /// a row, not a layer that fills a z-stack, not a realized virtual row? (Its declared height is the caller's to check.)</summary>
+    private bool HeightFromContent(NodeHandle n)
+    {
+        NodeHandle p = _scene.Parent(n);
+        if (p.IsNull || IsVirtualContent(p)) return false;
+        ref LayoutInput li = ref _scene.Layout(n);
+        ref LayoutInput pl = ref _scene.Layout(p);
+        FlexAlign align = li.AlignSelf == FlexAlign.Auto ? pl.AlignItems : li.AlignSelf;
+        if ((_scene.Flags(p) & NodeFlags.ZStack) != 0) return align is FlexAlign.Center or FlexAlign.End;
+        if (pl.Direction == 1) return li.FlexGrow <= 0f && li.FlexShrink <= 0f;
+        return align != FlexAlign.Stretch;
+    }
+
+    /// <summary>Is another node of <see cref="_contentReflowScratch"/> (the live reflow nodes) a descendant of <paramref name="n"/>?</summary>
+    private bool HasLiveReflowBelow(NodeHandle n)
+    {
+        for (int i = 0; i < _contentReflowScratch.Count; i++)
+        {
+            NodeHandle c = _contentReflowScratch[i];
+            if (c == n) continue;
+            for (NodeHandle p = _scene.Parent(c); !p.IsNull; p = _scene.Parent(p))
+                if (p == n) return true;
+        }
+        return false;
+    }
+
     private readonly List<AnimEngine.LiveRelayout> _liveRelayoutScratch = new(16);
 
     /// <summary>Re-aim every live SizeMode.Relayout row toward an AUTO size (declared NaN) on its parent's CROSS axis, where the parent stretches it and
@@ -8639,7 +8699,20 @@ public sealed partial class AppHost : IDisposable
             NodeHandle p = _scene.Parent(n);
             if (p.IsNull) return true;   // the root: the window's size
             if (IsVirtualContent(p)) return true;   // a realized virtual row: its viewport's item layout sizes it (ArrangeVirtual)
-            if ((_scene.Flags(p) & NodeFlags.ZStack) != 0) return false;
+            if ((_scene.Flags(p) & NodeFlags.ZStack) != 0)
+            {
+                // A z-stack layer FILLS the stack on an axis unless it is aligned Center or End there, or measures at its natural width
+                // (FlexLayout.ArrangeZStack: vertical = AlignSelf, else the stack's AlignItems; horizontal = JustifySelf, else the
+                // stack's Justify read as an alignment). A filling layer's size is the stack's: go on up with the stack itself. A page's
+                // skeleton region over its content is such a layer, so a card under it follows a docking panel's live width too.
+                ref LayoutInput zl = ref _scene.Layout(p);
+                FlexAlign za = horizontal
+                    ? (li.JustifySelf != FlexAlign.Auto ? li.JustifySelf
+                        : zl.Justify == FlexJustify.Center ? FlexAlign.Center : zl.Justify == FlexJustify.End ? FlexAlign.End : FlexAlign.Start)
+                    : (li.AlignSelf != FlexAlign.Auto ? li.AlignSelf : zl.AlignItems);
+                if (za is FlexAlign.Center or FlexAlign.End || (horizontal && li.MeasureUnboundedWidth)) return false;
+                continue;
+            }
             ref LayoutInput pl = ref _scene.Layout(p);
             if ((pl.Direction == 0) == horizontal) return li.FlexGrow > 0f || li.FlexShrink > 0f;   // its parent's main axis: a share of the free space
             if ((li.AlignSelf == FlexAlign.Auto ? pl.AlignItems : li.AlignSelf) != FlexAlign.Stretch) return false;
@@ -8835,6 +8908,10 @@ public sealed partial class AppHost : IDisposable
             _invalidator.RunDirty(layoutSize);
             _scene.ClearLayoutDirty();
         }
+        // A reflow toward an AUTO height its content sets was aimed at the height the commit that seeded it measured. Its content can re-set
+        // under the row (a card's title re-wraps, or re-renders larger, at the widths a docking panel's slide passes through): re-aim the row
+        // at the height the content wants now, over the time it has left, so it lands there in the one motion.
+        FollowContentReflows(roots);
         // A reflow toward an AUTO size that landed this tick on a size its content has since left (it re-wrapped under the row: a hero whose title
         // re-sets at the widths a docked panel's slide passes through) would show the difference as a one-frame snap now that the restore solved
         // the real size. Glide on from the landed size instead: re-seed the row there and lay this frame out at it.

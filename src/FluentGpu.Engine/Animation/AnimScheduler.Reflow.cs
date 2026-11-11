@@ -475,6 +475,32 @@ public sealed partial class AnimEngine
         return true;
     }
 
+    /// <summary>Re-aim a live reflow row at <paramref name="to"/>, departing from where its interp is, over the time it has LEFT (its remaining
+    /// start delay kept, no seed-frame hold): a box whose auto size its content changed while the row flies (a card whose title re-sets at the
+    /// widths a docking panel's slide passes through) lands on that size by the row's own deadline instead of landing on the stale target and
+    /// gliding on in a second motion (<see cref="SettledToAuto"/>). The interp does not move this frame, so nothing is written into the layout.
+    /// False when no row is in flight or the target has not moved. Allocates only the re-seed's keyframes, as every retarget.</summary>
+    internal bool ReaimReflow(NodeHandle node, AnimChannel ch, float to)
+    {
+        int ex = Find(node, ch);
+        if (ex < 0) return false;
+        AnimValue cur = _slab.At(ex);          // copy: Animate/Spring may grow the slab's backing array
+        if (cur.Has(AnimFlags.Done) || cur.Has(AnimFlags.Parked) || MathF.Abs(cur.To - to) < 0.5f) return false;
+        AnimFlags carried = cur.Flags & ReflowOwnedFlags;
+        if (!TryGetTransition(node, out LayoutTransition spec)) spec = default;
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if (cur.Kind == GenKind.Spring)
+            Spring(node, ch, to, SpringParams.FromResponse(dyn.Kind == DynamicsKind.Spring ? dyn.Response : 0.30f,
+                dyn.Kind == DynamicsKind.Spring ? dyn.DampingRatio : 1f), initial: cur.Position);
+        else if ((cur.Kind is GenKind.Eased or GenKind.Keyframes) && !cur.Has(AnimFlags.Driven))
+            Animate(node, ch, cur.Position, to, MathF.Max(1f, cur.Gen.DurationMs - cur.ElapsedMs), dyn.Easing, delayMs: cur.DelayRemainingMs);
+        else return false;
+        int s = FinishReflowRow(node, ch, cur.RestoreTo, in spec, hadRow: true, carried);
+        if (s < 0) return false;
+        _slab.At(s).Flags &= ~AnimFlags.JustSeeded;   // a re-aim keeps moving (the row was presented already)
+        return true;
+    }
+
     /// <summary>Write the START of <paramref name="node"/>'s reflow rows (a seed that has not ticked: its from) into its layout input and dirty
     /// the parent, as the seed frame's tick would: the host re-solves the commit at it before measuring the other projections
     /// (AppHost.SeedReflowsFirst). False when the node has no reflow row. Allocates nothing.</summary>
