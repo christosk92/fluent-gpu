@@ -98,7 +98,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // Host options (AppOptions.D3D12DebugLayer / D3D12Dred), set in code and fixed for the device's lifetime.
     private readonly bool _debugLayer, _dred;
 
-    private uint _w, _h;   // ALIAS: reassigned from _f.Target.W/H at BeginTargetFrame — Resize is render-owned and never mid-submit
+    private uint _w, _h;   // ALIAS of _f.Target.W/H: set by BeginTargetFrame, zeroed by EndTargetFrame — a target's size lives on the target
     private int _ringSlot;   // ALIAS: this submit's SubmissionRing slot — see the comment where it is assigned in SubmitDrawList
     // The current target's recording state — replaces _activeSwapchain (Phase 0) and every Activate/StoreActive
     // working-copy field (Phase 1). Set by BeginTargetFrame, cleared by EndTargetFrame; every stencil/layer/damage
@@ -1688,6 +1688,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void EndTargetFrame()
     {
         _f = null;
+        _w = 0; _h = 0;   // the size is the target's (D3D12Swapchain.W/H): nothing outside a bracket reads another target's last size
         _cmdList = null;
         _list4 = null;
     }
@@ -5309,7 +5310,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Check(target.SwapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, target.SwapChainFlags), "ResizeBuffers");
         target.PpEpoch++;   // new buffers hold nothing: the next frame composites and presents whole
         target.W = w; target.H = h;
-        _w = w; _h = h;
         CreateRtvs(target);
         target.Backdrop?.SetBounds(w, h);   // resize the WUC backdrop/content visuals to match
         long resizeT2 = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -5318,7 +5318,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         EndTargetFrame();
     }
 
-    public Size2 SizePx => _primarySwapchain is { } sc ? sc.SizePx : new(_w, _h);
+    public Size2 SizePx => _primarySwapchain is { } sc ? sc.SizePx : default;   // no primary yet: no size
 
     internal void DisposeSwapchain(D3D12Swapchain target)
     {
