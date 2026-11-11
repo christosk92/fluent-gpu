@@ -2395,8 +2395,15 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // exists to close: unfixed, that sample reads as a real drag delta and the picture/thumb flings to the
                 // park point (the pop-out-fling bug).
                 uint leaveId = GET_POINTERID_WPARAM(wParam);
-                if (leaveId == _primaryDownId && _primaryDown) CancelPrimaryContact("pointer-leave");
-                else if (TryHandOverPointer(leaveId)) return true;   // onto one of our own popup windows: not a leave
+                LeaveProbe probe;
+                if (leaveId == _primaryDownId && _primaryDown)
+                {
+                    probe = ProbeLeave(leaveId, out _);
+                    LogPointerLeave(leaveId, in probe, "cancel");
+                    CancelPrimaryContact("pointer-leave");
+                }
+                else if (TryHandOverPointer(leaveId, out probe)) { LogPointerLeave(leaveId, in probe, "handover"); return true; }   // onto one of our own popup windows: not a leave
+                else LogPointerLeave(leaveId, in probe, "park");
                 _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
                     Pointer: PointerKindOf(leaveId), TimestampMs: Now(), PointerId: leaveId));
                 return true;
@@ -2933,7 +2940,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     internal void ForwardPopupPointerLeave(uint pointerId)
     {
         if (_primaryDown && pointerId == _primaryDownId) return;
-        if (TryHandOverPointer(pointerId)) return;
+        if (TryHandOverPointer(pointerId, out var probe)) { LogPointerLeave(pointerId, in probe, "handover", popup: true); return; }
+        LogPointerLeave(pointerId, in probe, "park", popup: true);
         _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
             Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId));
     }
@@ -2956,14 +2964,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// touch contact), or is over a window that is not ours, still parks. Any depth of nested popups works: every popup
     /// HWND is owned by this host's window, and the owner chain is walked, not one level.</para>
     /// </summary>
-    private bool TryHandOverPointer(uint pointerId)
+    private bool TryHandOverPointer(uint pointerId, out LeaveProbe probe)
     {
-        POINTER_INFO pi;
-        if (!GetPointerInfo(pointerId, &pi) || (pi.pointerFlags & POINTER_FLAG_INRANGE) == 0) return false;
-        HWND under = WindowFromPoint(pi.ptPixelLocation);
-        if (under == HWND.NULL) return false;
-        HWND root = GetAncestor(under, 2 /* GA_ROOT */);
-        if (!IsOwnWindow(root)) return false;
+        probe = ProbeLeave(pointerId, out POINTER_INFO pi);
+        if (!probe.InRange || probe.Under != LeaveUnder.Own) return false;
+        HWND root = probe.Root;
         // Onto the owner it is a handover over its CLIENT content and over a caption pixel (a drag band, or any inert pixel
         // of a drag-anywhere window): the non-client stream hovers a caption pixel at its real point too (NcHover), so
         // parking it would only undo that move when this leave lands after the NC stream's first update (the two arrive
@@ -2973,11 +2978,52 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         {
             nint lp = (nint)(((pi.ptPixelLocation.y & 0xFFFF) << 16) | (pi.ptPixelLocation.x & 0xFFFF));
             nint ht = (nint)SendMessageW(_hwnd, WM_NCHITTEST, default, (LPARAM)lp);
+            probe.Ht = ht;
             if (ht != HTCLIENT && ht != HTCAPTION) return false;
         }
         EmitPointerMove(in pi);
         PaintRequested?.Invoke();   // the handover can land while the frame loop idles
         return true;
+    }
+
+    private enum LeaveUnder : byte { None, Own, Foreign }
+
+    /// <summary>Where a leaving pointer stands (the leave log line and the handover decision): in range or not, its screen
+    /// pixel, the top-level window under it (ours, foreign, none) and, for the owner, its WM_NCHITTEST result.</summary>
+    private struct LeaveProbe
+    {
+        public bool InRange;
+        public int X, Y;
+        public LeaveUnder Under;
+        public HWND Root;
+        public nint Ht;   // -1: not asked (only the owner's own pixels are hit-tested)
+    }
+
+    private LeaveProbe ProbeLeave(uint pointerId, out POINTER_INFO pi)
+    {
+        var probe = new LeaveProbe { Ht = -1 };
+        POINTER_INFO info;
+        if (!GetPointerInfo(pointerId, &info)) { pi = default; return probe; }
+        pi = info;
+        probe.X = info.ptPixelLocation.x; probe.Y = info.ptPixelLocation.y;
+        if ((info.pointerFlags & POINTER_FLAG_INRANGE) == 0) return probe;
+        probe.InRange = true;
+        HWND under = WindowFromPoint(info.ptPixelLocation);
+        if (under == HWND.NULL) return probe;
+        probe.Root = GetAncestor(under, 2 /* GA_ROOT */);
+        probe.Under = IsOwnWindow(probe.Root) ? LeaveUnder.Own : LeaveUnder.Foreign;
+        return probe;
+    }
+
+    /// <summary>Always-on, one line per WM_POINTERLEAVE (an edge, never per frame): what the leaving pointer stands on and
+    /// what the platform made of it (park = the dispatcher's off-screen leave, handover = moved onto another window of
+    /// ours, cancel = a held contact torn down, then parked).</summary>
+    private void LogPointerLeave(uint pointerId, in LeaveProbe probe, string outcome, bool popup = false)
+    {
+        string under = probe.Under switch { LeaveUnder.Own => "own", LeaveUnder.Foreign => "foreign", _ => "none" };
+        string ht = probe.Ht == -1 ? "-" : probe.Ht.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[pointer] leave id={pointerId} kind={PointerKindOf(pointerId)}{(popup ? " from=popup" : "")} screen={probe.X},{probe.Y} under={under}{(probe.InRange ? "" : " range=out")} ht={ht} -> {outcome}"));
     }
 
     /// <summary>Is top-level <paramref name="hwnd"/> this host's window or a popup owned by it (directly or through other popups)?</summary>

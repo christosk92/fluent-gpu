@@ -845,9 +845,12 @@ public sealed class MediaPlayerElement : Component
         bool presentedFullscreen = PresentingFullscreen || fullscreen.Value;   // subscribe: the policy edge must re-render
         UseEffect(() => { vis.SetCursorMayHide(CursorHidingAllowed(), Now()); Sync(); }, presentedFullscreen ? 1 : 0);
 
-        // An OS move/size loop of the host window reports its end through the host; a window blur is a LEAVE (the
-        // dispatcher clears hover before it drops the pointer position, so the exit alone would read as "covered" and
-        // the controls would linger over a window the user has switched away from).
+        // An OS move/size loop of the host window reports its end through the host; a window blur is a LEAVE. The
+        // dispatcher drops the pointer position before the blur's exits run, so a hovered player's HandleExit already
+        // reads it as a leave; this subscription covers the blur that finds the player NOT hovered (a scrim had taken
+        // hover, or no pointer event since mount), where no exit fires and the controls would linger over a window the
+        // user has switched away from. (InputHooks.PointerLeftWindowObserved fires on a blur only while the pointer is
+        // in, so it would miss the second case.)
         UseEffect(() =>
         {
             if (hooks is null) return (Action?)null;

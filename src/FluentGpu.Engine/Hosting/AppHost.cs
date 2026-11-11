@@ -5264,6 +5264,8 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.FirstFocusableIn = _dispatcher.FirstFocusableIn; // focus-trap initial focus (first tab stop / default button)
         _dispatcher.OnCursorChanged = _window.SetCursor;                        // hover-resolved cursor (hand/I-beam/resize)
         _dispatcher.OnWindowBlur = _inputHooks.NotifyWindowBlur;                // deactivation → light-dismiss overlays close
+        _dispatcher.OnPointerWindowEdge = _inputHooks.NotifyPointerWindowEdge;  // the pointer left / re-entered the window (edges only)
+        _inputHooks.IsPointerInWindow = () => _dispatcher.PointerInWindow;
         _dispatcher.OnPointerDownObserved = _inputHooks.NotifyPointerDown;
         _dispatcher.OnScrollGestureStarted = _inputHooks.NotifyScrollStarted;   // "a scroll started" (SwipeControl auto-dismiss)
         _inputHooks.RedispatchContextAt = _dispatcher.RequestContextAt;         // scrim right-click → close top + reopen the node's menu (one gesture)

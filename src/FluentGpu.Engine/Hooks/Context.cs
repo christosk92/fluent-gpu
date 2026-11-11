@@ -324,6 +324,29 @@ public sealed class InputHooks
     public event Action<Point2>? PointerDownObserved;
     public event Action? ScrollStartedObserved;
     public void NotifyWindowBlur() { WindowBlurred?.Invoke(); WindowBlurObserved?.Invoke(); }
+
+    /// <summary>The hovering mouse/pen pointer left this window: it moved from inside the root bounds to outside them
+    /// (onto the desktop, another app, another monitor; Win32's off-screen park after WM_POINTERLEAVE), or the window
+    /// blurred while it was in. Once per leave, also when nothing is hovered, never per frame; a captured drag carried
+    /// out does not count until its release. Not raised for a move onto a windowed popup of this window's scene (a menu
+    /// or its cascade hanging past the window edge), nor for touch. UI thread, from the input dispatch: after the hover
+    /// exits of that move, so <see cref="GetPointerPosition"/> no longer reports a point over the content (during a blur
+    /// it is null, and the blur's exits already saw null); on a blur it comes before <see cref="WindowBlurObserved"/>.
+    /// Paired with <see cref="PointerEnteredWindowObserved"/>; <see cref="IsPointerInWindow"/> reads the current state.</summary>
+    public event Action? PointerLeftWindowObserved;
+    /// <summary>The hovering mouse/pen pointer came (back) into this window: the first mouse/pen event inside the root
+    /// bounds (or over a windowed popup of this scene) after a leave, a blur, or since the window opened. Once per entry,
+    /// UI thread, after that event's hover resolve. Pairs with <see cref="PointerLeftWindowObserved"/>.</summary>
+    public event Action? PointerEnteredWindowObserved;
+    /// <summary>Is a hovering mouse/pen pointer in this window now (the state the two edges above announce)? False before
+    /// the first pointer event. Host-wired to <c>InputDispatcher.PointerInWindow</c>; null in a host-less tree.</summary>
+    public Func<bool>? IsPointerInWindow;
+    /// <summary>Host seam: the dispatcher's pointer-in-window edge (true = entered).</summary>
+    public void NotifyPointerWindowEdge(bool entered)
+    {
+        if (entered) PointerEnteredWindowObserved?.Invoke();
+        else PointerLeftWindowObserved?.Invoke();
+    }
     public void NotifyPointerDown(Point2 point) => PointerDownObserved?.Invoke(point);
     public void NotifyScrollStarted() => ScrollStartedObserved?.Invoke();
 
