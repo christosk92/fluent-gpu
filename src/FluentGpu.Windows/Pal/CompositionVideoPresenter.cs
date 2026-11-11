@@ -22,19 +22,20 @@ namespace FluentGpu.Pal.Windows;
 /// <c>DesktopWindowTarget</c> on this window's HWND: beneath the DComp target that holds the UI swap chain, revealed through the UI's
 /// premultiplied-0 hole exactly like the DComp presenter's underlay. One presenter per composited swap chain (the primary window, a
 /// pop-out, the mini player), each with its own target and root container.</para>
-/// <para>Per slot: <c>Node</c> (a container at the placed rect's whole-px origin, the rect's size, the viewport as an
-/// <c>InsetClip</c>) → four nested corner containers (the rounded clip: one <c>CompositionGeometricClip</c> on the first when the four
-/// radii are equal, else one per rounded corner, each a uniform-radius rounded rect extended past the two edges that do not touch its
-/// corner, so their intersection is the per-corner shape; SOFT border mode, so the arcs anti-alias) → an opaque black backing sprite
-/// under the video sprite (both the placed rect, HARD edges). A hidden slot is removed from the root collection; Z order among slots is
+/// <para>Per slot: <c>Node</c> (a container at the placed rect's whole-px origin, the rect's size, SOFT border mode so the arcs
+/// anti-alias) clipped by one <c>RectangleClip</c> (the viewport within the rect, with the four corner radii: the DComp presenter's
+/// rounded <c>IDCompositionRectangleClip</c>) → an opaque black backing sprite under the video sprite (both the placed rect, HARD
+/// edges). One clip, because nested rounded <c>CompositionGeometricClip</c>s do not intersect: the composed result keeps the arc of
+/// only one of them (measured: a (12,12,0,0) slot built as a top-left and a top-right clip showed the top-left arc alone, in either
+/// nesting order), while nested <c>RectangleClip</c>s do. A hidden slot is removed from the root collection; Z order among slots is
 /// (Z, slot) ascending.</para>
-/// <para>Frosted plates (<see cref="SetBackdrops"/>): per slot up to <see cref="MaxPlates"/>, each four nested corner containers (the
-/// plate's rounded clip, always bounding it, built like the slot's) holding one sprite over the plate grown by the blur's reach, inserted
-/// into the slot's innermost collection directly above the video sprite, so a plate is slot-local and inherits the slot's offset,
-/// viewport clip and corners. The sprite's brush is a <c>CompositionEffectBrush</c> from one factory per presenter
-/// (<see cref="CompositionVideoEffects"/>): a <c>CompositionBackdropBrush</c> (what is already composed beneath the sprite: the video and
-/// its backing) through a Gaussian blur (border HARD) and the acrylic's luminosity step (a LinearTransfer); sigma and the step are the
-/// brush's animatable properties, so a fading plate writes scalars, never a brush. The plate's opacity is the sprite's.</para>
+/// <para>Frosted plates (<see cref="SetBackdrops"/>): per slot up to <see cref="MaxPlates"/>, each a SOFT container clipped by its own
+/// <c>RectangleClip</c> (the plate's rounded rect) holding one sprite over the plate grown by the blur's reach, inserted into the slot's
+/// collection directly above the video sprite, so a plate is slot-local and inherits the slot's offset, viewport clip and corners. The
+/// sprite's brush is a <c>CompositionEffectBrush</c> from one factory per presenter (<see cref="CompositionVideoEffects"/>): a
+/// <c>CompositionBackdropBrush</c> (what is already composed beneath the sprite: the video and its backing) through a Gaussian blur
+/// (border HARD) and the acrylic's luminosity step (a LinearTransfer); sigma and the step are the brush's animatable properties, so a
+/// fading plate writes scalars, never a brush. The plate's opacity is the sprite's.</para>
 /// <para>Render-thread confined like the DComp presenter. Place / SetViewport / SetCornerRadii / SetVisible only record;
 /// <see cref="ApplyPending"/> first lets the device pump the compositor's queue (only on a turn that moves no picture), then writes
 /// only what changed (a pure move writes one Offset) and
@@ -46,7 +47,6 @@ namespace FluentGpu.Pal.Windows;
 public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposable
 {
     private const int MaxSurfaces = 16;   // preallocated slots ⇒ zero per-frame managed alloc
-    private const int Corners = 4;        // the nested corner containers: 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left
     private const int MaxPlates = 8;      // the engine's VideoHoleBackdrops.Max: the plates one hole can list
     private const float MaxBlurSigma = 250f;   // D2D's Gaussian blur ceiling
 
@@ -54,10 +54,10 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     {
         public bool InUse;
         public IVisual* Node;                      // the slot's container in the root collection (owned)
-        public IInsetClip* Inset;                  // the viewport clip on Node (owned)
+        public IRectangleClip* Clip;               // Node's clip: the viewport within the rect, rounded (owned)
         public IVisual* Backing;                   // opaque black sprite under the video (owned)
         public IVisual* Video;                     // the picture's sprite (owned)
-        public IVisualCollection* Kids;            // the innermost corner container's children: backing, video, plates (owned)
+        public IVisualCollection* Kids;            // Node's children: backing, video, plates (owned)
         public ICompositionSurfaceBrush* Brush;    // Stretch = Fill over Surface (owned)
         public ICompositionSurface* Surface;       // the wrapped swap-chain handle (owned; null = no content)
         public RectF Rect;
@@ -69,25 +69,27 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         public bool Restack;                       // Z changed while in the tree: ApplyPending re-inserts it
         public bool Dirty;
         // What the visuals hold now (WUC defaults are all 0, like a fresh slot): ApplyPlacement writes only what differs.
-        public float X, Y, W, H, InL, InT, InR, InB;
+        public float X, Y, W, H;
+        public RoundedBox Held;                    // what Clip holds now
         public RectF AppliedRect, AppliedViewport;   // the geometry ApplyPlacement last wrote from: a differing one is a geometry write
         public CornerRadius4 AppliedRadii;
     }
 
-    private struct Corner
+    // A RectangleClip's state (a fresh clip's defaults are all 0): its edges in its visual's px and its four corner radii.
+    private struct RoundedBox
     {
-        public IVisual* Visual;                            // the nested container (owned)
-        public ICompositionRoundedRectangleGeometry* Geo;  // created with Clip on first use (owned)
-        public ICompositionClip* Clip;                     // the geometric clip over Geo (owned)
-        public bool On;                                    // Clip is Visual's clip now
-        public Vector2 Offset, Size, Radius;               // what Geo holds now
+        public float L, T, R, B;
+        public Vector2 TL, TR, BR, BL;
     }
 
     private struct Plate
     {
-        public IVisual* Sprite;                  // the blurred backdrop over the plate grown by the reach (owned)
+        public IVisual* Holder;                  // the SOFT container the plate's rounded clip sits on, in the slot's Kids (owned)
+        public IRectangleClip* Clip;             // Holder's clip: the plate's rounded rect, slot-local (owned)
+        public RoundedBox Held;                  // what Clip holds now
+        public IVisual* Sprite;                  // the blurred backdrop over the plate grown by the reach, in Holder (owned)
         public ICompositionPropertySet* Props;   // its effect brush's animatable properties (owned)
-        public bool InTree;                      // its outermost corner container is in the slot's Kids
+        public bool InTree;                      // Holder is in the slot's Kids
         // What the sprite and the brush hold now: a fresh sprite's defaults, NaN for the brush's scalars (the first apply writes them).
         public Vector2 Offset, Size;
         public float Opacity, Sigma, Slope, Lift;
@@ -98,9 +100,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     private readonly D3D12Device _device;
     private readonly D3D12Swapchain _target;
     private readonly Slot[] _slots = new Slot[MaxSurfaces];
-    private readonly Corner[] _corners = new Corner[MaxSurfaces * Corners];
     private readonly Plate[] _plates = new Plate[MaxSurfaces * MaxPlates];
-    private readonly Corner[] _plateCorners = new Corner[MaxSurfaces * MaxPlates * Corners];
     private readonly VideoBackdropPx[] _want = new VideoBackdropPx[MaxSurfaces * MaxPlates];
     private readonly int[] _wantCount = new int[MaxSurfaces];
     private readonly bool[] _platesDirty = new bool[MaxSurfaces];
@@ -115,8 +115,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     private IDesktopWindowTarget* _windowTarget;
     private IContainerVisual* _root;
     private IVisualCollection* _rootKids;
-    private ICompositor5* _comp5;   // CreateRoundedRectangleGeometry
-    private ICompositor6* _comp6;   // CreateGeometricClipWithGeometry
+    private ICompositor7* _comp7;   // CreateRectangleClip
     private ICompositionBrush* _black;   // the backing sprites' shared opaque black brush
     private bool _rootFailed;      // the window's target could not be built: logged once, not retried
 
@@ -147,12 +146,10 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         IContainerVisual* root = null;
         IVisual* rootVisual = null;
         IVisualCollection* kids = null;
-        ICompositor5* c5 = null;
-        ICompositor6* c6 = null;
+        ICompositor7* c7 = null;
         ICompositionColorBrush* black = null;
         ICompositionBrush* blackBrush = null;
-        bool ok = Ok(((IUnknown*)Comp)->QueryInterface(__uuidof<ICompositor5>(), (void**)&c5), "QI ICompositor5")
-            && Ok(((IUnknown*)Comp)->QueryInterface(__uuidof<ICompositor6>(), (void**)&c6), "QI ICompositor6")
+        bool ok = Ok(((IUnknown*)Comp)->QueryInterface(__uuidof<ICompositor7>(), (void**)&c7), "QI ICompositor7")
             && Ok(Comp->CreateColorBrushWithColor(new Color { A = 255, R = 0, G = 0, B = 0 }, &black), "CreateColorBrushWithColor(backing)")
             && Ok(((IUnknown*)black)->QueryInterface(__uuidof<ICompositionBrush>(), (void**)&blackBrush), "QI ICompositionBrush(backing)")
             && Ok(_device.VideoCompositorDesktop->CreateDesktopWindowTarget(_target.Hwnd, BOOL.FALSE, &wt), "CreateDesktopWindowTarget(non-topmost)")
@@ -171,11 +168,10 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
             if (root != null) root->Release();
             if (wt != null) { CloseTarget(wt); wt->Release(); }
             if (blackBrush != null) blackBrush->Release();
-            if (c6 != null) c6->Release();
-            if (c5 != null) c5->Release();
+            if (c7 != null) c7->Release();
             return false;
         }
-        _windowTarget = wt; _root = root; _rootKids = kids; _comp5 = c5; _comp6 = c6; _black = blackBrush;
+        _windowTarget = wt; _root = root; _rootKids = kids; _comp7 = c7; _black = blackBrush;
         _rootFailed = false;
         Diag.Line($"[video.surface] [video.wuc] window target created hwnd=0x{(nint)_target.Hwnd:X} (non-topmost, under the UI's DComp target)");
         return true;
@@ -204,22 +200,11 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     {
         ref Slot s = ref _slots[idx];
         s = default;
-        IVisualCollection* kids = null;
-        IInsetClip* inset = null;
-        ICompositionClip* clip = null;
-        bool ok = Container("CreateContainerVisual(slot)", out s.Node, out kids)
-            && Ok(Comp->CreateInsetClip(&inset), "CreateInsetClip")
-            && Ok(((IUnknown*)inset)->QueryInterface(__uuidof<ICompositionClip>(), (void**)&clip), "QI ICompositionClip(inset)")
-            && Ok(s.Node->put_Clip(clip), "slot put_Clip(inset)")
-            && Ok(s.Node->put_BorderMode(CompositionBorderMode.CompositionBorderMode_Hard), "slot put_BorderMode(Hard)");
-        if (clip != null) clip->Release();
-        s.Inset = inset;
-        // The corner chain under Node; the sprites below it are HARD, so the video's own edge stays on the whole-px rect.
-        IVisualCollection* nodeKids = kids;
-        kids = null;
-        ok = ok && BuildCornerChain(_corners, idx * Corners, out kids) && Ok(nodeKids->InsertAtTop(_corners[idx * Corners].Visual), "InsertAtTop(corner)");
-        if (nodeKids != null) nodeKids->Release();
-        ok = ok && Sprite("CreateSpriteVisual(backing)", _black, out s.Backing) && Ok(kids->InsertAtTop(s.Backing), "InsertAtTop(backing)");
+        // Node's clip is the slot's whole clip (viewport and corners); the sprites below it are HARD, so the video's own edge stays on
+        // the whole-px rect.
+        bool ok = Container("CreateContainerVisual(slot)", out s.Node, out s.Kids)
+            && RoundedClip(s.Node, out s.Clip)
+            && Sprite("CreateSpriteVisual(backing)", _black, out s.Backing) && Ok(s.Kids->InsertAtTop(s.Backing), "InsertAtTop(backing)");
         if (ok)
         {
             ICompositionSurfaceBrush* sb;
@@ -232,13 +217,12 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
                     && Ok(sb->put_BitmapInterpolationMode(CompositionBitmapInterpolationMode.CompositionBitmapInterpolationMode_Linear), "brush put_BitmapInterpolationMode(Linear)")
                     && Ok(((IUnknown*)sb)->QueryInterface(__uuidof<ICompositionBrush>(), (void**)&brush), "QI ICompositionBrush(video)")
                     && Sprite("CreateSpriteVisual(video)", brush, out s.Video)
-                    && Ok(kids->InsertAtTop(s.Video), "InsertAtTop(video)");
+                    && Ok(s.Kids->InsertAtTop(s.Video), "InsertAtTop(video)");
                 if (brush != null) brush->Release();
             }
         }
-        // The frosted plates (SetBackdrops) go into this innermost collection directly above the video sprite, so they share the
-        // slot's offset, viewport clip and rounded corners: the slot keeps it.
-        s.Kids = kids;
+        // The frosted plates (SetBackdrops) go into Kids directly above the video sprite, so they share the slot's offset, viewport
+        // clip and rounded corners.
         if (!ok)
         {
             ReleaseSlot(idx);
@@ -266,43 +250,21 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         return true;
     }
 
-    // Four nested corner containers arr[c0..c0+3] (cold): each clips one corner, or with equal radii the first clips all four. SOFT
-    // anti-aliases the arcs. innermost = the last one's children; the caller parents arr[c0].Visual. On false ReleaseCorners frees
-    // what was built.
-    private bool BuildCornerChain(Corner[] arr, int c0, out IVisualCollection* innermost)
+    // A new RectangleClip as `visual`'s clip, SOFT border mode so its arcs anti-alias (cold). The clip starts empty (all edges 0): the
+    // first apply writes it.
+    private bool RoundedClip(IVisual* visual, out IRectangleClip* clip)
     {
-        innermost = null;
-        IVisualCollection* kids = null;
-        for (int k = 0; k < Corners; k++)
-        {
-            ref Corner c = ref arr[c0 + k];
-            c = default;
-            IVisualCollection* inner;
-            bool ok = Container("CreateContainerVisual(corner)", out c.Visual, out inner)
-                && Ok(c.Visual->put_BorderMode(CompositionBorderMode.CompositionBorderMode_Soft), "corner put_BorderMode(Soft)")
-                && (kids == null || Ok(kids->InsertAtTop(c.Visual), "InsertAtTop(corner)"));
-            if (kids != null) kids->Release();
-            kids = inner;
-            if (!ok)
-            {
-                if (kids != null) kids->Release();
-                return false;
-            }
-        }
-        innermost = kids;
+        clip = null;
+        IRectangleClip* rc;
+        if (!Ok(_comp7->CreateRectangleClip(&rc), "CreateRectangleClip")) return false;
+        ICompositionClip* c = null;
+        bool ok = Ok(((IUnknown*)rc)->QueryInterface(__uuidof<ICompositionClip>(), (void**)&c), "QI ICompositionClip(rectangle)")
+            && Ok(visual->put_Clip(c), "put_Clip(rectangle)")
+            && Ok(visual->put_BorderMode(CompositionBorderMode.CompositionBorderMode_Soft), "put_BorderMode(Soft)");
+        if (c != null) c->Release();
+        if (!ok) { rc->Release(); return false; }
+        clip = rc;
         return true;
-    }
-
-    private static void ReleaseCorners(Corner[] arr, int c0)
-    {
-        for (int k = 0; k < Corners; k++)
-        {
-            ref Corner c = ref arr[c0 + k];
-            if (c.Clip != null) c.Clip->Release();
-            if (c.Geo != null) c.Geo->Release();
-            if (c.Visual != null) c.Visual->Release();
-            c = default;
-        }
     }
 
     private bool Sprite(string what, ICompositionBrush* brush, out IVisual* visual)
@@ -408,7 +370,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     }
 
     // Place every wanted plate of slot idx (slot-local, so a plate that moved with its slot writes nothing) and take the rest out of
-    // the tree. Runs inside ApplyPlacement, after the slot's clip insets are current. True when anything was written.
+    // the tree. Runs inside ApplyPlacement, after the slot's clip is current. True when anything was written.
     private bool ApplyPlates(int idx)
     {
         _platesDirty[idx] = false;
@@ -417,14 +379,14 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         bool wrote = false;
         // The slot's visible box (viewport within the placed rect), slot-local: a sprite never reaches past it, where the backdrop holds
         // no picture.
-        float vl = s.InL, vt = s.InT, vr = s.W - s.InR, vb = s.H - s.InB;
+        float vl = s.Held.L, vt = s.Held.T, vr = s.Held.R, vb = s.Held.B;
         for (int k = 0; k < MaxPlates; k++)
         {
             int pi = idx * MaxPlates + k;
             ref Plate p = ref _plates[pi];
             if (k >= want)
             {
-                if (p.InTree) { Ok(s.Kids->Remove(_plateCorners[pi * Corners].Visual), "Kids Remove(plate)"); p.InTree = false; wrote = true; }
+                if (p.InTree) { Ok(s.Kids->Remove(p.Holder), "Kids Remove(plate)"); p.InTree = false; wrote = true; }
                 continue;
             }
             if (p.Sprite == null && !BuildPlate(pi))
@@ -434,7 +396,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
             }
             VideoBackdropPx b = _want[pi];
             float l = b.Rect.X - s.Rect.X, t = b.Rect.Y - s.Rect.Y, w = MathF.Max(0f, b.Rect.W), h = MathF.Max(0f, b.Rect.H);
-            wrote |= ApplyRoundedClip(_plateCorners, pi * Corners, l, t, w, h, b.Radii, bounded: true);
+            wrote |= ApplyClip(p.Clip, ref p.Held, l, t, l + w, t + h, b.Radii);
             // The blur's input: the plate's neighbourhood (3 sigma reaches 99.7 % of the kernel), never another plate (the DComp
             // presenter's rule; here it also keeps one plate's backdrop free of another's frost), clamped to the visible box. The
             // brush's HARD border clamps at the sprite's edge, so a plate with no reach reads the same at its own border.
@@ -464,7 +426,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
                 if (ok) p.Lift = lift;
                 wrote = true;
             }
-            if (!p.InTree && Ok(s.Kids->InsertAbove(_plateCorners[pi * Corners].Visual, s.Video), "Kids InsertAbove(plate, video)"))
+            if (!p.InTree && Ok(s.Kids->InsertAbove(p.Holder, s.Video), "Kids InsertAbove(plate, video)"))
             {
                 p.InTree = true;
                 wrote = true;
@@ -543,8 +505,8 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         return true;
     }
 
-    // Build plate pi (cold: once per plate for its slot's life): its corner chain holding a sprite whose brush is a new effect brush
-    // over a backdrop brush. False leaves nothing behind.
+    // Build plate pi (cold: once per plate for its slot's life): its clipped holder with a sprite whose brush is a new effect brush over
+    // a backdrop brush. False leaves nothing behind.
     private bool BuildPlate(int pi)
     {
         if (!EnsurePlateFactory()) return false;
@@ -553,7 +515,8 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         ICompositionBrush* backdrop = null, brush = null;
         ICompositionObject* obj = null;
         ICompositionPropertySet* props = null;
-        IVisual* sprite = null;
+        IVisual* sprite = null, holder = null;
+        IRectangleClip* clip = null;
         IVisualCollection* inner = null;
         bool ok = Ok(_plateFactory->CreateBrush(&eb), "plate CreateBrush")
             && Ok(_comp2->CreateBackdropBrush(&bb), "CreateBackdropBrush")
@@ -563,7 +526,8 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
             && Ok(obj->get_Properties(&props), "plate brush get_Properties")
             && Ok(((IUnknown*)eb)->QueryInterface(__uuidof<ICompositionBrush>(), (void**)&brush), "QI ICompositionBrush(plate)")
             && Sprite("CreateSpriteVisual(plate)", brush, out sprite)
-            && BuildCornerChain(_plateCorners, pi * Corners, out inner)
+            && Container("CreateContainerVisual(plate)", out holder, out inner)
+            && RoundedClip(holder, out clip)
             && Ok(inner->InsertAtTop(sprite), "InsertAtTop(plate sprite)");
         if (inner != null) inner->Release();
         if (brush != null) brush->Release();
@@ -573,12 +537,13 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         if (eb != null) eb->Release();
         if (!ok)
         {
-            ReleaseCorners(_plateCorners, pi * Corners);
+            if (clip != null) clip->Release();
+            if (holder != null) holder->Release();
             if (sprite != null) sprite->Release();
             if (props != null) props->Release();
             return false;
         }
-        _plates[pi] = new Plate { Sprite = sprite, Props = props, Opacity = 1f, Sigma = float.NaN, Slope = float.NaN, Lift = float.NaN };
+        _plates[pi] = new Plate { Holder = holder, Clip = clip, Sprite = sprite, Props = props, Opacity = 1f, Sigma = float.NaN, Slope = float.NaN, Lift = float.NaN };
         return true;
     }
 
@@ -607,7 +572,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
             {
                 int pi = i * MaxPlates + k;
                 if (!_plates[pi].InTree) continue;
-                Ok(s.Kids->Remove(_plateCorners[pi * Corners].Visual), "Kids Remove(plate)");
+                Ok(s.Kids->Remove(_plates[pi].Holder), "Kids Remove(plate)");
                 _plates[pi].InTree = false;
             }
             _wantCount[i] = 0;
@@ -621,7 +586,8 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         {
             int pi = idx * MaxPlates + k;
             ref Plate p = ref _plates[pi];
-            ReleaseCorners(_plateCorners, pi * Corners);
+            if (p.Clip != null) p.Clip->Release();
+            if (p.Holder != null) p.Holder->Release();
             if (p.Sprite != null) p.Sprite->Release();
             if (p.Props != null) p.Props->Release();
             p = default;
@@ -739,97 +705,38 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
             wrote = true;
         }
 
-        // The viewport, clamped into the placed rect (the content only exists inside it), as insets from Node's edges.
+        // The viewport, clamped into the placed rect (the content only exists inside it), rounded, in Node-local device px (the
+        // containers carry no transform), so device-px radii apply directly. A box of four zero radii is the plain rect clip.
         RectF viewport = s.Viewport.W > 0f && s.Viewport.H > 0f ? s.Viewport : s.Rect;
         float l = Math.Clamp(viewport.X - s.Rect.X, 0f, w);
         float t = Math.Clamp(viewport.Y - s.Rect.Y, 0f, h);
         float r = Math.Clamp(viewport.X + viewport.W - s.Rect.X, l, w);
         float b = Math.Clamp(viewport.Y + viewport.H - s.Rect.Y, t, h);
-        if (s.InL != l) { Ok(s.Inset->put_LeftInset(l), "inset put_LeftInset"); s.InL = l; wrote = true; }
-        if (s.InT != t) { Ok(s.Inset->put_TopInset(t), "inset put_TopInset"); s.InT = t; wrote = true; }
-        if (s.InR != w - r) { Ok(s.Inset->put_RightInset(w - r), "inset put_RightInset"); s.InR = w - r; wrote = true; }
-        if (s.InB != h - b) { Ok(s.Inset->put_BottomInset(h - b), "inset put_BottomInset"); s.InB = h - b; wrote = true; }
-
-        // The rounded clip, in Node-local device px (the containers carry no transform), so device-px radii apply directly. Node's
-        // inset clip bounds the rect, so all zero radii = no geometric clip at all.
-        wrote |= ApplyRoundedClip(_corners, idx * Corners, l, t, r - l, b - t, s.Radii, bounded: false);
+        wrote |= ApplyClip(s.Clip, ref s.Held, l, t, r, b, s.Radii);
         // The plates after the slot's own clip: their sprites are clamped to it.
         if (_wantCount[idx] > 0 || _platesDirty[idx]) wrote |= ApplyPlates(idx);
         return wrote;
     }
 
-    // The rounded clip of the box (l, t, cw, ch) on the corner chain arr[c0..c0+3]. Each radius is clamped to half the box's extent per
-    // axis (the DComp presenter's rule). bounded: the clips must also bound the box's edges (a plate, whose sprite is larger than the
-    // plate); otherwise the caller bounds it and square corners need no clip. True when anything was written.
-    private bool ApplyRoundedClip(Corner[] arr, int c0, float l, float t, float cw, float ch, CornerRadius4 rad, bool bounded)
+    // A rounded clip (l, t, r, b) with each radius clamped to half the box's extent per axis (the DComp presenter's rule), writing only
+    // what differs from `held`. True when anything was written.
+    private bool ApplyClip(IRectangleClip* rc, ref RoundedBox held, float l, float t, float r, float b, CornerRadius4 rad)
     {
-        float hw = cw * 0.5f, hh = ch * 0.5f;
+        float hw = (r - l) * 0.5f, hh = (b - t) * 0.5f;
         Vector2 tl = new(MathF.Min(rad.TopLeft, hw), MathF.Min(rad.TopLeft, hh));
         Vector2 tr = new(MathF.Min(rad.TopRight, hw), MathF.Min(rad.TopRight, hh));
         Vector2 br = new(MathF.Min(rad.BottomRight, hw), MathF.Min(rad.BottomRight, hh));
         Vector2 bl = new(MathF.Min(rad.BottomLeft, hw), MathF.Min(rad.BottomLeft, hh));
         bool wrote = false;
-        if (!bounded && rad.TopLeft <= 0f && rad.TopRight <= 0f && rad.BottomRight <= 0f && rad.BottomLeft <= 0f)
-        {
-            for (int k = 0; k < Corners; k++) wrote |= SetCorner(ref arr[c0 + k], false, default, default, default);
-        }
-        else if (tl == tr && tl == br && tl == bl)
-        {
-            // One radius (zero for a square plate): the first container clips all four corners with the box itself.
-            wrote |= SetCorner(ref arr[c0], true, new Vector2(l, t), new Vector2(cw, ch), tl);
-            for (int k = 1; k < Corners; k++) wrote |= SetCorner(ref arr[c0 + k], false, default, default, default);
-        }
-        else
-        {
-            // Per corner: a rounded rect of that corner's radius at that corner, twice the box's extent, so its other three corners
-            // (whose arcs reach at most half the extent inward) lie beyond the box's far edges. The nested clips intersect; each bounds
-            // the two edges at its corner, so a bounded box keeps every corner's clip on (radius 0 at a square corner).
-            Vector2 size = new(2f * cw, 2f * ch);
-            wrote |= SetCorner(ref arr[c0 + 0], bounded || rad.TopLeft > 0f, new Vector2(l, t), size, tl);
-            wrote |= SetCorner(ref arr[c0 + 1], bounded || rad.TopRight > 0f, new Vector2(l - cw, t), size, tr);
-            wrote |= SetCorner(ref arr[c0 + 2], bounded || rad.BottomRight > 0f, new Vector2(l - cw, t - ch), size, br);
-            wrote |= SetCorner(ref arr[c0 + 3], bounded || rad.BottomLeft > 0f, new Vector2(l, t - ch), size, bl);
-        }
+        if (held.L != l) { Ok(rc->put_Left(l), "clip put_Left"); held.L = l; wrote = true; }
+        if (held.T != t) { Ok(rc->put_Top(t), "clip put_Top"); held.T = t; wrote = true; }
+        if (held.R != r) { Ok(rc->put_Right(r), "clip put_Right"); held.R = r; wrote = true; }
+        if (held.B != b) { Ok(rc->put_Bottom(b), "clip put_Bottom"); held.B = b; wrote = true; }
+        if (held.TL != tl) { Ok(rc->put_TopLeftRadius(tl), "clip put_TopLeftRadius"); held.TL = tl; wrote = true; }
+        if (held.TR != tr) { Ok(rc->put_TopRightRadius(tr), "clip put_TopRightRadius"); held.TR = tr; wrote = true; }
+        if (held.BR != br) { Ok(rc->put_BottomRightRadius(br), "clip put_BottomRightRadius"); held.BR = br; wrote = true; }
+        if (held.BL != bl) { Ok(rc->put_BottomLeftRadius(bl), "clip put_BottomLeftRadius"); held.BL = bl; wrote = true; }
         return wrote;
-    }
-
-    // One corner container's clip: on with this geometry, or off. True when anything was written.
-    private bool SetCorner(ref Corner c, bool on, Vector2 offset, Vector2 size, Vector2 radius)
-    {
-        if (!on)
-        {
-            if (!c.On) return false;
-            Ok(c.Visual->put_Clip(null), "corner put_Clip(null)");
-            c.On = false;
-            return true;
-        }
-        if (c.Clip == null && !BuildCornerClip(ref c)) return false;
-        bool wrote = false;
-        if (c.Offset != offset) { Ok(c.Geo->put_Offset(offset), "corner geometry put_Offset"); c.Offset = offset; wrote = true; }
-        if (c.Size != size) { Ok(c.Geo->put_Size(size), "corner geometry put_Size"); c.Size = size; wrote = true; }
-        if (c.Radius != radius) { Ok(c.Geo->put_CornerRadius(radius), "corner geometry put_CornerRadius"); c.Radius = radius; wrote = true; }
-        if (!c.On && Ok(c.Visual->put_Clip(c.Clip), "corner put_Clip(rounded)")) { c.On = true; wrote = true; }
-        return wrote;
-    }
-
-    // The rounded-rectangle geometry and its geometric clip for one corner container (cold: once per container).
-    private bool BuildCornerClip(ref Corner c)
-    {
-        ICompositionRoundedRectangleGeometry* geo;
-        if (!Ok(_comp5->CreateRoundedRectangleGeometry(&geo), "CreateRoundedRectangleGeometry")) return false;
-        ICompositionGeometry* g = null;
-        ICompositionGeometricClip* gc = null;
-        ICompositionClip* clip = null;
-        bool ok = Ok(((IUnknown*)geo)->QueryInterface(__uuidof<ICompositionGeometry>(), (void**)&g), "QI ICompositionGeometry")
-            && Ok(_comp6->CreateGeometricClipWithGeometry(g, &gc), "CreateGeometricClipWithGeometry")
-            && Ok(((IUnknown*)gc)->QueryInterface(__uuidof<ICompositionClip>(), (void**)&clip), "QI ICompositionClip(geometric)");
-        if (gc != null) gc->Release();
-        if (g != null) g->Release();
-        if (!ok) { geo->Release(); return false; }
-        c.Geo = geo;
-        c.Clip = clip;
-        c.Offset = default; c.Size = default; c.Radius = default;   // a new geometry's defaults
-        return true;
     }
 
     private ref Slot Get(VideoSurfaceId id)
@@ -845,13 +752,12 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     {
         ref Slot s = ref _slots[idx];
         ReleasePlates(idx);
-        ReleaseCorners(_corners, idx * Corners);
         if (s.Kids != null) s.Kids->Release();
         if (s.Surface != null) s.Surface->Release();
         if (s.Brush != null) s.Brush->Release();
         if (s.Video != null) s.Video->Release();
         if (s.Backing != null) s.Backing->Release();
-        if (s.Inset != null) s.Inset->Release();
+        if (s.Clip != null) s.Clip->Release();
         if (s.Node != null) s.Node->Release();
         s = default;
     }
@@ -890,8 +796,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         if (_black != null) { _black->Release(); _black = null; }
         if (_plateFactory != null) { _plateFactory->Release(); _plateFactory = null; }
         if (_comp2 != null) { _comp2->Release(); _comp2 = null; }
-        if (_comp6 != null) { _comp6->Release(); _comp6 = null; }
-        if (_comp5 != null) { _comp5->Release(); _comp5 = null; }
+        if (_comp7 != null) { _comp7->Release(); _comp7 = null; }
     }
 
     /// <summary>Non-throwing HRESULT check (the DComp presenter's rule): nothing here throws into the render thread's commit path.
