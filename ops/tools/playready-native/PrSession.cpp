@@ -2639,7 +2639,7 @@ void fgpr::SessionApplyIntent(Runtime& rt, Session& s, const char* after)
         HRESULT hr = rt.engine->Play();
         fgpr::RaiseLog(s.handle, "[transport] PLAY hr=" + fgpr::Hex(hr) + " (intent after " + after + ")");
     }
-    else if (!s.wantPlay && !paused)
+    else if (!s.wantPlay && !paused && !s.frameStepInFlight)
     {
         HRESULT hr = rt.engine->Pause();
         fgpr::RaiseLog(s.handle, "[transport] PAUSE hr=" + fgpr::Hex(hr) + " (intent after " + after + ")");
