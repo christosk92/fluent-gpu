@@ -164,8 +164,11 @@ public readonly record struct PopupOptions(
     /// rect instead of closing. Default false closes the overlay with its usual fade the frame the anchor dies.</summary>
     public bool FreezeAtLastRect { get; init; }
 
-    /// <summary>DECLARE: this popup sits over content the acrylic compositor cannot sample (a video hole) — paint the
-    /// flat plate and never take the acrylic path. Only the caller can know this: a media transport's own
+    /// <summary>DECLARE: this popup sits over content the acrylic compositor cannot sample (a video hole). With
+    /// <see cref="ConstrainToRootBounds"/> false and a frosted chrome it then leases an OS popup window even when it fits
+    /// the window, because the window's compositor material is the one backdrop that frosts a video
+    /// (<c>OverlayHost.WantsMaterialWindow</c>); where no window can be leased it paints the flat plate and never takes the
+    /// in-app acrylic path. Only the caller can know this: a media transport's own
     /// quality/speed/captions pickers, which always open over the video they control, state it once at open time. Nothing
     /// infers it from geometry — a popup that merely overlaps a hole's rect often sits over UI painted ON TOP of the hole
     /// (a Canvas cut to its panel under an opaque ground), where the flat plate's see-through share shows that UI
@@ -302,7 +305,7 @@ internal sealed class OverlayEntry
     public bool ConstrainToRootBounds = true;
     public bool PinsAnchor = true;    // WS3 P6 anchor-liveness: pins the anchor's auto-hide scope while open
     public bool FreezeAtLastRect;     // opt-in: dead-anchor holds last rect instead of BeginClose
-    public bool OpaqueSurface;        // PopupOptions.OpaqueSurface: declared over a video hole — flat plate, never acrylic
+    public bool OpaqueSurface;        // PopupOptions.OpaqueSurface: declared over a video hole — leases a window for its material; flat plate if it cannot
     public bool ScrimVisual = true;   // PopupOptions.ScrimVisual: Modal only — false keeps blocking/trap but paints the scrim transparent
     /// <summary>One-way latch: the host declined a popup-window lease for this entry, so stop asking. The refusal is a
     /// property of the HOST (its device/async-render-loop configuration), not of this popup's placement, so it cannot
@@ -312,6 +315,13 @@ internal sealed class OverlayEntry
     /// an OS popup window would give it was the very rect the in-window placement gives it — so it renders in-window for
     /// its whole life and never leases a window. See <see cref="OverlayHost.NeedsPopupWindow"/>.</summary>
     public bool InWindowByFit;
+    /// <summary>One-way latch, the other answer to the same first-measure question: this entry FIT the root bounds but
+    /// leases a popup window anyway, for its MATERIAL. A popup declared over a video (<see cref="OpaqueSurface"/>), or a
+    /// cascade of such a menu, can only be frosted by the compositor: the in-app backdrop pass cannot sample the video
+    /// plane. Its window is placed with the IN-WINDOW geometry (the root bounds as its container, never the monitor work
+    /// area), so it sits exactly where the in-window popup would; only the material changes. See
+    /// <see cref="OverlayHost.WantsMaterialWindow"/>.</summary>
+    public bool WindowForMaterial;
     public bool WantWindowedLogged;
     public bool OwnerWasLive;         // latch: this entry's owner node has been observed live at least once
     public bool AnchorDeathNotified;  // one-shot: don't re-BeginClose every frame after a vetoed dead-anchor close
@@ -832,7 +842,10 @@ internal sealed class OverlayServiceImpl : IOverlayService
             // viewport hangs past the new right/bottom edge. A windowed popup places against the monitor work area, not
             // the root, so only an in-window entry compares it.
             bool windowed = e.PopupWindowToken >= 0;
-            bool viewportResized = !windowed
+            // A window leased only for its material keeps the in-window geometry: it re-places against the root like an
+            // in-window entry.
+            bool workAreaPlaced = windowed && !e.WindowForMaterial;
+            bool viewportResized = !workAreaPlaced
                 && (MathF.Abs(ViewportRect.W - e.LastViewport.W) >= 0.5f || MathF.Abs(ViewportRect.H - e.LastViewport.H) >= 0.5f);
             bool anchorStill = MathF.Abs(aRect.X - e.LastAnchorRect.X) < 0.5f && MathF.Abs(aRect.Y - e.LastAnchorRect.Y) < 0.5f
                 && MathF.Abs(aRect.W - e.LastAnchorRect.W) < 0.5f && MathF.Abs(aRect.H - e.LastAnchorRect.H) < 0.5f;
@@ -848,11 +861,11 @@ internal sealed class OverlayServiceImpl : IOverlayService
             if (resized) { e.MeasuredW = wb.W; e.MeasuredH = wb.H; }
             var popupSize = new Size2(e.MeasuredW, e.MeasuredH);
             RectF container = ViewportRect;
-            if (windowed && Hooks is { GetWorkArea: { } workArea })
+            if (workAreaPlaced && Hooks is { GetWorkArea: { } workArea })
                 container = workArea(new Point2(aRect.X + aRect.W * 0.5f, aRect.Y + aRect.H * 0.5f));
 
             var place = OverlayHost.ApplyAnchorOffsetX(
-                FlyoutPositioner.Place(in aRect, in popupSize, in container, request, isWindowed: windowed),
+                FlyoutPositioner.Place(in aRect, in popupSize, in container, request, isWindowed: workAreaPlaced),
                 e.AnchorOffsetX, in aRect);
             if (windowed)
                 Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, e.MeasuredW, e.MeasuredH), place.OpensUp,
@@ -1051,6 +1064,38 @@ public sealed class OverlayHost : Component
         return false;
     }
 
+    /// <summary>Whether <paramref name="e"/>'s parent menu holds a popup window leased for its material
+    /// (<see cref="OverlayEntry.WindowForMaterial"/>).</summary>
+    private static bool ParentIsMaterialWindow(OverlayServiceImpl svc, OverlayEntry e)
+    {
+        if (e.ParentId < 0) return false;
+        foreach (var p in svc.Entries)
+            if (p.Id == e.ParentId) return p.PopupWindowToken >= 0 && p.WindowForMaterial;
+        return false;
+    }
+
+    /// <summary>Does a popup that FITS the window still lease an OS popup window? Only for its material, and only when it
+    /// is DECLARED over a video (<see cref="PopupOptions.OpaqueSurface"/>) or cascades from a menu that leased for that
+    /// reason. Over a video the window's compositor material is the one backdrop that can frost the picture: DWM blurs
+    /// what is behind the popup HWND, the owner's video plane included, while the in-app acrylic is a pass over the UI
+    /// swap chain, where the video is a hole. Without this a menu over a borderless full-screen video, which always fits
+    /// (the window is the whole monitor), never leased and painted the flat <see cref="FlatAcrylicFill"/> plate.
+    /// The flat plate stays the fallback wherever no window can be leased (the host refuses, the platform has none,
+    /// headless). Every other fitting popup stays in-window: the lease costs an HWND and a swap chain per open, and the
+    /// engine acrylic is the better material over UI. Pure; the caller has already checked the popup may leave the root
+    /// bounds and that its chrome carries a window material.</summary>
+    internal static bool WantsMaterialWindow(bool opaqueSurface, bool parentIsMaterialWindow)
+        => opaqueSurface || parentIsMaterialWindow;
+
+    /// <summary>The smallest rect holding both the work area and the window's root bounds: everything a popup window may
+    /// cover (the window can extend past the work area, e.g. a borderless full-screen window over the taskbar strip).</summary>
+    private static RectF ReachOf(in RectF workArea, in RectF root)
+    {
+        float l = MathF.Min(workArea.X, root.X), t = MathF.Min(workArea.Y, root.Y);
+        float r = MathF.Max(workArea.Right, root.Right), b = MathF.Max(workArea.Bottom, root.Bottom);
+        return new RectF(l, t, r - l, b - t);
+    }
+
     /// <summary>The WinUI acrylic recipe painted as ONE FLAT FILL: the tint COLOR at the coverage the in-app
     /// compositor's luminosity+tint layers apply over the blurred backdrop = 1 − (1−LuminosityOpacity)·(1−TintOpacity)
     /// (the fraction of the result that is NOT see-through backdrop). Light FlyoutLight (Lum .85 / Tint 0) ⇒ #FCFCFC
@@ -1102,7 +1147,9 @@ public sealed class OverlayHost : Component
     /// or CompositionBackdrop's acrylic group + masked drop shadow in the fallback regime) and paint only
     /// <see cref="OsBackedTintFill"/> — the presenter's residual tint — over it.</item>
     /// <item><b>Declared over a video hole</b> (<see cref="PopupOptions.OpaqueSurface"/>) — clear the acrylic, keep the
-    /// shadow, paint <see cref="FlatAcrylicFill"/>.</item>
+    /// shadow, paint <see cref="FlatAcrylicFill"/>. Only the FALLBACK for such a popup: a declared popup leases a window
+    /// for its material even when it fits (<see cref="WantsMaterialWindow"/>) and so is normally OS-backed; it lands here
+    /// only where no window can be leased (host refusal, no popup-window platform, headless, a non-frosted chrome).</item>
     /// <item><b>Ordinary in-window</b> — the engine acrylic + drop shadow, with the authored resting fill restored. This
     /// includes a plate that overlaps a video hole: the acrylic stays right there too. Where the hole shows the video,
     /// its erased pixels reach the blur as premultiplied zero and the acrylic recipe (backdrop over the opaque
@@ -1286,19 +1333,24 @@ public sealed class OverlayHost : Component
                         // menu fits. Measured in Wavee (--menu-bench, the real right-click path, 2026-10-03): a leased
                         // track menu reached the screen at a median 21.7 ms vs 8.2 ms in-window and cost the UI thread
                         // 5.6 ms vs 1.0 ms per open; the first lease in a process took 16 ms on its own.
+                        // The one exception is the MATERIAL: a popup declared over a video leases even when it fits
+                        // (WantsMaterialWindow), because only the window's compositor material can frost the video plane.
                         bool wantWindowed = !e.ConstrainToRootBounds
                                             && WindowMaterialFor(e) != PopupWindowMaterial.None
                                             && svc.Hooks is { OpenPopupWindow: not null }
                                             && !e.InWindowByFit;
+                        // A window leased for its MATERIAL (WantsMaterialWindow) keeps the in-window geometry: the root
+                        // bounds are its container, so it sits exactly where the in-window popup would.
+                        bool workAreaPlaced = wantWindowed && !e.WindowForMaterial;
                         RectF container = vpRect;
-                        if (wantWindowed && svc.Hooks!.GetWorkArea is { } workArea)
+                        if (workAreaPlaced && svc.Hooks!.GetWorkArea is { } workArea)
                             container = workArea(new Point2(aRect.X + aRect.W * 0.5f, aRect.Y + aRect.H * 0.5f));
 
                         var place = ApplyAnchorOffsetX(
-                            FlyoutPositioner.Place(in aRect, in popupSize, in container, e.Placement, isWindowed: wantWindowed),
+                            FlyoutPositioner.Place(in aRect, in popupSize, in container, e.Placement, isWindowed: workAreaPlaced),
                             e.AnchorOffsetX, in aRect);
 
-                        if (wantWindowed && e.PopupWindowToken < 0 && !e.PopupWindowRefused)
+                        if (wantWindowed && e.PopupWindowToken < 0 && !e.PopupWindowRefused && !e.WindowForMaterial)
                         {
                             var inWindow = ApplyAnchorOffsetX(
                                 FlyoutPositioner.Place(in aRect, in popupSize, in vpRect, e.Placement, isWindowed: false),
@@ -1307,9 +1359,31 @@ public sealed class OverlayHost : Component
                             // that would keep a menu that does overflow in-window, clamped, for its whole life. Until it
                             // has a size it neither leases nor latches — it places in-window for that pass.
                             bool measured = popupSize.Width > 0f && popupSize.Height > 0f;
-                            if (!measured || !NeedsPopupWindow(in place, in inWindow, ParentIsWindowed(svc, e)))
+                            if (!measured)
                             {
-                                if (measured) e.InWindowByFit = true;   // latched: decided once, never revisited mid-life
+                                wantWindowed = false;
+                                place = inWindow;
+                                SyncWindowedMenuBackdrop(scene, e);
+                            }
+                            else if (WantsMaterialWindow(e.OpaqueSurface, ParentIsMaterialWindow(svc, e))
+                                     && !NeedsPopupWindow(
+                                            ApplyAnchorOffsetX(
+                                                FlyoutPositioner.Place(in aRect, in popupSize, ReachOf(in container, in vpRect), e.Placement, isWindowed: true),
+                                                e.AnchorOffsetX, in aRect),
+                                            in inWindow, parentWindowed: false))
+                            {
+                                // Fits, but declared over a video (or cascading from a menu that is): lease for the
+                                // material, placed with the in-window geometry. "Fits" is judged against everything the
+                                // popup could reach (work area AND window): a borderless full-screen window covers the
+                                // taskbar strip the work area leaves out, and the menu must not shy away from that strip
+                                // only because it now has a window. Latched like InWindowByFit; a refused lease below
+                                // falls back to the in-window placement and the flat plate.
+                                e.WindowForMaterial = true;
+                                place = inWindow;
+                            }
+                            else if (!NeedsPopupWindow(in place, in inWindow, ParentIsWindowed(svc, e)))
+                            {
+                                e.InWindowByFit = true;   // latched: decided once, never revisited mid-life
                                 wantWindowed = false;
                                 place = inWindow;
                                 SyncWindowedMenuBackdrop(scene, e);
