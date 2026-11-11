@@ -349,6 +349,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             : new FluentGpu.Pal.Windows.DCompVideoPresenter(this, sc);
     }
 
+    /// <summary><see cref="IGpuDevice.VideoAlphaRamp"/>: the presenter kind <see cref="GetVideoPresenter(ISwapchain)"/> makes. The
+    /// composition presenter (<c>--fg video-wuc</c>) masks its sprites with the ramp; the DirectComposition one cannot mask a swap-chain
+    /// visual.</summary>
+    public bool VideoAlphaRamp => FluentGpu.Hosting.EngineSwitches.VideoWuc;
+
     private FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(D3D12Swapchain? swapchain)
         => swapchain is null ? null : GetVideoPresenter((ISwapchain)swapchain);
 

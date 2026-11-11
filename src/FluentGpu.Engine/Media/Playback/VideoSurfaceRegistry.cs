@@ -45,6 +45,7 @@ public sealed class VideoSurfaceRegistry
         public RectF RectDip;         // desired content rect in DIP; the render side scales it to device px when it applies it
         public RectF ViewportDip;     // visible container; smaller than RectDip for center-crop
         public float RadiusDip;         // corner radius in DIP (0 = square). Scaled to device px at apply, like the rect.
+        public VideoAlphaRamp Ramp;     // the picture's alpha ramp, window DIP (none = opaque). Laid on the placed rect, scaled and posed at apply.
         public uint ContentW, ContentH; // the content's native pixel size (e.g. decoder swapchain) — the presenter scales it to fill the rect (0 = unknown)
         public VideoContentVia ContentVia;   // how the current content size came to be, its request's age when written, and when (diagnostics)
         public int ContentAgeMs;
@@ -242,6 +243,23 @@ public sealed class VideoSurfaceRegistry
         e.RadiusDip = radiusDip;
         MarkDirty();
     }
+
+    /// <summary>Fade the picture along <paramref name="rampDip"/> (window DIP along its axis; none = opaque).
+    /// Only a presenter that <see cref="SupportsAlphaRamp"/> draws it. Value-gated.</summary>
+    public void SetAlphaRamp(int token, in VideoAlphaRamp rampDip)
+    {
+        ThreadGuard.AssertNotRender();
+        ref Entry e = ref Slot(token);
+        if (e.Ramp.Equals(rampDip)) return;
+        e.Ramp = rampDip;
+        MarkDirty();
+    }
+
+    /// <summary>True when the presenters this registry's window drains into draw a surface's alpha ramp
+    /// (<see cref="IVideoPresenter.SupportsAlphaRamp"/>): the host sets it once at construction from its device
+    /// (<see cref="FluentGpu.Rhi.IGpuDevice.VideoAlphaRamp"/>), so the UI can choose, at render, between fading the picture and painting an
+    /// opaque stand-in over it. UI thread.</summary>
+    public bool SupportsAlphaRamp { get; set; }
 
     /// <summary>Show/hide the surface. Value-gated.</summary>
     public void SetVisible(int token, bool visible)
@@ -660,7 +678,7 @@ public sealed class VideoSurfaceRegistry
             {
                 Token = i + 1, Gen = e.Gen, HandleSeq = e.HandleSeq, DesiredHandle = e.DesiredHandle,
                 ReleasePending = e.ReleasePending, HasGeometry = true, Seq = seq, Visible = e.Visible,
-                RectDip = e.RectDip, ViewportDip = e.ViewportDip, RadiusDip = e.RadiusDip,
+                RectDip = e.RectDip, ViewportDip = e.ViewportDip, RadiusDip = e.RadiusDip, Ramp = e.Ramp,
                 ContentW = e.ContentW, ContentH = e.ContentH, Z = e.Z,
                 ContentVia = e.ContentVia, ContentAgeMs = e.ContentAgeMs, ContentSetTicks = e.ContentSetTicks,
             };
@@ -924,6 +942,8 @@ public readonly struct VideoBinding
     /// <summary>Set the content's native pixel size (decoder swapchain size) so the frame scales to fill the rect.</summary>
     /// <summary>Round this surface's corners (DIP). Half the shorter side gives a circle.</summary>
     public void SetCornerRadius(float radiusDip) { if (_registry is { } r) r.SetCornerRadius(Token, radiusDip); }
+    /// <summary>Fade this surface's picture along <paramref name="rampDip"/> (window DIP; none = opaque).</summary>
+    public void SetAlphaRamp(in VideoAlphaRamp rampDip) { if (_registry is { } r) r.SetAlphaRamp(Token, in rampDip); }
     public void SetContentSize(SizeI px) { if (_registry is { } r) r.SetContentSize(Token, (uint)Math.Max(0, px.Width), (uint)Math.Max(0, px.Height)); }
     /// <summary><see cref="SetContentSize(SizeI)"/> with how the size came to be and its request's age in ms (the stream-size gate's
     /// <see cref="VideoStreamStep.ContentVia"/> / <see cref="VideoStreamStep.RequestAgeMs"/>): diagnostics for the applier's

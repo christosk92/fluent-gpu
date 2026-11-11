@@ -36,6 +36,14 @@ namespace FluentGpu.Pal.Windows;
 /// <c>CompositionBackdropBrush</c> (what is already composed beneath the sprite: the video and its backing) through a Gaussian blur
 /// (border HARD) and the acrylic's luminosity step (a LinearTransfer); sigma and the step are the brush's animatable properties, so a
 /// fading plate writes scalars, never a brush. The plate's opacity is the sprite's.</para>
+/// <para>Alpha ramp (<see cref="SetAlphaRamp"/>, <see cref="SupportsAlphaRamp"/>): a slot whose picture fades draws its video sprite through
+/// a <c>CompositionMaskBrush</c> (source: the slot's surface brush; mask: one <c>CompositionLinearGradientBrush</c> per slot, ABSOLUTE
+/// mapping in the sprite's px, white stops carrying the ramp's alphas, clamped past either end), so where the picture's alpha falls the
+/// window's own backdrop shows through, as it does wherever the UI is translucent. The black backing takes the same mask (a second mask
+/// brush over the shared black, same gradient): it is there so a slot with no frame yet, or a frame that does not cover the rect, shows
+/// black rather than the backdrop, and under a fading picture it must fade with it, or the faded part would read as black, not as the
+/// backdrop. A cleared ramp puts the plain brushes back. The gradient and its stops are built with the slot's first ramp and kept; a
+/// changed ramp rewrites only the points and stops that differ.</para>
 /// <para>Render-thread confined like the DComp presenter. Place / SetViewport / SetCornerRadii / SetVisible only record;
 /// <see cref="ApplyPending"/> first lets the device pump the compositor's queue (only on a turn that moves no picture), then writes
 /// only what changed (a pure move writes one Offset) and
@@ -49,6 +57,10 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     private const int MaxSurfaces = 16;   // preallocated slots ⇒ zero per-frame managed alloc
     private const int MaxPlates = 8;      // the engine's VideoHoleBackdrops.Max: the plates one hole can list
     private const float MaxBlurSigma = 250f;   // D2D's Gaussian blur ceiling
+    private const int MaxStops = VideoAlphaRamp.MaxStops;
+    // IVector<CompositionColorGradientStop> (windows.ui.composition.h, the parameterized IID); Append is its slot 13 (IInspectable's six,
+    // then GetAt, get_Size, GetView, IndexOf, SetAt, InsertAt, RemoveAt), Clear its slot 15.
+    private static readonly Guid IidStopVector = new(0xbf2e107e, 0xf3db, 0x56cd, 0x91, 0xed, 0xc1, 0x12, 0x94, 0x06, 0xd5, 0x52);
 
     private struct Slot
     {
@@ -73,6 +85,15 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         public RoundedBox Held;                    // what Clip holds now
         public RectF AppliedRect, AppliedViewport;   // the geometry ApplyPlacement last wrote from: a differing one is a geometry write
         public CornerRadius4 AppliedRadii;
+        // The alpha ramp (SetAlphaRamp): what is wanted, what the gradient holds, and the objects that draw it (built with the first ramp).
+        public VideoAlphaRamp Ramp;                // device px from the rect's leading edge (none = opaque)
+        public VideoAlphaRamp HeldRamp;            // what the gradient and the sprites' brushes show now
+        public bool Masked;                        // the sprites draw through the mask brushes
+        public ICompositionLinearGradientBrush* Gradient;   // the mask (owned)
+        public void* StopVector;                   // its IVector<CompositionColorGradientStop> (owned)
+        public int StopsIn;                        // stops in the vector now
+        public ICompositionBrush* VideoMask;       // mask brush over Brush (owned)
+        public ICompositionBrush* BackingMask;     // mask brush over the shared black (owned)
     }
 
     // A RectangleClip's state (a fresh clip's defaults are all 0): its edges in its visual's px and its four corner radii.
@@ -107,6 +128,11 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     private ICompositor2* _comp2;                     // CreateBackdropBrush (owned, with the factory)
     private ICompositionEffectFactory* _plateFactory; // the plates' effect graph, created with the first plate (owned)
     private bool _noPlates;                           // the factory or a plate's brush was refused: logged once, plates stay off
+    private ICompositor4* _comp4;                     // CreateLinearGradientBrush / CreateColorGradientStop (owned, with the first ramp)
+    private ICompositor2* _comp2Ramp;                 // CreateMaskBrush (owned, with the first ramp)
+    private bool _noRamp;                             // a ramp's objects were refused: logged once, pictures stay opaque
+    private readonly nint[] _stops = new nint[MaxSurfaces * MaxStops];   // per slot, ICompositionColorGradientStop* (owned)
+    private readonly VideoAlphaStop[] _heldStops = new VideoAlphaStop[MaxSurfaces * MaxStops];   // what each stop object holds now
     private bool _anyDirty;
     private bool _graphDirty;      // a tree edit or a content change outside ApplyPlacement owes the controller a Commit
     private bool _attachPending;   // a visible slot is not in the tree yet (the window's UI target is not bound): ApplyPending retries
@@ -351,6 +377,208 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         if (s.Radii == r) return;
         s.Radii = r;
         s.Dirty = true; _anyDirty = true;
+    }
+
+    public bool SupportsAlphaRamp => true;
+
+    public void SetAlphaRamp(VideoSurfaceId id, in VideoAlphaRamp rampPx)
+    {
+        _device.AssertRenderThread();
+        ref Slot s = ref Get(id);
+        if (_noRamp || s.Ramp.Equals(rampPx)) return;
+        s.Ramp = rampPx;
+        s.Dirty = true; _anyDirty = true;
+    }
+
+    // Bring slot idx's sprites and mask to s.Ramp, writing only what differs from what they hold. Runs inside ApplyPlacement. True when
+    // anything was written.
+    private bool ApplyRamp(int idx)
+    {
+        ref Slot s = ref _slots[idx];
+        if (s.Ramp.IsNone)
+        {
+            s.HeldRamp = default;
+            if (!s.Masked) return false;
+            RestorePlain(ref s);
+            return true;
+        }
+        if (s.Gradient == null && !BuildRamp(idx))
+        {
+            RampOff();
+            return true;
+        }
+        bool wrote = false;
+        VideoAlphaRamp r = s.Ramp;
+        bool across = r.Axis == VideoRampAxis.LeftToRight;
+        if (s.HeldRamp.IsNone || s.HeldRamp.From != r.From || s.HeldRamp.Axis != r.Axis)
+        {
+            Ok(s.Gradient->put_StartPoint(across ? new Vector2(r.From, 0f) : new Vector2(0f, r.From)), "ramp put_StartPoint");
+            wrote = true;
+        }
+        if (s.HeldRamp.IsNone || s.HeldRamp.To != r.To || s.HeldRamp.Axis != r.Axis)
+        {
+            Ok(s.Gradient->put_EndPoint(across ? new Vector2(r.To, 0f) : new Vector2(0f, r.To)), "ramp put_EndPoint");
+            wrote = true;
+        }
+        int b = idx * MaxStops;
+        for (int k = 0; k < r.Count; k++)
+        {
+            VideoAlphaStop want = r.Stops[k];
+            var stop = (ICompositionColorGradientStop*)_stops[b + k];
+            if (stop == null)
+            {
+                if (!Ok(_comp4->CreateColorGradientStop(&stop), "CreateColorGradientStop")) { RampOff(); return true; }
+                _stops[b + k] = (nint)stop;
+                _heldStops[b + k] = new VideoAlphaStop(float.NaN, float.NaN);
+            }
+            if (_heldStops[b + k].At != want.At) { Ok(stop->put_Offset(want.At), "stop put_Offset"); wrote = true; }
+            if (_heldStops[b + k].Alpha != want.Alpha) { Ok(stop->put_Color(StopColor(want.Alpha)), "stop put_Color"); wrote = true; }
+            _heldStops[b + k] = want;
+        }
+        if (s.StopsIn != r.Count)
+        {
+            // The count changed (cold: a ramp is set once and re-shaped in place): the collection is rebuilt from the kept stops.
+            void** vtbl = *(void***)s.StopVector;
+            Ok(((delegate* unmanaged[MemberFunction]<void*, int>)vtbl[15])(s.StopVector), "stops Clear");
+            for (int k = 0; k < r.Count; k++)
+                Ok(((delegate* unmanaged[MemberFunction]<void*, void*, int>)vtbl[13])(s.StopVector, (void*)_stops[b + k]), "stops Append");
+            s.StopsIn = r.Count;
+            wrote = true;
+        }
+        if (!s.Masked)
+        {
+            SetSpriteBrush(s.Video, s.VideoMask, "video put_Brush(mask)");
+            SetSpriteBrush(s.Backing, s.BackingMask, "backing put_Brush(mask)");
+            s.Masked = true;
+            wrote = true;
+        }
+        s.HeldRamp = r;
+        return wrote;
+    }
+
+    // The sprites' plain brushes again (the surface brush, the shared black): a cleared ramp.
+    private void RestorePlain(ref Slot s)
+    {
+        ICompositionBrush* surface;
+        if (Ok(((IUnknown*)s.Brush)->QueryInterface(__uuidof<ICompositionBrush>(), (void**)&surface), "QI ICompositionBrush(surface)"))
+        {
+            SetSpriteBrush(s.Video, surface, "video put_Brush(surface)");
+            surface->Release();
+        }
+        SetSpriteBrush(s.Backing, _black, "backing put_Brush(black)");
+        s.Masked = false;
+    }
+
+    private static Color StopColor(float alpha)
+        => new() { A = (byte)MathF.Round(Math.Clamp(alpha, 0f, 1f) * 255f), R = 255, G = 255, B = 255 };
+
+    private void SetSpriteBrush(IVisual* visual, ICompositionBrush* brush, string what)
+    {
+        ISpriteVisual* sv;
+        if (!Ok(((IUnknown*)visual)->QueryInterface(__uuidof<ISpriteVisual>(), (void**)&sv), "QI ISpriteVisual")) return;
+        Ok(sv->put_Brush(brush), what);
+        sv->Release();
+    }
+
+    // Slot idx's ramp objects (cold: once per slot, with its first ramp): the gradient (absolute mapping, in the sprite's px), its stop
+    // collection, and the two mask brushes over the surface brush and the black. False leaves nothing behind.
+    private bool BuildRamp(int idx)
+    {
+        ref Slot s = ref _slots[idx];
+        if (_comp4 == null)
+        {
+            ICompositor4* c4 = null;
+            ICompositor2* c2 = null;
+            if (!Ok(((IUnknown*)Comp)->QueryInterface(__uuidof<ICompositor4>(), (void**)&c4), "QI ICompositor4")
+                || !Ok(((IUnknown*)Comp)->QueryInterface(__uuidof<ICompositor2>(), (void**)&c2), "QI ICompositor2(ramp)"))
+            {
+                if (c4 != null) c4->Release();
+                return false;
+            }
+            _comp4 = c4;
+            _comp2Ramp = c2;
+        }
+        ICompositionLinearGradientBrush* lg = null;
+        ICompositionGradientBrush* gb = null;
+        ICompositionGradientBrush2* gb2 = null;
+        ICompositionColorGradientStopCollection* stops = null;
+        void* vector = null;
+        ICompositionBrush* mask = null, videoMask = null, backingMask = null, surface = null;
+        Guid iidVector = IidStopVector;
+        bool ok = Ok(_comp4->CreateLinearGradientBrush(&lg), "CreateLinearGradientBrush")
+            && Ok(((IUnknown*)lg)->QueryInterface(__uuidof<ICompositionGradientBrush>(), (void**)&gb), "QI ICompositionGradientBrush")
+            && Ok(((IUnknown*)lg)->QueryInterface(__uuidof<ICompositionGradientBrush2>(), (void**)&gb2), "QI ICompositionGradientBrush2")
+            && Ok(gb2->put_MappingMode(CompositionMappingMode.CompositionMappingMode_Absolute), "ramp put_MappingMode(Absolute)")
+            && Ok(gb->get_ColorStops(&stops), "ramp get_ColorStops")
+            && Ok(((IUnknown*)stops)->QueryInterface(&iidVector, &vector), "QI IVector<CompositionColorGradientStop>")
+            && Ok(((IUnknown*)lg)->QueryInterface(__uuidof<ICompositionBrush>(), (void**)&mask), "QI ICompositionBrush(ramp)")
+            && Ok(((IUnknown*)s.Brush)->QueryInterface(__uuidof<ICompositionBrush>(), (void**)&surface), "QI ICompositionBrush(surface)")
+            && MaskBrush(surface, mask, out videoMask)
+            && MaskBrush(_black, mask, out backingMask);
+        if (surface != null) surface->Release();
+        if (stops != null) stops->Release();
+        if (gb2 != null) gb2->Release();
+        if (gb != null) gb->Release();
+        if (mask != null) mask->Release();
+        if (!ok)
+        {
+            if (backingMask != null) backingMask->Release();
+            if (videoMask != null) videoMask->Release();
+            if (vector != null) ((IUnknown*)vector)->Release();
+            if (lg != null) lg->Release();
+            return false;
+        }
+        s.Gradient = lg; s.StopVector = vector; s.StopsIn = 0; s.VideoMask = videoMask; s.BackingMask = backingMask;
+        Diag.Line($"[video.surface] [video.wuc] alpha ramp built id={idx + 1} (mask brushes over the picture and its backing)");
+        return true;
+    }
+
+    private bool MaskBrush(ICompositionBrush* source, ICompositionBrush* mask, out ICompositionBrush* brush)
+    {
+        brush = null;
+        ICompositionMaskBrush* mb;
+        if (!Ok(_comp2Ramp->CreateMaskBrush(&mb), "CreateMaskBrush")) return false;
+        ICompositionBrush* b = null;
+        bool ok = Ok(mb->put_Source(source), "mask put_Source")
+            && Ok(mb->put_Mask(mask), "mask put_Mask")
+            && Ok(((IUnknown*)mb)->QueryInterface(__uuidof<ICompositionBrush>(), (void**)&b), "QI ICompositionBrush(mask)");
+        mb->Release();
+        if (!ok) { if (b != null) b->Release(); return false; }
+        brush = b;
+        return true;
+    }
+
+    // A ramp could not be built: every picture is opaque from now on (logged once). The UI's complement then lies over the full picture.
+    private void RampOff()
+    {
+        _noRamp = true;
+        Diag.Line("[video.surface] [video.wuc] alpha ramps are off (the picture draws opaque)");
+        for (int i = 0; i < MaxSurfaces; i++)
+        {
+            ref Slot s = ref _slots[i];
+            if (!s.InUse) continue;
+            s.Ramp = default;
+            if (s.Masked)
+            {
+                RestorePlain(ref s);
+            }
+            s.HeldRamp = default;
+        }
+    }
+
+    private void ReleaseRamp(int idx)
+    {
+        ref Slot s = ref _slots[idx];
+        int b = idx * MaxStops;
+        for (int k = 0; k < MaxStops; k++)
+        {
+            if (_stops[b + k] != 0) { ((ICompositionColorGradientStop*)_stops[b + k])->Release(); _stops[b + k] = 0; }
+            _heldStops[b + k] = default;
+        }
+        if (s.VideoMask != null) s.VideoMask->Release();
+        if (s.BackingMask != null) s.BackingMask->Release();
+        if (s.StopVector != null) ((IUnknown*)s.StopVector)->Release();
+        if (s.Gradient != null) s.Gradient->Release();
     }
 
     public void SetBackdrops(VideoSurfaceId id, ReadOnlySpan<VideoBackdropPx> backdrops)
@@ -615,7 +843,8 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         {
             ref Slot g = ref _slots[i];
             geometryPending = g.InUse && g.Dirty
-                && (g.Rect != g.AppliedRect || g.Viewport != g.AppliedViewport || g.Radii != g.AppliedRadii || _platesDirty[i]);
+                && (g.Rect != g.AppliedRect || g.Viewport != g.AppliedViewport || g.Radii != g.AppliedRadii || _platesDirty[i]
+                    || !g.Ramp.Equals(g.HeldRamp));
         }
         _device.PumpVideoCompositorQueue(geometryPending);
         if (!_anyDirty && !_graphDirty && !_attachPending) return;
@@ -715,6 +944,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         wrote |= ApplyClip(s.Clip, ref s.Held, l, t, r, b, s.Radii);
         // The plates after the slot's own clip: their sprites are clamped to it.
         if (_wantCount[idx] > 0 || _platesDirty[idx]) wrote |= ApplyPlates(idx);
+        if (!s.Ramp.Equals(s.HeldRamp)) wrote |= ApplyRamp(idx);
         return wrote;
     }
 
@@ -752,6 +982,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     {
         ref Slot s = ref _slots[idx];
         ReleasePlates(idx);
+        ReleaseRamp(idx);
         if (s.Kids != null) s.Kids->Release();
         if (s.Surface != null) s.Surface->Release();
         if (s.Brush != null) s.Brush->Release();
@@ -797,6 +1028,8 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         if (_plateFactory != null) { _plateFactory->Release(); _plateFactory = null; }
         if (_comp2 != null) { _comp2->Release(); _comp2 = null; }
         if (_comp7 != null) { _comp7->Release(); _comp7 = null; }
+        if (_comp4 != null) { _comp4->Release(); _comp4 = null; }
+        if (_comp2Ramp != null) { _comp2Ramp->Release(); _comp2Ramp = null; }
     }
 
     /// <summary>Non-throwing HRESULT check (the DComp presenter's rule): nothing here throws into the render thread's commit path.

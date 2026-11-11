@@ -6,6 +6,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Media;
+using FluentGpu.Pal;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 
@@ -131,6 +132,12 @@ public sealed class MediaPlayerElement : Component
     /// DirectComposition visual OUTSIDE the UI back buffer, so a rounded parent with ClipToBounds cannot clip it — the
     /// radius has to reach the compositor, which is what this does. Half the shorter side gives a circle.</summary>
     public float CornerRadius { get; init; }
+    /// <summary>Fade the composited picture along an alpha ramp (<see cref="VideoAlphaRamp"/>, its span in DIP from this element's own top
+    /// (or left) edge, untransformed), so where its alpha falls the window's backdrop shows through instead of an opaque ground painted
+    /// over it. Read on every placement and watched (a change re-places the picture; the element does not re-render). Only a presenter
+    /// that supports it draws it (<see cref="VideoSurfaceRegistry.SupportsAlphaRamp"/>, read from <c>VideoCompositor.Current</c>):
+    /// elsewhere the picture stays opaque, so the caller keeps its own stand-in there. Null (the default) = opaque.</summary>
+    public IReadSignal<VideoAlphaRamp>? AlphaRamp { get; init; }
     /// <summary>Decoration mode: a BARE composited surface that owns none of the player frame. No minimum height, no
     /// border, no poster and no status overlay; the UI-side corners follow <see cref="CornerRadius"/> instead of the
     /// standard overlay radius, and everything before first frame paints transparent so whatever the caller stacked
@@ -782,6 +789,8 @@ public sealed class MediaPlayerElement : Component
         UseActivation(RequestBindingPump, RequestBindingPump);
         int pumpGeometryKey = HashCode.Combine(HashCode.Combine(playerNatural, aspect), customAspect);
         UseEffect(RequestBindingPump, pumpGeometryKey);
+        // The alpha ramp is watched, never read by Render: a caller's resize re-shapes the fade every frame without re-rendering this.
+        if (AlphaRamp is { } rampSig) UseSignalEffect(() => { _ = rampSig.Value; _binding.RequestPump(); });
 
         // Single-writer ownership: the fullscreen presentation CLAIMS the shared slot on mount; the inline element
         // (re)claims it whenever NOT fullscreen (mount + every exit, incl. the overlay's closing frames). A non-owner
@@ -1455,6 +1464,13 @@ public sealed class MediaPlayerElement : Component
         // radii that overlap and degenerate. CornerRadius freezes at mount, so this is a constant per element.
         if (CornerRadius > 0f)
             b.SetCornerRadius(MathF.Min(CornerRadius, MathF.Min(videoRect.W, videoRect.H) * 0.5f));
+        // The ramp from this element's own edge into window DIP: the applier lays it on whatever rect the session places (a crop places
+        // one larger than the element) and moves it with the hole's posed travel.
+        if (AlphaRamp is { } ramp)
+        {
+            VideoAlphaRamp r = ramp.Peek();
+            b.SetAlphaRamp(r.Mapped(r.Axis == VideoRampAxis.LeftToRight ? area.X : area.Y, 1f));
+        }
         // Overflow safety net: a layout defect that widens the element past its DIRECT host must degrade to a SMALLER
         // video, never to a video composited at a rect that is not on screen (plus an oversized ABR request). It is keyed
         // to the direct host's laid-out rect and NOT to the clip viewport: a scroller or the window edge cutting a

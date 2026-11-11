@@ -28,6 +28,7 @@ internal struct VideoPresentIntent
     public RectF RectDip;           // desired content rect in DIP
     public RectF ViewportDip;        // visible container; smaller than RectDip for center-crop
     public float RadiusDip;
+    public VideoAlphaRamp Ramp;      // the picture's alpha ramp in window DIP, as published (none = opaque)
     public uint ContentW, ContentH;
     public int Z;
     // Diagnostics only (the [video.surface] content line): how ContentW/H came to be, its request's age when the UI wrote it, and when.
@@ -193,6 +194,7 @@ internal sealed class VideoPlacementApplier
         public RectF Dev, Viewport;
         public bool ViewportEmpty, Visible;
         public CornerRadius4 Radii;
+        public VideoAlphaRamp Ramp;          // device px from Dev's leading edge (none = opaque)
         public uint ContentW, ContentH;
         public int Z;
         public float Dx, Dy;
@@ -203,7 +205,7 @@ internal sealed class VideoPlacementApplier
         public readonly bool SameOnGlass(in PlacementPx o)
             => Visible == o.Visible
                && (!Visible || (Dev == o.Dev && ViewportEmpty == o.ViewportEmpty && (ViewportEmpty || Viewport == o.Viewport)
-                                && Radii == o.Radii && ContentW == o.ContentW && ContentH == o.ContentH && Z == o.Z));
+                                && Radii == o.Radii && Ramp.Equals(o.Ramp) && ContentW == o.ContentW && ContentH == o.ContentH && Z == o.Z));
     }
 
     // A plate is the same on the glass when its device-px rect, corners, blur and recipe are, and its opacity is within half an
@@ -363,13 +365,13 @@ internal sealed class VideoPlacementApplier
     }
 
     private static bool GeometryChanged(in VideoPresentIntent a, in VideoPresentIntent b)
-        => a.RectDip != b.RectDip || a.ViewportDip != b.ViewportDip || a.RadiusDip != b.RadiusDip
+        => a.RectDip != b.RectDip || a.ViewportDip != b.ViewportDip || a.RadiusDip != b.RadiusDip || !a.Ramp.Equals(b.Ramp)
            || a.ContentW != b.ContentW || a.ContentH != b.ContentH || a.Visible != b.Visible || a.Z != b.Z
            || a.HasHoleOrigin != b.HasHoleOrigin || a.HoleX != b.HoleX || a.HoleY != b.HoleY || a.HoleW != b.HoleW || a.HoleH != b.HoleH;
 
     private static void CopyGeometry(ref VideoPresentIntent dst, in VideoPresentIntent src)
     {
-        dst.RectDip = src.RectDip; dst.ViewportDip = src.ViewportDip; dst.RadiusDip = src.RadiusDip;
+        dst.RectDip = src.RectDip; dst.ViewportDip = src.ViewportDip; dst.RadiusDip = src.RadiusDip; dst.Ramp = src.Ramp;
         dst.ContentW = src.ContentW; dst.ContentH = src.ContentH; dst.Visible = src.Visible; dst.Z = src.Z;
         dst.ContentVia = src.ContentVia; dst.ContentAgeMs = src.ContentAgeMs; dst.ContentSetTicks = src.ContentSetTicks;
         dst.HasHoleOrigin = src.HasHoleOrigin; dst.HoleX = src.HoleX; dst.HoleY = src.HoleY; dst.HoleW = src.HoleW; dst.HoleH = src.HoleH;
@@ -526,6 +528,16 @@ internal sealed class VideoPlacementApplier
                 new RectF(p.Round.X * scale, p.Round.Y * scale, p.Round.W * scale, p.Round.H * scale), p.RoundR * scale);
             p.Radii = new CornerRadius4(MathF.Max(own, arc.TopLeft), MathF.Max(own, arc.TopRight),
                 MathF.Max(own, arc.BottomRight), MathF.Max(own, arc.BottomLeft));
+        }
+        // The alpha ramp (window DIP) moves with the hole's posed travel, as the rect does, and lands in device px from the snapped rect's
+        // own leading edge, so the fade sits where the UI drew its complement whatever the snap did to the rect's origin.
+        if (!it.Ramp.IsNone)
+        {
+            bool across = it.Ramp.Axis == VideoRampAxis.LeftToRight;
+            float devLead = across ? p.Dev.X : p.Dev.Y;
+            p.Ramp = it.Ramp.Mapped(across ? p.Dx : p.Dy, scale);
+            p.Ramp.From -= devLead;
+            p.Ramp.To -= devLead;
         }
         p.ContentW = it.ContentW; p.ContentH = it.ContentH; p.Z = it.Z;
     }
@@ -763,6 +775,7 @@ internal sealed class VideoPlacementApplier
         presenter.Place(s.SurfaceId, p.Dev, 1f, p.Z);
         if (!p.ViewportEmpty) presenter.SetViewport(s.SurfaceId, p.Viewport);
         presenter.SetCornerRadii(s.SurfaceId, p.Radii);
+        presenter.SetAlphaRamp(s.SurfaceId, in p.Ramp);
         // The frosted plates over the hole (an acrylic card the composite drew after it): the presenter blurs the video beneath each,
         // in device px on the same grid as the hole. Only a presenting turn knows them (the early drain keeps what it has).
         if (scope == VideoApplyScope.Full)

@@ -220,6 +220,12 @@ public partial interface IGpuDevice : IDisposable
     /// the primary <see cref="VideoPresenter"/> so single-window backends are unaffected.</summary>
     FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(ISwapchain swapchain) => VideoPresenter;
 
+    /// <summary>Whether the video presenters this device makes draw a surface's alpha ramp
+    /// (<see cref="FluentGpu.Pal.IVideoPresenter.SupportsAlphaRamp"/>), answered without making one: the presenters are render-thread
+    /// confined, and the UI must choose at render between fading the picture and painting an opaque stand-in over it. A constant per
+    /// device; any thread. Default false.</summary>
+    bool VideoAlphaRamp => false;
+
     /// <summary>The ONE device-level composition flush of a render turn (F080): every presenter's queued mutations
     /// (<see cref="FluentGpu.Pal.IVideoPresenter.ApplyPending"/>) are made visible by a single commit on the shared composition
     /// device, after the parent and every detached child drained. No-op when nothing was applied since the last commit, and on a

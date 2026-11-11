@@ -5766,6 +5766,7 @@ public sealed partial class AppHost : IDisposable
         _reconciler.SetAmbient(Activation.IsActive, new Signal<object?>(_windowVisible));
         _reconciler.SetAmbient(ThemeControl.Request, new Signal<object?>((Action<float>)RequestThemeTransition));   // live re-theme trigger for app code
         _reconciler.SetAmbient(VideoCompositor.Current, new Signal<object?>(_videoSurfaces));   // video-surface intent buffer for UseVideoSurface
+        _videoSurfaces.SupportsAlphaRamp = _device.VideoAlphaRamp;   // the UI's choice between fading a picture and an opaque stand-in
         _videoSurfaces.RequireSlotBinding = !_isHeadless;   // a real host drains into a presenter: elements wait for their OWN slot's bind (the headless seam has no presenter to wait for)
         if (!_isHeadless) FluentGpu.Media.MediaCensus.RegisterRegistry(_videoSurfaces);   // F235: every window's registry joins the process-wide dual-handle scan (unregistered in FinishDispose)
         _reconciler.SetAmbient(HostTimers.Current, new Signal<object?>(_timers));   // frame-clock timer queue for the timing hooks (UseTimeout/UseInterval/UseDebouncedValue/UseThrottledValue)

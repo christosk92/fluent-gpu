@@ -185,6 +185,10 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     public bool GpuPassTimingEnabled { get; set; }
     public FluentGpu.Pal.IVideoPresenter? VideoPresenter => VideoPresenterForTest;
 
+    /// <summary><see cref="IGpuDevice.VideoAlphaRamp"/>: a test presenter's own answer; with none, the Windows device's under the same
+    /// switch (<c>--fg video-wuc</c>), so the inspector renders the arm a window would take (it has no picture to fade either way).</summary>
+    public bool VideoAlphaRamp => VideoPresenterForTest?.SupportsAlphaRamp ?? FluentGpu.Hosting.EngineSwitches.VideoWuc;
+
     /// <summary>Device-level composition commits (<see cref="IGpuDevice.CommitVideoComposition"/>) this run, and a hook run on
     /// each — a test's door to WHEN the host commits relative to its presents.</summary>
     public int VideoCompositionCommits { get; private set; }
