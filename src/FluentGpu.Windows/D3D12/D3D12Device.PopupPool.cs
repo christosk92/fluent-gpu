@@ -10,10 +10,12 @@ namespace FluentGpu.Rhi.D3D12;
 // released at each close: 1.7-2.7 ms of the shared render thread per open (8.7-10.1 ms for the first in a process, most of it
 // the composition backdrop), and a release that waited on the popup's own fence on that thread. The host now parks a closed
 // popup's window and swapchain together and hands both to the next popup:
-//  - ParkPopup keeps the swapchain, its RTV heap, its command list and its composition backdrop. The buffers shrink to 1x1 once
-//    this target's frames retired (never waited for: checked after the primary's present and on elided turns), so a parked
-//    popup holds three 1x1 back buffers, a three-descriptor RTV heap, one closed command list and the composition visuals.
-//    A popup created but never built (the host's idle prewarm) is built here, at 1x1.
+//  - ParkPopup keeps the swapchain, its RTV heap, its command list and its composition backdrop, the buffers at the size the
+//    popup had: no ResizeBuffers at park (a shrink to 1x1 used to run after the owner's present and took 3 ms, and 26 / 144 ms
+//    when it met the owner's own swap chain resizing into full screen), and none at all when the next popup has the same size.
+//    A parked popup holds its three back buffers (the largest Wavee menu, the 298x465 DIP track menu window: 1.66 MB at scale
+//    1, 3.74 MB at 1.5), a three-descriptor RTV heap, one closed command list and the composition visuals; the pool keeps at
+//    most three. A popup created but never built (the host's idle prewarm) is built at 1x1.
 //  - UnparkPopup resets the open/close motion and re-arms the reveal latch: the host's reveal waits for the NEW popup's first
 //    present, and the direct route clears every frame it draws, so nothing of the previous menu can be composed.
 //  - A popup released for good (DisposeSwapchain) drops its composition backdrop at once - its window may be destroyed right
@@ -48,14 +50,9 @@ public sealed unsafe partial class D3D12Device
             _popupUpkeepPending = true;
             build = "pending";
         }
-        else if (sc.W != 1 || sc.H != 1)
-        {
-            sc.ParkShrinkPending = true;
-            _popupUpkeepPending = true;
-        }
         sc.Parked = true;
         double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-        Diag.Line($"[d3d12.present] popup parked target={sc.Ordinal} build={build} shrink={(sc.ParkShrinkPending ? "after-retire" : "none")} framesAwaitingBuild={awaitingBuild} framesDeferredBusySlot={deferred} ms={ms:F2}");
+        Diag.Line($"[d3d12.present] popup parked target={sc.Ordinal} build={build} size={sc.W}x{sc.H} heldBytes={ParkedPopupBytes(sc)} framesAwaitingBuild={awaitingBuild} framesDeferredBusySlot={deferred} ms={ms:F2}");
         return true;
     }
 
@@ -63,8 +60,7 @@ public sealed unsafe partial class D3D12Device
     {
         AssertDeviceOwner();
         if (sc.Disposed || sc.RetireDeferred || !sc.Parked || sc.BuildFailed) return false;
-        sc.Parked = false;
-        sc.ParkShrinkPending = false;   // the new placement's Resize sizes it (from whatever size the park left it at)
+        sc.Parked = false;   // the new placement's Resize sizes it: a no-op at the size it was parked at
         ResetPopupFrameState(sc);
         try { sc.Backdrop?.ResetForReuse(); }
         catch (System.Exception ex)
@@ -96,7 +92,6 @@ public sealed unsafe partial class D3D12Device
     {
         Diag.Line($"[d3d12.present] popup released target={target.Ordinal} built={(target.SwapChain != null ? 1 : 0)} parked={(target.Parked ? 1 : 0)} framesAwaitingBuild={target.PopupFramesAwaitingBuild} framesDeferredBusySlot={target.PopupFramesDeferred}");
         target.Parked = false;
-        target.ParkShrinkPending = false;
         target.Backdrop?.Dispose();
         target.Backdrop = null;
         _swapchains.Remove(target);
@@ -113,9 +108,9 @@ public sealed unsafe partial class D3D12Device
         _popupUpkeepPending = true;
     }
 
-    /// <summary>Release what a closed popup no longer needs, as far as its frames retired: a parked popup's buffers shrink to
-    /// 1x1, a popup released for good lets go of its D3D12 resources. Never waits. Render thread; after the primary's present
-    /// (Present) and on turns that submit nothing (ReclaimCompletedUploads).</summary>
+    /// <summary>The prewarm's never-built popup is built (on a turn with no owner present), and a popup released for good lets go
+    /// of its D3D12 resources once its frames retired. Never waits. Render thread; after the primary's present (Present) and on
+    /// turns that submit nothing (ReclaimCompletedUploads).</summary>
     private void ServicePopupUpkeep()
     {
         if (!_popupUpkeepPending || _fence == null) return;
@@ -126,14 +121,6 @@ public sealed unsafe partial class D3D12Device
         {
             var sc = _swapchains[i];
             if (sc.Parked && sc.BuildPending) BuildPopupNow(sc);   // the prewarm's build on a turn with no owner present (logs its own line)
-            if (!sc.ParkShrinkPending) continue;
-            if (TargetFenceHorizon(sc.Frame) > done) { _popupUpkeepPending = true; continue; }
-            sc.ParkShrinkPending = false;
-            uint w = sc.W, h = sc.H;
-            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-            Resize(sc, 1, 1);
-            double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-            Diag.Line($"[d3d12.present] popup parked-shrink target={sc.Ordinal} from={w}x{h} to=1x1 ms={ms:F2} heldBytes={ParkedPopupBytes(sc)}");
         }
         for (int i = _retiringPopupTargets.Count - 1; i >= 0; i--)
         {
@@ -162,14 +149,13 @@ public sealed unsafe partial class D3D12Device
             if (!sc.Parked) continue;
             ReleaseSwapchainResources(sc);   // Disposed = true: UnparkPopup answers false, a later Dispose is a no-op
             sc.Parked = false;
-            sc.ParkShrinkPending = false;
             _swapchains.RemoveAt(i);
         }
         _popupUpkeepPending = false;
     }
 
-    /// <summary>What a parked popup's back buffers commit on this device (the driver's own allocation size for one 1x1 buffer,
-    /// times the buffer count) plus its RTV heap's descriptors; the command list and the composition visuals are driver / DWM
+    /// <summary>What a parked popup's back buffers commit on this device (the driver's own allocation size for one buffer at its
+    /// size, times the buffer count) plus its RTV heap's descriptors; the command list and the composition visuals are driver / DWM
     /// objects with no size to query. For the park log line.</summary>
     private ulong ParkedPopupBytes(D3D12Swapchain sc)
     {

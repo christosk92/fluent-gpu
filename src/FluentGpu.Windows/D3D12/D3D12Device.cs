@@ -3663,7 +3663,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (!ReferenceEquals(target, _primarySwapchain)) return;
         _primaryPresentThreadId = System.Environment.CurrentManagedThreadId;
         if (_popupBuildPending) BuildPendingPopups();
-        if (_popupUpkeepPending) ServicePopupUpkeep();   // a closed popup's buffers shrink / release after the owner's present, never before it
+        if (_popupUpkeepPending) ServicePopupUpkeep();   // the prewarm's build and a released popup's resources: after the owner's present, never before it
     }
 
     private void PresentTarget(D3D12Swapchain target, bool noWait)
@@ -5106,7 +5106,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// the fence read <see cref="DrainImageJobs"/> already uses.</summary>
     public void ReclaimCompletedUploads()
     {
-        // A turn with no present still lets a closed popup shrink / release - on the presenting thread only (a force-sync host
+        // A turn with no present still builds the prewarm / releases a popup let go - on the presenting thread only (a force-sync host
         // reclaims from its UI thread while the render thread owns the swapchains).
         if (_popupUpkeepPending && (!_renderConfined || System.Environment.CurrentManagedThreadId == _primaryPresentThreadId)) ServicePopupUpkeep();
         if (_imageTextures is null || _fence == null) return;
@@ -5684,9 +5684,9 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal bool BuildPending, BuildFailed, ChromePending;
     internal int BuildWaitTurns, PopupFramesAwaitingBuild, PopupFramesDeferred;
     internal PopupChromeMetrics PendingChrome;
-    // The host's popup pool (D3D12Device.PopupPool.cs): parked between popups, its buffers still to shrink to 1x1 once its frames
-    // retire, and released for good but its D3D12 resources waiting for its fence (out of the device's target list). Render thread.
-    internal bool Parked, ParkShrinkPending, RetireDeferred;
+    // The host's popup pool (D3D12Device.PopupPool.cs): parked between popups (at its size), and released for good but its D3D12
+    // resources waiting for its fence (out of the device's target list). Render thread.
+    internal bool Parked, RetireDeferred;
     // This swapchain's DXGI maximum frame latency when it is NOT the primary (D3D12Device.SetPresentQueueDepth(target, depth) —
     // a detached pop-out's own depth policy); the primary's lives on the device (_presentQueueDepth). Render thread writes
     // (Volatile), any thread may read. Starts at the creation depth, so a rebuild of the swapchain restores it.
