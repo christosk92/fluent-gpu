@@ -49,6 +49,9 @@ internal static class SoakProbe
     public static Mode Selected;
     // Tunables (`--soak-actions N`, `--soak-fpa N`, `--soak-report N`, `--stress-iters N`, `--stress-cycles N`).
     public static int SoakActions = 4000, SoakFramesPerAction = 4, SoakReportEvery = 200, StressIters = 240, StressCycles = 12;
+    // `--stress-sizes WxH,WxH` (client px) and `--stress-fpi N` (frames run after each resize) for --stress-resize: a small window and
+    // enough frames between resizes that each one's [window.resize] line is printed (that line is rate-limited to one per 100 ms).
+    public static int StressW1 = 1500, StressH1 = 1040, StressW2 = 920, StressH2 = 660, StressFramesPerIter = 2;
 
     /// <summary>Parse this probe's command-line arms; true when a mode was selected.</summary>
     public static bool Parse(string[] args)
@@ -62,6 +65,13 @@ internal static class SoakProbe
                 case "--stress-nav": Selected = Mode.StressNav; break;
                 case "--wake-audit": Selected = Mode.WakeAudit; break;
             }
+            if (args[i] == "--stress-sizes" && i + 1 < args.Length)
+            {
+                string[] parts = args[i + 1].Split(',', 'x');
+                if (parts.Length == 4 && int.TryParse(parts[0], out int a) && int.TryParse(parts[1], out int b)
+                    && int.TryParse(parts[2], out int c) && int.TryParse(parts[3], out int d) && a > 0 && b > 0 && c > 0 && d > 0)
+                    (StressW1, StressH1, StressW2, StressH2) = (a, b, c, d);
+            }
             if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out int v) || v <= 0) continue;
             switch (args[i])
             {
@@ -70,6 +80,7 @@ internal static class SoakProbe
                 case "--soak-report": SoakReportEvery = v; break;
                 case "--stress-iters": StressIters = v; break;
                 case "--stress-cycles": StressCycles = v; break;
+                case "--stress-fpi": StressFramesPerIter = v; break;
             }
         }
         return Selected != Mode.None;
@@ -162,14 +173,14 @@ internal static class SoakProbe
     {
         int iters = StressIters;
         var proc = Process.GetCurrentProcess();
-        Console.Error.WriteLine($"[stress] resize: {iters} iterations (two client sizes, 2 frames each)");
+        Console.Error.WriteLine($"[stress] resize: {iters} iterations ({StressW1}x{StressH1} / {StressW2}x{StressH2}, {StressFramesPerIter} frames each)");
         Mem(proc, "baseline"); gpu.DiagDumpLive("baseline");
 
         for (int it = 0; it < iters && !window.IsClosed; it++)
         {
             bool big = (it & 1) == 0;
-            window.SetClientSize(big ? 1500 : 920, big ? 1040 : 660);
-            host.RunFrame(); host.RunFrame();
+            window.SetClientSize(big ? StressW1 : StressW2, big ? StressH1 : StressH2);
+            for (int f = 0; f < StressFramesPerIter && !window.IsClosed; f++) host.RunFrame();
             if (it % 30 == 0)
             {
                 var t = gpu.DiagResourceTotals; proc.Refresh();

@@ -2056,6 +2056,10 @@ public sealed partial class AppHost : IDisposable
     private bool _ownResizePending;
     private Size2 _ownResizeSize;
     private int _ownResizesApplied;
+    private long _ownResizePostedQpc;   // when the first still-pending resize was posted (guarded by _popupActionLock)
+    private int _ownResizeCollapsed;    // posts that replaced a pending one since the last apply (guarded by _popupActionLock)
+    private long _renderResizeLogQpc;   // the render-side [window.resize] rate limit (render thread)
+    private int _renderResizeLogSuppressed;
 
     private void PostPopupRenderAction(in PopupRenderAction action)
     {
@@ -2071,7 +2075,14 @@ public sealed partial class AppHost : IDisposable
     /// thread one ResizeBuffers per turn, not one per message. Wakes the loop: the resize must not wait for a publication.</summary>
     private void PostOwnResize(Size2 size)
     {
-        lock (_popupActionLock) { _ownResizePending = true; _ownResizeSize = size; }
+        long now = Stopwatch.GetTimestamp();
+        lock (_popupActionLock)
+        {
+            if (!_ownResizePending) _ownResizePostedQpc = now;   // the oldest unapplied post: how long the newest size waited at most
+            else _ownResizeCollapsed++;
+            _ownResizePending = true;
+            _ownResizeSize = size;
+        }
         OwningRenderThread?.WakeAsync();
     }
 
@@ -2080,20 +2091,27 @@ public sealed partial class AppHost : IDisposable
     {
         bool ownResize;
         Size2 ownSize;
+        long ownPostedQpc;
+        int ownCollapsed;
         lock (_popupActionLock)
         {
             ownResize = _ownResizePending;
             ownSize = _ownResizeSize;
+            ownPostedQpc = _ownResizePostedQpc;
+            ownCollapsed = _ownResizeCollapsed;
+            _ownResizeCollapsed = 0;
             _ownResizePending = false;
             if (_popupActionsIn.Count == 0 && !ownResize) return;
             if (_popupActionsIn.Count != 0) (_popupActionsIn, _popupActionsOut) = (_popupActionsOut, _popupActionsIn);
         }
         if (ownResize)
         {
-            // This host's OWN swapchain (a detached child's: the primary parks for its resize instead), once, at the newest size.
+            // This host's OWN swapchain (the primary's or a detached child's), once, at the newest size.
             _ownResizesApplied++;
+            long r0 = Stopwatch.GetTimestamp();
             try { _swapchain.Resize(ownSize); }
             catch (Exception) when (_device.NoteIfDeviceLost()) { }
+            NoteRenderResize(ownSize, ToMs(r0 - ownPostedQpc), ToMs(Stopwatch.GetTimestamp() - r0), ownCollapsed);
         }
         for (int i = 0; i < _popupActionsOut.Count; i++)
         {
@@ -2122,6 +2140,21 @@ public sealed partial class AppHost : IDisposable
             }
         }
         _popupActionsOut.Clear();   // retains capacity
+    }
+
+    /// <summary>The <c>[window.resize]</c> line of a resize applied on the render thread (the mailbox path): <c>quiesceMs</c> is 0 (no
+    /// park), <c>postedMs</c> is how long the size waited in the mailbox, <c>collapsed</c> how many later posts replaced it. Rate-limited
+    /// like the UI side's line. Render thread.</summary>
+    private void NoteRenderResize(Size2 px, double postedMs, double resizeMs, int collapsed)
+    {
+        long now = Stopwatch.GetTimestamp();
+        if (_renderResizeLogQpc != 0 && now - _renderResizeLogQpc < Stopwatch.Frequency / 10) { _renderResizeLogSuppressed++; return; }
+        _renderResizeLogQpc = now;
+        int suppressed = _renderResizeLogSuppressed;
+        _renderResizeLogSuppressed = 0;
+        var (waitGpuMs, buffersMs) = _swapchain.LastResizeSplit;
+        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[window.resize] px={px.Width:F0}x{px.Height:F0} path={(_isDetachedChild ? "render-child" : "render")} quiesceMs=0.00 waitGpuMs={waitGpuMs:F2} buffersMs={buffersMs:F2} resizeMs={resizeMs:F2} postedMs={postedMs:F2} collapsed={collapsed} suppressed={suppressed}"));
     }
 
     /// <summary>Render thread: build a leased popup's swapchain. A failure must not escape (this runs outside the submit's
@@ -5242,8 +5275,8 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.IsWindowActive = () => _window.IsActive;
         _inputHooks.WindowMinimize = _window.Minimize;
         _inputHooks.WindowToggleMaximize = _window.ToggleMaximize;
-        _inputHooks.IsWindowFullscreen = () => _window.IsFullscreen;
-        _inputHooks.WindowSetFullscreen = _window.SetFullscreen;
+        _inputHooks.IsWindowFullscreen = () => _pendingFullscreen >= 0 ? _pendingFullscreen == 1 : _window.IsFullscreen;
+        _inputHooks.WindowSetFullscreen = RequestFullscreen;
         _dispatcher.OnWindowMoveSizeBegan = _inputHooks.NotifyWindowMoveSizeBegan; // …learns when an OS move/size loop begins
         _dispatcher.OnWindowMoveSizeEnded = OnWindowMoveSizeEnded; // …learns when an OS move/size loop is over
         _inputHooks.WindowClose = _window.CloseWindow;
@@ -5607,6 +5640,30 @@ public sealed partial class AppHost : IDisposable
         _sbFamName = icon;
         SceneRecorder.ConfigureScrollbarArrowGlyphs(_scene, _sbUp, _sbDown, _sbLeft, _sbRight, family);
         _strings.Release(previous);
+    }
+
+    // The main window's full-screen request, applied at the top of the next Paint (-1 = none; 0 / 1 = leave / enter).
+    private int _pendingFullscreen = -1;
+
+    /// <summary>The app's <c>WindowSetFullscreen</c> (UI thread). The request is applied at the top of the next <see cref="Paint"/>,
+    /// BEFORE that frame's size check (<see cref="ApplyPendingFullscreen"/>), never where it was asked: app code asks from a layout
+    /// effect or an unmount cleanup, mid-frame, and a window resized there showed the previous frame's swapchain in the new window for
+    /// a whole frame (and parked the render thread a frame later for the swapchain). Applied first, the window, the swapchain and
+    /// the layout change in ONE frame. Latest wins; <c>IsWindowFullscreen</c> answers the pending value meanwhile.</summary>
+    private void RequestFullscreen(bool fullscreen)
+    {
+        _pendingFullscreen = fullscreen ? 1 : 0;
+        WakeFrame();
+    }
+
+    /// <summary>Apply a pending full-screen request (UI thread): the top of <see cref="Paint"/>, before <see cref="EnsureSize"/>, and
+    /// a parked frame (a minimized window never paints; entering full screen restores it, which un-parks the next frame).</summary>
+    private void ApplyPendingFullscreen()
+    {
+        int pending = _pendingFullscreen;
+        if (pending < 0) return;
+        _pendingFullscreen = -1;
+        if (!_window.IsClosed) _window.SetFullscreen(pending == 1);
     }
 
     private void WakeFrame()
@@ -6036,6 +6093,7 @@ public sealed partial class AppHost : IDisposable
             // the scene) instead of piling up until the restore frame. Same intent as the minimize-EDGE flush above, now
             // per drained minimized frame; a frame with nothing drained costs nothing.
             if (drainedPosts || _runtime.HasPending) FlushToQuiescence();
+            ApplyPendingFullscreen();   // never painted while parked: a full-screen request made now is applied here
             _ledgerExit = LedgerFrameExit.Parked;
             LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
             // Nothing presented this frame (minimized: Paint never runs) — the next present must not be charged for
@@ -6426,6 +6484,7 @@ public sealed partial class AppHost : IDisposable
             bool diagTick = keepAlive && s_resizeDiag;
             double ensureMs = 0, layoutMs0 = 0;
             long segStart = diagTick ? Stopwatch.GetTimestamp() : 0;
+            ApplyPendingFullscreen();   // first: its SetWindowPos resizes the window, and THIS frame's EnsureSize + layout follow it
             bool resized = EnsureSize(keepAlive);
             _tiers.FrameResized = resized;   // a measured crossing stored during this frame's layout waits one more layout (TierRegistry.Store)
             if (_fzPhase != FreezePhase.None) FreezeFrameStart(resized);   // E2: a resize / DPI change or the watchdog cuts the freeze (and ends its snap scope) before this frame flushes
@@ -9234,25 +9293,18 @@ public sealed partial class AppHost : IDisposable
         // rebuilds the swapchain wholesale, and one stale-size frame until the recovery frame lands is invisible next to
         // a crash); anything else is a genuine bug and rethrows. The exception FILTER runs before the finally, so the
         // render loop is still Resumed on both outcomes.
-        if (_isDetachedChild && _parentRenderThread is not null)
+        if (OwningRenderThread is not null)
         {
-            // A pop-out's OWN swapchain resize rides its mailbox (F207), applied on the shared render thread at the top of this
-            // child's next turn - dragging the pop-out's edge never parks the parent's loop, nor the main window's presents.
-            // Latest wins (F093): the several resizes a live drag posts between two turns collapse into one ResizeBuffers.
-            // Invalidate FIRST, then post: the turn that applies the op sees the new epoch, so a frame this host published at the
-            // old size is dropped there and can never be presented against the resized swapchain.
+            // The swapchain resize rides this host's mailbox (F207), applied on the render thread - the swapchain's sole owner - at
+            // the top of its next turn: a bare wake runs it at once (DrainChildRenderSources), so it overlaps this frame's layout, and
+            // the turn that presents this frame's publication drains it again first (SubmitPresentOnRenderThread), so that
+            // publication can never meet the old buffers. The UI never parks the loop for it: the park (Quiesce) waited for the
+            // render thread to finish its turn, present slot included, and stalled every present for that long (40-55 ms at a
+            // full-screen exit). Latest wins (F093): the resizes a live drag posts between two turns collapse into one ResizeBuffers.
+            // Invalidate FIRST, then post: the turn that applies the op sees the new epoch, so a frame published at the old size is
+            // dropped there and can never be presented against the resized swapchain. A pop-out (its parent's thread) is the same.
             _renderSeam.InvalidateTarget();
             PostOwnResize(s);
-        }
-        else if (OwningRenderThread is { } rt)
-        {
-            long q0 = Stopwatch.GetTimestamp();
-            rt.Quiesce();
-            long q1 = Stopwatch.GetTimestamp();
-            try { _renderSeam.InvalidateTarget(); _swapchain.Resize(s); }
-            catch (Exception) when (_device.NoteIfDeviceLost()) { }
-            finally { rt.Resume(); }
-            NoteWindowResize(s, "parked", ToMs(q1 - q0), ToMs(Stopwatch.GetTimestamp() - q1));
         }
         else
         {
