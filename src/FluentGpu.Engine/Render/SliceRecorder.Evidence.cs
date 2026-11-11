@@ -179,6 +179,20 @@ public sealed partial class SliceRecorder
         });
     }
 
+    /// <summary>The walk just begun on <paramref name="slot"/> was dirtied by <paramref name="node"/> (its own bits
+    /// <paramref name="bits"/>; <paramref name="count"/> self-dirty nodes on the trail).</summary>
+    internal void EvNoteCulprit(int slot, int node, uint gen, byte bits, int count)
+    {
+        if (!_ev || _evWalks is null || slot >= _evWalkAt.Length) return;
+        _evWalks.SetCulprit(_evWalkAt[slot], node, gen, bits, count);
+    }
+
+    internal void EvNoteCulpritMore(int slot, int k, int node, uint gen, byte bits)
+    {
+        if (!_ev || _evWalks is null || slot >= _evWalkAt.Length) return;
+        _evWalks.SetCulpritMore(_evWalkAt[slot], k, node, gen, bits);
+    }
+
     /// <summary>EndWalk: the walk of <paramref name="slot"/> closed with <paramref name="bytes"/> in its arena.</summary>
     private void EvWalkBytes(int slot, int bytes)
     {

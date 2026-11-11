@@ -192,6 +192,41 @@ internal sealed partial class SceneRecordingContext
         return true;
     }
 
+    /// <summary>Evidence only (the walk ledger is on): the node that dirtied the walk of <paramref name="slot"/> — the first
+    /// node, pre-order down the dirty trail from <paramref name="root"/> (across nested slices: the trail does not stop at a cut),
+    /// whose OWN record-dirty bits are set, and how many such nodes the trail holds. Bounded (<see cref="PartialKeepProbeLimit"/>
+    /// nodes); never a decision.</summary>
+    private void NoteWalkCulprit(SceneRecordingSnapshot scene, SliceRecorder sl, int slot, NodeHandle root)
+    {
+        NodeHandle first = NodeHandle.Null;
+        byte firstBits = 0;
+        int count = 0, top = 0, visited = 0;
+        _probeStack[top++] = (int)root.Raw.Index;
+        while (top > 0 && visited++ < PartialKeepProbeLimit)
+        {
+            var n = scene.HandleAt(_probeStack[--top]);
+            if (n.IsNull || !scene.IsLive(n)) continue;
+            byte self = scene.RecordDirtySelfBits(n);
+            if (self != 0)
+            {
+                if (count == 0) { first = n; firstBits = self; }
+                else if (count <= 3) sl.EvNoteCulpritMore(slot, count, (int)n.Raw.Index, n.Raw.Gen, self);
+                count++;
+            }
+            if (scene.RecordDirtyDescendantBits(n) == 0) continue;
+            // push children in reverse so the first child pops first (pre-order)
+            int mark = top;
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c))
+            {
+                if (scene.RecordDirtyBits(c) == 0) continue;
+                if (top == _probeStack.Length) Array.Resize(ref _probeStack, top * 2);
+                _probeStack[top++] = (int)c.Raw.Index;
+            }
+            Array.Reverse(_probeStack, mark, top - mark);
+        }
+        sl.EvNoteCulprit(slot, first.IsNull ? 0 : (int)first.Raw.Index, first.IsNull ? 0 : first.Raw.Gen, firstBits, count);
+    }
+
     private const int PartialKeepProbeLimit = 4096;
     private int[] _probeStack = new int[64];
 

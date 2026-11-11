@@ -49,6 +49,18 @@ public struct WalkEntry
     public byte Why;
     /// <summary>The slice role (<c>SliceRole</c>).</summary>
     public byte Role;
+    /// <summary><see cref="WalkWhy.RecordDirty"/>: the first node (pre-order, following the dirty trail down from the slice
+    /// root, across nested slices) whose OWN record-dirty bits are set — the node that dirtied the walk; 0 = none found.</summary>
+    public int Culprit;
+    public uint CulpritGen;
+    /// <summary>The culprit's own record-dirty bits (1 content, 2 transform, 4 … as <c>SceneStore.RecordDirty*</c>).</summary>
+    public byte CulpritBits;
+    /// <summary>How many self-dirty nodes the trail held (capped at 255).</summary>
+    public byte CulpritCount;
+    /// <summary>The next three self-dirty nodes on the trail (pre-order after <see cref="Culprit"/>; 0 = none) and their own bits.</summary>
+    public int Culprit2, Culprit3, Culprit4;
+    public uint Culprit2Gen, Culprit3Gen, Culprit4Gen;
+    public byte Culprit2Bits, Culprit3Bits, Culprit4Bits;
 }
 
 /// <summary>
@@ -90,5 +102,26 @@ public sealed class WalkLedger() : DiagRing<WalkEntry>(WalkLedgerCapacity)
     public void SetBytes(long index, int bytes)
     {
         if (TryAt(index, out int slot)) Slot(slot).Bytes = bytes;
+    }
+
+    /// <summary>PRODUCER ONLY. Name the node that dirtied the walk written at <paramref name="index"/>.</summary>
+    public void SetCulprit(long index, int node, uint gen, byte bits, int count)
+    {
+        if (!TryAt(index, out int slot)) return;
+        ref WalkEntry e = ref Slot(slot);
+        e.Culprit = node; e.CulpritGen = gen; e.CulpritBits = bits; e.CulpritCount = (byte)Math.Min(count, 255);
+    }
+
+    /// <summary>PRODUCER ONLY. The <paramref name="k"/>-th (1..3) further self-dirty node of the walk at <paramref name="index"/>.</summary>
+    public void SetCulpritMore(long index, int k, int node, uint gen, byte bits)
+    {
+        if (!TryAt(index, out int slot)) return;
+        ref WalkEntry e = ref Slot(slot);
+        switch (k)
+        {
+            case 1: e.Culprit2 = node; e.Culprit2Gen = gen; e.Culprit2Bits = bits; break;
+            case 2: e.Culprit3 = node; e.Culprit3Gen = gen; e.Culprit3Bits = bits; break;
+            case 3: e.Culprit4 = node; e.Culprit4Gen = gen; e.Culprit4Bits = bits; break;
+        }
     }
 }

@@ -1785,6 +1785,7 @@ internal sealed partial class SceneRecordingContext
                             spans is not null && spans.IsBlocked((int)node.Raw.Index, spanFrame), scene.RecordDirtyBits(node),
                             stats.KeepDenySlot == selfSlot, selfSlot == SliceRecorder.RootSlot, missClass: 2, wholeArena: true, out uint lwhyDetail);
                         sl.BeginWalk(selfSlot, lwhy, lwhyDetail);
+                        if (lwhy == WalkWhy.RecordDirty && sl.EvidenceEnabled) NoteWalkCulprit(scene, sl, selfSlot, node);
                         sl.SetLayerInputSig(selfSlot, layerSig);
                         stats.CurGen = sl.CurGen(selfSlot);
                         stats.PriorGen = sl.PriorGen(selfSlot);
@@ -2045,6 +2046,7 @@ internal sealed partial class SceneRecordingContext
                     recordDirtyBits, stats.KeepDenySlot == selfSlot, selfSlot == SliceRecorder.RootSlot, missClass,
                     wholeArena: missClass != 0, out uint whyDetail);
                 sl.BeginWalk(selfSlot, why, whyDetail);
+                if (why == WalkWhy.RecordDirty && sl.EvidenceEnabled) NoteWalkCulprit(scene, sl, selfSlot, node);
                 stats.CurGen = sl.CurGen(selfSlot);
                 stats.PriorGen = sl.PriorGen(selfSlot);
             }
