@@ -23,14 +23,15 @@ public readonly record struct TextOverflow(bool IsText, bool HorizontalOverflow,
 /// <summary>
 /// The per-text-node "was it trimmed" query. Derived, not stored: the node's laid-out box (<see cref="SceneStore.Bounds"/>)
 /// against the run re-measured through the SAME font system the layout used, without the cut — a single-line run at
-/// unbounded width, a wrapping run at the box width with no line cap and no trimming. The style is the node's layout style
-/// (size, weight, family, spacing, line height, case), so the measure is the layout's own, at the auto-fit size when
-/// <c>MinSize</c> shrank it. Cold path (one or two shapes per call, no caching): meant for inspection and lint, not for
-/// every frame. Call on the UI thread between frames.
+/// unbounded width, a wrapping run at the box width (the width the draw shapes it at) with no line cap and no trimming. The
+/// style is the node's layout style (size, weight, family, spacing, line height, case), so the measure is the layout's own,
+/// at the auto-fit size when <c>MinSize</c> shrank it. Cold path (one or two shapes per call, no caching): meant for
+/// inspection and lint, not for every frame. Call on the UI thread between frames.
 /// </summary>
 public static class TextOverflowQuery
 {
-    /// <summary>Slack (DIP) before a difference counts: sub-pixel rounding between measure and arrange is not a trim.</summary>
+    /// <summary>Slack (DIP) on the size COMPARISON only (natural against box) before a difference counts: sub-pixel rounding
+    /// between measure and arrange is not a trim. The run itself is laid out at the box width, never at the box plus this.</summary>
     public const float Tolerance = 0.5f;
 
     /// <summary>The overflow of text node <paramref name="node"/> in <paramref name="scene"/>, measured by
@@ -68,8 +69,9 @@ public static class TextOverflowQuery
         }
         else
         {
-            // The box width plus the slack: a run whose box IS its widest line must not re-break that line on rounding.
-            float wrapW = MathF.Max(0f, box.Width) + Tolerance;
+            // The box width, the width the draw shapes the run at: the layout engine's own wrap slack (TextLayoutEngine.WrapSlack)
+            // is what keeps a run whose box IS its widest line from re-breaking that line on rounding.
+            float wrapW = MathF.Max(0f, box.Width);
             natural = fonts.Measure(text, uncut, wrapW).Size;
             // An unbreakable word wider than the box overflows sideways even when wrapping.
             horizontal = natural.Width > box.Width + Tolerance;
@@ -109,8 +111,8 @@ public static class TextOverflowQuery
             TextMeasureEntry entry = cache.ResolveForWidth(bounds.W);
             if (entry.Valid && entry.FitSize > 0f && entry.FitSize < style.SizeDip) style = style.AtFitSize(entry.FitSize);
         }
-        // A pure measure: a span run's artifacts stay the ones the layout published.
-        bool found = fonts.TryMeasureInk(paint.Text, style with { MinSizeDip = 0f }, MathF.Max(0f, bounds.W) + Tolerance, out ink);
+        // A pure measure at the box width the draw shapes at: a span run's artifacts stay the ones the layout published.
+        bool found = fonts.TryMeasureInk(paint.Text, style with { MinSizeDip = 0f }, MathF.Max(0f, bounds.W), out ink);
         if (style.SpanRunId != 0)
         {
             float drawnW = cache.Valid ? cache.ResolveForWidth(bounds.W).MaxW : bounds.W;
