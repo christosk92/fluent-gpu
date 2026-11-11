@@ -471,7 +471,17 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
     // measure pass saw it fit) while the run actually rasterizes TWO, so the following sibling overlaps it (the Expander
     // "body overlaps the action button after collapse→re-expand" defect). One DIP of slack keeps measure ≡ render at
     // that boundary — the run clips at most ~1px on the right, imperceptible — without affecting genuinely-narrower boxes.
+    // The slack is one rule for a wrapping run, read only through Overruns: a line the wrap test keeps is drawn whole, so
+    // the trim of a wrapping run's last line decides its ellipsis with the same threshold, and the overflow suffix fits
+    // with it too. A no-wrap run ran no wrap test and trims strictly (TrimTest.Strict).
     private const float WrapSlack = 1f;
+
+    private static bool Overruns(float width, float maxWidth) => width > maxWidth + WrapSlack;
+
+    // How EmitLine decides to ellipsize a trimmed line. Slack: a wrapping run's line, ellipsized only when it Overruns
+    // (the wrap test's threshold). Strict: a no-wrap run, ellipsized past maxWidth. Overflowed: the wrap test already
+    // fired on this last allowed line and content is dropped, so it always carries the ellipsis.
+    private enum TrimTest : byte { Strict, Slack, Overflowed }
 
     private void WrapAndPosition(float size, float scale, float lineHeight, float maxWidth, int wrap, int trim, int maxLines, nint face,
         int overflowSuffixStart)
@@ -485,6 +495,7 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
         // at 0, so a collapsed cell degrades to one glyph + the ellipsis instead of the whole string. Wrapping stays
         // gated: breaking at a ~0 budget would emit one glyph per line, which is worse than a single trimmed line.
         bool doTrim = trim != 0 && maxWidth >= 0f && !float.IsInfinity(maxWidth);
+        TrimTest trimTest = doWrap ? TrimTest.Slack : TrimTest.Strict;
         int maxL = maxLines > 0 ? maxLines : int.MaxValue;
         int allGc = _glyphCount;
         int suffixGlyph = allGc;
@@ -533,11 +544,12 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
                                 line, lineHeight, maxWidth, ref maxLineW);
                             emittedOverflowSuffix = true;
                         }
-                        else EmitLine(lineStart, i, line, lineHeight, doTrim, maxWidth, ref maxLineW);
+                        else EmitLine(lineStart, i, line, lineHeight, doTrim, trimTest, maxWidth, ref maxLineW);
                         line++; lineStart = gc;
                         break;
                     }
-                    EmitLine(lineStart, i, line, lineHeight, doTrim, maxWidth, ref maxLineW); lineStart = i; line++; pen = 0f; lastBreak = -1;
+                    EmitLine(lineStart, i, line, lineHeight, doTrim, trimTest, maxWidth, ref maxLineW);
+                    lineStart = i; line++; pen = 0f; lastBreak = -1;
                 }
                 if (canBreak) lastBreak = i;
 
@@ -548,7 +560,7 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
                 // break, started the next line with the space (br = i): an indented line, or a line of only spaces.
                 // The wrap now fires on the next letter, whose CanBreak keeps the spaces on this line.
                 bool hang = c >= 0 && c < _breaks.Count && _breaks[c].IsWhitespace;
-                if (doWrap && !hang && pen + adv > maxWidth + WrapSlack && i > lineStart)
+                if (doWrap && !hang && Overruns(pen + adv, maxWidth) && i > lineStart)
                 {
                     // WrapWholeWords (wrap == 2, WinUI TextWrapping.WrapWholeWords): a line breaks ONLY at a break opportunity;
                     // a word wider than the budget overhangs instead of breaking mid-word (Wrap's emergency break). The
@@ -559,18 +571,19 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
                     {
                         // Overflow ON the last allowed line: it still wraps at the break point — the remainder is
                         // dropped, never dumped unwrapped past maxWidth. With trimming, EmitLine ellipsizes the
-                        // remainder down to the width budget instead (WinUI CharacterEllipsis + MaxLines).
+                        // remainder down to the width budget instead (WinUI CharacterEllipsis + MaxLines). Content is
+                        // dropped here, so the trimmed line always shows the ellipsis (TrimTest.Overflowed).
                         if (canEmitOverflowSuffix)
                         {
                             EmitOverflowSuffixLine(lineStart, gc, suffixGlyph, allGc, overflowSuffixStart,
                                 line, lineHeight, maxWidth, ref maxLineW);
                             emittedOverflowSuffix = true;
                         }
-                        else EmitLine(lineStart, doTrim ? gc : br, line, lineHeight, doTrim, maxWidth, ref maxLineW);
+                        else EmitLine(lineStart, doTrim ? gc : br, line, lineHeight, doTrim, TrimTest.Overflowed, maxWidth, ref maxLineW);
                         line++; lineStart = gc;
                         break;
                     }
-                    EmitLine(lineStart, br, line, lineHeight, false, maxWidth, ref maxLineW);   // wrapped lines fit by construction
+                    EmitLine(lineStart, br, line, lineHeight, false, trimTest, maxWidth, ref maxLineW);   // wrapped lines fit by construction
                     lineStart = br; line++;
                     pen = 0f; for (int k = br; k < i; k++) pen += _glyphs[k].Advance;
                     lastBreak = -1;
@@ -580,7 +593,7 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
             else if (gc > lineStart || line == 0)
             {
                 // The final line: it may overflow (no-wrap, or the maxLines-truncated remainder) → trim if requested.
-                EmitLine(lineStart, gc, line, lineHeight, doTrim, maxWidth, ref maxLineW); line++;
+                EmitLine(lineStart, gc, line, lineHeight, doTrim, trimTest, maxWidth, ref maxLineW); line++;
             }
         }
 
@@ -796,7 +809,7 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
             suffixW = 0f;
             suffixUseEnd = suffixStartGlyph;
             while (suffixUseEnd < suffixEndGlyph
-                && suffixW + _glyphs[suffixUseEnd].Advance <= maxWidth + WrapSlack)
+                && !Overruns(suffixW + _glyphs[suffixUseEnd].Advance, maxWidth))
                 suffixW += _glyphs[suffixUseEnd++].Advance;
         }
 
@@ -846,7 +859,7 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
                 if (before == BreakOpp.CanBreak || before == BreakOpp.MustBreak) lastBreak = i;
             }
             float next = used + _glyphs[i].Advance;
-            if (next > budget + WrapSlack)
+            if (Overruns(next, budget))
                 return lastBreak > start ? lastBreak : i;
             used = next;
         }
@@ -868,7 +881,8 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
     }
 
     // Position glyphs [start,end) on one line with BiDi L2 reordering; trim+ellipsize if the line overflows; append to _laid.
-    private void EmitLine(int start, int end, int lineIndex, float lineHeight, bool doTrim, float maxWidth, ref float maxLineW)
+    private void EmitLine(int start, int end, int lineIndex, float lineHeight, bool doTrim, TrimTest trimTest, float maxWidth,
+        ref float maxLineW)
     {
         if (end <= start) return;
         int len = end - start;
@@ -882,7 +896,15 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
         if (doTrim)
         {
             float total = 0f; for (int i = start; i < end; i++) total += _glyphs[i].Advance;
-            if (total > maxWidth)
+            // A line the wrap test keeps is drawn whole: a wrapping run ellipsizes only when the line Overruns (the wrap
+            // test's threshold); a no-wrap run trims strictly past maxWidth. Either way the cut below fits maxWidth itself.
+            bool overflows = trimTest switch
+            {
+                TrimTest.Overflowed => true,
+                TrimTest.Slack => Overruns(total, maxWidth),
+                _ => total > maxWidth,
+            };
+            if (overflows)
             {
                 if (_spanEllCount == 0)
                 {
