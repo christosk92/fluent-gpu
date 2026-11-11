@@ -574,7 +574,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         var target = new D3D12Swapchain(this, (HWND)desc.PresentTarget.Value,
             (uint)Math.Max(1, (int)desc.SizePx.Width), (uint)Math.Max(1, (int)desc.SizePx.Height), composited,
             desc.DesktopAcrylic, desc.AcrylicTint, desc.CornerRadiusPx, ordinal: (byte)Math.Min(255, ++_swapchainOrdinalSeq));
-        InitSwapChain(target);
+        // A POPUP window's swapchain (the desktop-acrylic material: AppHost.OpenPopupWindow) is not built here. Its create runs on the
+        // shared render thread at the top of a turn (the popup mailbox), i.e. between the owner's frame start and its present, and
+        // costs 2-14 ms (13-19 ms for the first one in a process): the owner's frame missed a refresh on every menu open. It is
+        // built right AFTER the owner's next present instead (BuildPendingPopups); its first frame, deferred until then like a
+        // busy-slot frame (DeferPopupSubmit), shows one turn later. Until built it only records its size and chrome.
+        if (desc.DesktopAcrylic && _primarySwapchain is not null)
+        {
+            target.BuildPending = true;
+            _popupBuildPending = true;
+        }
+        else InitSwapChain(target);
         _swapchains.Add(target);
         _primarySwapchain ??= target;
         // NO Activate(target) here (INCIDENT 2026-09, detached-window-render-isolation-implementation.md §1.2): creation
@@ -1328,6 +1338,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     private void InitSwapChain(D3D12Swapchain target)
     {
+        long icT0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool lazyBuild = target.BuildPending;
+        target.BuildPending = false;
+        target.BuildFailed = false;
         DXGI_SWAP_CHAIN_DESC1 sd = default;
         sd.Width = target.W;
         sd.Height = target.H;
@@ -1361,6 +1375,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         else
             Check(_factory->CreateSwapChainForHwnd((IUnknown*)_queue, target.Hwnd, &sd, null, null, &sc1), "CreateSwapChainForHwnd");
 
+        long icT1 = System.Diagnostics.Stopwatch.GetTimestamp();
         IDXGISwapChain3* sc3;
         Check(sc1->QueryInterface(__uuidof<IDXGISwapChain3>(), (void**)&sc3), "QI IDXGISwapChain3");
         sc1->Release();
@@ -1398,6 +1413,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.RtvHeap = heap;
         D3D12MemoryDiagnostics.Track(target.RtvHeap, "Swapchain.RtvHeap", (ulong)FRAME_COUNT * _rtvSize);
 
+        long icT2 = System.Diagnostics.Stopwatch.GetTimestamp();
         if (target.DesktopAcrylic)
         {
             // Desktop-sampling acrylic popup (the WinUI MenuFlyout material): host the swapchain in a Windows.UI.Composition
@@ -1419,6 +1435,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             target.DcompBindPending = true;
         }
 
+        long icT3 = System.Diagnostics.Stopwatch.GetTimestamp();
         CreateRtvs(target);
         // ONE command list per target (Phase 1 §3.1 — was ONE device-global list, created once in InitDevice). Any
         // ring allocator is fine here: the first real submit's Reset() supplies the actual bank. This runs on the
@@ -1434,6 +1451,49 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.Frame.List4 = list4;
         SetName(target.Frame.List, $"FluentGpu.CommandList[{target.Ordinal}]");
         SamplePresentTopology(target);
+        // Always-on, once per popup swapchain build: where a popup's create time goes (the [overlay.popup] renderCreate= total),
+        // so the cost a popup open puts on the shared render thread is attributable by part.
+        if (target.DesktopAcrylic)
+        {
+            long icT4 = System.Diagnostics.Stopwatch.GetTimestamp();
+            double qf = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            Diag.Line($"[d3d12.present] popup create target={target.Ordinal} total={(icT4 - icT0) * qf:F2}ms swapchain={(icT1 - icT0) * qf:F2} waitable+heap={(icT2 - icT1) * qf:F2} backdrop={(icT3 - icT2) * qf:F2} rtv+list+topology={(icT4 - icT3) * qf:F2} lazy={(lazyBuild ? 1 : 0)}");
+        }
+        // The chrome a placement configured while the build was pending (D3D12Swapchain.ConfigurePopupChrome).
+        if (target.ChromePending && target.Backdrop is { } backdrop)
+        {
+            ref readonly var m = ref target.PendingChrome;
+            backdrop.ConfigureChrome(m.ContentRectPx, m.OpensUp, m.ClosedRatio, m.CornerRadiusPx);
+        }
+        target.ChromePending = false;
+    }
+
+    // ── popup swapchain build after the owner's present (CreateSwapchain) ──────────────────────────────────────────────
+    private bool _popupBuildPending;
+
+    /// <summary>Build every popup swapchain still pending: run right after the PRIMARY's present, so the build never sits between
+    /// the owner's frame start and its present. Render thread (the presenting thread).</summary>
+    private void BuildPendingPopups()
+    {
+        _popupBuildPending = false;
+        for (int i = 0; i < _swapchains.Count; i++)
+        {
+            var sc = _swapchains[i];
+            if (sc.BuildPending && !sc.Disposed) BuildPopupNow(sc);
+        }
+    }
+
+    private void BuildPopupNow(D3D12Swapchain sc)
+    {
+        try { InitSwapChain(sc); }
+        catch (Exception ex)
+        {
+            // CreateSwapchain would have thrown to the host's create (which drops the popup); here the owner's present already ran, so
+            // the popup keeps deferring its frames (never shown) until the host closes it. A lost device rebuilds it in RecoverDevice.
+            sc.BuildPending = false;
+            sc.BuildFailed = true;
+            Diag.Line($"[d3d12.present] popup build failed target={sc.Ordinal}: {ex.Message}");
+        }
     }
 
     private void EnsureDComp()
@@ -3599,12 +3659,19 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // thread, nothing is queued, and the latency credit stays held.
     internal void Present(D3D12Swapchain target, bool noWait = false)
     {
+        PresentTarget(target, noWait);
+        if (_popupBuildPending && ReferenceEquals(target, _primarySwapchain)) BuildPendingPopups();
+    }
+
+    private void PresentTarget(D3D12Swapchain target, bool noWait)
+    {
         // Reset BEFORE the Disposed early-out: a dead target must never replay the previous call's refusal (the host would keep
         // the frame owed, and the shared render thread ticking, to retry a swapchain that is gone).
         target.Frame.LastPresentRefused = false;
         if (target.Disposed) return;
         // A popup frame deferred at submit (DeferPopupSubmit) recorded nothing: there is nothing to flip, and no credit to spend.
         if (target.SubmitDeferred) { target.SubmitDeferred = false; return; }
+        if (target.BuildPending || target.BuildFailed) return;   // never built: nothing to present
         if (target.PresentNoWaitOnce) { target.PresentNoWaitOnce = false; noWait = true; }
         long sdp = SdNow();
         AssertSubmitThread();   // seam Step 0: when render-confined (force-sync/async), only the render thread may present
@@ -4304,6 +4371,21 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private bool DeferPopupSubmit(D3D12Swapchain sc)
     {
         sc.SubmitDeferred = false;
+        if (sc.BuildFailed) { sc.SubmitDeferred = true; return true; }
+        if (sc.BuildPending)
+        {
+            // Not built yet: this turn's frame waits for the build after the owner's present. A second turn with the build still
+            // pending had no owner present in between (nothing to present on the primary): build here, one turn late.
+            if (sc.BuildWaitTurns++ == 0)
+            {
+                sc.SubmitDeferred = true;
+                Volatile.Write(ref sc.PopupFrameOwed, 1);
+                sc.PopupFramesAwaitingBuild++;
+                return true;
+            }
+            BuildPopupNow(sc);
+            if (sc.BuildFailed) { sc.SubmitDeferred = true; return true; }
+        }
         if (!sc.DesktopAcrylic || ReferenceEquals(sc, _primarySwapchain) || !sc.HasLatencyWaitable
             || sc.LatencyCreditHeld || sc.Frame.SkipLatencyOnce)
         {
@@ -4326,6 +4408,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             sc.SubmitDeferred = true;
             Volatile.Write(ref sc.PopupFrameOwed, 1);
             Volatile.Write(ref _popupFramesDeferred, _popupFramesDeferred + 1);
+            sc.PopupFramesDeferred++;
             if (sc.PopupDeferTurns == PopupDeferLogTurns) NotePopupDeferral(sc, deferredMs, forced: false);
             return true;
         }
@@ -5202,6 +5285,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         AssertDeviceOwner();
         if (w < 1) w = 1; if (h < 1) h = 1;
         if (target.Disposed || (w == target.W && h == target.H)) return;
+        if (target.BuildPending || target.BuildFailed) { target.W = w; target.H = h; return; }   // built at this size later
         BeginTargetFrame(target.Frame);
         // Phase 1 (§3.4, pal-rhi.md §5.4 as designed): CPU-wait only the fence values THIS target's in-flight work
         // stamped — its submits AND its last present (TargetFenceHorizon) — never a full device drain: a detached child's
@@ -5248,6 +5332,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // referenced by this target's own submits, which its fence ledger covers; DComp / DXGI keep their own references for
         // anything still being composed, and the shared pools (atlases, image textures, ring allocators) are not released here.
         Diag.Line($"[d3d12.teardown] phase=target-drain target={target.Ordinal} recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
+        if (target.DesktopAcrylic)
+            Diag.Line($"[d3d12.present] popup released target={target.Ordinal} built={(target.SwapChain != null ? 1 : 0)} framesAwaitingBuild={target.PopupFramesAwaitingBuild} framesDeferredBusySlot={target.PopupFramesDeferred}");
         DrainForTeardown(TargetFenceHorizon(target.Frame), signal: false);
         ReleaseSwapchainResources(target);
         // Release this swapchain's video presenter AFTER its resources (its DcompRoot is now null → DetachChild no-ops)
@@ -5593,6 +5679,11 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal long PopupDeferSinceQpc;
     internal int PopupDeferTurns;
     internal int PopupFrameOwed;
+    // A popup swapchain created but not built yet (D3D12Device.CreateSwapchain: built after the owner's next present), the turns
+    // its frames waited for that, a build that failed, and the chrome a placement configured meanwhile. Render thread only.
+    internal bool BuildPending, BuildFailed, ChromePending;
+    internal int BuildWaitTurns, PopupFramesAwaitingBuild, PopupFramesDeferred;
+    internal PopupChromeMetrics PendingChrome;
     // This swapchain's DXGI maximum frame latency when it is NOT the primary (D3D12Device.SetPresentQueueDepth(target, depth) —
     // a detached pop-out's own depth policy); the primary's lives on the device (_presentQueueDepth). Render thread writes
     // (Volatile), any thread may read. Starts at the creation depth, so a rebuild of the swapchain restores it.
@@ -5908,7 +5999,11 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
         Device.Present(this, noWait: true);
         return !Frame.LastPresentRefused;
     }
-    public void ConfigurePopupChrome(in PopupChromeMetrics m) => Backdrop?.ConfigureChrome(m.ContentRectPx, m.OpensUp, m.ClosedRatio, m.CornerRadiusPx);
+    public void ConfigurePopupChrome(in PopupChromeMetrics m)
+    {
+        if (BuildPending) { PendingChrome = m; ChromePending = true; return; }   // applied when D3D12Device.InitSwapChain builds it
+        Backdrop?.ConfigureChrome(m.ContentRectPx, m.OpensUp, m.ClosedRatio, m.CornerRadiusPx);
+    }
     public void AnimatePopupOpen() => Backdrop?.AnimateOpen();
     public void AnimatePopupClose() => Backdrop?.AnimateClose();
     /// <remarks>Also true while a frame of this popup is owed (deferred behind a busy present slot): the host keeps
