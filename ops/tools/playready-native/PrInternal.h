@@ -818,6 +818,7 @@ struct Session
     struct StreamProbe
     {
         bool armed = false;
+        bool echoPending = false;    // the size is published (appliedStreamW/H + FgPrEvent_StreamApplied) when the probe resolves
         int32_t w = 0, h = 0;
         int64_t calledQpc = 0;       // when UpdateVideoStream returned
         double applyMs = 0.0;        // how long UpdateVideoStream itself took

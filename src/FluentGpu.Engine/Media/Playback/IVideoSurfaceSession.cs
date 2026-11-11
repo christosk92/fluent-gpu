@@ -322,8 +322,11 @@ public enum VideoContentVia : byte
 /// <item>WHEN: the first size at once and a changed natural size at once; any other change only after the destination
 /// has held still for <see cref="SettleMs"/> (never mid-animation: DirectComposition's scale covers the gap).</item>
 /// <item>WHAT THE COMPOSITOR IS TOLD: the content size moves to a newly requested size only when the backend echoes
-/// that it APPLIED it, so DirectComposition never scales an old-size buffer by a new-size factor. A backend that
-/// cannot echo (or has not by <see cref="EchoTimeoutMs"/> while paused) is trusted after the timeout.</item>
+/// that it APPLIED it, so DirectComposition never scales an old-size buffer by a new-size factor. Both Windows backends echo a
+/// request made while playing only once their renderer counted a frame after it, and one made while not playing right after
+/// asking for the repaint; both raise a pump when the echo changes (the protected runtime's FgPrEvent_StreamApplied, the clear
+/// engine's snapshot raise). A backend that cannot echo (or has not by <see cref="EchoTimeoutMs"/> while frames are not
+/// expected) is trusted after the timeout; while frames are expected an echo is never assumed.</item>
 /// </list>
 /// A destination that is not laid out decides nothing. UI-thread only; the clock is passed in so it is testable.</summary>
 public sealed class VideoStreamSizeGate
@@ -332,7 +335,8 @@ public sealed class VideoStreamSizeGate
     public const int SettleMs = 250;
     /// <summary>How long a requested size may stay unconfirmed before a paused (or non-echoing) backend is trusted.</summary>
     public const int EchoTimeoutMs = 500;
-    /// <summary>The pump cadence while an echo is awaited (the protected runtime raises no event for it).</summary>
+    /// <summary>The pump cadence while an echo is awaited, up to <see cref="EchoTimeoutMs"/>: the fallback to the backends' own
+    /// echo pump (the protected runtime's <c>FgPrEvent_StreamApplied</c>, the clear engine's snapshot raise).</summary>
     public const int EchoPollMs = 40;
 
     private SizeI _natural, _requested, _published;

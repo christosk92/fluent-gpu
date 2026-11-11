@@ -1023,6 +1023,9 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
                 LogVideo($"size.changed key={_logKey} size={a}x{b}");
                 break;
 
+            case PrNative.EvStreamApplied:   // the native "[cenc] stream size ... firstFrameAfterMs=" line already says when and why
+                break;
+
             case PrNative.EvFeedStalled:
                 Volatile.Write(ref _feedStalled, 1);
                 LogVideo($"feed.stalled key={_logKey} seg={a} http={b}");

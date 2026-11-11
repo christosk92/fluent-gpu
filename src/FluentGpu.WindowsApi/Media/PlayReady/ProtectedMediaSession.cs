@@ -686,8 +686,11 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         {
             if (VideoStreamSizing.IsLaidOut(videoRect))
             {
+                // Frames are expected while the native source plays, Buffering included (a stall the snapshot reads as Playing): the
+                // echo then waits for the frame rendered after the request, and only a source that renders none (paused, ended) is
+                // trusted at the timeout - native publishes its echo at once after the repaint anyway.
                 VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, _player.AppliedStreamSize,
-                    pv == ProtectedVideoState.Playing, ClockMs(), binding.Display);
+                    pv is ProtectedVideoState.Playing or ProtectedVideoState.Buffering, ClockMs(), binding.Display);
                 if (!step.Request.IsEmpty) _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
                 ArmSizeRetry(step.RetryInMs);
                 SizeI content = step.Content;

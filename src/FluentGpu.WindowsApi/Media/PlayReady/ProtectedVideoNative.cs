@@ -70,6 +70,9 @@ internal static unsafe partial class PrNative
     /// <summary>A USABLE license's key went INTERNAL_ERROR / RELEASED / OUTPUT_NOT_ALLOWED and will never decrypt again:
     /// <c>a</c> = the failing HRESULT (0x8004800N, N = the status), <c>b</c> = the MF_MEDIAKEY_STATUS. Native has evicted it.</summary>
     internal const int EvLicenseRevoked = 53;
+    /// <summary>The snapshot's applied stream size changed to one a frame was rendered at (<c>a</c> = width, <c>b</c> = height): a
+    /// stream-size request's echo, raised so the pump that flips the compositor's content size runs now and not at its next poll.</summary>
+    internal const int EvStreamApplied = 54;
 
     // ── state (FgPrState) ──────────────────────────────────────────────────────────────────────────────────────────
 

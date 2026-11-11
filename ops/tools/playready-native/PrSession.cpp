@@ -1898,10 +1898,20 @@ constexpr int64_t kStreamProbeGiveUpMs = 10000;
 
 static void ScheduleStreamProbe(Runtime& rt, const std::shared_ptr<Session>& sp, int32_t delayMs);
 
+/// Publish a stream size as applied (the echo the managed side scales by) and say so (runtime thread).
+static void PublishAppliedStream(Session& s, int32_t w, int32_t h)
+{
+    s.appliedStreamW.store(w, std::memory_order_release);
+    s.appliedStreamH.store(h, std::memory_order_release);
+    Raise(s.handle, FgPrEvent_StreamApplied, (int64_t)w, (int64_t)h);
+}
+
 static void ResolveStreamProbe(Session& s, int64_t afterMs, const char* how)
 {
     const Session::StreamProbe p = s.streamProbe;
     s.streamProbe.armed = false;
+    s.streamProbe.echoPending = false;
+    if (p.echoPending) PublishAppliedStream(s, p.w, p.h);
     char tail[200];
     snprintf(tail, sizeof(tail), " applyMs=%.2f firstFrameAfterMs=%lld polls=%d via=%s state=%d", p.applyMs, (long long)afterMs,
              p.polls, how, (int)s.state.load(std::memory_order_acquire));
@@ -1912,9 +1922,17 @@ static void PollStreamProbe(Runtime& rt, const std::shared_ptr<Session>& sp, uin
 {
     Session& s = *sp;
     if (gen != s.streamProbeGen || !s.streamProbe.armed) return;
-    if (!IsLive(rt, s)) { s.streamProbe.armed = false; return; }
+    if (!IsLive(rt, s)) { s.streamProbe.armed = false; s.streamProbe.echoPending = false; return; }
     s.streamProbe.polls++;
     const int64_t afterMs = fgpr::QpcToMs(fgpr::QpcNow() - s.streamProbe.calledQpc);
+    if (s.streamProbe.echoPending && s.state.load(std::memory_order_acquire) != FgPrState_Playing)
+    {
+        // Paused (or ended) before a frame came: none will. Ask MF to render the current frame into the resized swap chain - the
+        // clear path's StreamRect + Repaint - and publish now, as a request made while paused is.
+        rt.engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);
+        ResolveStreamProbe(s, -1, "paused");
+        return;
+    }
     uint32_t rendered = 0, dropped = 0;
     if (!ReadEngineFrameStats(rt, rendered, dropped))
     {
@@ -1927,7 +1945,10 @@ static void PollStreamProbe(Runtime& rt, const std::shared_ptr<Session>& sp, uin
         ResolveStreamProbe(s, afterMs, "frame");
         return;
     }
-    if (afterMs >= kStreamProbeGiveUpMs)
+    // A request still waiting for its frame is never given up on while the source plays: a stall (WAITING) renders nothing and
+    // the old buffer is what is on the glass; the next frame, a pause, a newer request or the detach resolves it. Only a probe
+    // that publishes nothing (it was published at once) stops looking.
+    if (!s.streamProbe.echoPending && afterMs >= kStreamProbeGiveUpMs)
     {
         ResolveStreamProbe(s, -1, "none");
         return;
@@ -1945,14 +1966,16 @@ static void ScheduleStreamProbe(Runtime& rt, const std::shared_ptr<Session>& sp,
     });
 }
 
-/// Arm the probe for an UpdateVideoStream(dst) that just returned (runtime thread).
-static void ArmStreamProbe(Runtime& rt, const std::shared_ptr<Session>& sp, int32_t w, int32_t h, int64_t calledQpc, double applyMs)
+/// Arm the probe for an UpdateVideoStream(dst) that just returned (runtime thread). With `echoPending` the size is published only
+/// when the probe resolves (the first frame after the call, or a pause); a superseded request publishes nothing (the newer one does).
+static void ArmStreamProbe(Runtime& rt, const std::shared_ptr<Session>& sp, int32_t w, int32_t h, int64_t calledQpc, double applyMs,
+                           bool echoPending)
 {
     Session& s = *sp;
     ++s.streamProbeGen;
     uint32_t rendered = 0, dropped = 0;
     const bool readable = ReadEngineFrameStats(rt, rendered, dropped);
-    s.streamProbe = Session::StreamProbe{ true, w, h, calledQpc, applyMs, rendered, 0 };
+    s.streamProbe = Session::StreamProbe{ true, echoPending, w, h, calledQpc, applyMs, rendered, 0 };
     if (!readable)
     {
         ResolveStreamProbe(s, -1, "unreadable");
@@ -2664,15 +2687,16 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rtH
         const double applyMs = (double)(returnedQpc - callQpc) * 1000.0 / (double)fgpr::QpcFrequency();
         if (SUCCEEDED(hr))
         {
-            ArmStreamProbe(rt, sp, (int32_t)dst.right, (int32_t)dst.bottom, returnedQpc, applyMs);
-            // The compositor scales the swap chain's CURRENT frame by the new size's factor, but that frame was rendered at the
-            // old size: unless the source is playing (its next frame is rendered at the new size anyway), repaint so the frame
-            // DirectComposition scales is one MF rendered for this destination (the clear path's StreamRect + Repaint).
-            if (s.state.load(std::memory_order_acquire) != FgPrState_Playing)
-                rt.engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);
-            // Echo AFTER the repaint was asked for: the managed side publishes the new content size on seeing this.
-            s.appliedStreamW.store((int32_t)dst.right, std::memory_order_release);
-            s.appliedStreamH.store((int32_t)dst.bottom, std::memory_order_release);
+            // The compositor scales the swap chain's CURRENT frame by the new size's factor, and the managed side moves that factor
+            // when this echo says so. While the source plays, the echo waits for the renderer to count a frame after this call (the
+            // probe): until then the buffer holds the old-size frame, and an echo stored the instant the call returned drew it at
+            // the new scale (a picture a third of its size, then a snap). A source that is not playing renders no frame by itself:
+            // repaint so the frame DirectComposition scales is one MF rendered for this destination (the clear path's StreamRect +
+            // Repaint), and echo after asking for it. A request superseded before its frame publishes nothing (the newer one does).
+            const bool playing = s.state.load(std::memory_order_acquire) == FgPrState_Playing;
+            if (!playing) rt.engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);
+            ArmStreamProbe(rt, sp, (int32_t)dst.right, (int32_t)dst.bottom, returnedQpc, applyMs, /*echoPending*/ playing);
+            if (!playing) PublishAppliedStream(s, (int32_t)dst.right, (int32_t)dst.bottom);
             s.frameWatch.Restart(TickMs());   // F066
         }
         // Rate-limited (one line a second; a failure always): the size used to log once per change, and a resize gesture

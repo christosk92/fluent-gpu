@@ -204,6 +204,22 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private uint _appliedStreamW, _appliedStreamH;
     // Engine thread only: when PollFrameStats last read the counters (VideoEngineSnapshot.FramesSampledTimestamp; 0 = never this source).
     private long _framesSampledTicks;
+    // Engine thread only: a StreamRect for a size OTHER than the one the swap chain holds, made while playing, not yet echoed. An echo
+    // stored when UpdateVideoStream(dst) returned had the compositor scale the frame still in the buffer by the new size's factor until
+    // MF drew a frame into the resized swap chain. The echo now waits for the renderer to count a frame after the call. What that
+    // proves is limited: on this machine (2026-11-11, the stage bench's clip) MF resized the buffer in place while playing and the next
+    // frame was at the new size, but on the owner's canvas MF kept presenting the old size for good after a request, frames and all.
+    // Holding every later size until a swap-chain re-creation was tried and drew this machine's resized buffer at the old scale
+    // (magnified, for good), so it is not the rule either; the `[video] stream.applied` line records frame, epoch and handle so the
+    // next field log tells the two apart. Resolved by a frame, a pause, a newer StreamRect or a new source.
+    private bool _streamEchoPending;
+    private uint _pendingStreamW, _pendingStreamH, _pendingStreamBaseRendered;
+    private long _pendingStreamTicks;
+    private int _pendingStreamEpoch;
+    private int _pendingStreamPolls;
+    // Fast engine-thread refresh while an echo is pending: a frame is due within one frame period while playing.
+    private const int StreamEchoPollMs = 4;
+    private const long StreamEchoFastWindowMs = 1000;
     private VideoEngineSnapshot _lastPublished;
     private long _lastRaiseTicks;
     // Engine thread only: the source loops (the Loop command), the loop seam's measurement (LoopSeamProbe: its period is the gapless
@@ -280,7 +296,9 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     }
 
     private int RefreshIntervalMs()
-        => !_hasSource ? ParkedRefreshMs
+        => _streamEchoPending
+            ? (Stopwatch.GetElapsedTime(_pendingStreamTicks).TotalMilliseconds < StreamEchoFastWindowMs ? StreamEchoPollMs : ActiveRefreshMs)
+         : !_hasSource ? ParkedRefreshMs
          : _loop && _playing && _metadataTrusted && _seam.Near(_lastPosition, _cachedDuration) ? LoopSeamProbe.NearMs
          : !_metadataTrusted || _playing || _liveLatched ? ActiveRefreshMs : ParkedRefreshMs;
 
@@ -480,12 +498,33 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             {
                 RECT dst = new() { left = 0, top = 0, right = w, bottom = h };
                 MFARGB border = new() { rgbBlue = 0, rgbGreen = 0, rgbRed = 0, rgbAlpha = 255 };
+                long called = Stopwatch.GetTimestamp();
                 int hr = _engineEx->UpdateVideoStream(null, &dst, &border);
+                double applyMs = Stopwatch.GetElapsedTime(called).TotalMilliseconds;
                 if (hr < 0) Log("UpdateVideoStream(dst)", hr);
                 else if (w > 0 && h > 0)
                 {
-                    _appliedStreamW = (uint)w; _appliedStreamH = (uint)h;
                     _frameWatch.Restart(Environment.TickCount64);   // a re-sized (re-created) stream gets a fresh no-frame window
+                    if (_playing && _appliedStreamW != 0 && _appliedStreamH != 0 && (_appliedStreamW != (uint)w || _appliedStreamH != (uint)h)
+                        && TryReadFrameStats(out uint baseRendered, out _))
+                    {
+                        // A later size while playing: echoed once a frame was rendered after this call (see _streamEchoPending).
+                        _streamEchoPending = true;
+                        _pendingStreamW = (uint)w; _pendingStreamH = (uint)h;
+                        _pendingStreamBaseRendered = baseRendered;
+                        _pendingStreamTicks = called;
+                        _pendingStreamEpoch = Volatile.Read(ref _presentationEpoch);
+                        _pendingStreamPolls = 0;
+                        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                            $"[video] stream.request backend=mf size={w}x{h} applied={_appliedStreamW}x{_appliedStreamH} applyMs={applyMs:F2} seeking={(_seeking ? 1 : 0)} epoch={_pendingStreamEpoch}"));
+                    }
+                    else
+                    {
+                        // The source's first size (MF builds its swap chain at this destination), the size it already has, or a source
+                        // that is not playing: it renders no frame by itself, and the session's Repaint (same drain, after this) paints it.
+                        _streamEchoPending = false;
+                        _appliedStreamW = (uint)w; _appliedStreamH = (uint)h;
+                    }
                 }
             }
         }
@@ -522,6 +561,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         Interlocked.Exchange(ref _seekedCount, 0);
         _naturalW = 0; _naturalH = 0; _naturalQueriedForEpoch = -1;
         _appliedStreamW = 0; _appliedStreamH = 0;
+        _streamEchoPending = false;
         _cachedHandle = 0; _handleQueriedForEpoch = -1;
         _handles.Retire(Environment.TickCount64);   // F198: the old source's handle is superseded; it is closed a replacement or a grace later
         _frames.Reset(); _frameWatch.Reset(); _nextStatsPollMs = 0; _frameStatsReadable = false; _framesSampledTicks = 0;
@@ -541,6 +581,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     {
         if (Interlocked.Exchange(ref _deviceProbePending, 0) != 0) CheckDeviceRemoved("engine event");
         _handles.Sweep(Environment.TickCount64);
+        if (_streamEchoPending) PollStreamEcho();
         uint readyState = _engine != null ? (uint)_engine->GetReadyState() : 0u;
         // LOADEDMETADATA is trusted only once the engine itself reports HAVE_METADATA (see _metadataTrusted).
         bool metadata = _metadataLoaded && readyState >= EngineLivenessRule.HaveMetadata;
@@ -785,6 +826,27 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             return true;
         }
         finally { PropVariantClear(&pv); }
+    }
+
+    /// <summary>Engine thread: resolve a pending stream-size echo. A frame counted since the StreamRect (FRAMES_RENDERED past the value
+    /// it read): publish the size. A source that stopped playing renders none: publish (the session's Repaint paints it). A counter that
+    /// went down was reset by a flush: rebase and keep waiting. One `[video] stream.applied` line per resolved request, with whether
+    /// the swap chain was re-created since (the presentation epoch and the handle).</summary>
+    private void PollStreamEcho()
+    {
+        _pendingStreamPolls++;
+        string? via = null;
+        if (!_playing) via = "paused";
+        else if (!TryReadFrameStats(out uint rendered, out _)) via = "unreadable";
+        else if (rendered < _pendingStreamBaseRendered) _pendingStreamBaseRendered = rendered;
+        else if (rendered > _pendingStreamBaseRendered) via = "frame";
+        if (via is null) return;
+        _streamEchoPending = false;
+        _appliedStreamW = _pendingStreamW; _appliedStreamH = _pendingStreamH;
+        double afterMs = Stopwatch.GetElapsedTime(_pendingStreamTicks).TotalMilliseconds;
+        int epoch = Volatile.Read(ref _presentationEpoch);
+        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[video] stream.applied backend=mf size={_pendingStreamW}x{_pendingStreamH} firstFrameAfterMs={(via == "frame" ? afterMs : -1):F1} sinceRequestMs={afterMs:F1} polls={_pendingStreamPolls} via={via} recreated={(epoch != _pendingStreamEpoch ? 1 : 0)}"));
     }
 
     private void PollFrameStats()
