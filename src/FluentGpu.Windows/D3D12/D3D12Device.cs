@@ -1717,6 +1717,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (target is not D3D12Swapchain sc || sc.Device != this || sc.Disposed)
             throw new InvalidOperationException("Submit target is not a live D3D12 swapchain from this device.");
         AssertSubmitThread();   // seam Step 0: when render-confined (force-sync/async), only the render thread may submit
+        if (DeferPopupSubmit(sc)) return;   // a popup whose last present has not retired waits for a later turn, never the render thread
         TargetFrameState f = sc.Frame;
         _stencilFloorW = 0; _stencilFloorH = 0;
         int slot = OpenSubmit(sc, f);
@@ -3602,6 +3603,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // the frame owed, and the shared render thread ticking, to retry a swapchain that is gone).
         target.Frame.LastPresentRefused = false;
         if (target.Disposed) return;
+        // A popup frame deferred at submit (DeferPopupSubmit) recorded nothing: there is nothing to flip, and no credit to spend.
+        if (target.SubmitDeferred) { target.SubmitDeferred = false; return; }
+        if (target.PresentNoWaitOnce) { target.PresentNoWaitOnce = false; noWait = true; }
         long sdp = SdNow();
         AssertSubmitThread();   // seam Step 0: when render-confined (force-sync/async), only the render thread may present
         BeginTargetFrame(target.Frame);
@@ -4273,6 +4277,89 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private static void RepayLatencyDebt(D3D12Swapchain sc)
     {
         while (sc.LatencyCountsOwed > 0 && WaitForSingleObject(sc.FrameLatencyWaitable, 0) == WAIT_OBJECT_0) sc.LatencyCountsOwed--;
+    }
+
+    // ── popup frame deferral ─────────────────────────────────────────────────────────────────────────────────────────
+    // A popup window's frame is recorded and submitted on the SHARED render thread, in the same turn as the owner's frame
+    // (SceneRenderFrame.RecordPopups). OpenSubmit's latency wait for it blocked that thread until the popup's previous present
+    // retired: measured 23.4 ms on a menu open (the owner's submit 24.1 ms, 8 missed refreshes), bounded only at 1 s. So a
+    // popup takes its present slot WITHOUT waiting: a busy slot defers THIS popup's frame (nothing recorded on the GPU, its
+    // Present a no-op) and marks it owed, which PopupAnimating reports so the host keeps publishing turns (WakeReasons.PopupAnim;
+    // a turn with a popup open is never elided) until one finds the slot open. A popup can then only delay itself. Its FIRST
+    // frame is never deferred: a new (or rebuilt) swapchain's waitable starts signaled. Bounded: past PopupDeferBoundMs of
+    // consecutive deferrals the frame goes out unpaid with DXGI_PRESENT_DO_NOT_WAIT (what the old 1 s timeout did, minus the
+    // block), so a popup whose presents never retire (a hidden HWND) cannot wake the loop forever.
+    // Scope: popup windows only, i.e. the swapchains created with the desktop-acrylic material (AppHost.OpenPopupWindow leases
+    // every popup window with PopupWindowMaterial.TransientAcrylic; the main window and a detached pop-out never ask for it, and
+    // a pop-out takes its slot itself, non-blocking, before it submits: AppHost.DrainChildRenderSources).
+    private const double PopupDeferBoundMs = 100.0;
+    private const int PopupDeferLogTurns = 4;   // consecutive deferrals before a line is logged (rate-limited per target)
+    private long _popupFramesDeferred;
+
+    /// <summary>Popup frames deferred so far because their present slot was busy (cumulative; render thread writes).</summary>
+    public long PopupFramesDeferred => Volatile.Read(ref _popupFramesDeferred);
+
+    /// <summary>True when this submit of a popup window's frame is deferred to a later turn (its present slot is still busy).
+    /// Takes the slot non-blocking when it is open (the credit is then held, so OpenSubmit does not wait again). Render thread.</summary>
+    private bool DeferPopupSubmit(D3D12Swapchain sc)
+    {
+        sc.SubmitDeferred = false;
+        if (!sc.DesktopAcrylic || ReferenceEquals(sc, _primarySwapchain) || !sc.HasLatencyWaitable
+            || sc.LatencyCreditHeld || sc.Frame.SkipLatencyOnce)
+        {
+            EndPopupDeferral(sc);
+            return false;
+        }
+        if (WaitForSingleObject(sc.FrameLatencyWaitable, 0) == WAIT_OBJECT_0)
+        {
+            RepayLatencyDebt(sc);
+            sc.LatencyCreditHeld = true;
+            EndPopupDeferral(sc);
+            return false;
+        }
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (sc.PopupDeferSinceQpc == 0) sc.PopupDeferSinceQpc = now;
+        sc.PopupDeferTurns++;
+        double deferredMs = System.Diagnostics.Stopwatch.GetElapsedTime(sc.PopupDeferSinceQpc, now).TotalMilliseconds;
+        if (deferredMs < PopupDeferBoundMs)
+        {
+            sc.SubmitDeferred = true;
+            Volatile.Write(ref sc.PopupFrameOwed, 1);
+            Volatile.Write(ref _popupFramesDeferred, _popupFramesDeferred + 1);
+            if (sc.PopupDeferTurns == PopupDeferLogTurns) NotePopupDeferral(sc, deferredMs, forced: false);
+            return true;
+        }
+        // The bound passed with the slot still busy: present this frame unpaid and without blocking (the timed-out wait's
+        // contract: the credit is held without a count taken, and the debt is repaid by a later open take).
+        NoteUnpaidLatencyCredit(sc);
+        sc.LatencyCreditHeld = true;
+        sc.PresentNoWaitOnce = true;
+        Volatile.Write(ref _nonPrimaryTimeouts, _nonPrimaryTimeouts + 1);
+        NotePopupDeferral(sc, deferredMs, forced: true);
+        EndPopupDeferral(sc);
+        return false;
+    }
+
+    // A submit went ahead: no frame of this popup is owed any more.
+    private static void EndPopupDeferral(D3D12Swapchain sc)
+    {
+        sc.PopupDeferSinceQpc = 0;
+        sc.PopupDeferTurns = 0;
+        if (Volatile.Read(ref sc.PopupFrameOwed) != 0) Volatile.Write(ref sc.PopupFrameOwed, 0);
+    }
+
+    private static void NotePopupDeferral(D3D12Swapchain sc, double deferredMs, bool forced)
+    {
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (!forced && sc.LatencyWaitLogQpc != 0
+            && System.Diagnostics.Stopwatch.GetElapsedTime(sc.LatencyWaitLogQpc, now).TotalMilliseconds < NonPrimaryLatencyLogPeriodMs)
+        {
+            sc.LatencyWaitsSuppressed++;
+            return;
+        }
+        Diag.Line($"[d3d12.present] popup frame deferred target={sc.Ordinal} turns={sc.PopupDeferTurns} sinceMs={deferredMs:F1} forced={(forced ? 1 : 0)} suppressed={sc.LatencyWaitsSuppressed}");
+        sc.LatencyWaitLogQpc = now;
+        sc.LatencyWaitsSuppressed = 0;
     }
 
     // Non-primary latency waits run on the shared render thread, so a long one is a main-window stall attributable to a
@@ -5498,6 +5585,14 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     // how many qualifying waits it swallowed since. Render-thread-only, like LatencyCreditHeld.
     internal long LatencyWaitLogQpc;
     internal int LatencyWaitsSuppressed;
+    // Popup frame deferral (D3D12Device.DeferPopupSubmit): this turn's submit was deferred (the Present that follows is a
+    // no-op), when the run of consecutive deferrals began (QPC, 0 = none) and how many turns it holds, and the one-shot
+    // DO_NOT_WAIT for the frame that goes out unpaid past the bound. Render thread only. PopupFrameOwed (0/1) is also read
+    // by the UI thread's wake computation through PopupAnimating.
+    internal bool SubmitDeferred, PresentNoWaitOnce;
+    internal long PopupDeferSinceQpc;
+    internal int PopupDeferTurns;
+    internal int PopupFrameOwed;
     // This swapchain's DXGI maximum frame latency when it is NOT the primary (D3D12Device.SetPresentQueueDepth(target, depth) —
     // a detached pop-out's own depth policy); the primary's lives on the device (_presentQueueDepth). Render thread writes
     // (Volatile), any thread may read. Starts at the creation depth, so a rebuild of the swapchain restores it.
@@ -5816,7 +5911,9 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     public void ConfigurePopupChrome(in PopupChromeMetrics m) => Backdrop?.ConfigureChrome(m.ContentRectPx, m.OpensUp, m.ClosedRatio, m.CornerRadiusPx);
     public void AnimatePopupOpen() => Backdrop?.AnimateOpen();
     public void AnimatePopupClose() => Backdrop?.AnimateClose();
-    public bool PopupAnimating => Backdrop?.IsAnimating ?? false;
+    /// <remarks>Also true while a frame of this popup is owed (deferred behind a busy present slot): the host keeps
+    /// publishing turns until one presents it (D3D12Device.DeferPopupSubmit, bounded).</remarks>
+    public bool PopupAnimating => (Backdrop?.IsAnimating ?? false) || System.Threading.Volatile.Read(ref PopupFrameOwed) != 0;
     public void Dispose() => Device.DisposeSwapchain(this);
 
     // ── Per-target seam members (Phase 1 §3.3) ──────────────────────────────────────────────────────────────────────
