@@ -97,6 +97,24 @@ internal struct VideoBackdropPxs
     private VideoBackdropPx _e0;
 }
 
+/// <summary>The plates one surface was given for ONE presented frame (device px), with the device submit serial of that frame, whose
+/// veils they back (<see cref="FluentGpu.Rhi.ISwapchain.LastSubmitSerial"/>).</summary>
+internal struct VideoPlateFrame
+{
+    public ulong Serial;
+    public int Count;
+    public VideoBackdropPxs Plates;
+}
+
+/// <summary>The plates of a surface's last presented frames, newest first: the history a plate's retreat waits on (a frame's GPU work
+/// retires in submit order, and the swap chain bounds how many are in flight).</summary>
+[System.Runtime.CompilerServices.InlineArray(Depth)]
+internal struct VideoPlateFrames
+{
+    public const int Depth = 4;
+    private VideoPlateFrame _e0;
+}
+
 /// <summary>A rect under a uniform ROUNDED clip (a rounded box <c>roundRect</c> of radius <c>r</c>, the recorder's tier-2 clip: its SDF box
 /// is extended past a fully square side, so that side's corners fall outside the visible clip): the corner radii that keep the rect inside
 /// the clip's arcs. A rect corner inset (dx, dy) from the box's corner takes the radius r - max(dx, dy): concentric with the box's arc
@@ -184,6 +202,16 @@ internal sealed class VideoPlacementApplier
         public int AppliedBackdropCount;
         public PlacementPx AppliedPx;       // the placement the presenter was last given, in device px (what the glass shows)
         public VideoBackdropPxs AppliedPlatesPx;   // the plates it was last given, in device px
+        // What the presenter SHOWS (ShowPlates): the newest frame's plates, plus what an older frame still on the glass needs (a plate
+        // retreats only once the flip that drops its veil has retired); the frames it is taken from, newest first; whether it is more
+        // than the newest list right now, since when, and for how many turns.
+        public VideoBackdropPxs ShownPlatesPx;
+        public int ShownPlateCount;
+        public VideoPlateFrames PlateFrames;
+        public int PlateFrameCount;
+        public bool PlatesHeld;
+        public long HeldSinceQpc;
+        public int HeldTurns;
     }
 
     /// <summary>One surface's placement exactly as <see cref="PlaceSlot"/> hands it to the presenter: device pixels, snapped the way
@@ -215,6 +243,13 @@ internal sealed class VideoPlacementApplier
            && MathF.Abs(a.Opacity - b.Opacity) < 0.002f;
 
     private readonly VideoBackdropPx[] _backdropScratch = new VideoBackdropPx[VideoHoleBackdrops.Max];
+    private readonly VideoBackdropPx[] _shownScratch = new VideoBackdropPx[VideoHoleBackdrops.Max];
+    // The submit serial of the frame the presenting turn delivers (0 = unknown: its plates count as retired at once) and the device's
+    // newest retired one (NoteGpuProgress, RetireHeldPlates).
+    private ulong _turnSerial;
+    private ulong _completedSerial = ulong.MaxValue;
+    // A hold at least this long is the GPU queue keeping a flip back (a healthy retreat retires within a refresh or two): logged.
+    private const double HoldNoteMs = 25.0;
 
     private static bool SameBackdrops(in Slot s, ReadOnlySpan<VideoPosedHole> posed)
     {
@@ -788,7 +823,8 @@ internal sealed class VideoPlacementApplier
                 s.AppliedPlatesPx[k] = _backdropScratch[k];
             }
             s.AppliedBackdropCount = n;
-            presenter.SetBackdrops(s.SurfaceId, _backdropScratch.AsSpan(0, n));
+            PushPlateFrame(ref s, n);
+            ShowPlates(presenter, ref s, i);
         }
         presenter.SetVisible(s.SurfaceId, p.Visible);
         // F087: the z-order the turn's verdict chose (above the UI plane only while nothing paints over the rect), given to the
@@ -810,6 +846,129 @@ internal sealed class VideoPlacementApplier
         if (announce)
             Diag.Line($"[video.surface] place token={i + 1} id={s.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) content={p.ContentW}x{p.ContentH} visible={p.Visible} scale={scale:0.##}");
         if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"Place id={s.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) visible={p.Visible} scale={scale:0.##} pose=({p.Dx:0.##},{p.Dy:0.##})");
+    }
+
+    // ── frosted plates: a retreat waits for its flip ──────────────────────────────────────────────────────────────
+
+    /// <summary>Render thread, before the <see cref="ApplyTurn"/> of a presenting turn: the submit serial of the frame it presents (whose
+    /// veils this turn's plates back) and the device's newest retired serial. A plate over a video and the veil the swap chain draws over it
+    /// reach the glass by two roads: the presenter's change with the next DWM composition after the commit, the flip only once its GPU
+    /// work has retired (F070 Stage B waits for that at most one refresh). A plate that came or grew may show early (a frost under no menu
+    /// yet), but one that shrank, faded or went ahead of its flip leaves the old veil and its text over the sharp picture: the
+    /// see-through menu, for as long as the GPU queue holds the flip back (30-500 ms measured on 2026-11-11 under DRM playback). So a
+    /// retreat is held until the frame that drops the veil has retired (<see cref="ShowPlates"/>, <see cref="RetireHeldPlates"/>). A host
+    /// that never calls this (no render thread) retires everything at once, as before.</summary>
+    internal void NoteGpuProgress(ulong turnSerial, ulong completedSerial)
+    {
+        _turnSerial = turnSerial;
+        _completedSerial = completedSerial;
+    }
+
+    /// <summary>Some surface shows more plates than its newest frame asks for (a retreat waits for its flip): the render loop keeps
+    /// turning until <see cref="RetireHeldPlates"/> lets them go. Render thread.</summary>
+    internal bool HoldsPlates
+    {
+        get
+        {
+            for (int i = 0; i < MaxSurfaces; i++)
+                if (_slots[i].InUse && _slots[i].PlatesHeld) return true;
+            return false;
+        }
+    }
+
+    /// <summary>Render thread, every render turn while <see cref="HoldsPlates"/>: hand each held surface the plates its frames still
+    /// on the glass need now that the GPU retired up to <paramref name="completedSerial"/>. True when the presenter was given new lists
+    /// (applied with the device commit deferred: the caller commits).</summary>
+    internal bool RetireHeldPlates(IVideoPresenter presenter, ulong completedSerial)
+    {
+        if (DeferAll) return false;   // a frozen frame (E2): the thaw frame's apply hands every list over
+        if (!ReferenceEquals(presenter, _drainedBy))
+        {
+            // Another presenter (a recovery is rebuilding): what the old one showed is gone with it, and the next apply resets the slots.
+            for (int i = 0; i < MaxSurfaces; i++) _slots[i].PlatesHeld = false;
+            return false;
+        }
+        _completedSerial = completedSerial;
+        bool wrote = false;
+        for (int i = 0; i < MaxSurfaces; i++)
+        {
+            ref Slot s = ref _slots[i];
+            if (!s.InUse || !s.PlatesHeld) continue;
+            if (s.SurfaceId.IsNone) { NoteHold(ref s, i, false); continue; }
+            wrote |= ShowPlates(presenter, ref s, i);
+        }
+        if (wrote) presenter.ApplyPending();
+        return wrote;
+    }
+
+    // This presenting turn's plates (device px, _backdropScratch[0..n]) become the slot's newest frame; a second apply for the same
+    // frame replaces it. Without a serial there is no history: the newest frame is all there is.
+    private void PushPlateFrame(ref Slot s, int n)
+    {
+        if (_turnSerial == 0) s.PlateFrameCount = 1;
+        else if (s.PlateFrameCount == 0 || s.PlateFrames[0].Serial != _turnSerial)
+        {
+            int keep = Math.Min(s.PlateFrameCount, VideoPlateFrames.Depth - 1);
+            for (int j = keep; j > 0; j--) s.PlateFrames[j] = s.PlateFrames[j - 1];
+            s.PlateFrameCount = keep + 1;
+        }
+        ref VideoPlateFrame f = ref s.PlateFrames[0];
+        f.Serial = _turnSerial;
+        f.Count = n;
+        for (int k = 0; k < n; k++) f.Plates[k] = _backdropScratch[k];
+    }
+
+    // What the presenter shows: the newest frame's plates, plus, from each older frame back to (not past) the newest one whose GPU
+    // work has retired - the flip DWM may still be composing - every plate the newest list no longer covers: a plate that went or
+    // moved stays where it was, a fading one keeps its higher opacity. Plates are matched by rect and corners (a fading card keeps
+    // both). The presenter is given the list only when it differs from what it shows. True when it was given one.
+    private bool ShowPlates(IVideoPresenter presenter, ref Slot s, int i)
+    {
+        ref VideoPlateFrame head = ref s.PlateFrames[0];
+        int n = head.Count;
+        for (int k = 0; k < n; k++) _shownScratch[k] = head.Plates[k];
+        bool held = false;
+        for (int j = 1; j < s.PlateFrameCount; j++)
+        {
+            if (s.PlateFrames[j - 1].Serial <= _completedSerial) break;   // that newer frame retired: nothing older is on the glass
+            ref VideoPlateFrame f = ref s.PlateFrames[j];
+            for (int k = 0; k < f.Count; k++)
+            {
+                VideoBackdropPx p = f.Plates[k];
+                int m = 0;
+                while (m < n && !(_shownScratch[m].Rect == p.Rect && _shownScratch[m].Radii == p.Radii)) m++;
+                if (m < n)
+                {
+                    if (p.Opacity > _shownScratch[m].Opacity + 0.002f) { _shownScratch[m] = _shownScratch[m] with { Opacity = p.Opacity }; held = true; }
+                }
+                else if (n < VideoHoleBackdrops.Max) { _shownScratch[n++] = p; held = true; }
+            }
+        }
+        bool same = n == s.ShownPlateCount;
+        for (int k = 0; same && k < n; k++) same = SamePlate(in _shownScratch[k], in s.ShownPlatesPx[k]);
+        if (!same)
+        {
+            presenter.SetBackdrops(s.SurfaceId, _shownScratch.AsSpan(0, n));
+            for (int k = 0; k < n; k++) s.ShownPlatesPx[k] = _shownScratch[k];
+            s.ShownPlateCount = n;
+        }
+        NoteHold(ref s, i, held);
+        return !same;
+    }
+
+    private static void NoteHold(ref Slot s, int i, bool held)
+    {
+        if (held)
+        {
+            if (!s.PlatesHeld) { s.PlatesHeld = true; s.HeldSinceQpc = System.Diagnostics.Stopwatch.GetTimestamp(); s.HeldTurns = 0; }
+            s.HeldTurns++;
+            return;
+        }
+        if (!s.PlatesHeld) return;
+        s.PlatesHeld = false;
+        double ms = System.Diagnostics.Stopwatch.GetElapsedTime(s.HeldSinceQpc).TotalMilliseconds;
+        // Cold: one line per hold that outlived a few refreshes (the GPU queue held the flip back), never per frame.
+        if (ms >= HoldNoteMs) Diag.Line($"[video.surface] plates held token={i + 1} ms={ms:F1} turns={s.HeldTurns} (the flip that drops their veil had not retired)");
     }
 
     // Cold: once per content-size edge (a stream-size change, a new surface), never per frame.
@@ -907,6 +1066,9 @@ internal sealed class VideoPlacementApplier
             s.Placed = false;
             s.Overlay.Reset();        // the new presenter's visuals start below the UI plane
             s.AppliedOverlay = false;
+            s.ShownPlateCount = 0;    // the new presenter shows no plates, and no frame of the old one is its history
+            s.PlateFrameCount = 0;
+            s.PlatesHeld = false;
             s.GeomDirty = s.HasGeometry;
             s.Dirty = true;
             ClearBound(i);

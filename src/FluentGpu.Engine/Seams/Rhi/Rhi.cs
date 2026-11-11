@@ -346,6 +346,13 @@ public partial interface IGpuDevice : IDisposable
     /// backend also runs it right after the primary's own present; never ahead of it. Default no-op.</summary>
     void ServicePopupWork() { }
 
+    /// <summary>The newest submit serial whose GPU work has retired (the device's one monotonic submit fence; compare with
+    /// <see cref="ISwapchain.LastSubmitSerial"/>). A frosted plate over a video may only shrink, fade or go once the frame that drops
+    /// its veil has retired: until then the glass still shows the veil, and the compositor would show it without the blur
+    /// (<c>VideoPlacementApplier</c>). Render thread. Default <see cref="ulong.MaxValue"/>: a backend with no submit queue retires
+    /// everything at once.</summary>
+    ulong CompletedSubmitSerial => ulong.MaxValue;
+
     /// <summary>Record + batch + submit to a specific swapchain target (windowed popup HWNDs). Backends without
     /// secondary-swapchain support fall back to the primary target via the legacy overload.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
@@ -638,6 +645,10 @@ public interface ISwapchain : IDisposable
     /// GPU work runs longer than the bound presents anyway (one skewed frame, counted). Armed ONLY for a turn that moves video
     /// geometry, never on steady playback or idle. Default no-op: a backend with no present queue to skew against.</summary>
     void HintGeometryMotionPresent() { }
+
+    /// <summary>The device submit serial of THIS target's most recent submit: its GPU work has retired once
+    /// <see cref="IGpuDevice.CompletedSubmitSerial"/> reaches it. Render thread. Default 0 (no serial: counts as retired).</summary>
+    ulong LastSubmitSerial => 0;
 
     /// <summary>Run (or drop) the sync <see cref="HintSettlePresent"/> armed. The host calls this AFTER it committed the
     /// frame's video placement, so the hole and the video geometry reach DWM in the same composition: a blocking flush

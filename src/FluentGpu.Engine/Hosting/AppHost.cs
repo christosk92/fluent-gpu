@@ -771,12 +771,24 @@ public sealed partial class AppHost : IDisposable
 
     private bool HasRenderMotion()
     {
-        if (HasOwnRenderMotion()) return true;
+        if (HasOwnRenderMotion() || HoldsVideoPlates) return true;
         // A child whose present slot was busy this turn left its publication pending (DrainChildRenderSources), and one whose
         // non-blocking present was refused owes that frame: keep the loop ticking so the next turn probes the slot / re-presents
         // instead of sleeping until some unrelated wake.
-        foreach (var child in Volatile.Read(ref _childRenderSources)) if (child.HasOwnRenderMotion() || child._slotDeferred || child._presentOwed) return true;
+        foreach (var child in Volatile.Read(ref _childRenderSources))
+            if (child.HasOwnRenderMotion() || child._slotDeferred || child._presentOwed || child.HoldsVideoPlates) return true;
         return false;
+    }
+
+    // Render thread: frosted plates over a video wait for the flip that drops their veil (VideoPlacementApplier.NoteGpuProgress). Holding
+    // ticks the loop at the display clock with no present of its own (it is not this host's motion), so each turn's drain
+    // (DrainChildRenderSources) lets them go as the GPU retires frames, even when the UI publishes nothing more.
+    private bool HoldsVideoPlates => _videoApplier is { HoldsPlates: true };
+
+    private void RetireHeldVideoPlates()
+    {
+        if (!HoldsVideoPlates || _device.GetVideoPresenter(_swapchain) is not { } vp) return;
+        if (_videoApplier!.RetireHeldPlates(vp, _device.CompletedSubmitSerial)) _device.CommitVideoComposition();
     }
 
     // Render-thread-owned (set/cleared only in DrainChildRenderSources; read by HasRenderMotion on the same thread): this
@@ -2851,6 +2863,9 @@ public sealed partial class AppHost : IDisposable
             var scope = !placement ? FluentGpu.Media.VideoApplyScope.ReleasesOnly
                 : elided ? FluentGpu.Media.VideoApplyScope.ContentOnly : FluentGpu.Media.VideoApplyScope.Full;
             var applier = VideoApplier;
+            // The frame this turn delivers and how far the GPU got: a frosted plate retreats only once the flip that drops its veil has
+            // retired (the render loop lets held plates go, RetireHeldVideoPlates). Without a render loop nothing would, so nothing holds.
+            applier.NoteGpuProgress(deferCommit ? _swapchain.LastSubmitSerial : 0UL, deferCommit ? _device.CompletedSubmitSerial : ulong.MaxValue);
             bool edge = applier.ApplyTurn(vp, _renderSeam.VideoIntents(rf), VideoPosedHoles(in rf), rf.Submit.Scale, scope, deferCommit);
             if (deferCommit && applier.LastTurnMovedGeometry)
             {
@@ -3997,6 +4012,7 @@ public sealed partial class AppHost : IDisposable
         // This host's OWN queued swapchain work (a popup's create / release) is applied on every turn, not only on a turn that
         // has a publication to present: the loop runs this callback even on a bare wake, which is what PostPopupRenderAction sends.
         DrainPopupRenderActions();
+        RetireHeldVideoPlates();
         // The popup pool's deferred device work (the prewarm's build, released popups' resources) runs on a turn in which this,
         // the primary, presents nothing - else the device runs it right after the primary's present. Never ahead of that present,
         // and never from a child's turn.
@@ -4015,6 +4031,7 @@ public sealed partial class AppHost : IDisposable
             // The child's queued swapchain work (its own resize, its popups' create / dispose) rides this turn even when it has
             // no frame to present: those ops are why the UI no longer parks this thread for them.
             child.DrainPopupRenderActions();
+            child.RetireHeldVideoPlates();
             // An owed present (a refused non-blocking one) whose target was since invalidated (resize / recovery) is stale: the back
             // buffer it described is gone, and the next publication draws a whole new frame.
             if (child._presentOwed && !child._renderSeam.IsCurrentTarget(child._owedFrame)) child._presentOwed = false;

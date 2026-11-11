@@ -4645,6 +4645,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Count("d3d12", "motionFenceWait");
     }
 
+    /// <inheritdoc/>
+    /// <remarks>The device fence's completed value (every target's submits signal the one fence, in queue order). UINT64_MAX on a
+    /// removed device, so nothing waits on a GPU that will never finish. Render thread.</remarks>
+    public ulong CompletedSubmitSerial
+        => _fence == null ? ulong.MaxValue : global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
+
     // F080: edits the video presenters applied to the shared IDCompositionDevice that no Commit has flushed yet. Every
     // presenter shares the device's one IDCompositionDevice, so ONE commit per render turn (CommitVideoComposition) flushes the
     // parent's and every pop-out's tree together instead of one commit per window landing in different DWM frames.
@@ -5826,6 +5832,9 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     /// hidden / cloaked stand-down of a composited target). UI thread; a present already in flight on the render thread may
     /// re-set the latch - the host's reveal also requires a publication newer than the arm, so that cannot reveal early.</remarks>
     public void ArmRevealExemption() => System.Threading.Volatile.Write(ref _presentedContent, 0);
+    /// <inheritdoc/>
+    /// <remarks>The fence value this target's last submit signalled (<see cref="TargetFrameState.LastSubmitFence"/>). Render thread.</remarks>
+    public ulong LastSubmitSerial => Frame.LastSubmitFence;
 
     internal void NotePresentedContent()
     {
