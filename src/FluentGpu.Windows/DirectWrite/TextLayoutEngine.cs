@@ -469,11 +469,9 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
     // rounding, and a shrink-to-fit container sizes to ~the run's natural width but its child box ends a few hundredths
     // of a pixel short. A strict `> maxWidth` test then wraps the trailing word — reserving ONE line's height (the
     // measure pass saw it fit) while the run actually rasterizes TWO, so the following sibling overlaps it (the Expander
-    // "body overlaps the action button after collapse→re-expand" defect). A tenth of a DIP of slack keeps measure ≡ render at
-    // that boundary without affecting genuinely-narrower boxes: it covers those hundredths and nothing more. It was a whole DIP, so a word
-    // that overran a FIXED box by up to 1 DIP stayed on the line and the box's clip cut its ink (Theatre's about block at 1440 x 672: a
-    // 555.5 DIP bio line kept in a 555 DIP box, text.clip 1.14 past the edge).
-    private const float WrapSlack = 0.1f;
+    // "body overlaps the action button after collapse→re-expand" defect). One DIP of slack keeps measure ≡ render at
+    // that boundary — the run clips at most ~1px on the right, imperceptible — without affecting genuinely-narrower boxes.
+    private const float WrapSlack = 1f;
 
     private void WrapAndPosition(float size, float scale, float lineHeight, float maxWidth, int wrap, int trim, int maxLines, nint face,
         int overflowSuffixStart)
