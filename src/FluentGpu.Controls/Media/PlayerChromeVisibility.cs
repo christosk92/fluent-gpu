@@ -59,7 +59,8 @@ public readonly record struct PlayerChromeTiming(
 /// <item>ACTIVITY reveals and restarts the dwell: entering, a move that leaves the rest-point deadzone, a press, the
 /// wheel, a handled key, a tap on hidden chrome, keyboard focus / AT gained, a user-visible stop, an OS move loop's
 /// start/end.</item>
-/// <item>HOLDS keep visible chrome up and never reveal hidden chrome; releasing one restarts the dwell.</item>
+/// <item>HOLDS keep visible chrome up and never reveal hidden chrome; releasing one restarts the dwell (the leave delay
+/// once the pointer has left).</item>
 /// <item>Leaving hides after a short debounce; the cursor hides when the conceal fade ends, only while the pointer is
 /// inside, only if the surface's policy allows it.</item>
 /// </list>
@@ -291,7 +292,13 @@ public sealed class PlayerChromeVisibility
         _cursorAt = nowMs + _t.CursorTrailMs;              // the cursor goes when the conceal fade has finished
     }
 
-    private void Rearm(double nowMs) { if (_visible) _hideAt = Math.Max(_hideAt, nowMs + _dwell); }
+    // A released hold (and a resume) restarts the dwell, but a pointer that has LEFT is owed the leave debounce, never the
+    // full idle dwell: a menu closed with the pointer outside the window hides like the leave itself would have
+    // (PointerLeft sets the same deadline). A later reveal while outside keeps its own longer deadline (the Max).
+    private void Rearm(double nowMs)
+    {
+        if (_visible) _hideAt = Math.Max(_hideAt, nowMs + (_left ? Math.Min(_dwell, _t.LeaveHideMs) : _dwell));
+    }
 
     private void SetHold(ref bool hold, bool on, double nowMs)
     {
