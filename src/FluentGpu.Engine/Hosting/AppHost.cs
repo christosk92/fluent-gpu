@@ -733,6 +733,36 @@ public sealed partial class AppHost : IDisposable
         return w < 0 ? dueIn : Math.Min(w, dueIn);
     }
 
+    /// <summary>Milliseconds until an animated image's next frame is due (<see cref="ImageCache.AnimationDueMs"/>, already less its
+    /// slack), extrapolated on the image clock exactly as <see cref="ImageLeftoverDueInMs"/>: +∞ when nothing plays or every
+    /// playing image waits on its decode (whose landing wakes the loop), ≤ 0 when a frame is due now.</summary>
+    private double AnimatedImageDueInMs()
+    {
+        float due = _images.AnimationDueMs;
+        if (float.IsPositiveInfinity(due)) return double.PositiveInfinity;
+        double clock = _images.ClockMs;
+        double sampledAt = _images.ClockCapturedAtMs;
+        if (_frameTime is StopwatchFrameTimeSource && !double.IsNaN(sampledAt))
+            clock += Math.Max(0.0, Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency - sampledAt);
+        // Fixed headless time moves the image clock only inside a painted frame, by one step, before the animations tick: a frame
+        // due within that step is due now (otherwise an idle headless loop never paints and its clock never reaches the frame).
+        else if (_frameTime is FixedFrameTimeSource fixedTime)
+            clock += fixedTime.StepMs;
+        return due - clock;
+    }
+
+    /// <summary>Shorten the wait so the loop wakes when an animated image's next frame falls due: the
+    /// <see cref="ClampWaitToImageLeftovers"/> contract (a display-rate wait already runs the frame, a parked host paints
+    /// nothing, the floor is 1 ms; a frame due now is the <see cref="WakeReasons.AnimatedImage"/> bit's job).</summary>
+    private int ClampWaitToAnimatedImages(int w, HostWaitKind kind)
+    {
+        if (IsDisplayRateWait(kind, w) || IsParked || !PumpsSharedImages) return w;
+        double dueInMs = AnimatedImageDueInMs();
+        if (double.IsPositiveInfinity(dueInMs)) return w;
+        int dueIn = dueInMs >= int.MaxValue ? int.MaxValue : (int)Math.Ceiling(Math.Max(1.0, dueInMs));
+        return w < 0 ? dueIn : Math.Min(w, dueIn);
+    }
+
     /// <summary>E1 (design-engine-images.md): describe every currently-revealing image as its owning node(s)' repaint
     /// rect instead of the caller forcing a full frame for <c>HasActiveCrossfades</c>. Returns false — leaving
     /// <paramref name="repaint"/> untouched beyond whatever it already had — the moment the crossfade set cannot be
@@ -3456,6 +3486,8 @@ public sealed partial class AppHost : IDisposable
         WakeReasons.Timer |
         // …and a due pinned-leftover image restart (T10) is the same kind of deadline.
         WakeReasons.ImageLeftoverDue |
+        // …and so is an animated image's due frame (a window drag must not freeze it).
+        WakeReasons.AnimatedImage |
         // A KeepAlive unpark replay still in flight is essential so the modal bail cannot starve it.
         WakeReasons.WarmingVirtuals;
     private static bool NoEssentialModalWakeReasons(WakeReasons reasons) => (reasons & ModalLoopEssentialWake) == 0;
@@ -4504,6 +4536,7 @@ public sealed partial class AppHost : IDisposable
         w = ClampWaitToSettle(w);                          // E17c: a settle waiting for fonts/images looks again on time
         w = ClampWaitToTransaction(w);                     // E5: a theme transaction's prewarm polls its fonts
         w = ClampWaitToImageLeftovers(w, _lastWaitKind);   // T10: an idle page still wakes for a pinned canceled leftover
+        w = ClampWaitToAnimatedImages(w, _lastWaitKind);   // ImageEl.Animate: wake exactly for the next animation frame
         w = ClampWaitToColdMaintenance(w);
         w = ClampWaitToPopupPool(w);                       // the popup pool's idle prewarm / stale drop wakes itself (TickPopupPool)
         // Render-owned exits normally wake us through completion feedback. Keep their wall-clock
@@ -5187,6 +5220,8 @@ public sealed partial class AppHost : IDisposable
             // T10: a pinned canceled leftover whose retry is DUE forces the frame whose Pump restarts it; a future one sets no
             // bit (ClampWaitToImageLeftovers shapes the idle wait to reach it). Nothing listed = one float read.
             if (ImageLeftoverDueInMs() <= 0.0) r |= WakeReasons.ImageLeftoverDue;
+            // ImageEl.Animate: an in-view animation's next frame is decoded and due; a future one only shapes the wait.
+            if (AnimatedImageDueInMs() <= 0.0) r |= WakeReasons.AnimatedImage;
         }
         // E5 (design-engine-images.md): HasPendingUploads is an unsubmitted UPLOAD/activation, not a retire backlog —
         // a queued retire is fence-only maintenance (ReclaimCompletedUploads), never a reason to keep the loop awake on
@@ -7292,6 +7327,9 @@ public sealed partial class AppHost : IDisposable
                 }
             }
             if (_frameTime is not StopwatchFrameTimeSource && PumpsSharedImages) _images.Tick(dtMs); // fixed/manual headless time stays deterministic
+            // ImageEl.Animate: name the animated images in view this frame (this frame's layout) and show each one's due frame;
+            // a shown frame lands in ContentChangedIds, so the sweep below repaints its nodes' rects only.
+            if (PumpsSharedImages) _reconciler.TickAnimatedImages(Motion.ReducedMotion);
             // E1 (design-engine-images.md): every id whose CONTENT changed this pump (LQIP→full, baked-blur replace,
             // a fresh decode landing) marks its owning node(s) paint-dirty, so the recorder's §13.1 block describes the
             // landing as a per-node band instead of the host having to force a full frame for it. Idempotent for ids an

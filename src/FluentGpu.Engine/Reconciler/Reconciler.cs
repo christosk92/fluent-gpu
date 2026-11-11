@@ -457,6 +457,8 @@ public sealed partial class TreeReconciler
     // pins (node, id) that took a keep reference for it, so an unpin gives back exactly what its pin took.
     private readonly HashSet<int> _keepWhileHiddenNodes = new();
     private readonly HashSet<long> _keepWhileHiddenPins = new();
+    // ImageEl.Animate: nodes (scene index) that asked their image to play when it is an animation (TickAnimatedImages).
+    private readonly HashSet<int> _animatedImageNodes = new();
     // Hold-last-good (media-pipeline.md §hold-last-good): node index → the NEW (still-decoding) image id a re-keyed
     // Image node is holding while its OLD Ready texture keeps drawing. Absent ⇒ no hold in progress for that node.
     // Lives here, not on ImageVisualEffects, because that struct is rewritten wholesale from the element every reconcile.
@@ -5005,6 +5007,7 @@ public sealed partial class TreeReconciler
             // A swap crossfade in flight holds its OUTGOING texture pinned — release it with the node.
             if (_imageSwaps.Remove(idx, out var swap)) UnpinImageNode(node, swap.OutgoingId);
             _keepWhileHiddenNodes.Remove(idx);   // the slot may be reused by a node that never asked to be kept
+            _animatedImageNodes.Remove(idx);     // likewise a node that never asked to animate
         }
         DisposeNodeBindings(idx);
         // Element.Stagger / RelativeTo rows are node-indexed like the rest: a freed index must not hand its stagger or its
@@ -6480,6 +6483,8 @@ public sealed partial class TreeReconciler
                 // Before any request / pin below: the flag is read when this node pins an id (PinImageNode).
                 if (im.KeepWhileHidden) _keepWhileHiddenNodes.Add((int)node.Raw.Index);
                 else _keepWhileHiddenNodes.Remove((int)node.Raw.Index);
+                if (im.Animate) _animatedImageNodes.Add((int)node.Raw.Index);
+                else _animatedImageNodes.Remove((int)node.Raw.Index);
                 if (!im.Placeholder.IsBound)
                 {
                     if (paint.Fill != im.Placeholder.Value) StaticThemeFade(node, isMount, BrushAnim.FillBit);   // E20

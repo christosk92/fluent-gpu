@@ -117,6 +117,35 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         buffer = null;
         return false;
     }
+    /// <summary>Loan <paramref name="block"/> to the upload sink exactly as <see cref="Pump"/> loans a decode buffer, for a
+    /// pixel producer outside the decode lanes (an animated image's frames, <see cref="AnimatedFrameSource"/>). Pair with
+    /// <see cref="EndLoan"/> in a finally around the one synchronous sink call; the caller still owns the block when EndLoan
+    /// returns false.</summary>
+    internal static void BeginLoan(PixelBlock block, int byteLen)
+    {
+        t_loanBuffer = block; t_loanByteLen = byteLen; t_loanTaken = false;
+    }
+
+    /// <summary>Close a <see cref="BeginLoan"/>: true when the sink took the block (it now returns it to the pool).</summary>
+    internal static bool EndLoan()
+    {
+        bool taken = t_loanTaken;
+        t_loanBuffer = null; t_loanByteLen = 0; t_loanTaken = false;
+        return taken;
+    }
+
+    /// <summary>The pool decode and animation buffers are rented from (and uploads return to).</summary>
+    public PixelBufferPool PixelPool => _pixels;
+
+    /// <summary>Open <paramref name="source"/> as an animation (<c>ImageEl.Animate</c>): a frame source with its own worker,
+    /// fetching through this scheduler's fetcher and decoding through its codec, renting from its pixel pool and waking the
+    /// host through its completion wake. Null when the codec plays no animations (<see cref="IAnimatedImageCodec"/>). UI thread;
+    /// the open itself (fetch, parse) runs on the source's worker.</summary>
+    public AnimatedFrameSource? OpenAnimation(string source)
+        => _codec is IAnimatedImageCodec animated && !string.IsNullOrEmpty(source)
+            ? new AnimatedFrameSource(source, _fetcher, animated, _pixels, Volatile.Read(ref _completionWake))
+            : null;
+
     /// <summary>Number of completions applied by the most recent UI-thread <see cref="Pump"/>.</summary>
     public int LastPumpAppliedCount { get; private set; }
     /// <summary>Decoded pixel bytes applied by the most recent UI-thread <see cref="Pump"/>.</summary>

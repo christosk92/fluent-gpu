@@ -120,6 +120,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         public ID3D12Resource* Upload, Resource; // Upload always recycled via RecycleUpload (ring or release, by capacity); Resource released for kind 0
         public long UploadCapacity;             // bytes Upload holds — decides ring-return vs release in RecycleUpload
         public int Bucket, Slot;
+        public int W, H;                        // kind 0: the standalone texture's exact size (its reuse key, KeepStandalone)
         public ImageAtlasCell Cell;             // kind 2: the packed cell to hand back to the packer
         public D3D12_GPU_DESCRIPTOR_HANDLE Srv;
         public D3D12_RESOURCE_STATES State;
@@ -223,8 +224,8 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     // the 2-frame fence window — so the ring absorbs the steady state without ratcheting UPLOAD memory to the session
     // peak. A return that would exceed the cap is released outright (Kind 3 semantics), never queued.
     private const int MinUploadBucket = 64 * 1024;
-    private const int MaxUploadBucket = 4 * 1024 * 1024;
-    private const int UploadBucketCount = 7;                          // 64K, 128K, 256K, 512K, 1M, 2M, 4M
+    private const int MaxUploadBucket = 8 * 1024 * 1024;   // an animated 1440x810 frame (4.6 MB staged) rides the ring, not a one-off heap per frame
+    private const int UploadBucketCount = 8;                          // 64K, 128K, 256K, 512K, 1M, 2M, 4M, 8M
     private const long MaxPooledUploadBytes = 16L * 1024 * 1024;
     private readonly Stack<nint>?[] _uploadRing = new Stack<nint>?[UploadBucketCount];  // bucket index → FREE heaps (ID3D12Resource*); a bucket is null until first return
     private long _uploadRingBytes;                                    // Σ bytes of the FREE heaps held in the ring
@@ -617,15 +618,24 @@ internal sealed unsafe class ImageTextureStore : IDisposable
                 t.TexSize = bucket; t.Ox = 0; t.Oy = 0; t.State = pt.State; t.Live = false;
                 _poolCount++;
             }
-            else   // > 512: standalone exact-size texture (defensive; the cache buckets to ≤512, so this rarely runs)
+            else   // > 512: standalone exact-size texture (a large poster, an animated image's frames)
             {
-                if (!TryAcquireSlot(out int slot)) return RejectCapacity();
-                var res = CreateTexture(w, h);
-                if (res == null) { _freeSlots.Push(slot); return RejectDeviceFault(); }
-                t.Atlas = false; t.Resource = res; t.Slot = slot; t.Bucket = 0;
+                if (TakeStandalone(w, h, out var kept))
+                {
+                    // The same size retired earlier and fenced out: its texture, slot and SRV come back as a unit. An animated
+                    // image re-stages its id every frame, so steady playback cycles two or three textures and creates none.
+                    t.Atlas = false; t.Resource = kept.Resource; t.Slot = kept.Slot; t.Srv = kept.Srv; t.Bucket = 0;
+                }
+                else
+                {
+                    if (!TryAcquireSlot(out int slot)) return RejectCapacity();
+                    var res = CreateTexture(w, h);
+                    if (res == null) { _freeSlots.Push(slot); return RejectDeviceFault(); }
+                    t.Atlas = false; t.Resource = res; t.Slot = slot; t.Bucket = 0;
+                    CreateSrv(t.Resource, slot, out t.Srv);
+                }
                 t.TexSize = Math.Max(w, h); t.Ox = 0; t.Oy = 0;
                 t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON; t.Live = false;   // COMMON for life, both paths
-                CreateSrv(t.Resource, slot, out t.Srv);
             }
         }
 
@@ -853,7 +863,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         else if (t.Derived) { r.Kind = 6; r.Bucket = t.Bucket; r.Resource = t.Resource; r.Srv = t.Srv; r.Slot = t.Slot; }
         else if (t.Atlas) { r.Kind = 2; r.Cell = new ImageAtlasCell(t.Page, t.Cell, t.Ox, t.Oy, t.Bucket, t.PageGen); }
         else if (t.Bucket > 0) { r.Kind = 1; r.Bucket = t.Bucket; r.Resource = t.Resource; r.Srv = t.Srv; r.Slot = t.Slot; }
-        else { r.Kind = 0; r.Resource = t.Resource; r.Slot = t.Slot; }
+        else { r.Kind = 0; r.Resource = t.Resource; r.Slot = t.Slot; r.Srv = t.Srv; r.W = t.W; r.H = t.H; }
         _retired.Add(r);
         t.Resource = null; t.Upload = null; t.UploadCapacity = 0;
     }
@@ -895,7 +905,11 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             if (r.Upload != null) RecycleUpload(r.Upload, r.UploadCapacity);
             switch (r.Kind)
             {
-                case 0: if (r.Resource != null) { D3D12MemoryDiagnostics.Release(r.Resource, "Image.Texture"); r.Resource->Release(); } QuarantineSlot(r.Slot); break;
+                case 0:
+                    if (KeepStandalone(in r)) break;   // a same-size re-stage (an animated image's next frame) takes it back
+                    if (r.Resource != null) { D3D12MemoryDiagnostics.Release(r.Resource, "Image.Texture"); r.Resource->Release(); }
+                    QuarantineSlot(r.Slot);
+                    break;
                 case 1: ReleasePooled(r.Bucket, new Pooled { Resource = r.Resource, Srv = r.Srv, Slot = r.Slot, State = r.State }); break;
                 case 2: ReleaseAtlasCell(r.Cell); break;
                 case 3: break;   // one-off upload heap: released above
@@ -910,6 +924,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             _retired.RemoveAt(i);
         }
         _smallImages?.Reclaim(completedFence, keepWarm: !_noPooling);
+        AgeStandalone();
         AdvanceSlotQuarantine();
     }
 
@@ -1497,9 +1512,71 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
     private static void Check(HRESULT hr, string what) { if ((int)hr < 0) throw new InvalidOperationException($"{what} failed: 0x{(uint)hr:X8}"); }
 
+    // ── Standalone (> 512 px) texture reuse ──
+    // A resident id is never rewritten in place (every re-stage takes a fresh placement), and a standalone texture used to be
+    // released at its retire. An animated image (ImageEl.Animate) re-stages its id once per frame: at 60 fps that was a
+    // CreateCommittedResource and a Release of a 4.7 MB texture every 16.7 ms on the render thread. Retired standalone
+    // textures now wait here, keyed by exact size, for the next stage of that size; only fenced-out textures enter (the
+    // ReclaimCompleted gate), so a reused one is never still sampled. Bounded: StandaloneKeepMax textures, and any not
+    // reused within StandaloneKeepMs is released at the next reclaim, so a stopped animation gives its memory back.
+    private const int StandaloneKeepMax = 3;
+    private const long StandaloneKeepMs = 1000;
+    private struct KeptStandalone { public ID3D12Resource* Resource; public D3D12_GPU_DESCRIPTOR_HANDLE Srv; public int Slot, W, H; public long KeptAt; }
+    private readonly KeptStandalone[] _standaloneKept = new KeptStandalone[StandaloneKeepMax];
+    private int _standaloneKeptCount;
+
+    /// <summary>Standalone textures parked for a same-size reuse (diagnostics).</summary>
+    internal int StandaloneKeptCount => _standaloneKeptCount;
+
+    private bool KeepStandalone(in Retire r)
+    {
+        AgeStandalone();
+        if (_noPooling || r.Resource == null || r.W <= 0 || r.H <= 0 || _standaloneKeptCount >= StandaloneKeepMax) return false;
+        _standaloneKept[_standaloneKeptCount++] = new KeptStandalone
+        {
+            Resource = r.Resource, Srv = r.Srv, Slot = r.Slot, W = r.W, H = r.H, KeptAt = System.Diagnostics.Stopwatch.GetTimestamp(),
+        };
+        return true;
+    }
+
+    private bool TakeStandalone(int w, int h, out KeptStandalone kept)
+    {
+        for (int i = _standaloneKeptCount - 1; i >= 0; i--)
+        {
+            if (_standaloneKept[i].W != w || _standaloneKept[i].H != h) continue;
+            kept = _standaloneKept[i];
+            _standaloneKept[i] = _standaloneKept[--_standaloneKeptCount];
+            _standaloneKept[_standaloneKeptCount] = default;
+            return true;
+        }
+        kept = default;
+        return false;
+    }
+
+    /// <summary>Release kept textures nobody reused within <see cref="StandaloneKeepMs"/>.</summary>
+    private void AgeStandalone()
+    {
+        if (_standaloneKeptCount == 0) return;
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        long limit = StandaloneKeepMs * System.Diagnostics.Stopwatch.Frequency / 1000;
+        for (int i = _standaloneKeptCount - 1; i >= 0; i--)
+        {
+            if (now - _standaloneKept[i].KeptAt < limit) continue;
+            var k = _standaloneKept[i];
+            D3D12MemoryDiagnostics.Release(k.Resource, "Image.Texture");
+            k.Resource->Release();
+            QuarantineSlot(k.Slot);
+            _standaloneKept[i] = _standaloneKept[--_standaloneKeptCount];
+            _standaloneKept[_standaloneKeptCount] = default;
+        }
+    }
+
     public void Dispose()
     {
         _copyQueue?.Dispose(); _copyQueue = null;   // waits for every copy batch first
+        for (int i = 0; i < _standaloneKeptCount; i++)
+            if (_standaloneKept[i].Resource != null) { D3D12MemoryDiagnostics.Release(_standaloneKept[i].Resource, "Image.Texture"); _standaloneKept[i].Resource->Release(); }
+        _standaloneKeptCount = 0;
         foreach (var (_, prior) in _replacing)
             if (prior.Resource != null && !prior.Placed.IsValid) { D3D12MemoryDiagnostics.Release(prior.Resource, "Image.Texture"); prior.Resource->Release(); }
         _replacing.Clear();

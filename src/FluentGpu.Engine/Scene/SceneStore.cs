@@ -2679,6 +2679,36 @@ public sealed partial class SceneStore : ISceneBackend
         return new RectF(x, y, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
     }
 
+    /// <summary><see cref="IsShown"/> AND some of its box survives every clipping ancestor (<see cref="NodeFlags.ClipsToBounds"/>:
+    /// a scroll viewport, a clipped card) and the root: the "is any of it in view" test a per-frame consumer (an animated image's
+    /// clock) needs. The node's box is carried up the parent chain in each ancestor's own space (the
+    /// <see cref="AbsoluteRect"/> offsets: bounds, translation, the parent's child shift) and cut by every clip it meets.
+    /// Translation-only, like <see cref="AbsoluteRect"/>. Allocation-free; O(depth).</summary>
+    public bool IsInView(NodeHandle h)
+    {
+        if (!IsShown(h)) return false;
+        float l = 0f, t = 0f, r = _bounds[h.Raw.Index].W, b = _bounds[h.Raw.Index].H;
+        for (var n = h; !n.IsNull; )
+        {
+            var parent = Parent(n);
+            if (parent.IsNull) break;
+            float dx = _bounds[n.Raw.Index].X + _paint[n.Raw.Index].LocalTransform.Dx + _paint[parent.Raw.Index].ChildShiftX;
+            float dy = _bounds[n.Raw.Index].Y + _paint[n.Raw.Index].LocalTransform.Dy + _paint[parent.Raw.Index].ChildShiftY;
+            l += dx; r += dx; t += dy; b += dy;
+            n = parent;
+            if ((_flags[n.Raw.Index] & NodeFlags.ClipsToBounds) != 0 || n == Root)
+            {
+                ref RectF pb = ref _bounds[n.Raw.Index];
+                if (l < 0f) l = 0f;
+                if (t < 0f) t = 0f;
+                if (r > pb.W) r = pb.W;
+                if (b > pb.H) b = pb.H;
+                if (r <= l || b <= t) return false;
+            }
+        }
+        return true;
+    }
+
     /// <summary>Does the tree say <paramref name="h"/> is on screen: live, linked to <see cref="Root"/> (a KeepAlive-parked
     /// tab or an exit orphan is not), <see cref="NodeFlags.Visible"/> on every node of its chain, no zero
     /// <see cref="NodePaint.Opacity"/> on the chain, and a non-empty box. Clip and scroll culling are NOT considered: a
