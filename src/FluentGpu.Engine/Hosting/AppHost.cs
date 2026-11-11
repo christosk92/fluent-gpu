@@ -1486,6 +1486,11 @@ public sealed partial class AppHost : IDisposable
     private readonly List<NodeHandle> _reflowOwnedRoots = new(4);                   // SuppressDescendantTransitions containers a live sibling reflow resizes this commit: they land, they suppress nothing
     private readonly List<int> _positionScratch = new(64);                          // nodes with a position transition (RunReflowLayout's wrap watch)
     private readonly List<NodeHandle> _enterReflowsSeeded = new(8);                 // this frame's Reflow ENTERS (SeedReflowsFirst lays them out at 0)
+    private readonly List<NodeHandle> _widthSeeds = new(8);                         // the width reflows SeedReflowsFirst starts this pass (their destination is the commit's layout)
+    private readonly List<NodeHandle> _widthSeedsCommit = new(8);                   // every width reflow this commit's SeedReflowsFirst passes started (none of them is "away" from this commit)
+    private readonly List<NodeHandle> _destProbeNodes = new(8);                     // the live reflows a destination probe presents at their targets
+    private readonly List<(NodeHandle Node, float Width)> _destProbeSaved = new(8);  // the width inputs the probe found, put back exactly after its solve
+    private Size2 _destLayoutSize;                                                  // the window size the recorded destination widths were solved at
     private readonly List<(NodeHandle Node, RectF Was)> _wrapMovers = new(16);     // children of wrapping boxes and where they stood before a reflow re-solve
     private readonly List<(NodeHandle Node, float H)> _revealHeights = new(16);    // flow-reveal boxes and their height before a reflow re-solve
     private readonly List<RenderContext> _pendingLayoutEffectContexts = new();
@@ -6996,6 +7001,12 @@ public sealed partial class AppHost : IDisposable
             bool flowRevealFrame = _anim.HasFlowRevealWork || (capturedProjections && CapturedFlowReveal());
             _layout.DeferOffsetClamp = flowRevealFrame;
             MountProf.Enter(MountProf.Layout);
+            // A width reflow re-aimed by this frame's commit (the panel toggled back mid-slide), or a window resize while one flies: solve the
+            // targets once before the frame's own layout, which then lays the frame out where the slide is.
+            if (_everLaidOut && !_needFullLayout && !_scene.Root.IsNull
+                && (_anim.DestinationStale || (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)))
+                && SolveReflowTargets(layoutSize, "before layout"))
+                layoutNeeded = true;
             if (layoutNeeded && !_scene.Root.IsNull)
             {
                 if (_needFullLayout || !_everLaidOut)
@@ -7109,6 +7120,9 @@ public sealed partial class AppHost : IDisposable
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             if (capturedProjections) ApplyProjections(layoutSize, keepAliveSuppressed);   // FLIP "Last+Invert+Play"
+            // A width reflow seeded or re-aimed on a frame with no projection pass, or a window resize while one flies: probe its destination here.
+            if (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)) _anim.DestinationStale = true;
+            if (_anim.DestinationStale) ProbeReflowDestinations(layoutSize);
             _reconciler.RunEntranceCascades();                 // 6.7 staggered entrances requested this commit: their units are what this layout shows
             _enterReflowsSeeded.Clear();                       // read by ApplyProjections' SeedReflowsFirst (this frame's only)
             _anim.PendingEnterReveal.Clear();                  // seeded at 6.3, read by ApplyProjections as shove carriers
@@ -8533,6 +8547,7 @@ public sealed partial class AppHost : IDisposable
         // collapse) owns nothing, and the parts under it project their own moves.
         _projectionSuppressionRoots.Clear();
         _reflowOwnedRoots.Clear();
+        _widthSeedsCommit.Clear();
         if (!suppressed)
         {
             DiscoverProjectionRoots(PosEps, SizeEps);
@@ -8542,6 +8557,9 @@ public sealed partial class AppHost : IDisposable
             // A seeded node is laid out at its start by then, so a later pass finds it unchanged and seeds only what became free.
             for (int pass = 0; pass < SeedReflowPasses && SeedReflowsFirst(layoutSize, reduced, PosEps, SizeEps); pass++)
                 DiscoverProjectionRoots(PosEps, SizeEps);
+            // A width reflow this commit re-aimed (the panel toggled back mid-slide) or seeded beside another one in flight lands where no layout
+            // has solved yet: probe it before any FLIP is measured, so a structure that re-decides for the new destination glides there.
+            if (_anim.DestinationStale && ProbeReflowDestinations(layoutSize)) DiscoverProjectionRoots(PosEps, SizeEps);
         }
 
         foreach (var kv in _projectBefore)
@@ -8712,6 +8730,8 @@ public sealed partial class AppHost : IDisposable
     {
         if (reduced) return false;
         bool started = false;
+        bool destStale = _anim.DestinationStale;   // this pass's own width seeds are recorded below, from the commit's layout
+        _widthSeeds.Clear();
         foreach (var kv in _projectBefore)
         {
             NodeHandle n = kv.Key;
@@ -8724,6 +8744,7 @@ public sealed partial class AppHost : IDisposable
             // Size only: the main pass FLIPs the node's own move against the re-solved layout, and finds this row aimed already (its guards).
             _anim.AnimateBounds(n, from, to, spec with { Channels = TransitionChannels.Size });
             started |= _anim.PresentReflowStart(n);
+            if (_anim.HasLiveWidthReflow(n)) { _widthSeeds.Add(n); _widthSeedsCommit.Add(n); }
         }
         // A node that MOUNTED with a Reflow enter this commit (seeded after the layout as 0 -> its natural size, so it was never captured) is a
         // reflow this commit starts too: laid out at its target, it made every sibling's FLIP count the room it opens, which the reflow then
@@ -8735,8 +8756,11 @@ public sealed partial class AppHost : IDisposable
             if (!_scene.IsLive(n) || IsBelowProjectionSuppressionRoot(n)) continue;
             if (s_motionDiag) LogMotionNode(n.Raw.Index, "enter-reflow-first", default, _scene.Bounds(n));
             started |= _anim.PresentReflowStart(n);
+            if (_anim.HasLiveWidthReflow(n)) { _widthSeeds.Add(n); _widthSeedsCommit.Add(n); }
         }
         _enterReflowsSeeded.Clear();
+        _anim.DestinationStale = destStale;
+        RecordSeededDestinations(layoutSize);   // from the commit's layout, or one target solve (the re-solve below then lays out the start)
         if (!started || !_scene.AnyLayoutDirty) return false;
         NoteFlowRevealHeights();
         // The commit's own pass arranged these subtrees at their targets: the ring's slots for the start (the frame before) would answer without
@@ -8768,6 +8792,126 @@ public sealed partial class AppHost : IDisposable
             if (kept && _reflowShoveFrames.Count > 0 && ReflowRelationOf(n) != ReflowRelation.None) _reflowOwnedRoots.Add(n);
             else _projectionSuppressionRoots.Add(n);
         }
+    }
+
+    /// <summary>The destination widths of the width reflows <see cref="SeedReflowsFirst"/> starts: the commit's layout IS their target (each row
+    /// was presented at its start, but nothing has been re-solved yet), so each box under a seeded row's parent is recorded at the width it has
+    /// there (<see cref="SceneStore.StructureWidth"/>). When another width reflow in flight holds its box away from where it lands (it has
+    /// ticked), that layout does not show its destination: the frame is probed instead (<see cref="ProbeReflowDestinations"/>).</summary>
+    private string DestDiagPath(NodeHandle n)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0, keyed = 0; i < 24 && keyed < 2 && !n.IsNull; i++, n = _scene.Parent(n)) { if (_scene.DebugKeyOf(n) is not null) keyed++; sb.Append(_scene.DebugKeyOf(n) ?? "#" + n.Raw.Index).Append('<'); }
+        return sb.ToString();
+    }
+
+    private void RecordSeededDestinations(Size2 layoutSize)
+    {
+        if (_widthSeeds.Count == 0) return;
+        // Only a width reflow that was already flying before this commit can hold a box away from where it lands: this commit's own seeds (every
+        // pass's) were laid out at their targets by the commit's pass.
+        if (_anim.AnyWidthReflowAwayFromDeclared(_widthSeedsCommit, out NodeHandle away))
+        {
+            // A width reflow seeded on an earlier frame has ticked: this commit's layout does not show where it lands. Solve the targets once here;
+            // the seed pass's own re-solve then lays the frame out at the rows' start.
+            if (s_motionDiag)
+            {
+                System.Console.Error.WriteLine($"[dest-width] seeded beside a flying width reflow node={away.Raw.Index} at={DestDiagPath(away)}");
+                for (int i = 0; i < _widthSeeds.Count; i++) System.Console.Error.WriteLine($"[dest-width]   seed node={_widthSeeds[i].Raw.Index} at={DestDiagPath(_widthSeeds[i])} declared={_scene.Bounds(_widthSeeds[i]).W:0.0}");
+            }
+            _widthSeeds.Clear();
+            SolveReflowTargets(layoutSize, "seed beside a flying reflow");
+            return;
+        }
+        bool laterPass = _widthSeedsCommit.Count > _widthSeeds.Count;   // an earlier pass laid its seeds out at their start since the commit's pass
+        if (!_scene.HasDestinationWidths) _destLayoutSize = layoutSize;   // a later pass adds to this frame's record, first width kept
+        else if (!_destLayoutSize.Equals(layoutSize)) { _scene.ClearDestinationWidths(markChanged: false); _destLayoutSize = layoutSize; }
+        for (int i = 0; i < _widthSeeds.Count; i++)
+        {
+            NodeHandle n = _widthSeeds[i], p = _scene.Parent(n);
+            NodeHandle root = p.IsNull ? n : p;
+            // A later pass's seed whose box the first pass did not record stands in a layout re-solved at the earlier seeds' start: probe instead.
+            if (laterPass && !_scene.HasDestinationWidth(root))
+            {
+                if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] a later seed pass's node={n.Raw.Index} at={DestDiagPath(n)} is outside the first record");
+                _widthSeeds.Clear();
+                SolveReflowTargets(layoutSize, "later seed pass");
+                return;
+            }
+            _scene.RecordDestinationWidths(root);
+        }
+        if (s_motionDiag)
+            for (int i = 0; i < _widthSeeds.Count; i++) System.Console.Error.WriteLine($"[dest-width] recorded seed node={_widthSeeds[i].Raw.Index} at={DestDiagPath(_widthSeeds[i])} from the commit's layout");
+        _widthSeeds.Clear();
+    }
+
+    /// <summary>The destination probe: lay the frame out once with every live width reflow at its TARGET, record the width each box under each
+    /// reflow's parent has there (<see cref="SceneStore.StructureWidth"/>: what column counts, wrap breaks and forms are chosen for while the
+    /// reflows fly), then put the rows' current sizes back and solve again, so this frame still shows where the slide is. Runs on a frame that
+    /// re-aims a width reflow, seeds one beside another in flight, or resizes the window during one; a fresh slide records the commit's own
+    /// layout instead (<see cref="RecordSeededDestinations"/>). Two solves of the dirty scopes, once per slide direction. True when it probed.</summary>
+    private bool ProbeReflowDestinations(Size2 layoutSize)
+    {
+        NoteFlowRevealHeights();
+        if (!SolveReflowTargets(layoutSize, "after layout")) return false;
+        _layout.BypassMeasureRing = true;
+        try { _invalidator.RunDirty(layoutSize); _scene.ClearLayoutDirty(); }
+        finally { _layout.BypassMeasureRing = false; }
+        FollowFlowRevealHeights();
+        return true;
+    }
+
+    /// <summary>The destination probe's ONE target solve: present every live width reflow at the width it lands at, solve the dirty scopes, record
+    /// the width each box under each reflow's parent has there (<see cref="SceneStore.StructureWidth"/>), and present the rows back at their
+    /// current sizes (dirtying their parents). The caller's next solve puts the frame back where the slide is: the frame's own layout (the
+    /// pre-layout probe), the seed pass's re-solve at the rows' start (<see cref="SeedReflowsFirst"/>), or one restore solve
+    /// (<see cref="ProbeReflowDestinations"/>). Allocation-free once the lists have grown. True when a live width reflow was solved.</summary>
+    private bool SolveReflowTargets(Size2 layoutSize, string where)
+    {
+        _anim.DestinationStale = false;
+        _anim.CollectLiveReflowNodes(_destProbeNodes);
+        bool width = false;
+        for (int i = 0; i < _destProbeNodes.Count && !width; i++) width = _anim.HasLiveWidthReflow(_destProbeNodes[i]);
+        if (!width)
+        {
+            // No width reflow flies any more (a window resize snapped it): structure is chosen from the live width again, from the next solve on.
+            _scene.ClearDestinationWidths(markChanged: true);
+            _destProbeNodes.Clear();
+            return false;
+        }
+        _scene.ClearDestinationWidths(markChanged: false);   // the target solve chooses structure at its own (target) widths
+        // THE PROBE IS AN OBSERVATION: every width input it writes is saved first and put back exactly after (NaN stays NaN: an auto-width box
+        // stays auto), only a slide's rows are presented (HasLiveWidthReflow: no exit orphan, no enter), and nothing it arranges is delivered.
+        _destProbeSaved.Clear();
+        for (int i = 0; i < _destProbeNodes.Count; i++)
+        {
+            NodeHandle n = _destProbeNodes[i];
+            if (!_anim.HasLiveWidthReflow(n)) continue;
+            _destProbeSaved.Add((n, _scene.Layout(n).Width));
+            _anim.PresentReflowTarget(n);
+        }
+        if (_destProbeSaved.Count == 0) { _destProbeNodes.Clear(); return false; }
+        if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] target solve ({where}) at {layoutSize.Width:0}x{layoutSize.Height:0}");
+        // The solve re-arranges subtrees the frame's layout already solved at other sizes: the ring would answer from those (BypassMeasureRing).
+        // Nothing it arranges is shown: no OnBoundsChanged or measured-bounds hook hears it (FlexLayout.SuppressBoundsDelivery).
+        _layout.BypassMeasureRing = true;
+        _layout.SuppressBoundsDelivery = true;
+        try
+        {
+            _invalidator.RunDirty(layoutSize);
+            _scene.ClearLayoutDirty();
+        }
+        finally { _layout.BypassMeasureRing = false; _layout.SuppressBoundsDelivery = false; }
+        for (int i = 0; i < _destProbeSaved.Count; i++)
+        {
+            NodeHandle n = _destProbeSaved[i].Node, p = _scene.Parent(n);
+            _scene.RecordDestinationWidths(p.IsNull ? n : p);
+        }
+        for (int i = 0; i < _destProbeSaved.Count; i++) _anim.RestoreProbedWidth(_destProbeSaved[i].Node, _destProbeSaved[i].Width);
+        _destProbeSaved.Clear();
+        _destLayoutSize = layoutSize;
+        _destProbeNodes.Clear();
+        return true;
     }
 
     /// <summary>Note the height of every live flow-reveal box before a re-solve that is no commit (<see cref="FollowFlowRevealHeights"/>).</summary>
@@ -9093,6 +9237,8 @@ public sealed partial class AppHost : IDisposable
     private void RunReflowLayout(Size2 layoutSize)
     {
         var roots = _anim.ReflowRoots;
+        // The last width reflow landed (or was cancelled): structure is chosen from the live width again, from this re-solve on.
+        if (_scene.HasDestinationWidths && _anim.CountLiveWidthReflows() == 0) _scene.ClearDestinationWidths(markChanged: true);
         if (!_anim.ConsumeReflowWrites()) { roots.Clear(); _anim.SettledToAuto.Clear(); return; }
         // A WRAPPING box the re-solve narrows or widens re-breaks its lines without a commit, so no projection sees its children move: a group
         // that drops to the next line (a quickplay strip beside a docking panel) would jump there in one tick. Note where every child of a wrapping

@@ -33,6 +33,9 @@ internal sealed class MeasuredBoundsCell : HookCell, IDisposableCell
     public Signal<RectF>? BoundsSig;
     public FloatSignal? WidthSig;
     public float Quantum;
+    // The width hook reports the STRUCTURE width (SceneStore.StructureWidth: the width the box lands at while a width reflow resizes it)
+    // instead of the live one: the measure a discrete choice reads (a tier, a column count), which then holds through the slide.
+    public bool Structure;
     // E17c: the full MeasureMemory key of a keyed hook (null = unkeyed), and the call site that names an unkeyed one in a
     // settle's journal (the caller-info literal: no allocation).
     public string? MemoryKey;
@@ -90,7 +93,11 @@ internal sealed class MeasuredBoundsCell : HookCell, IDisposableCell
     {
         bool changed;
         if (WidthSig is { } ws)
-            changed = ws.SetIfChanged(QuantizeWidth(r.W));   // round to the quantum; the signal's exact-compare then coalesces sub-quantum churn
+        {
+            float w = Structure && _ctx.Scene is { } sc ? sc.StructureWidth(_node, r.W) : r.W;
+            if (Structure && EngineSwitches.MotionDiag) System.Console.Error.WriteLine($"[dest-width] structure hook node={_node.Raw.Index} live={r.W:0.0} structure={w:0.0}");
+            changed = ws.SetIfChanged(QuantizeWidth(w));   // round to the quantum; the signal's exact-compare then coalesces sub-quantum churn
+        }
         else changed = BoundsSig!.SetIfChanged(r);     // RectF is a record struct ⇒ value-equality coalesces no-change writes
         // E17c: a keyed hook remembers its rect for the next mount with the same key; a changed decision (keyed or not) bumps
         // the measured-change serial a settle compares across a pass, and is journaled while one runs.
@@ -146,6 +153,18 @@ public sealed partial class RenderContext
     /// written during layout, consumer re-renders NEXT frame; a same-frame layout-effect sees the previous value.</summary>
     public IReadSignal<float> UseMeasuredWidth(float quantum = 0f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
         => MeasuredCell(null, bounds: false, quantum, __hf, __hl).WidthSig!;
+
+    /// <summary>The width this component's rendered root's STRUCTURE is chosen for, as a read signal: its arranged width, except while a width
+    /// reflow resizes it (a docking panel's reservation easing), when it is the width the root lands at, decided on the slide's first frame
+    /// (<see cref="SceneStore.StructureWidth"/>). Feed it to a discrete choice (<c>UseTier(ladder, TierSource.Measured(...))</c>, a column count,
+    /// a form) so the choice is made once per slide; sizes that follow the slide come from layout. Same timing and quantum as
+    /// <see cref="UseMeasuredWidth(float,string?,int)"/>.</summary>
+    public IReadSignal<float> UseStructureWidth(float quantum = 0f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+    {
+        var cell = MeasuredCell(null, bounds: false, quantum, __hf, __hl);
+        cell.Structure = true;
+        return cell.WidthSig!;
+    }
 
     /// <summary>E17c — the KEYED <see cref="UseMeasuredBounds(string?,int)"/>: the signal starts from the rect remembered for
     /// <paramref name="key"/> (<see cref="MeasureMemory"/>, composed onto the ambient <see cref="MeasureMemory.Scope"/>), and every

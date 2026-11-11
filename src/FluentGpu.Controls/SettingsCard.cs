@@ -368,15 +368,20 @@ sealed class SettingsCardCore : Component
     readonly Signal<int> _formEdge = Signal.AlwaysNotify(0);
     SettingsCard.Options? _options;
     float _w;
+    NodeHandle _node;
     int _rendered = -1;
     readonly Action<RectF> _onBounds;
+    readonly Action<NodeHandle> _onRealized;
 
     public SettingsCardCore()
     {
+        _onRealized = h => _node = h;
         _onBounds = r =>
         {
-            if (r.W <= 0f || MathF.Abs(r.W - _w) <= 0.5f) return;
-            _w = r.W;
+            // The form is chosen at the structure width (the width the card lands at while a width reflow resizes it): once per slide.
+            float w = Context.Scene is { } scene ? scene.StructureWidth(_node, r.W) : r.W;
+            if (w <= 0f || MathF.Abs(w - _w) <= 0.5f) return;
+            _w = w;
             if (_options is { } o && SettingsCard.FormOf(o, _w) != _rendered) _formEdge.Value = 0;
         };
     }
@@ -392,7 +397,7 @@ sealed class SettingsCardCore : Component
         {
             Direction = 1,
             AlignSelf = FlexAlign.Stretch,
-            OnBoundsChanged = _onBounds,
+            OnBoundsChanged = _onBounds, OnRealized = _onRealized,
             Children = [SettingsCard.Build(options, form)],
         };
     }

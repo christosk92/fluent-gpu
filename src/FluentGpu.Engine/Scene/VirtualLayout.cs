@@ -532,11 +532,33 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
         else _cardW = MinCardW;
     }
 
-    /// <summary>The fit at an inner (gutter-free) width: the held columns when the host holds them, else <see cref="Fit"/>.</summary>
+    // The viewport width the column count is chosen at (NaN: the live viewport). The engine feeds it before each SetViewport: while a width
+    // reflow resizes the strip it is the width the strip lands at (SceneStore.StructureWidth), so the strip takes its final columns once and
+    // only its cards' width follows the slide.
+    private float _structMain = float.NaN;
+
+    /// <summary>Feed the viewport width the column COUNT is chosen at (the engine's arrange, before <see cref="SetViewport"/>); the live viewport
+    /// still sizes the cards for that count. Re-fits at once when it moved. Allocation-free.</summary>
+    public void SetStructureMain(float mainExtent)
+    {
+        if (mainExtent == _structMain || (float.IsNaN(mainExtent) && float.IsNaN(_structMain))) return;
+        _structMain = mainExtent;
+        Refit();
+    }
+
+    /// <summary>The fit at an inner (gutter-free) width: the held columns when the host holds them, else <see cref="Fit"/>, with its count chosen
+    /// at the structure width when that differs (<see cref="SetStructureMain"/>) and the cards sized for that count at <paramref name="inner"/>.</summary>
     private (int PerPage, float CardW) FitInner(float inner)
     {
         if (HeldColumns <= 0 || PerPageOverride > 0 || FixedCardW > 0f || inner <= 1f)
-            return Fit(inner, MinCardW, MaxCardW, Gap, PerPageOverride, FixedCardW, MaxColumns);
+        {
+            float structInner = float.IsNaN(_structMain) ? inner : MathF.Max(0f, _structMain - LeadInset - TrailInset);
+            if (PerPageOverride > 0 || FixedCardW > 0f || inner <= 1f || MathF.Abs(structInner - inner) <= 0.5f)
+                return Fit(inner, MinCardW, MaxCardW, Gap, PerPageOverride, FixedCardW, MaxColumns);
+            // The count is the structure width's; each card is the live width's share of it (the band's cap chose the count and does not hold it).
+            int perPage = Fit(structInner, MinCardW, MaxCardW, Gap, 0, 0f, MaxColumns).PerPage;
+            return (perPage, MathF.Max(1f, (inner - (perPage - 1) * Gap) / perPage));
+        }
         int cols = HeldColumns;
         return (cols, HeldCardW > 0f ? HeldCardW : MathF.Max(1f, (inner - (cols - 1) * Gap) / cols));
     }

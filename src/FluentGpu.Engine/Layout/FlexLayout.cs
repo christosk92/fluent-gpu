@@ -31,6 +31,12 @@ public sealed partial class FlexLayout
     /// trailing group at the target's x, a list's rows at the target width, for one frame. False otherwise.</summary>
     public bool BypassMeasureRing { get; set; }
 
+    /// <summary>Set by the host around its destination probe's target solve (<c>AppHost.SolveReflowTargets</c>): a layout of where width reflows
+    /// LAND, which the frame never shows. Its arranged rects must not reach Element.OnBoundsChanged or a measured-bounds hook (they would write
+    /// the landing width into app state, and re-render what reads it, before the next solve puts the frame back), nor advance the delivered
+    /// baseline those edges compare against.</summary>
+    public bool SuppressBoundsDelivery { get; set; }
+
     // `--fg layout` (EngineSwitches.LayoutDiag): per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
     // measure≫arrange flags a redundant-measure blow-up. Gated to a single bool check (zero work/alloc) when off.
@@ -463,6 +469,12 @@ public sealed partial class FlexLayout
     /// (WrapWholeWords at width 0) and nothing is memoised, so a grid can learn the narrowest width a cell can take
     /// without breaking inside a word. Set only around the cell measures in AutoTrackBounds.</summary>
     private bool _minContentProbe;
+
+    /// <summary>The width a box's STRUCTURE is chosen for (its auto-fill column count, where its wrapped lines break, a fill-row's columns):
+    /// the width it lands at while a width reflow resizes it (<see cref="SceneStore.StructureWidth"/>), else <paramref name="live"/>. The live
+    /// width still sizes and places the cells. Intrinsic probes measure at hypothetical widths and keep them.</summary>
+    private float StructureW(NodeHandle node, float live)
+        => _minContentProbe || _naturalProbe ? live : _scene.StructureWidth(node, live);
     // The probe's own per-node text ring (index-keyed; the entry key is the full (text, style, maxW) pure-function input,
     // so a recycled index can only ever hit a correct answer). Grown in MeasureNatural only — cold, never per frame.
     private TextMeasureCache[] _probeText = System.Array.Empty<TextMeasureCache>();
@@ -702,6 +714,7 @@ public sealed partial class FlexLayout
         if (ai < (uint)_arranged.Length) { _arranged[ai] = next; _arrangedVer[ai] = _scene.SubtreeVersion(node); }
         _scene.SetArrangedValid(node);
         NoteVerifySig(node);   // DEBUG tripwire baseline: the layout inputs this placement was computed from
+        if (SuppressBoundsDelivery) return;   // a destination probe's target solve: nothing the frame shows
         var handler = _scene.GetBoundsChangedHandler(node);   // element author's Element.OnBoundsChanged
         var hook = _scene.GetBoundsChangedHook(node);          // hook-owned observers (UseMeasuredBounds/Width) — separate slot
         if (handler is null && hook is null) return;
@@ -729,7 +742,7 @@ public sealed partial class FlexLayout
     /// is exactly that signal, independent of whether the rect moved.</summary>
     private void DeliverPendingBoundsChangedIfAny(NodeHandle node, in RectF current)
     {
-        if ((_scene.Flags(node) & NodeFlags.BoundsChangedPending) == 0) return;
+        if (SuppressBoundsDelivery || (_scene.Flags(node) & NodeFlags.BoundsChangedPending) == 0) return;
         var handler = _scene.GetBoundsChangedHandler(node);
         var hook = _scene.GetBoundsChangedHook(node);
         _scene.Unmark(node, NodeFlags.BoundsChangedPending);
@@ -1651,6 +1664,12 @@ public sealed partial class FlexLayout
         if (!Verifying && ext is VirtualLayoutExtent { Cross: > 0f } reflowing && reflowing.Cross == arrangedCross
             && cross > 0f && cross != arrangedCross && sc.Offset > 0.0)
             reflowFrom = ext.OffsetOf(anchorIndex);
+        // A fill-row strip's columns are chosen at the viewport's structure width; the live width sizes the cards.
+        if (horizontal && layout is FillRowVirtualLayout fill)
+        {
+            float padH = _scene.Layout(node).Padding.Horizontal;
+            fill.SetStructureMain(StructureW(node, innerW + padH) - padH);
+        }
         if (layout is IViewportVirtualLayout vl) vl.SetViewport(horizontal ? innerW : innerH, cross);
         if (ext is VirtualLayoutExtent vle && cross > 0f) vle.Cross = cross;
         _ = ext.Total;   // a lazily-tabled measured layout must own its table BEFORE the first SetMeasured below
@@ -1989,7 +2008,7 @@ public sealed partial class FlexLayout
             // ScrollEl.FitContentWidth viewport pans it) — layout.md §7.2.
             w = Clamp(float.IsInfinity(availW) ? natural : MathF.Max(MathF.Min(w, natural), floor), li.MinW, li.MaxW);
         }
-        int count = GridColCount(in g, w - padH);   // auto-fill resolves the count from the (now known) width
+        int count = GridColCount(in g, StructureW(node, w) - padH);   // auto-fill resolves the count from the (now known) width
         float h;
         if (w > 0f && count > 0)
         {
@@ -2008,7 +2027,7 @@ public sealed partial class FlexLayout
         _scene.TryGetGrid(node, out var g);
         float padL = li.Padding.Left, padT = li.Padding.Top;
         float innerW = finalW - li.Padding.Horizontal;
-        int count = GridColCount(in g, innerW);   // same width Measure saw → same count, so rows/height stay consistent
+        int count = GridColCount(in g, StructureW(node, finalW) - li.Padding.Horizontal);   // same width Measure saw → same count, so rows/height stay consistent
         if (count == 0 || _scene.FirstChild(node).IsNull) return;
 
         Span<float> colW = count <= 64 ? stackalloc float[count] : new float[count];
@@ -2209,6 +2228,8 @@ public sealed partial class FlexLayout
     private (float w, float h) MeasureWrap(NodeHandle node, in LayoutInput li, bool row, float mainLimit)
     {
         float availMain = MathF.Max(0f, mainLimit - (row ? li.Padding.Horizontal : li.Padding.Vertical));
+        // A row's lines break at the width its structure is chosen for (StructureW: the landing width while a reflow resizes it).
+        float breakMain = row ? MathF.Max(0f, ClampMain(in li, row, StructureW(node, mainLimit)) - li.Padding.Horizontal) : availMain;
         // Text (MaxLines=1 + Trim) must measure against the LINE width so a lone over-long item ellipsizes
         // instead of overflowing. Never the leftover: leftover would crush a shrinkable run instead of wrapping.
         float childAvailW = row ? availMain : float.PositiveInfinity;
@@ -2220,7 +2241,7 @@ public sealed partial class FlexLayout
             ref LayoutInput cli = ref _scene.Layout(c);
             float oMain = (row ? cs.Width : cs.Height) + MarginMain(cli, row);
             float oCross = (row ? cs.Height : cs.Width) + MarginCross(cli, row);
-            if (!first && cursor + li.Gap + oMain > availMain + 0.01f)
+            if (!first && cursor + li.Gap + oMain > breakMain + 0.01f)
             {
                 totalCross += lineCross + li.Gap;   // close the line + a cross-axis gap
                 cursor = oMain; lineCross = oCross;
@@ -2262,6 +2283,7 @@ public sealed partial class FlexLayout
         float padMainStart = row ? li.Padding.Left : li.Padding.Top;
         float padCrossStart = row ? li.Padding.Top : li.Padding.Left;
         float availMain = (row ? finalW : finalH) - (row ? li.Padding.Horizontal : li.Padding.Vertical);
+        float breakMain = row ? ClampMain(in li, row, StructureW(node, finalW)) - li.Padding.Horizontal : availMain;   // as MeasureWrap
         // MeasureWrap's childAvailW: the line width on a row (text MaxLines=1 + Trim ellipsizes against it), unbounded on a column.
         float childAvailW = row ? MathF.Max(0f, availMain) : float.PositiveInfinity;
         float lineTop = padCrossStart;
@@ -2278,7 +2300,7 @@ public sealed partial class FlexLayout
                 ref LayoutInput cli = ref _scene.Layout(c);
                 float oMain = (row ? cs.Width : cs.Height) + MarginMain(cli, row);
                 float next = usedMain + (count > 0 ? li.Gap : 0f) + oMain;
-                if (count > 0 && next > availMain + 0.01f) break;   // CSS: always ≥1 item per line
+                if (count > 0 && next > breakMain + 0.01f) break;   // CSS: always ≥1 item per line
                 usedMain = next; totalGrow += cli.FlexGrow; count++;
                 lineCross = MathF.Max(lineCross, (row ? cs.Height : cs.Width) + MarginCross(cli, row));   // the line's cross size, known before placement
             }
