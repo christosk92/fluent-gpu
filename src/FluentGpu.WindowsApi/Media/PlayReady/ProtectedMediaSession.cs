@@ -434,11 +434,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         RequestPump();
     }
 
-    /// <summary>The floor the laid-out viewport height is clamped to before it becomes an ABR cap. Real video surfaces
-    /// are small (191 DIP docked, 202 DIP pop-out, 135 DIP at the pop-out minimum) and every one is below every rung a
-    /// manifest offers, so the raw height would filter the whole ladder away and Auto would collapse to the bottom rung
-    /// on any bandwidth. A viewport is a hint about what is worth downloading, not a licence to starve the ladder.</summary>
-    private const int MinViewportCapHeight = 720;
+    /// <summary>The floor a viewport height is clamped to before it becomes an ABR cap (the rule lives on the controller,
+    /// <see cref="AdaptiveBitrateController.ViewportCapFor"/>).</summary>
+    private const int MinViewportCapHeight = AdaptiveBitrateController.MinViewportCapHeight;
 
     /// <summary>How long a LOWER viewport cap must hold unchanged before it is committed. A fullscreen exit animates
     /// through many heights; a cap that follows each one samples a surface mid-resize. Raising is never delayed.</summary>
@@ -458,8 +456,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         // mid-replacement — neither is a real viewport. A pending switch also restarts any lower-cap timer, so the
         // switch itself never counts towards "stable".
         if (abr is null || _disposed || height <= 0) return;
+        abr.ViewportRequestedHeight = height;   // what the surface asks for, even mid-switch: the next source's opening cap reads it
         if (_pendingRepresentationId is not null) { _viewportLowerCandidate = 0; return; }
-        int cap = QuantiseViewportCap(Math.Max(height, MinViewportCapHeight));
+        int cap = QuantiseViewportCap(height);
         if (_viewportMaxHeight == int.MaxValue || cap >= _viewportMaxHeight)
         {
             CommitViewportCap(abr, cap, nowTicks);
@@ -486,19 +485,13 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         abr.ViewportMaxHeight = cap;
     }
 
-    /// <summary>The smallest ladder height at or above <paramref name="height"/>; the tallest rung when the surface is
-    /// taller than every rung; the raw height when no rung declares a resolution.</summary>
+    /// <summary>The viewport cap for a surface <paramref name="height"/> over this ladder: the floor and the quantise UP are
+    /// <see cref="AdaptiveBitrateController.ViewportCapFor"/>, the one rule the app's opening pick uses too.</summary>
     private int QuantiseViewportCap(int height)
     {
-        int atOrAbove = int.MaxValue, tallest = 0;
-        for (int i = 0; i < _qualityVariants.Length; i++)
-        {
-            int rung = _qualityVariants[i].Resolution.Height;
-            if (rung > tallest) tallest = rung;
-            if (rung >= height && rung < atOrAbove) atOrAbove = rung;
-        }
-        if (atOrAbove != int.MaxValue) return atOrAbove;
-        return tallest > 0 ? tallest : height;
+        Span<int> heights = stackalloc int[_qualityVariants.Length];
+        for (int i = 0; i < heights.Length; i++) heights[i] = _qualityVariants[i].Resolution.Height;
+        return AdaptiveBitrateController.ViewportCapFor(height, heights);
     }
 
     /// <summary>
