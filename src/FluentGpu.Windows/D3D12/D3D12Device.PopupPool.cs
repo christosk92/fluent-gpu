@@ -24,10 +24,10 @@ namespace FluentGpu.Rhi.D3D12;
 //    disposes it and builds a new one.
 public sealed unsafe partial class D3D12Device
 {
-    // Render thread. Set when a parked popup still holds its open-size buffers or a released one still holds its D3D12 resources;
-    // serviced after the primary's present and on elided turns (ServicePopupUpkeep).
+    // Render thread. Set while a parked popup waits for its build (the idle prewarm's) or a released one still holds its D3D12
+    // resources; serviced right after the primary's present, or by the primary host on a turn in which the primary presents
+    // nothing (ServicePopupWork) - never ahead of the primary's present, whichever host's turn it is.
     private bool _popupUpkeepPending;
-    private int _primaryPresentThreadId;   // the thread that presents the primary (the render thread under a render loop)
     // Popups released for good whose frames had not retired yet: out of _swapchains (nothing records or presents them), their
     // backdrop gone, their buffers / RTV heap / command list released by ServicePopupUpkeep once the fence passed them.
     private readonly List<D3D12Swapchain> _retiringPopupTargets = new(2);
@@ -44,7 +44,7 @@ public sealed unsafe partial class D3D12Device
         {
             // Never built (the idle prewarm, or a popup closed before its first frame): built at the parked size where every popup
             // build runs, after the owner's next present (BuildPendingPopups) or on a turn that presents nothing
-            // (ServicePopupUpkeep), never inside the owner's frame. The prewarm pays the first-in-process backdrop there, at idle.
+            // (ServicePopupWork), never inside the owner's frame. The prewarm pays the first-in-process backdrop there, at idle.
             sc.W = 1; sc.H = 1;
             _popupBuildPending = true;
             _popupUpkeepPending = true;
@@ -108,30 +108,45 @@ public sealed unsafe partial class D3D12Device
         _popupUpkeepPending = true;
     }
 
+    /// <inheritdoc/>
+    public void ServicePopupWork()
+    {
+        AssertSubmitThread();
+        ServicePopupUpkeep();
+    }
+
     /// <summary>The prewarm's never-built popup is built (on a turn with no owner present), and a popup released for good lets go
     /// of its D3D12 resources once its frames retired. Never waits. Render thread; after the primary's present (Present) and on
-    /// turns that submit nothing (ReclaimCompletedUploads).</summary>
+    /// turns the primary presents nothing (ServicePopupWork, called by the primary host).</summary>
     private void ServicePopupUpkeep()
     {
         if (!_popupUpkeepPending || _fence == null) return;
-        _popupUpkeepPending = false;
         ulong done = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
-        if (done == ulong.MaxValue) { _popupUpkeepPending = true; return; }   // lost: RecoverDeviceCore releases them all
+        if (done == ulong.MaxValue) return;   // lost: RecoverDeviceCore releases them all
+        // The pending flag is recomputed from what is left AFTER the work: a step that throws leaves it set and is retried, and each
+        // step leaves its target whole or released (a failed build latches BuildFailed: UnparkPopup then answers false and the host
+        // disposes it; a release that ran is out of the list).
         for (int i = 0; i < _swapchains.Count; i++)
         {
             var sc = _swapchains[i];
-            if (sc.Parked && sc.BuildPending) BuildPopupNow(sc);   // the prewarm's build on a turn with no owner present (logs its own line)
+            if (sc.Parked && sc.BuildPending) BuildPopupNow(sc);   // the prewarm's build (logs its own "popup create ... lazy=1" line)
         }
         for (int i = _retiringPopupTargets.Count - 1; i >= 0; i--)
         {
             var t = _retiringPopupTargets[i];
-            if (TargetFenceHorizon(t.Frame) > done) { _popupUpkeepPending = true; continue; }
+            if (TargetFenceHorizon(t.Frame) > done) continue;
             _retiringPopupTargets.RemoveAt(i);
             t.RetireDeferred = false;
             ReleaseSwapchainResources(t);
             Diag.Line($"[d3d12.teardown] phase=target-released target={t.Ordinal} recovery={_recoveryCount} deferred=1");
         }
+        bool left = _retiringPopupTargets.Count != 0;
+        for (int i = 0; i < _swapchains.Count && !left; i++) left = _swapchains[i].Parked && _swapchains[i].BuildPending;
+        _popupUpkeepPending = left;
     }
+
+    /// <inheritdoc/>
+    public bool CanParkPopups => true;
 
     /// <summary>Device loss / teardown: every popup still waiting for its fence is released now (the fence is dead or drained), and
     /// every parked popup is released for good (the host builds a new one on its next open). Render thread (or the parked owner).</summary>

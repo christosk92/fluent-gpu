@@ -330,6 +330,16 @@ public partial interface IGpuDevice : IDisposable
     /// Default no-op (headless / backends with no deferred-retire resource pool).</summary>
     void ReclaimCompletedUploads() { }
 
+    /// <summary>True when this backend keeps a closed popup's swap chain for the next popup (<see cref="ISwapchain.ParkPopup"/>):
+    /// the host's popup pool and its idle prewarm run only then, so a backend that cannot park (headless) never starts one.
+    /// Default false.</summary>
+    bool CanParkPopups => false;
+
+    /// <summary>Render thread, the primary host's turn only, on a turn in which the primary presents nothing: run the popup pool's
+    /// deferred device work (the idle prewarm's swap chain build, the release of popups let go once their frames retired). The
+    /// backend also runs it right after the primary's own present; never ahead of it. Default no-op.</summary>
+    void ServicePopupWork() { }
+
     /// <summary>Record + batch + submit to a specific swapchain target (windowed popup HWNDs). Backends without
     /// secondary-swapchain support fall back to the primary target via the legacy overload.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)

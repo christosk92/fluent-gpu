@@ -36,6 +36,7 @@ internal sealed class PopupLifecycle
     internal bool Reused;      // UI: the lease took a pooled window + parked swapchain (render: false again when that swapchain could not serve)
     internal bool Parked;      // where the swapchain is released: the close parked it for the next popup instead
     internal double RetireMs;  // the close's park / release call on its thread (render thread under a render loop)
+    internal PopupOrigin Origin;   // UI: where the lease's window + swapchain came from (built, the prewarm's pair, a closed popup's)
 
     /// <summary>One popup pass on the render thread: record + submit + present of the popup swapchain.</summary>
     internal void NoteTurn(long startQpc, long endQpc, bool presentedContent)
@@ -60,6 +61,6 @@ internal sealed class PopupLifecycle
             + $" firstPresent=+{Since(LeaseStartQpc, FirstPresentQpc):F1}ms (pass={FirstTurnMs:F2}ms)"
             + $" shown=+{Since(LeaseStartQpc, ShownQpc):F1}ms (show={ShowMs:F1}ms)"
             + $" open={Since(LeaseStartQpc, closeQpc):F0}ms passes={Turns} pass={(Turns == 0 ? 0 : TurnMsSum / Turns):F2}/{TurnMsMax:F2}ms"
-            + $" reused={(Reused ? 1 : 0)} parked={(Parked ? 1 : 0)} retire={RetireMs:F2}ms");
+            + $" reused={(Reused ? 1 : 0)} parked={(Parked ? 1 : 0)} retire={RetireMs:F2}ms origin={Origin}");
     }
 }

@@ -3665,7 +3665,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         PresentTarget(target, noWait);
         if (!ReferenceEquals(target, _primarySwapchain)) return;
-        _primaryPresentThreadId = System.Environment.CurrentManagedThreadId;
         if (_popupBuildPending) BuildPendingPopups();
         if (_popupUpkeepPending) ServicePopupUpkeep();   // the prewarm's build and a released popup's resources: after the owner's present, never before it
     }
@@ -4350,8 +4349,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // retired: measured 23.4 ms on a menu open (the owner's submit 24.1 ms, 8 missed refreshes), bounded only at 1 s. So a
     // popup takes its present slot WITHOUT waiting: a busy slot defers THIS popup's frame (nothing recorded on the GPU, its
     // Present a no-op) and marks it owed, which PopupAnimating reports so the host keeps publishing turns (WakeReasons.PopupAnim;
-    // a turn with a popup open is never elided) until one finds the slot open. A popup can then only delay itself. Its FIRST
-    // frame is never deferred: a new (or rebuilt) swapchain's waitable starts signaled. Bounded: past PopupDeferBoundMs of
+    // a turn with a popup open is never elided) until one finds the slot open. A popup can then only delay itself. Its first
+    // frame finds the slot open whenever its previous present has retired: always for a new (or rebuilt) swapchain, whose
+    // waitable starts signaled, and for a pooled one parked for more than a frame or two; a pooled swapchain reused within a
+    // frame of its close may defer its first frame like any busy-slot frame (bounded below). Bounded: past PopupDeferBoundMs of
     // consecutive deferrals the frame goes out unpaid with DXGI_PRESENT_DO_NOT_WAIT (what the old 1 s timeout did, minus the
     // block), so a popup whose presents never retire (a hidden HWND) cannot wake the loop forever.
     // Scope: popup windows only, i.e. the swapchains created with the desktop-acrylic material (AppHost.OpenPopupWindow leases
@@ -5115,9 +5116,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// the fence read <see cref="DrainImageJobs"/> already uses.</summary>
     public void ReclaimCompletedUploads()
     {
-        // A turn with no present still builds the prewarm / releases a popup let go - on the presenting thread only (a force-sync host
-        // reclaims from its UI thread while the render thread owns the swapchains).
-        if (_popupUpkeepPending && (!_renderConfined || System.Environment.CurrentManagedThreadId == _primaryPresentThreadId)) ServicePopupUpkeep();
         if (_imageTextures is null || _fence == null) return;
         _imageTextures.ReclaimCompleted(_fence->GetCompletedValue());
     }
