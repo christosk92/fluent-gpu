@@ -351,6 +351,7 @@ public sealed class MediaPlayerElement : Component
         _onWake = OnWake;
         _onMoveSizeEnded = OnMoveSizeEnded;
         _onWindowLeave = OnWindowLeave;
+        _onPointerHeld = OnPointerHeld;
         _seedPointerPresence = SeedPointerPresence;
         _onPointerMoved = OnPointerMoved;
     }
@@ -429,6 +430,7 @@ public sealed class MediaPlayerElement : Component
     private NodeHandle _playerRoot;
     private readonly Action _resolveFocusOut, _onWake, _onMoveSizeEnded, _onWindowLeave, _seedPointerPresence;
     private readonly Action<Point2> _onPointerMoved;
+    private readonly Action<bool> _onPointerHeld;
     private bool _pressIsTouch, _moveInFlight;
     // When the last OS move loop ended (host timer clock). A press within the double-click window of it is never the
     // second half of a double-click: a press right after a caption drag lands on the same client point, and it is not
@@ -456,6 +458,10 @@ public sealed class MediaPlayerElement : Component
             Diag.Line($"[media.chrome] {(vis.ChromeVisible ? "show" : "hide")} cause={vis.LastCause} holds=0x{(int)vis.Holds:X}");
         }
         if (vis.CursorHidden) HideCursor(); else ShowCursor();
+        // While controls that a window leave must hide are up, ask the platform to catch the leave no message reports (a
+        // window shown over the resting pointer; InputHooks.WatchPointerPresence). Pinned chrome (no auto-hide, paused) asks nothing.
+        bool watch = vis.ChromeVisible && (vis.Holds & (ChromeHold.Disabled | ChromeHold.Stopped)) == 0;
+        if (watch != _presenceWatch && _hooks is { } watchHooks) { _presenceWatch = watch; watchHooks.WatchPointerPresence(watch); }
         double due = vis.NextWakeMs;
         if (double.IsPositiveInfinity(due)) { _armedDueMs = double.PositiveInfinity; return; }   // a stale armed wake just finds nothing due
         // Re-arm only when the deadline moves EARLIER (the base::Timer trick). A pointer moving at 1 kHz pushes the
@@ -481,7 +487,25 @@ public sealed class MediaPlayerElement : Component
 
     /// <summary>The window lost activation (the user switched away; the dispatcher has already dropped every cursor override),
     /// or the hovering pointer left the window: a real leave wherever hover was, the player's own exit included or not.</summary>
-    private void OnWindowLeave() { _vis?.PointerLeft(Now()); Sync(); }
+    private void OnWindowLeave() { _vis?.PointerLeftWindow(Now()); Sync(); }
+
+    /// <summary>A mouse/pen button went down (or came up) anywhere in the window. A press that lands on the player, its own
+    /// transport or a host strip over it (a volume drag, the seek) holds the chrome until its release, wherever the drag
+    /// goes; the window's leave waits for that release too (InputHooks.PointerHeldObserved). A press elsewhere is not ours.</summary>
+    private void OnPointerHeld(bool held)
+    {
+        if (_vis is not { } vis) return;
+        double now = Now();
+        if (held) { if (!PointerStillOverPlayer()) return; vis.SetPressed(true, now); }
+        else if ((vis.Holds & ChromeHold.Pressed) != 0)
+        {
+            vis.SetPressed(false, now);
+            // released off the player but inside the window: the leave the drag deferred (HandleExit). Out of the window, the
+            // window's own leave follows in this batch and hides at once.
+            if (!PointerStillOverPlayer() && _hooks?.IsPointerInWindow?.Invoke() == true) vis.PointerLeft(now);
+        }
+        Sync();
+    }
 
     private bool CursorHidingAllowed() => CursorAutoHide switch
     {
@@ -602,6 +626,14 @@ public sealed class MediaPlayerElement : Component
     }
 
     private void ReleaseCursorOverride() => _hooks?.SetCursorOverride?.Invoke(this, null);
+
+    private bool _presenceWatch;
+    private void ReleasePresenceWatch()
+    {
+        if (!_presenceWatch) return;
+        _presenceWatch = false;
+        _hooks?.WatchPointerPresence(false);
+    }
 
     /// <summary>S6 — "is ANY input-blocking overlay up right now". The overlay service knows; the interface does not yet
     /// surface it, and <c>OverlayServiceImpl</c> is internal to this very assembly, so the kit reads it directly. A
@@ -873,18 +905,20 @@ public sealed class MediaPlayerElement : Component
         // switched away from (the blur), or, once that menu closes with the pointer outside, over a window the pointer
         // has left (InputHooks.PointerLeftWindowObserved). Both are needed: the window edge fires on a blur only while the
         // pointer is in, and a blur never fires for a pointer that just leaves an active window. Both land in the same
-        // idempotent PointerLeft (a blur with the pointer in raises both: the earlier deadline stands).
+        // idempotent PointerLeftWindow: the hide is due on that tick (YouTube's rule), holds permitting.
         UseEffect(() =>
         {
             if (hooks is null) return (Action?)null;
             hooks.WindowMoveSizeEndedObserved += _onMoveSizeEnded;
             hooks.WindowBlurObserved += _onWindowLeave;
             hooks.PointerLeftWindowObserved += _onWindowLeave;
+            hooks.PointerHeldObserved += _onPointerHeld;
             return () =>
             {
                 hooks.WindowMoveSizeEndedObserved -= _onMoveSizeEnded;
                 hooks.WindowBlurObserved -= _onWindowLeave;
                 hooks.PointerLeftWindowObserved -= _onWindowLeave;
+                hooks.PointerHeldObserved -= _onPointerHeld;
             };
         }, DepKey.Empty);
         // PART A: claim ChromeFeed on mount, release it on unmount — but only if it is STILL this instance. A keyed
@@ -899,6 +933,7 @@ public sealed class MediaPlayerElement : Component
         UseEffect(OnMounted, DepKey.Empty);
         UseEffect(() => (Action?)(() => { if (pictureShown.Peek()) PictureShownOut?.SetIfChanged(false); }), DepKey.Empty);
         UseEffect(() => (Action?)ReleaseCursorOverride, DepKey.Empty);
+        UseEffect(() => (Action?)ReleasePresenceWatch, DepKey.Empty);
         UseLayoutEffect(_seedPointerPresence, DepKey.Empty);   // after layout: the frame's rect is valid
 
         bool showChrome = AreTransportControlsEnabled && !SuppressTransport && chromeVisible.Value;
@@ -1246,8 +1281,12 @@ public sealed class MediaPlayerElement : Component
 
         void HandleExit()
         {
-            // A real leave (the window, the non-client resize band, a blur) hides after the short leave debounce; hover
-            // TAKEN over the player (a scrim, the OS move loop's capture cancel) only drops the pointer holds.
+            // A drag that started on the player carries the hover off it while the button is held: not a leave. Its release
+            // decides (OnPointerHeld: off the player then, the leave debounce; out of the window, the window's leave).
+            if (_vis is { } heldVis && (heldVis.Holds & ChromeHold.Pressed) != 0 && _hooks?.IsPointerHeld?.Invoke() == true) return;
+            // A real leave (the non-client resize band, off the player inside the window) hides after the short leave
+            // debounce (the window's own leave and a blur hide at once: OnWindowLeave); hover TAKEN over the player (a
+            // scrim, the OS move loop's capture cancel) only drops the pointer holds.
             if (PointerStillOverPlayer()) _vis?.PointerCovered(Now());
             else _vis?.PointerLeft(Now());   // also shows the cursor: it must never stay hidden outside the video
             Sync();

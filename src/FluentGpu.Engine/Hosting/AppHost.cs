@@ -5485,6 +5485,9 @@ public sealed partial class AppHost : IDisposable
         _dispatcher.OnWindowBlur = _inputHooks.NotifyWindowBlur;                // deactivation → light-dismiss overlays close
         _dispatcher.OnPointerWindowEdge = _inputHooks.NotifyPointerWindowEdge;  // the pointer left / re-entered the window (edges only)
         _inputHooks.IsPointerInWindow = () => _dispatcher.PointerInWindow;
+        _dispatcher.OnPointerHeldEdge = _inputHooks.NotifyPointerHeld;          // a mouse/pen button held / released (edges only)
+        _inputHooks.IsPointerHeld = () => _dispatcher.PointerHeld;
+        _inputHooks.SetPointerPresenceWatch = _window.SetPointerPresenceWatch;  // the leave the OS never sends (a window shown over a resting pointer)
         _dispatcher.OnPointerDownObserved = _inputHooks.NotifyPointerDown;
         _dispatcher.OnScrollGestureStarted = _inputHooks.NotifyScrollStarted;   // "a scroll started" (SwipeControl auto-dismiss)
         _inputHooks.RedispatchContextAt = _dispatcher.RequestContextAt;         // scrim right-click → close top + reopen the node's menu (one gesture)

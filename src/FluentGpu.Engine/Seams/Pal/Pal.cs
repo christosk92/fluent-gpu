@@ -799,6 +799,13 @@ public interface IPlatformWindow : IDisposable
     /// <see cref="InputKind.WindowFocus"/>/<see cref="InputKind.WindowBlur"/> events; this property is the pull side.</summary>
     bool IsActive => true;
 
+    /// <summary>While on, confirm with the OS that a hovering mouse/pen pointer the input stream last placed in this window is
+    /// still over it (or over one of its popups), and park it (the leave the OS never sent) when it is not: a window shown
+    /// over a resting pointer, a window under it hidden or minimised. Win32 checks the cursor's window every 100 ms while the
+    /// pointer rests in the window and nothing holds it. The host turns it on while something that hides on a window leave
+    /// is showing (<c>InputHooks.WatchPointerPresence</c>). No-op where the platform has no such question (headless).</summary>
+    void SetPointerPresenceWatch(bool on) { }
+
     /// <summary>Engine caption-button commands (Win32: WM_SYSCOMMAND SC_MINIMIZE / SC_MAXIMIZE↔SC_RESTORE / WM_CLOSE).</summary>
     void Minimize() { }
     void ToggleMaximize() { }

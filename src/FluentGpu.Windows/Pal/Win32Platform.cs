@@ -350,6 +350,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private const nuint MoveLoopTimerId = 1;   // SetTimer id for the modal move/size loop keep-alive pump
     private const nuint LiftTimerId = 2;       // SetTimer id for the touchpad wheel-fallback silence-lift check (fires even when no frames pump)
     private const nuint PendingBoundsTimerId = 3;   // SetTimer id: a held full-screen window change no present committed is applied anyway
+    private const nuint PresenceTimerId = 4;        // SetTimer id: the pointer-presence watch (SetPointerPresenceWatch)
+    private const uint PresenceWatchMs = 100;
     private const uint PendingBoundsTimeoutMs = 250;
     private const uint CommitWaitMs = 100;          // the presenting thread's one bounded wait for the window thread to apply the change
     // ── Pointer input (EnableMouseInPointer): the WM_MOUSE* client stream is retired — mouse, touch and pen all arrive
@@ -1566,11 +1568,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         if (ncHit != _ncHover) { _ncHover = ncHit; changed = true; }
         if (ncHit == TitleBarHit.Caption)
         {
+            NoteHoverIn(NcSyntheticPointerId, PointerKind.Mouse, caption: true);
             _queue.Enqueue(new InputEvent(InputKind.PointerMove, ScreenLpToDip(lp), 0, 0,
                 Mods: Mods(), TimestampMs: Now(), PointerId: NcSyntheticPointerId));
             PaintRequested?.Invoke();
             return false;   // DefWindowProc keeps its own caption tracking (the press → the move loop, double-click)
         }
+        if (ncHit != TitleBarHit.Client) NoteHoverIn(NcSyntheticPointerId, PointerKind.Mouse, caption: true);   // a caption button is in the window
         if (changed)
         {
             _queue.Enqueue(new InputEvent(InputKind.PointerMove,
@@ -2177,7 +2181,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _dm = null;
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
         _boundsPending = false;   // a held full-screen change dies with the window: nothing to apply
-        if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); KillTimer(_hwnd, LiftTimerId); KillTimer(_hwnd, PendingBoundsTimerId); DestroyWindow(_hwnd); }
+        if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); KillTimer(_hwnd, LiftTimerId); KillTimer(_hwnd, PendingBoundsTimerId); KillTimer(_hwnd, PresenceTimerId); DestroyWindow(_hwnd); }
         // Stop the vblank waiter BEFORE the events it and the render thread signal are closed.
         _compositorClock?.Dispose();
         _compositorClock = null;
@@ -2426,6 +2430,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 PaintRequested?.Invoke();   // one settle frame at the final position
                 return true;
             case WM_TIMER:
+                if ((nuint)wParam == PresenceTimerId) { CheckPointerPresence("watch"); return true; }
                 if ((nuint)wParam == MoveLoopTimerId)
                 {
                     // Composited edge-resize: full defer (zero paints). Composited pure move + non-composited: throttled
@@ -2526,6 +2531,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 }
                 else if (TryHandOverPointer(leaveId, out probe)) { LogPointerLeave(leaveId, in probe, "handover"); return true; }   // onto one of our own popup windows: not a leave
                 else LogPointerLeave(leaveId, in probe, "park");
+                NoteHoverOut();
                 _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
                     Pointer: PointerKindOf(leaveId), TimestampMs: Now(), PointerId: leaveId));
                 return true;
@@ -2597,6 +2603,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 return (int)(nuint)wParam != ' ';
             case WM_ACTIVATE:
                 _active = ((nuint)wParam & 0xFFFF) != 0;
+                if (!_active) NoteHoverOut();   // the blur is the leave (the dispatcher drops the pointer); the next move re-enters
                 _queue.Enqueue(new InputEvent(_active ? InputKind.WindowFocus : InputKind.WindowBlur, default, 0, 0, TimestampMs: Now()));
                 return true;
             case WM_COPYDATA:
@@ -2751,10 +2758,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             // WM_NCHITTEST result; lParam = SCREEN px (the OS already drag/size-loops via DefWindowProc for HTCAPTION).
             case WM_NCPOINTERUPDATE when _customFrame:
                 _ncPointerSeen = true;
-                if (!_ncTracking)
+                if (!_ncTracking || !_ncInside)
                 {
                     // Arm NC leave-tracking so WM_NCMOUSELEAVE still tears the NC hover/press down when the contact leaves
-                    // the caption straight off-window (the pointer stream has no NC-specific leave of its own).
+                    // the caption straight off-window (the pointer stream has no NC-specific leave of its own). Re-armed on
+                    // every entry into the NC stream, not only after a WM_NCMOUSELEAVE cleared the flag: a client press's
+                    // SetCapture or a move loop can end the OS tracking with no leave, and the flag would then never re-arm
+                    // it (a drag-anywhere window like the mini player would lose its leave from an inert pixel for good).
                     TRACKMOUSEEVENT tme = new() { cbSize = (uint)sizeof(TRACKMOUSEEVENT), dwFlags = TME_LEAVE | TME_NONCLIENT, hwndTrack = hWnd };
                     TrackMouseEvent(&tme);
                     _ncTracking = true;
@@ -2791,6 +2801,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 if (_ncInside)
                 {
                     _ncInside = false; _ncHover = TitleBarHit.Client;
+                    NoteHoverOut();   // off the window from a caption pixel (the client crossing clears _ncInside first)
+                    Diag.Line("[pointer] leave nc -> park");   // one per caption-stream leave (an edge): the evidence a drag-anywhere window's leave arrived
                     if (_ncPress != TitleBarHit.Client)
                     {
                         // NC presses have no capture: leaving the NC area cancels the press (offscreen up, no click) — on
@@ -2962,6 +2974,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             if (!stillDown) CancelPrimaryContact("move-without-button");
         }
         var dipPos = ScreenPtToDip(pi.ptPixelLocation);
+        NoteHoverIn(pi.pointerId, kind);
         _queue.Enqueue(new InputEvent(InputKind.PointerMove, dipPos, 0, 0,
             Mods: Mods(), Pointer: kind, TimestampMs: time, PointerId: pi.pointerId, Pressure: pressure, QpcTicks: qpc));
     }
@@ -3071,6 +3084,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         if (_primaryDown && pointerId == _primaryDownId) return;
         if (TryHandOverPointer(pointerId, out var probe)) { LogPointerLeave(pointerId, in probe, "handover", popup: true); return; }
         LogPointerLeave(pointerId, in probe, "park", popup: true);
+        NoteHoverOut();
         _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
             Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId));
     }
@@ -3113,6 +3127,99 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         EmitPointerMove(in pi);
         PaintRequested?.Invoke();   // the handover can land while the frame loop idles
         return true;
+    }
+
+    // ── the pointer-presence watch: the leaves the OS never sends ─────────────────────────────────────────────────────
+    // The pointer-in-window edge (InputDispatcher.PointerInWindow) is built from messages: a move inside, then the park a
+    // WM_POINTERLEAVE / WM_NCMOUSELEAVE brings. Some leaves bring no message to anyone this window hears: a windowed popup
+    // of ours (a menu hanging past the window edge) hidden or destroyed under the pointer leaves the dispatcher holding the
+    // popup's last point, and a window shown over a resting pointer, or a window under it hidden or minimised, need not
+    // re-route a pointer that does not move. Controls that hide on a window leave (the media chrome's YouTube rule) then
+    // stayed up. Two checks close it, both ending in the same park a real leave makes: a popup that hides asks at once,
+    // and while a surface watches (SetPointerPresenceWatch) a 100 ms timer asks while the pointer rests in the window.
+    // The answer is the OS's: the window under the cursor (WindowFromPoint), ours (client, a drag band, a caption button) or
+    // one of our popups, else out. A held button or the move loop defers to the release, as the dispatcher does.
+    private bool _presenceWatch, _presenceTimer;
+    private bool _hoverIn;              // the last mouse/pen move put a pointer in this window or a popup of ours; no park since
+    private uint _hoverId;              // that pointer's id (the park carries it)
+    private PointerKind _hoverKind;
+
+    public void SetPointerPresenceWatch(bool on)
+    {
+        _presenceWatch = on;
+        UpdatePresenceTimer();
+    }
+
+    /// <summary>A mouse/pen move went into this window's stream (client, a popup of ours), or the caption stream hovered a
+    /// caption pixel (<paramref name="caption"/>: no real pointer id to remember).</summary>
+    private void NoteHoverIn(uint pointerId, PointerKind kind, bool caption = false)
+    {
+        if (kind == PointerKind.Touch) return;
+        if (!caption) { _hoverId = pointerId; _hoverKind = kind; }
+        if (_hoverIn) return;
+        _hoverIn = true;
+        UpdatePresenceTimer();
+    }
+
+    private void NoteHoverOut()
+    {
+        if (!_hoverIn) return;
+        _hoverIn = false;
+        UpdatePresenceTimer();
+    }
+
+    private void UpdatePresenceTimer()
+    {
+        bool want = _presenceWatch && _hoverIn && _hwnd != HWND.NULL;
+        if (want == _presenceTimer) return;
+        _presenceTimer = want;
+        if (want) SetTimer(_hwnd, PresenceTimerId, PresenceWatchMs, null);
+        else KillTimer(_hwnd, PresenceTimerId);
+    }
+
+    /// <summary>A windowed popup of this window was hidden or destroyed: if the pointer was on it and is now over nothing of
+    /// ours, that is a leave no window will ever report.</summary>
+    internal void RevalidatePointerAfterPopup() => CheckPointerPresence("popup-closed");
+
+    /// <summary>Ask the OS whether the pointer this window's stream last saw inside is still over this window or a popup of
+    /// ours; when it is not, park it (both streams) exactly as a real leave does, with one always-on line.</summary>
+    private void CheckPointerPresence(string why)
+    {
+        if (!_hoverIn) return;
+        if (_primaryDown || _inMoveSizeLoop || _ncPress != TitleBarHit.Client) return;   // a held button: its release decides
+        POINT pt;
+        if (!GetCursorPos(&pt)) return;
+        if (CursorOverOwn(pt, out string under)) return;
+        _hoverIn = false;
+        UpdatePresenceTimer();
+        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[pointer] leave id={_hoverId} kind={_hoverKind} screen={pt.x},{pt.y} under={under} -> {why}"));
+        if (_ncInside) { _ncInside = false; _ncHover = TitleBarHit.Client; }
+        _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
+            Pointer: _hoverKind, TimestampMs: Now(), PointerId: _hoverId));
+        _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
+            TimestampMs: Now(), PointerId: NcSyntheticPointerId));
+        PaintRequested?.Invoke();   // the loop may be idle: the park must be dispatched now
+    }
+
+    /// <summary>Is screen point <paramref name="pt"/> over this window's content (client, a caption band, a caption
+    /// button; its resize frame is outside, as for a WM_POINTERLEAVE) or over one of its windowed popups? Another
+    /// top-level window of the app (a pop-out or the mini player, owned or not) is not this window.</summary>
+    private bool CursorOverOwn(POINT pt, out string under)
+    {
+        HWND hit = WindowFromPoint(pt);
+        if (hit == HWND.NULL) { under = "none"; return false; }
+        HWND root = GetAncestor(hit, 2 /* GA_ROOT */);
+        if (root == _hwnd)
+        {
+            nint lp = (nint)(((pt.y & 0xFFFF) << 16) | (pt.x & 0xFFFF));
+            nint ht = (nint)SendMessageW(_hwnd, WM_NCHITTEST, default, (LPARAM)lp);
+            under = "self ht=" + ht.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return ht is HTCLIENT or HTCAPTION or HTMINBUTTON or HTMAXBUTTON or HTCLOSE;
+        }
+        if (IsOwnWindow(root) && Win32PopupWindow.IsPopupWindow(root)) { under = "popup"; return true; }
+        under = IsOwnWindow(root) ? "own" : "foreign";
+        return false;
     }
 
     private enum LeaveUnder : byte { None, Own, Foreign }

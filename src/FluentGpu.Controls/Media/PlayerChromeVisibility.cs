@@ -61,8 +61,9 @@ public readonly record struct PlayerChromeTiming(
 /// start/end.</item>
 /// <item>HOLDS keep visible chrome up and never reveal hidden chrome; releasing one restarts the dwell (the leave delay
 /// once the pointer has left).</item>
-/// <item>Leaving hides after a short debounce; the cursor hides when the conceal fade ends, only while the pointer is
-/// inside, only if the surface's policy allows it.</item>
+/// <item>Leaving the WINDOW (or its blur) hides at once, holds permitting (<see cref="PointerLeftWindow"/>); leaving the
+/// player inside the window hides after a short debounce. The cursor hides when the conceal fade ends, only while the
+/// pointer is inside, only if the surface's policy allows it.</item>
 /// </list>
 /// </summary>
 public sealed class PlayerChromeVisibility
@@ -75,7 +76,7 @@ public sealed class PlayerChromeVisibility
     private readonly PlayerChromeTiming _t;
     private bool _visible = true, _cursorHidden;
     private bool _enabled = true, _a11y, _overControls, _pressed, _scrubbing, _menu, _keyboardFocus, _moving;
-    private bool _pointerInside, _left, _cursorMayHide;
+    private bool _pointerInside, _left, _leftWindow, _cursorMayHide;
     private ChromePlayback _playback;                          // Playing
     private double _dwell, _hideAt, _cursorAt = double.PositiveInfinity;
     private float _lastX = float.NaN, _lastY = float.NaN;       // last sample — same-point re-delivery is not activity
@@ -125,7 +126,7 @@ public sealed class PlayerChromeVisibility
     {
         if (x == _lastX && y == _lastY) return;          // re-delivered at the same point (show/hide/move, hover re-resolve)
         bool entering = !_pointerInside;
-        _pointerInside = true; _left = false;
+        _pointerInside = true; _left = false; _leftWindow = false;
         _lastX = x; _lastY = y;
         if (!_visible && !entering)
         {
@@ -146,7 +147,7 @@ public sealed class PlayerChromeVisibility
     public void PointerPresent(float x, float y)
     {
         if (_pointerInside) return;
-        _pointerInside = true; _left = false;
+        _pointerInside = true; _left = false; _leftWindow = false;
         _lastX = x; _lastY = y;
     }
 
@@ -187,14 +188,34 @@ public sealed class PlayerChromeVisibility
 
     // ── pointer levels ───────────────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The pointer really left the player: the window, onto the non-client resize band, or the window blurred.</summary>
+    /// <summary>The pointer left the player but not the window (onto the page around a docked player, off the picture in
+    /// Theatre): the controls go after the short leave debounce, so a hand that overshoots the player's edge by a few DIP
+    /// and comes straight back does not blink them.</summary>
     public void PointerLeft(double nowMs)
+    {
+        DropPointer();
+        if (_visible) _hideAt = Math.Min(_hideAt, nowMs + _t.LeaveHideMs);
+    }
+
+    /// <summary>The pointer left the WINDOW (any edge, another monitor, the taskbar, a window that covers ours, a popup of
+    /// ours closed with the pointer outside it) or the window lost activation (Alt+Tab, the Windows key, minimise). The
+    /// YouTube rule: the hide starts on this tick, with no idle dwell and no leave debounce, unless a hold still stands
+    /// (paused, a menu of ours open, a scrub carried out until its release, Tab focus in the controls, an AT client). A
+    /// hold released while the pointer is still out hides at once too (<see cref="Rearm"/>). Idempotent: a blur with the
+    /// pointer in raises the window edge and the blur, and the second call changes nothing.</summary>
+    public void PointerLeftWindow(double nowMs)
+    {
+        DropPointer();
+        _leftWindow = true;
+        if (_visible) _hideAt = Math.Min(_hideAt, nowMs);
+    }
+
+    private void DropPointer()
     {
         _pointerInside = false; _left = true;
         _lastX = _lastY = float.NaN;
         _overControls = false; _pressed = false;
         ShowCursor();                                      // never leave a hidden cursor behind outside the video
-        if (_visible) _hideAt = Math.Min(_hideAt, nowMs + _t.LeaveHideMs);
     }
 
     /// <summary>Hover was TAKEN (an overlay scrim, the move loop's capture cancel) while the pointer is still over the
@@ -262,7 +283,7 @@ public sealed class PlayerChromeVisibility
     public bool Tick(double nowMs)
     {
         bool visible = _visible, cursor = _cursorHidden;
-        if (_visible && Holds == ChromeHold.None && nowMs >= _hideAt) Conceal(nowMs, _left ? "leave" : "idle");
+        if (_visible && Holds == ChromeHold.None && nowMs >= _hideAt) Conceal(nowMs, _leftWindow ? "leave-window" : _left ? "leave" : "idle");
         if (!_visible && !_cursorHidden && _cursorMayHide && _pointerInside && nowMs >= _cursorAt) _cursorHidden = true;
         return visible != _visible || cursor != _cursorHidden;
     }
@@ -292,12 +313,13 @@ public sealed class PlayerChromeVisibility
         _cursorAt = nowMs + _t.CursorTrailMs;              // the cursor goes when the conceal fade has finished
     }
 
-    // A released hold (and a resume) restarts the dwell, but a pointer that has LEFT is owed the leave debounce, never the
-    // full idle dwell: a menu closed with the pointer outside the window hides like the leave itself would have
-    // (PointerLeft sets the same deadline). A later reveal while outside keeps its own longer deadline (the Max).
+    // A released hold (and a resume) restarts the dwell, but a pointer that has LEFT is owed what the leave itself would
+    // have given, never the full idle dwell: out of the window that is NOW (a menu closed, a scrub released or a resume with
+    // the pointer outside the window hides at once, as PointerLeftWindow does), off the player inside the window the leave
+    // debounce (PointerLeft). A later reveal while outside keeps its own longer deadline (the Max).
     private void Rearm(double nowMs)
     {
-        if (_visible) _hideAt = Math.Max(_hideAt, nowMs + (_left ? Math.Min(_dwell, _t.LeaveHideMs) : _dwell));
+        if (_visible) _hideAt = Math.Max(_hideAt, nowMs + (_leftWindow ? 0.0 : _left ? Math.Min(_dwell, _t.LeaveHideMs) : _dwell));
     }
 
     private void SetHold(ref bool hold, bool on, double nowMs)

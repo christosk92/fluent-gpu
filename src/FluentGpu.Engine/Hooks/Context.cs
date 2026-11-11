@@ -341,6 +341,30 @@ public sealed class InputHooks
     /// <summary>Is a hovering mouse/pen pointer in this window now (the state the two edges above announce)? False before
     /// the first pointer event. Host-wired to <c>InputDispatcher.PointerInWindow</c>; null in a host-less tree.</summary>
     public Func<bool>? IsPointerInWindow;
+    /// <summary>A mouse/pen button went down on this window's content (true) or came up, was cancelled or the window blurred
+    /// (false): once per edge, at the end of the input batch, before that batch's <see cref="PointerLeftWindowObserved"/>.
+    /// Controls that idle out or hide on a leave hold while it is true, so a drag that started on them (a scrub, a volume
+    /// drag) keeps them until its release, wherever the pointer went.</summary>
+    public event Action<bool>? PointerHeldObserved;
+    /// <summary>Is a mouse/pen button held on this window's content now (the state <see cref="PointerHeldObserved"/>
+    /// announces)? Host-wired to <c>InputDispatcher.PointerHeld</c>; null in a host-less tree.</summary>
+    public Func<bool>? IsPointerHeld;
+    /// <summary>Host seam: the dispatcher's button-held edge.</summary>
+    public void NotifyPointerHeld(bool held) => PointerHeldObserved?.Invoke(held);
+
+    /// <summary>Host-wired to the platform window's presence watch (<c>IPlatformWindow.SetPointerPresenceWatch</c>).</summary>
+    public Action<bool>? SetPointerPresenceWatch;
+    private int _presenceWatchers;
+    /// <summary>Count one watcher in (<paramref name="on"/>) or out. While any is in, the platform confirms that a pointer
+    /// resting in this window is still over it and raises <see cref="PointerLeftWindowObserved"/> when it is not (a window
+    /// shown over the resting pointer sends no leave of its own). A surface whose controls hide on a window leave holds one
+    /// while they show, and releases it on unmount; pair every in with one out.</summary>
+    public void WatchPointerPresence(bool on)
+    {
+        int before = _presenceWatchers;
+        _presenceWatchers = Math.Max(0, before + (on ? 1 : -1));
+        if ((before > 0) != (_presenceWatchers > 0)) SetPointerPresenceWatch?.Invoke(_presenceWatchers > 0);
+    }
     /// <summary>Host seam: the dispatcher's pointer-in-window edge (true = entered).</summary>
     public void NotifyPointerWindowEdge(bool entered)
     {

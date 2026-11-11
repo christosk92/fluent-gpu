@@ -141,6 +141,9 @@ public sealed partial class InputDispatcher
     // stream's park at an NC-to-client crossing, queued just before the real pointer's first client move, never reads
     // as a leave. _ptrInWindow is the published state; it is compared once per Dispatch batch (edges only).
     private bool _ptrRealIn, _ptrNcIn, _ptrInWindow;
+    // The mouse/pen button-held state (a press, an OnDrag gesture, an item drag, a thumb drag, a text selection) of the real
+    // pointer stream, sampled inside its slot window like _ptrRealIn; _ptrHeldPublished is what OnPointerHeldEdge last said.
+    private bool _ptrHeld, _ptrHeldPublished;
     // Armed by NotifySubtreeRemoved when the subtree carrying the hover is removed/orphaned: the pointer never moved, so
     // nothing else will ever re-resolve, and the row that slid into that place under the still cursor would stay
     // un-hovered until the user jiggles the mouse. Drained by the next frame's hover refresh (layout-move or scroll).
@@ -496,6 +499,8 @@ public sealed partial class InputDispatcher
     /// the first pointer event, after a leave and after a blur. Touch contacts never set it. See
     /// <see cref="OnPointerWindowEdge"/>.</summary>
     public bool PointerInWindow => _ptrInWindow;
+    /// <summary>A mouse/pen button is held on this window's content (the published side of <see cref="OnPointerHeldEdge"/>).</summary>
+    public bool PointerHeld => _ptrHeldPublished;
 
     /// <summary>The window's effective scale changed (an app-zoom step or a WM_DPICHANGED hop) under a possibly STATIONARY
     /// cursor. The last pointer position was captured in the OLD window DIP space (client px / old scale), and no pointer
@@ -797,6 +802,13 @@ public sealed partial class InputDispatcher
     /// hover exits for a move, and inside the WindowBlur case after the exits (which already read a null
     /// <see cref="PointerPosition"/>) and before <see cref="OnWindowBlur"/>.</summary>
     public Action<bool>? OnPointerWindowEdge;
+
+    /// <summary>Raised on the edges of <see cref="PointerHeld"/>: true when a mouse/pen button went down on this window's
+    /// content (a press, and whatever drag it becomes), false when it came up, was cancelled or the window blurred. Once
+    /// per edge, at the end of the batch, BEFORE that batch's <see cref="OnPointerWindowEdge"/> (a release outside the
+    /// window ends the hold, then leaves). Controls that idle out over a picture hold while it is true: a drag that started
+    /// on them (a scrub, a volume drag) keeps them up, wherever the pointer goes, until the release.</summary>
+    public Action<bool>? OnPointerHeldEdge;
 
     /// <summary>Raised on window activation/placement changes (WindowFocus, WindowBlur, WindowStateChanged): the host
     /// bumps the titlebar-chrome epoch signal here so a custom TitleBar re-renders (dimming / max↔restore glyph).</summary>
@@ -1265,6 +1277,7 @@ public sealed partial class InputDispatcher
 
                 case InputKind.PointerCancel:
                     CancelPointerContact(in e);
+                    if (e.Pointer != PointerKind.Touch && e.PointerId != NonClientInput.SyntheticPointerId) _ptrHeld = false;   // the held contact is gone
                     // A delta-stream contact (touchpad / hi-res wheel) is ended by its own producer's End; an UNRELATED
                     // contact's capture loss does not end it (ScrollRouter re-latches on the next Begin regardless).
                     break;
@@ -1291,6 +1304,7 @@ public sealed partial class InputDispatcher
                     if (!_scrollHovered.IsNull) Chrome?.SetPointerOver((int)_scrollHovered.Raw.Index, false, false);
                     _scrollHovered = NodeHandle.Null;
                     _accessKeyMode = false; _altPending = false;
+                    _ptrHeld = false;                        // CancelPointer released every held contact
                     PublishPointerWindowEdge(blurHovered);   // a blur with the pointer in is a leave (once: a pointer already out stays out)
                     OnWindowBlur?.Invoke();
                     OnWindowActivationChanged?.Invoke();   // custom titlebar dims (TextTertiary / disabled glyphs)
@@ -1335,8 +1349,9 @@ public sealed partial class InputDispatcher
     /// outside the root bounds that the hover resolve left on nothing.</summary>
     private void TrackPointerInWindow(in InputEvent e)
     {
-        if (e.Kind == InputKind.PointerMove
-            && (!_down.IsNull || !_dragTarget.IsNull || !_scrollDragNode.IsNull || _selDragging || Drag.IsActive))
+        bool held = !_down.IsNull || !_dragTarget.IsNull || !_scrollDragNode.IsNull || _selDragging || Drag.IsActive;
+        if (e.PointerId != NonClientInput.SyntheticPointerId) _ptrHeld = held;
+        if (e.Kind == InputKind.PointerMove && held)
             return;
         bool inside = PointInWindow(e.PositionPx);
         if (e.PointerId == NonClientInput.SyntheticPointerId) _ptrNcIn = inside;
@@ -1361,6 +1376,11 @@ public sealed partial class InputDispatcher
     /// client move, queued back to back by the same window message, never flicker out and in) and inside the blur.</summary>
     private void PublishPointerWindowEdge(NodeHandle hoveredBefore)
     {
+        if (_ptrHeld != _ptrHeldPublished)
+        {
+            _ptrHeldPublished = _ptrHeld;
+            OnPointerHeldEdge?.Invoke(_ptrHeld);
+        }
         bool now = _ptrRealIn || _ptrNcIn;
         if (now == _ptrInWindow) return;
         _ptrInWindow = now;

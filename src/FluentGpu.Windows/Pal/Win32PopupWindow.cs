@@ -113,18 +113,25 @@ public sealed unsafe class Win32PopupWindow : IPlatformPopupWindow
 
     public void Hide()
     {
+        bool was = _shown;
         ShowWindow(_hwnd, SW_HIDE);
         _shown = false;
+        if (was) ResolveOwner()?.RevalidatePointerAfterPopup();   // the pointer may have been on it: a leave nobody reports
     }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        bool was = _shown;
         _shown = false;
         if (_hwnd != HWND.NULL) DestroyWindow(_hwnd);
         if (_self.IsAllocated) _self.Free();
+        if (was) ResolveOwner()?.RevalidatePointerAfterPopup();
     }
+
+    /// <summary>Is top-level <paramref name="hwnd"/> a popup window of this class (any owner)?</summary>
+    internal static bool IsPopupWindow(HWND hwnd) => s_atom != 0 && GetClassWord(hwnd, -32 /* GCW_ATOM */) == s_atom;
 
     [UnmanagedCallersOnly]
     private static LRESULT StaticWndProc(HWND hWnd, uint msg, WPARAM wParam, LPARAM lParam)
