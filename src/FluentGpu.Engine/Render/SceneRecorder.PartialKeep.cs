@@ -21,7 +21,10 @@ namespace FluentGpu.Render;
 // such a path still has the scroll state its bytes were recorded under (that state changes without a dirty bit), and every
 // dirty child slice root is clean ITSELF (else its marker may change), has a cut entry written under its current parent, is
 // not an opacity group (its marker carries its content's drawn extent) and does not sit under a hover-elevate clip root.
-// Anything else falls back to the full re-walk.
+// An overflow cue (a marquee's clip: EdgeFadeSpec.OverflowTail) breaks the premise the same way: its marker's bands, and
+// whether it is a Layer cut at all, are resolved from its CONTENT's posed translate, which stamps no bit on the cue's node. So
+// a cut node with a cue is re-entered only while the cue resolves to the bands its marker holds (CutEntry.Cue*), and a cue
+// node on a dirty path that holds no cut falls back. Anything else falls back to the full re-walk.
 //
 // `--fg rewalk-validate` takes the full re-walk wherever a partial keep would have been taken, and counts every kept arena
 // whose re-walk wrote different bytes, every cut whose inputs differ from its saved entry, and every cut whose walk offset or
@@ -62,6 +65,30 @@ internal sealed partial class SceneRecordingContext
         public bool SelfAcrylic, SelfStickyClip, CarryAdditive;
         public int ParentAdditiveDepth;
         public RectF SliceClipPart;   // a translation cut: its marker clip (the parent's walk space); Infinite = none
+        // An overflow cue (EdgeFadeSpec.OverflowTail) on the cut node: its marker's bands — and whether it is a Layer cut at all —
+        // follow its CONTENT's posed translate, which moves with no bit on this node. What the cue resolved to when the marker
+        // was written: the slice is re-entered only while it still resolves so.
+        public bool OverflowCue;
+        public EdgeMask CueEdges;
+        public float CueLeft, CueRight;
+    }
+
+    /// <summary>What an overflow cue on <paramref name="node"/> resolves to under the current poses — the one part of a
+    /// marker that reads state BELOW its node (<see cref="TryResolveEdgeFade"/>, whose explicit branch this mirrors). False
+    /// when the node carries no overflow cue; <paramref name="edges"/> = None when the cue resolves to no fade.</summary>
+    private static bool ResolveOverflowCue(SceneRecordingSnapshot scene, NodeHandle node, out EdgeMask edges, out float left, out float right)
+    {
+        edges = EdgeMask.None; left = right = 0f;
+        if (!HasOverflowCue(scene, node, out EdgeFadeSpec raw)) return false;
+        EdgeFadeSpec r = raw.ResolveOverflow(OverflowContentDx(scene, node));
+        if (!r.IsNone) { edges = r.Edges; left = r.BandLeft; right = r.BandRight; }
+        return true;
+    }
+
+    private static bool HasOverflowCue(SceneRecordingSnapshot scene, NodeHandle node, out EdgeFadeSpec raw)
+    {
+        raw = default;
+        return (scene.Flags(node) & NodeFlags.SparsePaint) != 0 && scene.TryGetEdgeFade(node, out raw) && !raw.IsNone && raw.OverflowTail > 0f;
     }
 
     /// <summary>Remember what this cut hands its slice's root walk. Called at every cut, right before that walk, with the
@@ -81,6 +108,8 @@ internal sealed partial class SceneRecordingContext
             SelfAcrylic = stats.SelfAcrylic, SelfStickyClip = stats.SelfStickyClip, CarryAdditive = carryAdditive,
             ParentAdditiveDepth = saved.AdditiveDepth, SliceClipPart = sliceClipPart,
         };
+        // every kind: a cue resolving to no fade leaves its node uncut or cut as a boundary, and one resolving to a fade cuts a Layer
+        e.OverflowCue = ResolveOverflowCue(scene, node, out e.CueEdges, out e.CueLeft, out e.CueRight);
         ref CutEntry old = ref sl.CutOf(slot);
         if (PartialKeepValidate) ValidateCut(scene, sl, slot, in old, in e, ref stats);
         old = e;
@@ -180,6 +209,9 @@ internal sealed partial class SceneRecordingContext
                 if (scene.RecordDirtySelfBits(c) != 0) return false;
                 if ((scene.Flags(c) & NodeFlags.Visible) == 0) continue;   // not recorded, and was not (its visibility did not change)
                 if (scene.RecordDirtyDescendantBits(c) == 0) continue;
+                // an overflow cue with no cut of its own (it resolved to no fade, or was folded into an inline layer): its fade —
+                // or the Layer cut it now needs — follows the content moving below it, so these bytes may not be what it records
+                if (HasOverflowCue(scene, c, out _)) return false;
                 if (++visited > PartialKeepProbeLimit) return false;
                 if (top == _probeStack.Length) Array.Resize(ref _probeStack, top * 2);
                 _probeStack[top++] = (int)c.Raw.Index;
@@ -201,6 +233,9 @@ internal sealed partial class SceneRecordingContext
         if (own != 0) return false;
         if (e.Frame == 0 || e.NodeIndex != (int)c.Raw.Index || e.Gen != c.Raw.Gen || e.ParentSlot != sl.ParentOf(slot)) return false;
         if (e.OpacityGroup || e.Inherited.UnderElevateRoot != 0) return false;
+        // an overflow cue's marker follows its content's pose: the parent keeps it only while the cue resolves as it did then
+        bool cue = ResolveOverflowCue(scene, c, out EdgeMask cueEdges, out float cueLeft, out float cueRight);
+        if (cue != e.OverflowCue || (cue && (cueEdges != e.CueEdges || cueLeft != e.CueLeft || cueRight != e.CueRight))) return false;
         // the motion gate is the one cut input that changes with no dirty bit (a transform write ends without one)
         if (e.ParentInMotion != inMotion) return false;
         if (spans.IsBlocked((int)c.Raw.Index, spanFrame)) return false;
@@ -311,17 +346,56 @@ internal sealed partial class SceneRecordingContext
             // float drift of a recomputed world or clip (< 0.001): the same pixels — counted apart
             if (arena.DiffersOnlyByFloatDrift(1e-3f)) { s_keepDrift++; MaybeLogValidation(); return; }
             s_keepMismatches++;
-            arena.FirstOpDifferingFromPrior(out int at, out int curOp, out int priorOp);
-            Console.Error.WriteLine($"[rewalk-validate] MISMATCH kept arena: slot={slot} node={sl.NodeIndexOf(slot)}:{sl.GenOf(slot)} role={sl.RoleOf(slot)} bytes={arena.BytePosition} firstDiff@{at} op {(DrawOp)priorOp} -> {(DrawOp)curOp}");
-            // what the kept bytes named there (a child slice's marker) and the cut budget the re-walk saw
-            ReadOnlySpan<byte> prior = arena.PriorBytes(0, arena.PriorByteLength);
-            if ((DrawOp)priorOp == DrawOp.CompositeSlice && at + sizeof(int) + System.Runtime.CompilerServices.Unsafe.SizeOf<CompositeSliceCmd>() <= prior.Length)
+            arena.FirstOpDifferingFromPrior(out int at, out int opAt, out int curOp, out int priorOp);
+            Console.Error.WriteLine($"[rewalk-validate] MISMATCH kept arena: slot={slot} node={sl.NodeIndexOf(slot)}:{sl.GenOf(slot)} role={sl.RoleOf(slot)} bytes={arena.BytePosition} firstDiff@{at} (op@{opAt}) op {(DrawOp)priorOp} -> {(DrawOp)curOp}");
+            // what the kept bytes named there (a child slice's marker), what the re-walk wrote in its place, and the cut budget it saw.
+            // Both buffers share every byte before the first difference, so the op starts at the same offset in each.
+            int body = System.Runtime.CompilerServices.Unsafe.SizeOf<CompositeSliceCmd>();
+            ReadOnlySpan<byte> prior = arena.PriorBytes(0, arena.PriorByteLength), cur = arena.Bytes;
+            if ((DrawOp)priorOp == DrawOp.CompositeSlice && opAt >= 0 && opAt + sizeof(int) + body <= prior.Length)
             {
-                var m = System.Runtime.InteropServices.MemoryMarshal.Read<CompositeSliceCmd>(prior[(at + sizeof(int))..]);
-                Console.Error.WriteLine($"[rewalk-validate]   kept marker: child={m.NodeIndex}:{m.Gen} sub={m.Sub} kind={(Tiles.SliceKind)m.Kind} flags={m.Flags} | {sl.BudgetDiag(m.NodeIndex, m.Gen, m.Sub)}");
+                var m = System.Runtime.InteropServices.MemoryMarshal.Read<CompositeSliceCmd>(prior[(opAt + sizeof(int))..]);
+                Console.Error.WriteLine($"[rewalk-validate]   kept marker:    child={m.NodeIndex}:{m.Gen} sub={m.Sub} kind={(Tiles.SliceKind)m.Kind} flags={m.Flags} | {sl.BudgetDiag(m.NodeIndex, m.Gen, m.Sub)}");
+                if ((DrawOp)curOp == DrawOp.CompositeSlice && opAt + sizeof(int) + body <= cur.Length)
+                {
+                    var n = System.Runtime.InteropServices.MemoryMarshal.Read<CompositeSliceCmd>(cur[(opAt + sizeof(int))..]);
+                    Console.Error.WriteLine($"[rewalk-validate]   rewalk marker:  child={n.NodeIndex}:{n.Gen} sub={n.Sub} kind={(Tiles.SliceKind)n.Kind} flags={n.Flags}");
+                    Console.Error.WriteLine($"[rewalk-validate]   differs: {MarkerDiff(in m, in n)}");
+                }
             }
         }
         MaybeLogValidation();
+    }
+
+    /// <summary>Validation diagnostics: every field two <see cref="CompositeSliceCmd"/> markers differ in, as kept -> re-walked.</summary>
+    private static string MarkerDiff(in CompositeSliceCmd a, in CompositeSliceCmd b)
+    {
+        var sb = new System.Text.StringBuilder();
+        void D(bool same, string name, object x, object y) { if (!same) sb.Append(name).Append('(').Append(x).Append(" -> ").Append(y).Append(") "); }
+        D(a.NodeIndex == b.NodeIndex && a.Gen == b.Gen && a.Sub == b.Sub, "child", $"{a.NodeIndex}:{a.Gen}/{a.Sub}", $"{b.NodeIndex}:{b.Gen}/{b.Sub}");
+        D(a.Kind == b.Kind, "kind", a.Kind, b.Kind);
+        D(a.Flags == b.Flags, "flags", a.Flags, b.Flags);
+        D(a.Clip == b.Clip, "clip", a.Clip, b.Clip);
+        D(a.OuterClip == b.OuterClip, "outerClip", a.OuterClip, b.OuterClip);
+        if (a.Layer != b.Layer)
+        {
+            PushLayerCmd x = a.Layer, y = b.Layer;
+            int before = sb.Length;
+            D(x.Kind == y.Kind, "layer.kind", x.Kind, y.Kind);
+            D(x.DeviceRect == y.DeviceRect, "layer.rect", x.DeviceRect, y.DeviceRect);
+            D(x.CompositeClip == y.CompositeClip, "layer.compositeClip", x.CompositeClip, y.CompositeClip);
+            D(x.GroupAlpha == y.GroupAlpha, "layer.alpha", x.GroupAlpha, y.GroupAlpha);
+            D(x.FadeEdges == y.FadeEdges, "layer.fadeEdges", x.FadeEdges, y.FadeEdges);
+            D(x.FadeBandL == y.FadeBandL && x.FadeBandT == y.FadeBandT && x.FadeBandR == y.FadeBandR && x.FadeBandB == y.FadeBandB,
+                "layer.fadeBands(LTRB)", $"{x.FadeBandL},{x.FadeBandT},{x.FadeBandR},{x.FadeBandB}", $"{y.FadeBandL},{y.FadeBandT},{y.FadeBandR},{y.FadeBandB}");
+            D(x.BlurSigma == y.BlurSigma, "layer.blur", x.BlurSigma, y.BlurSigma);
+            D(x.Radii == y.Radii && x.FadeFalloff == y.FadeFalloff && x.FadeIntensity == y.FadeIntensity, "layer.shape", x.Radii, y.Radii);
+            if (sb.Length == before) D(false, "layer", x, y);   // an acrylic / feather field: print both whole
+        }
+        D(a.InnerClip == b.InnerClip, "innerClip", a.InnerClip, b.InnerClip);
+        D(a.PopRect == b.PopRect, "popRect", a.PopRect, b.PopRect);
+        D(a.SortKey == b.SortKey && a.LayerSortKey == b.LayerSortKey, "sortKeys", a.SortKey, b.SortKey);
+        return sb.Length == 0 ? "(no field: padding bytes)" : sb.ToString();
     }
 
     private static void ValidateCut(SceneRecordingSnapshot scene, SliceRecorder sl, int slot, in CutEntry old, in CutEntry cur,

@@ -549,8 +549,6 @@ public sealed class DrawList
     /// nested slice writes its own arena byte for byte again: the recorder then keeps that arena's scan.)</summary>
     public bool BytesEqualPrior() => _len == _priorLen && _buf.AsSpan(0, _len).SequenceEqual(_priorBuf.AsSpan(0, _priorLen));
 
-    /// <summary>Diagnostics (<c>--fg rewalk-validate</c>): the first op whose bytes differ between the current buffer and the
-    /// prior one — its offset and opcode in each (−1 when past that buffer's end).</summary>
     /// <summary>Diagnostics (<c>--fg rewalk-validate</c>): do the current and prior buffers differ ONLY by float drift — the same
     /// length, and every differing 4-byte word a finite, normal float (never a small integer, which reads as a denormal) within
     /// <paramref name="eps"/> of the prior one? (A world recomputed through another float path: the same pixels.)</summary>
@@ -569,19 +567,27 @@ public sealed class DrawList
         return true;
     }
 
-    internal void FirstOpDifferingFromPrior(out int offset, out int curOp, out int priorOp)
+    /// <summary>Diagnostics (<c>--fg rewalk-validate</c>): the first BYTE that differs between the current buffer and the prior
+    /// one (<paramref name="offset"/>), the start of the op holding it (<paramref name="opStart"/>, its opcode word: the same in
+    /// both, which share every byte before the difference; −1 when neither holds one), and its opcode in each (−1 past that
+    /// buffer's end, −2 an op of unknown size on the way).</summary>
+    internal void FirstOpDifferingFromPrior(out int offset, out int opStart, out int curOp, out int priorOp)
     {
         int n = Math.Min(_len, _priorLen), d = _buf.AsSpan(0, n).CommonPrefixLength(_priorBuf.AsSpan(0, n));
-        offset = d; curOp = OpAt(_buf, _len, d); priorOp = OpAt(_priorBuf, _priorLen, d);
+        offset = d;
+        curOp = OpAt(_buf, _len, d, out int curStart);
+        priorOp = OpAt(_priorBuf, _priorLen, d, out int priorStart);
+        opStart = priorStart >= 0 ? priorStart : curStart;
 
-        static int OpAt(byte[] b, int len, int at)
+        static int OpAt(byte[] b, int len, int at, out int start)
         {
             int pos = 0;
+            start = -1;
             while (pos + sizeof(int) <= len)
             {
                 var op = (DrawOp)System.Runtime.InteropServices.MemoryMarshal.Read<int>(b.AsSpan(pos));
                 if (!FluentGpu.Rhi.RepaintStreamSafety.TryBodySize(op, out int body)) return -2;
-                if (at < pos + sizeof(int) + body) return (int)op;
+                if (at < pos + sizeof(int) + body) { start = pos; return (int)op; }
                 pos += sizeof(int) + body;
             }
             return -1;
