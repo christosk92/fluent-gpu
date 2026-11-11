@@ -50,6 +50,11 @@ public interface IMediaPlayer : IAsyncDisposable
     IReadSignal<TimelineInfo> Timeline { get; }
     /// <summary>The video natural size in px; <c>(0,0)</c> = audio-only.</summary>
     IReadSignal<SizeI> NaturalSize { get; }
+    /// <summary>The natural size the opening source DECLARED (a manifest's opening rung) before its decoder reports
+    /// <see cref="NaturalSize"/>; <c>(0,0)</c> when none is declared or the source has reported its own. Never a layout input
+    /// (an empty <see cref="NaturalSize"/> still reads as audio-only): the surface's presenter sizes the protected stream from
+    /// it so the first swap chain is already built at its destination size.</summary>
+    IReadSignal<SizeI> ExpectedNaturalSize { get; }
     /// <summary>Display geometry including clean aperture, sample aspect ratio, and rotation.</summary>
     IReadSignal<VideoGeometry> VideoGeometry { get; }
     /// <summary>Colorimetry/HDR metadata.</summary>

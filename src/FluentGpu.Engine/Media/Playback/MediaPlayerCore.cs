@@ -30,6 +30,7 @@ public sealed class MediaPlayerCore
     private readonly Signal<BufferingInfo> _buffering = new(BufferingInfo.None);
     private readonly Signal<TimelineInfo> _timeline = new(TimelineInfo.Empty);
     private readonly Signal<SizeI> _naturalSize = new(SizeI.Zero);
+    private readonly Signal<SizeI> _expectedNaturalSize = new(SizeI.Zero);
     private readonly Signal<VideoGeometry> _videoGeometry = new(global::FluentGpu.Media.VideoGeometry.Empty);
     private readonly Signal<VideoColorInfo> _videoColor = new(VideoColorInfo.Sdr);
     private readonly Signal<VideoSurfaceGeometry> _surfaceGeometry = new(VideoSurfaceGeometry.Empty);
@@ -80,6 +81,8 @@ public sealed class MediaPlayerCore
     public IReadSignal<TimelineInfo> Timeline => _timeline;
     /// <summary>The natural-size signal.</summary>
     public IReadSignal<SizeI> NaturalSize => _naturalSize;
+    /// <summary>The natural size the opening source DECLARED before its decoder reported one (see <see cref="IMediaPlayer.ExpectedNaturalSize"/>).</summary>
+    public IReadSignal<SizeI> ExpectedNaturalSize => _expectedNaturalSize;
     /// <summary>Display geometry including aperture, sample aspect ratio, and rotation.</summary>
     public IReadSignal<VideoGeometry> VideoGeometry => _videoGeometry;
     /// <summary>Colorimetry and HDR metadata.</summary>
@@ -193,6 +196,8 @@ public sealed class MediaPlayerCore
     public void SetTimeline(TimelineInfo timeline) => _timeline.Value = timeline;
     /// <summary>Set the video natural size.</summary>
     public void SetNaturalSize(SizeI size) => _naturalSize.Value = size;
+    /// <summary>Set the natural size the opening source declared (zero = none declared).</summary>
+    public void SetExpectedNaturalSize(SizeI size) => _expectedNaturalSize.Value = size;
     public void SetVideoGeometry(VideoGeometry geometry)
     {
         _videoGeometry.Value = geometry;
@@ -333,6 +338,8 @@ public sealed class MediaSignalSink
     public void Timeline(TimelineInfo timeline) => _core.SetTimeline(timeline);
     /// <summary>Push the natural size.</summary>
     public void NaturalSize(SizeI size) => _core.SetNaturalSize(size);
+    /// <summary>Push the natural size the source declared before its decoder reports one (a manifest's opening rung).</summary>
+    public void ExpectedNaturalSize(SizeI size) => _core.SetExpectedNaturalSize(size);
     /// <summary>Push display geometry.</summary>
     public void VideoGeometry(VideoGeometry geometry) => _core.SetVideoGeometry(geometry);
     /// <summary>Push the composited PLACEMENT geometry (natural/content/place) the session just realized.</summary>

@@ -1479,7 +1479,7 @@ public sealed class MediaPlayerElement : Component
         }
         LogPump(b, pumpMode, area, natural, videoRect, viewport, s, defer: motion || _settleArmed);
         Player.SetAdaptiveViewportHeight((int)MathF.Ceiling(videoRect.H * MathF.Max(1f, s)));
-        Player.PumpVideo(b, videoRect, s);
+        Player.PumpVideo(b, audioOnly ? DeclaredFitRect(area, pumpMode, s) : videoRect, s);
         // The first metadata, a FORMATCHANGE or a different-aspect ABR rung publishes a new natural size INSIDE the pump,
         // but this pump placed against the hole as laid out for the old one: the new frame would be squashed into the old
         // fit until the next render + layout. Refit and re-place in THIS pump, and write the hole's Margin now so the next
@@ -1492,6 +1492,16 @@ public sealed class MediaPlayerElement : Component
         }
         b.SetVisible(active && !audioOnly && !Player.VideoSurface.Peek().IsNone);   // the viewport is non-empty here (the early-out above returns hidden); the session publishes readiness (VideoSurface) inside PumpVideo, so a re-attached or detached slot stays hidden until its own first frame
         if (!audioOnly) NoteSurfacePresented(b);
+    }
+
+    /// <summary>The destination a source that has not reported its natural size yet will be fitted to, from the size it DECLARED
+    /// (<see cref="IMediaPlayer.ExpectedNaturalSize"/>, a manifest's opening rung): the session sizes its stream from it before
+    /// metadata, so the first swap chain is built at the destination size. The area itself when nothing is declared (an audio-only
+    /// source, a backend that declares nothing): what an audio-only pump has always passed. Never a layout input or a placement.</summary>
+    private RectF DeclaredFitRect(RectF area, VideoAspectMode mode, float scale)
+    {
+        SizeI declared = Player.ExpectedNaturalSize.Peek();
+        return declared.IsEmpty ? area : FitVideoRectSnapped(area, declared, mode, _customAspectForPump?.Peek() ?? (16.0 / 9.0), scale);
     }
 
     /// <summary>The SAME-SOLVE letterbox: place the video hole at the fitted rect for <paramref name="area"/> inside the

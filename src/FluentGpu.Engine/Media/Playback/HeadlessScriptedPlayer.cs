@@ -70,6 +70,8 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
     /// <inheritdoc/>
     public IReadSignal<SizeI> NaturalSize => _core.NaturalSize;
     /// <inheritdoc/>
+    public IReadSignal<SizeI> ExpectedNaturalSize => _core.ExpectedNaturalSize;
+    /// <inheritdoc/>
     public IReadSignal<VideoGeometry> VideoGeometry => _core.VideoGeometry;
     /// <inheritdoc/>
     public IReadSignal<VideoColorInfo> VideoColor => _core.VideoColor;

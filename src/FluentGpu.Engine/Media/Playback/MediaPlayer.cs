@@ -271,6 +271,8 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     /// <inheritdoc/>
     public IReadSignal<SizeI> NaturalSize => _core.NaturalSize;
     /// <inheritdoc/>
+    public IReadSignal<SizeI> ExpectedNaturalSize => _core.ExpectedNaturalSize;
+    /// <inheritdoc/>
     public IReadSignal<VideoGeometry> VideoGeometry => _core.VideoGeometry;
     /// <inheritdoc/>
     public IReadSignal<VideoColorInfo> VideoColor => _core.VideoColor;
@@ -578,6 +580,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
                 // fades in, instead of crossfading over the held frame. A host with its own poster (Wavee) masks it.
                 _core.SetVideoSurface(default);
                 _core.SetNaturalSize(SizeI.Zero);
+                _core.SetExpectedNaturalSize(SizeI.Zero);
                 _core.SetDuration(TimeSpan.Zero);
                 _activeCaptions = null;   // the old source's captions would re-publish a cue from the next PumpVideo
                 _core.SetActiveCue(null);
@@ -868,6 +871,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
             _core.SetBuffering(BufferingInfo.None);
             _core.SetTimeline(TimelineInfo.Empty);
             _core.SetNaturalSize(SizeI.Zero);
+            _core.SetExpectedNaturalSize(SizeI.Zero);
             _core.SetVideoGeometry(global::FluentGpu.Media.VideoGeometry.Empty);
             _core.SetVideoColor(VideoColorInfo.Sdr);
             _core.SetSurfaceGeometry(VideoSurfaceGeometry.Empty);

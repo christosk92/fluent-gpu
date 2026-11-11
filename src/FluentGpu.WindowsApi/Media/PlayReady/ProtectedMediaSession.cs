@@ -214,6 +214,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         // The carried start position is published at once: the seek bar never shows 0:00 for a source opening at 1:23.
         if (_request.StartPosition > TimeSpan.Zero) sink.Position(_request.StartPosition);
         PublishCatalog(sink);
+        // The opening rung's declared size, before the decoder reports one: the presenter fits the stream's destination from it,
+        // so the size request reaches native before LOADEDMETADATA and MF's first swap chain is built at that size (PumpGeometry).
+        if (_activeQuality?.Resolution is { IsEmpty: false } declared) sink.ExpectedNaturalSize(declared);
         StartOnce();
         if (!_qualitySelection.IsAuto && _qualitySelection.VariantId is { } initialPin)
             RequestRepresentation(initialPin, PinRetainMs, Environment.TickCount64);
@@ -720,7 +723,27 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         else
         {
             binding.SetVisible(false);   // detached (or not produced yet): never leave a stale slot showing
+            PresizeStream(binding, videoRect, scale);
         }
+    }
+
+    /// <summary>Before the first swap chain: ask for the stream size the destination will need, from the opening rung's DECLARED
+    /// size, so native holds it when LOADEDMETADATA builds the chain (SessionPublishHandle builds at the session's stream size when
+    /// one is set) and the build MF would otherwise make at the native size, followed by a second one for our request a few ms
+    /// later, is one build. Only while attached and before metadata: a request before the attach is dropped by the player (and would
+    /// leave the gate believing it was sent), one after metadata is the ordinary step above. The decoder's own size, once reported,
+    /// is the gate's natural from then on: equal to the declared one (the usual case) it asks for nothing more; different, it asks
+    /// at once, as before.</summary>
+    private void PresizeStream(in VideoBinding binding, RectF videoRect, float scale)
+    {
+        if (!_naturalSize.IsEmpty || !VideoStreamSizing.IsLaidOut(videoRect)) return;
+        if (_activeQuality?.Resolution is not { IsEmpty: false } declared) return;
+        if (_player.Phase is not (ProtectedVideoPhase.Licensing or ProtectedVideoPhase.Buffering or ProtectedVideoPhase.Attaching)) return;
+        VideoStreamStep step = _sizeGate.Step(binding, declared, videoRect, scale, SizeI.Zero, playing: false, ClockMs(), binding.Display);
+        if (step.Request.IsEmpty) return;
+        _player.LogDiagnostic($"stream.gate size={step.Request.Width}x{step.Request.Height} pumping={binding.Token} " +
+                              $"governing={_sizeGate.GoverningToken} votes={_sizeGate.VoteCount} before=metadata declared={declared.Width}x{declared.Height}");
+        _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
     }
 
     /// <summary>Keep the runtime's hidden OPM window over the video (F264): the placed rect in device pixels of the presenting
