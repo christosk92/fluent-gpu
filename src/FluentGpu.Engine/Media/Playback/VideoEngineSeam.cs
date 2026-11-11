@@ -84,9 +84,11 @@ public struct VideoEngineSnapshot
     public uint ErrorCode;
     /// <summary>The underlying HRESULT for the error, valid iff <see cref="VideoEngineFlags.Error"/> is set.</summary>
     public int ErrorHr;
-    /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> value at which FIRSTFRAMEREADY landed for the
-    /// current <see cref="SourceEpoch"/>; 0 until it does (or when the backend does not report it). The moment a
-    /// surface may drop its poster — an event, never a state guess.</summary>
+    /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> value at which the current <see cref="SourceEpoch"/>'s
+    /// first frame was ON SCREEN; 0 until it is (or when the backend does not report it). For a source that plays, the renderer
+    /// counting its first frame after FIRSTFRAMEREADY (the event itself comes about 270 ms earlier on a switch); for one that does
+    /// not, FIRSTFRAMEREADY (MF paints the paused frame then). The moment a surface may drop its poster or a held picture, and a
+    /// host may refit to the new source — an event, never a state guess.</summary>
     public long FirstFrameTimestamp;
     /// <summary>How many SEEKED events the engine has raised for the current <see cref="SourceEpoch"/> (0 for a backend
     /// that does not report them). Lossless where the <see cref="VideoEngineFlags.Seeking"/> flag is not: a seek whose
