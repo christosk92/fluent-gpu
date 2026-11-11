@@ -361,6 +361,31 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
         ca->Release(); obj->Release(); kf->Release(); anim->Release();
     }
 
+    /// <summary>Ready a parked popup's tree for its next open (D3D12Device.UnparkPopup): the last close faded the chrome to 0 and
+    /// latched the motion. Stop both animations, put the chrome back at full opacity and the animation root at rest, and clear the
+    /// latches so the next <see cref="ConfigureChrome"/> seeds the closed offset and <see cref="AnimateOpen"/> plays again. The
+    /// window is hidden while this runs, so nothing of the previous menu's motion is ever seen.</summary>
+    public void ResetForReuse()
+    {
+        StopAnimation(_chromeVisual, "Opacity");
+        StopAnimation(_animRootVisual, "Offset.Y");
+        Check(_chromeVisual->put_Opacity(1f), "put_Opacity(reuse)");
+        Check(_animRootVisual->put_Offset(new Vector3(0f, 0f, 0f)), "put_Offset(reuse)");
+        _opened = false;
+        _closing = false;
+        _motionStartTick = 0;
+        _contentHPx = 0f;   // unconfigured until the new placement's ConfigureChrome
+    }
+
+    private static void StopAnimation(IVisual* visual, string property)
+    {
+        ICompositionObject* obj; Check(visual->QueryInterface(__uuidof<ICompositionObject>(), (void**)&obj), "QI ICompositionObject(stop)");
+        HSTRING prop = H(property);
+        obj->StopAnimation(prop);   // no animation on the property is not an error worth surfacing
+        WindowsDeleteString(prop);
+        obj->Release();
+    }
+
     public void Dispose()
     {
         if (_content != null) { _content->Release(); _content = null; }

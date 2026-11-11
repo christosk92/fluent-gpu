@@ -3660,7 +3660,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     internal void Present(D3D12Swapchain target, bool noWait = false)
     {
         PresentTarget(target, noWait);
-        if (_popupBuildPending && ReferenceEquals(target, _primarySwapchain)) BuildPendingPopups();
+        if (!ReferenceEquals(target, _primarySwapchain)) return;
+        _primaryPresentThreadId = System.Environment.CurrentManagedThreadId;
+        if (_popupBuildPending) BuildPendingPopups();
+        if (_popupUpkeepPending) ServicePopupUpkeep();   // a closed popup's buffers shrink / release after the owner's present, never before it
     }
 
     private void PresentTarget(D3D12Swapchain target, bool noWait)
@@ -5103,6 +5106,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// the fence read <see cref="DrainImageJobs"/> already uses.</summary>
     public void ReclaimCompletedUploads()
     {
+        // A turn with no present still lets a closed popup shrink / release - on the presenting thread only (a force-sync host
+        // reclaims from its UI thread while the render thread owns the swapchains).
+        if (_popupUpkeepPending && (!_renderConfined || System.Environment.CurrentManagedThreadId == _primaryPresentThreadId)) ServicePopupUpkeep();
         if (_imageTextures is null || _fence == null) return;
         _imageTextures.ReclaimCompleted(_fence->GetCompletedValue());
     }
@@ -5313,7 +5319,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     internal void DisposeSwapchain(D3D12Swapchain target)
     {
         AssertDeviceOwner();   // a detached child's teardown runs under the parent loop's park (AppHost.Dispose, INCIDENT 2026-09 §1.3)
-        if (target.Disposed) return;
+        if (target.Disposed || target.RetireDeferred) return;
+        // A popup window's swapchain never waits on its own fence here: the shared render thread would stall the owner's frame for
+        // it at every menu close. Its backdrop goes now (the host destroys the window next), its buffers once its frames retired.
+        if (target.DesktopAcrylic && !ReferenceEquals(target, _primarySwapchain)) { RetirePopupTarget(target); return; }
         // F117: wait only for the work THIS target's own frames still have in flight (the Resize rule), never a device-wide
         // WaitForGpu: that signalled a fresh device fence and blocked until the queue reached it, i.e. until every queued frame of
         // OTHER windows (the main window's included) retired too, while the UI sat parked inside a pop-out / flyout close. What
@@ -5321,8 +5330,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // referenced by this target's own submits, which its fence ledger covers; DComp / DXGI keep their own references for
         // anything still being composed, and the shared pools (atlases, image textures, ring allocators) are not released here.
         Diag.Line($"[d3d12.teardown] phase=target-drain target={target.Ordinal} recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
-        if (target.DesktopAcrylic)
-            Diag.Line($"[d3d12.present] popup released target={target.Ordinal} built={(target.SwapChain != null ? 1 : 0)} framesAwaitingBuild={target.PopupFramesAwaitingBuild} framesDeferredBusySlot={target.PopupFramesDeferred}");
         DrainForTeardown(TargetFenceHorizon(target.Frame), signal: false);
         ReleaseSwapchainResources(target);
         // Release this swapchain's video presenter AFTER its resources (its DcompRoot is now null → DetachChild no-ops)
@@ -5440,8 +5447,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     private void RecoverDeviceCore()
     {
+        ReleasePopupPoolForRecovery();
         // 1. Release every swapchain's GPU resources but KEEP the D3D12Swapchain objects (their W/H/Hwnd/Composited/etc.
-        //    survive for re-init); reset Disposed since we are recreating, not tearing down. ReleaseSwapchainResources
+        //    survive for re-init); reset Disposed since we are recreating, not tearing down. A PARKED popup and one still
+        //    retiring are released for good instead (ReleasePopupPoolForRecovery): the host builds a new one on its next open.
+        //    ReleaseSwapchainResources
         //    now also tears down each target's OWN command list + layer pools (Phase 1 §3.1/§3.3 — used to be device-
         //    global, released once below instead).
         for (int i = 0; i < _swapchains.Count; i++)
@@ -5547,6 +5557,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Unexpected drain errors propagate BEFORE releasing live in-flight GPU resources. A healthy fence still
         // waits for retirement, however long it takes; a polling interval is not a new shutdown timeout.
         DrainForTeardown(_fenceValue + 1, signal: true);
+        ReleasePopupPoolForRecovery();   // drained: the popups still retiring (and the parked ones) release now
         Diag.Line($"[d3d12.teardown] phase=device-release recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
         for (int i = _swapchains.Count - 1; i >= 0; i--)
         {
@@ -5673,6 +5684,9 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal bool BuildPending, BuildFailed, ChromePending;
     internal int BuildWaitTurns, PopupFramesAwaitingBuild, PopupFramesDeferred;
     internal PopupChromeMetrics PendingChrome;
+    // The host's popup pool (D3D12Device.PopupPool.cs): parked between popups, its buffers still to shrink to 1x1 once its frames
+    // retire, and released for good but its D3D12 resources waiting for its fence (out of the device's target list). Render thread.
+    internal bool Parked, ParkShrinkPending, RetireDeferred;
     // This swapchain's DXGI maximum frame latency when it is NOT the primary (D3D12Device.SetPresentQueueDepth(target, depth) —
     // a detached pop-out's own depth policy); the primary's lives on the device (_presentQueueDepth). Render thread writes
     // (Volatile), any thread may read. Starts at the creation depth, so a rebuild of the swapchain restores it.
@@ -5998,6 +6012,10 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     /// <remarks>Also true while a frame of this popup is owed (deferred behind a busy present slot): the host keeps
     /// publishing turns until one presents it (D3D12Device.DeferPopupSubmit, bounded).</remarks>
     public bool PopupAnimating => (Backdrop?.IsAnimating ?? false) || System.Threading.Volatile.Read(ref PopupFrameOwed) != 0;
+    /// <inheritdoc/>
+    public bool ParkPopup() => Device.ParkPopup(this);
+    /// <inheritdoc/>
+    public bool UnparkPopup() => Device.UnparkPopup(this);
     public void Dispose() => Device.DisposeSwapchain(this);
 
     // ── Per-target seam members (Phase 1 §3.3) ──────────────────────────────────────────────────────────────────────

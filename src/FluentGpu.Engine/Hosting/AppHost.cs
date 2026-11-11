@@ -361,6 +361,14 @@ public sealed class PopupWindowSlot
     {
         if (Interlocked.Exchange(ref _windowDisposed, 1) == 0) Window.Dispose();
     }
+    /// <summary>The window went to the host's popup pool with its parked swapchain: this slot must never dispose it.</summary>
+    internal void ReleaseWindowOwnership() => Interlocked.Exchange(ref _windowDisposed, 1);
+    /// <summary>The popup pool key this slot's window and swapchain were made for (AppHost.PopupPoolKeyFor).</summary>
+    internal PopupPoolKey PoolKey;
+    /// <summary>The close parks this popup's window and swapchain for the next popup instead of releasing them.</summary>
+    internal bool ParkOnClose;
+    /// <summary>The render thread parked this closed popup's swapchain (ISwapchain.ParkPopup); the UI pools it with the window.</summary>
+    internal ISwapchain? ParkedSwapchain;
     /// <summary>The popup's own command stream, re-recorded each frame via <c>SceneRecorder.RecordSubtree</c>.</summary>
     public DrawList DrawList { get; } = new();
     internal SceneRecordingContext Recording { get; } = new();
@@ -368,6 +376,11 @@ public sealed class PopupWindowSlot
     /// <summary>This popup's cost, for the always-on <c>[overlay.popup]</c> line written at close.</summary>
     internal PopupLifecycle Lifecycle { get; } = new();
 }
+
+/// <summary>What a pooled popup window and its swapchain were made for: a parked pair serves only a popup with the same key, so
+/// a theme switch (material tint, dark frame), a DPI or zoom change (corner radius, scale) or a move of the owner to another
+/// monitor (its work area) drops the pair instead of reusing it.</summary>
+internal readonly record struct PopupPoolKey(PopupWindowMaterial Material, bool Dark, ColorF Tint, float CornerRadiusPx, float Scale, RectF WorkAreaPx);
 
 /// <summary>Which branch of <see cref="AppHost.RecommendedWaitMs"/> produced the last wait — the diagnostic that
 /// distinguishes per-source cadence pacing, measured adaptive-GPU pacing, and display-rate free-run. <c>Cadence</c>
@@ -455,6 +468,13 @@ public sealed partial class AppHost : IDisposable
     // Popups closed while a render thread existed: out of _popupWindows already, but their swapchain is still owned by the
     // render thread until it runs the queued Dispose, and their HWND is destroyed only after (UI thread). UI-thread only.
     private readonly List<PopupWindowSlot> _retiringPopups = new(2);
+    // The popup pool: closed popups' windows, each with its parked swapchain (ISwapchain.ParkPopup), handed to the next popup
+    // instead of building a window, a swapchain and a composition backdrop per open. UI thread. Sized to what is up at once: a
+    // context menu, its cascade, and the sibling cascade that opens while the previous one still fades out (Wavee's menus nest
+    // one level: every Actions.Menu submenu holds plain items). Nothing is built to fill it: it holds what was used, at most this.
+    private readonly List<(IPlatformPopupWindow Window, ISwapchain Swapchain, PopupPoolKey Key)> _popupPool = new(PopupPoolCap);
+    private const int PopupPoolCap = 3;
+    private int _popupParking;   // parks the render thread has not handed back yet (count toward the cap)
     private readonly List<NodeHandle> _popupSkipRoots = new(2);
     private readonly List<NodeHandle> _reuseBlockRoots = new(4);   // W5: connected-anim fly anchors whose span-reuse ancestor chains the recorder blocks (spatial scoping)
     private int _popupTokenSeq;
@@ -2043,10 +2063,13 @@ public sealed partial class AppHost : IDisposable
     // ops are applied in order, and the swapchain is resolved when each one runs. A detached child's OWN swapchain resize is
     // not in the list at all: it is ONE latest-wins slot (_ownResizePending, F093), because a live resize posts one per WM_SIZE
     // and only the newest size is ever worth a ResizeBuffers.
-    private enum PopupRenderOp : byte { ResizeAndChrome, AnimateClose, Create, Dispose }
+    // The popup pool adds three: Reuse (a pooled swapchain serves a new popup), Park (a closed popup's swapchain is kept) and
+    // DropParked (a pooled pair released for good).
+    private enum PopupRenderOp : byte { ResizeAndChrome, AnimateClose, Create, Dispose, Reuse, Park, DropParked }
 
     private readonly record struct PopupRenderAction(PopupRenderOp Op, PopupWindowSlot? Slot, Size2 Size, PopupChromeMetrics Chrome,
-                                                     SwapchainDesc Desc = default);
+                                                     SwapchainDesc Desc = default, ISwapchain? Pooled = null,
+                                                     IPlatformPopupWindow? Window = null, PopupPoolKey Key = default);
 
     private readonly object _popupActionLock = new();
     private List<PopupRenderAction> _popupActionsIn = new(4);
@@ -2067,7 +2090,7 @@ public sealed partial class AppHost : IDisposable
         // Ops that change what EXISTS (a swapchain built or released) must not wait for a publication that may never come:
         // wake the render loop, whose per-turn callback (DrainChildRenderSources) applies them. A popup's Resize / fade stays
         // unwoken - it is ordered behind the publication that carries the matching placement.
-        if (action.Op is PopupRenderOp.Create or PopupRenderOp.Dispose) OwningRenderThread?.WakeAsync();
+        if (action.Op is not (PopupRenderOp.ResizeAndChrome or PopupRenderOp.AnimateClose)) OwningRenderThread?.WakeAsync();
     }
 
     /// <summary>UI thread: ask the render thread to resize THIS host's own swapchain (a detached child's). Latest wins: a request
@@ -2135,7 +2158,16 @@ public sealed partial class AppHost : IDisposable
                     a.Slot!.Swapchain?.AnimatePopupClose();
                     break;
                 case PopupRenderOp.Dispose:
-                    RetirePopupSlotOnRender(a.Slot!);
+                    RetirePopupSlotOnRender(a.Slot!, park: false);
+                    break;
+                case PopupRenderOp.Park:
+                    RetirePopupSlotOnRender(a.Slot!, park: true);
+                    break;
+                case PopupRenderOp.Reuse:
+                    ReusePooledSwapchainOnRender(a.Slot!, a.Pooled!, a.Desc);   // even for a slot closed meanwhile: its Park op follows
+                    break;
+                case PopupRenderOp.DropParked:
+                    DropParkedOnRender(a.Pooled!, a.Window!);
                     break;
             }
         }
@@ -2175,24 +2207,83 @@ public sealed partial class AppHost : IDisposable
         }
     }
 
-    /// <summary>Render thread: release a closed popup's swapchain, then hand its HWND back to the UI thread to destroy.
-    /// The window must outlive its composition swapchain (destroying it first gives DirectComposition errors), and
-    /// <c>DestroyWindow</c> belongs to the thread that created it.</summary>
-    private void RetirePopupSlotOnRender(PopupWindowSlot slot)
+    /// <summary>Render thread: park (<paramref name="park"/>: the pool has room) or release a closed popup's swapchain, then hand
+    /// its HWND back to the UI thread: to the popup pool with the parked swapchain, or to be destroyed. The window must outlive its
+    /// composition swapchain (destroying it first gives DirectComposition errors), and <c>DestroyWindow</c> belongs to the thread
+    /// that created it. Neither path waits on the popup's fence (D3D12Device.PopupPool.cs).</summary>
+    private void RetirePopupSlotOnRender(PopupWindowSlot slot, bool park)
     {
         var sc = slot.Swapchain;
-        slot.Swapchain = null;   // first: nothing recorded after this reaches the swapchain being released
-        sc?.Dispose();
+        slot.Swapchain = null;   // first: nothing recorded after this reaches the swapchain being parked or released
+        long t0 = Stopwatch.GetTimestamp();
+        bool parked = park && sc is not null && sc.ParkPopup();
+        if (!parked) sc?.Dispose();
+        slot.Lifecycle.RetireMs = ToMs(Stopwatch.GetTimestamp() - t0);
+        slot.Lifecycle.Parked = parked;
         // In mailbox order: after this slot's last pass, so its per-pass fields are settled. The one [overlay.popup] line it leaves behind.
         Diag.Line(slot.Lifecycle.Line(slot.Material, Stopwatch.GetTimestamp()));
-        Post(() => ReleaseRetiredPopupWindow(slot));
+        if (parked) { slot.ParkedSwapchain = sc; Post(() => ReturnParkedPopup(slot)); }
+        else Post(() => ReleaseRetiredPopupWindow(slot));
+    }
+
+    /// <summary>Render thread: a pooled swapchain serves a new popup on its own (pooled) window. One that can no longer serve
+    /// (released with a lost device) is disposed and a new one built on the same window.</summary>
+    private void ReusePooledSwapchainOnRender(PopupWindowSlot slot, ISwapchain pooled, in SwapchainDesc desc)
+    {
+        long t0 = Stopwatch.GetTimestamp();
+        if (pooled.UnparkPopup())
+        {
+            slot.Swapchain = pooled;
+            slot.Lifecycle.RenderCreateMs = ToMs(Stopwatch.GetTimestamp() - t0);
+            return;
+        }
+        pooled.Dispose();
+        slot.Lifecycle.Reused = false;
+        if (!slot.Retired) CreatePopupSwapchainOnRender(slot, desc);
+    }
+
+    /// <summary>Render thread: a pooled pair released for good (stale key, pool full): the swapchain now (its backdrop at once,
+    /// its buffers once they retired), the window back on the UI thread right after.</summary>
+    private void DropParkedOnRender(ISwapchain pooled, IPlatformPopupWindow window)
+    {
+        pooled.Dispose();
+        Post(window.Dispose);
     }
 
     /// <summary>UI thread: the render thread released this popup's swapchain; destroy its window.</summary>
     private void ReleaseRetiredPopupWindow(PopupWindowSlot slot)
     {
-        _retiringPopups.Remove(slot);
+        if (_retiringPopups.Remove(slot) && slot.ParkOnClose) _popupParking--;   // a park the render thread could not make
         slot.DisposeWindow();
+    }
+
+    /// <summary>UI thread: the render thread parked this closed popup's swapchain; pool it with the window.</summary>
+    private void ReturnParkedPopup(PopupWindowSlot slot)
+    {
+        if (!_retiringPopups.Remove(slot)) return;   // torn down meanwhile: the teardown sweep released both
+        _popupParking--;
+        var sc = slot.ParkedSwapchain!;
+        slot.ParkedSwapchain = null;
+        slot.ReleaseWindowOwnership();
+        PoolOrDropParked(slot.Window, sc, slot.PoolKey);
+    }
+
+    /// <summary>UI thread: keep a parked pair for the next popup when it still fits (the pool has room and its key is still the
+    /// current one), else release it.</summary>
+    private void PoolOrDropParked(IPlatformPopupWindow window, ISwapchain sc, PopupPoolKey key)
+    {
+        if (!_popupPoolClosed && _popupPool.Count < PopupPoolCap && key == PopupPoolKeyFor(key.Material))
+        {
+            _popupPool.Add((window, sc, key));
+            return;
+        }
+        DropParked(window, sc);
+    }
+
+    private void DropParked(IPlatformPopupWindow window, ISwapchain sc)
+    {
+        if (OwningRenderThread is null) { sc.Dispose(); window.Dispose(); return; }
+        PostPopupRenderAction(new PopupRenderAction(PopupRenderOp.DropParked, null, default, default, Pooled: sc, Window: window));
     }
 
     /// <summary>UI thread, with the render loop PARKED (or absent): drop every queued action. Teardown only: the popups it
@@ -7782,25 +7873,38 @@ public sealed partial class AppHost : IDisposable
         if (!PopupWindowsEnabled || subtreeRoot.IsNull || _fzPhase == FreezePhase.Frozen) return -1;   // E2: no popup window opens against a frozen tree
         // NO render-thread park (F207): the HWND is the UI thread's own, and the swapchain is built by the render thread (below).
         long leaseStart = Stopwatch.GetTimestamp();
-        var palWindow = _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default, material, Tok.Theme == ThemeKind.Dark));
+        var key = PopupPoolKeyFor(material);
+        // A pooled window with its parked swapchain (a closed popup's) serves this popup: no window, no
+        // swapchain and no composition backdrop to build. Only a pair made for this key fits; stale ones are released.
+        IPlatformPopupWindow? pooledWindow = null;
+        ISwapchain? pooled = null;
+        for (int i = _popupPool.Count - 1; i >= 0; i--)
+        {
+            var p = _popupPool[i];
+            _popupPool.RemoveAt(i);
+            if (pooled is null && p.Key == key) { pooledWindow = p.Window; pooled = p.Swapchain; }
+            else DropParked(p.Window, p.Swapchain);
+            if (pooled is not null) break;
+        }
+        var palWindow = pooledWindow ?? _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default, material, key.Dark));
         if (palWindow is null) return -1;
         long windowDone = Stopwatch.GetTimestamp();
-        bool acrylic = material == PopupWindowMaterial.TransientAcrylic;
-        // Flat tint over the host-backdrop (blurred desktop): the dark MenuFlyout fallback color at ~0.5 so the desktop
-        // reads through as a frosted grey (WinUI DesktopAcrylicBackdrop look). Tunable.
-        ColorF tint = acrylic ? Tok.AcrylicFlyout.Fallback with { A = 0.5f } : default;
-        // Round the composition acrylic to the flyout corner radius (WinUI OverlayCornerRadius = 8 DIP) so it matches
-        // the engine-drawn rounded plate/border in the swapchain content.
-        float cornerPx = acrylic ? 8f * (_window.Scale <= 0f ? 1f : _window.Scale) : 0f;
-        var slot = new PopupWindowSlot(++_popupTokenSeq, palWindow, subtreeRoot, material);
-        var desc = new SwapchainDesc(palWindow.Handle, new Size2(1, 1),
-            Composited: true, DesktopAcrylic: acrylic, AcrylicTint: tint, CornerRadiusPx: cornerPx);
+        var slot = new PopupWindowSlot(++_popupTokenSeq, palWindow, subtreeRoot, material) { PoolKey = key };
+        var desc = PopupSwapchainDesc(palWindow.Handle, in key);
         // Under a render thread the CREATE rides the mailbox: that thread is the sole ComPtr owner, so the swapchain is built
         // where the INCIDENT 2026-09 race (a create under a recording in flight) cannot occur, and the UI never waits for a
         // render turn to open a flyout. Until it lands slot.Swapchain is null: the recorder skips the slot, the wake reasons
         // keep frames coming, and the reveal gate waits for HasPresentedContent (so the window stays hidden meanwhile).
         // The thread-affine part of the create (the D3D12 backend's composition compositor for an acrylic popup) stays here.
-        if (OwningRenderThread is null) slot.Swapchain = _device.CreateSwapchain(in desc);
+        // A pooled swapchain is un-parked the same way (its reveal latch re-armed, so the window shows the NEW menu's first frame).
+        slot.Lifecycle.Reused = pooled is not null;
+        if (OwningRenderThread is null)
+        {
+            if (pooled is not null && pooled.UnparkPopup()) slot.Swapchain = pooled;
+            else { pooled?.Dispose(); slot.Lifecycle.Reused = false; slot.Swapchain = _device.CreateSwapchain(in desc); }
+        }
+        else if (pooled is not null)
+            PostPopupRenderAction(new PopupRenderAction(PopupRenderOp.Reuse, slot, default, default, desc, Pooled: pooled));
         else
         {
             _device.PrepareSwapchainCreate(in desc);
@@ -7892,26 +7996,56 @@ public sealed partial class AppHost : IDisposable
             slot.Retired = true;
             _popupWindows.RemoveAt(i);
             Volatile.Write(ref _popupWindowCount, _popupWindows.Count);
+            // The pool keeps this popup's window and swapchain for the next one while it has room (the parks still in flight count).
+            slot.ParkOnClose = !slot.CreateFailed && !_popupPoolClosed && _popupPool.Count + _popupParking < PopupPoolCap;
             if (inline)
             {
                 // No render thread: every pass ran on this thread, so the per-pass fields are settled. The one line this popup leaves behind.
-                Diag.Line(slot.Lifecycle.Line(slot.Material, Stopwatch.GetTimestamp()));
-                slot.Swapchain?.Dispose();
+                var sc = slot.Swapchain;
                 slot.Swapchain = null;
-                slot.DisposeWindow();
+                bool parked = slot.ParkOnClose && sc is not null && sc.ParkPopup();
+                slot.Lifecycle.Parked = parked;
+                Diag.Line(slot.Lifecycle.Line(slot.Material, Stopwatch.GetTimestamp()));
+                if (parked) { slot.ReleaseWindowOwnership(); PoolOrDropParked(slot.Window, sc!, slot.PoolKey); }
+                else { sc?.Dispose(); slot.DisposeWindow(); }
             }
             else
             {
-                // NO park (F207): the render thread releases the swapchain in mailbox order - after every Resize / fade already
-                // queued for this slot - and posts the HWND back for the UI thread to destroy. A frame published before this
-                // call may still name the slot; the recorder resolves slot.Swapchain when it records, finds null and skips it.
+                // NO park (F207): the render thread parks or releases the swapchain in mailbox order - after every Resize / fade
+                // already queued for this slot - and posts the HWND back to the pool or to be destroyed. A frame published before
+                // this call may still name the slot; the recorder resolves slot.Swapchain when it records, finds null and skips it.
                 _retiringPopups.Add(slot);
-                PostPopupRenderAction(new PopupRenderAction(PopupRenderOp.Dispose, slot, default, default));
+                if (slot.ParkOnClose) _popupParking++;
+                PostPopupRenderAction(new PopupRenderAction(slot.ParkOnClose ? PopupRenderOp.Park : PopupRenderOp.Dispose, slot, default, default));
             }
             WakeFrame();
             return;
         }
     }
+
+    /// <summary>The pool key of a popup leased now: its material, the theme's frame and tint, the owner's scale and the owner's
+    /// monitor (its work area, physical px). UI thread.</summary>
+    private PopupPoolKey PopupPoolKeyFor(PopupWindowMaterial material)
+    {
+        bool acrylic = material == PopupWindowMaterial.TransientAcrylic;
+        float s = _window.Scale <= 0f ? 1f : _window.Scale;
+        // Flat tint over the host-backdrop (blurred desktop): the dark MenuFlyout fallback color at ~0.5 so the desktop
+        // reads through as a frosted grey (WinUI DesktopAcrylicBackdrop look). Tunable.
+        ColorF tint = acrylic ? Tok.AcrylicFlyout.Fallback with { A = 0.5f } : default;
+        // Round the composition acrylic to the flyout corner radius (WinUI OverlayCornerRadius = 8 DIP) so it matches
+        // the engine-drawn rounded plate/border in the swapchain content.
+        float cornerPx = acrylic ? 8f * s : 0f;
+        var origin = _window.ClientOriginPx;
+        return new PopupPoolKey(material, Tok.Theme == ThemeKind.Dark, tint, cornerPx, s, _app.GetWorkArea(origin));
+    }
+
+    private static SwapchainDesc PopupSwapchainDesc(NativeHandle window, in PopupPoolKey key)
+    {
+        bool acrylic = key.Material == PopupWindowMaterial.TransientAcrylic;
+        return new SwapchainDesc(window, new Size2(1, 1), Composited: true, DesktopAcrylic: acrylic, AcrylicTint: key.Tint, CornerRadiusPx: key.CornerRadiusPx);
+    }
+
+    private bool _popupPoolClosed;                      // teardown: nothing is pooled any more
 
     /// <summary>Reveal a popup window (UI thread) and time the OS call — the reveal half of its <c>[overlay.popup]</c> line.</summary>
     private static void ShowPopupWindow(PopupWindowSlot slot)
@@ -9418,9 +9552,19 @@ public sealed partial class AppHost : IDisposable
             var retiring = _retiringPopups[i];
             retiring.Swapchain?.Dispose();
             retiring.Swapchain = null;
+            retiring.ParkedSwapchain?.Dispose();   // parked by the render thread, its hand-back post not run yet
+            retiring.ParkedSwapchain = null;
             retiring.DisposeWindow();
         }
         _retiringPopups.Clear();
+        // The popup pool: each parked swapchain, then its window (the window outlives its composition swapchain).
+        _popupPoolClosed = true;
+        for (int i = _popupPool.Count - 1; i >= 0; i--)
+        {
+            _popupPool[i].Swapchain.Dispose();
+            _popupPool[i].Window.Dispose();
+        }
+        _popupPool.Clear();
         // INSIDE the park (INCIDENT 2026-09 §1.3): for a detached child the owning thread is the parent's LIVE render
         // thread and DisposeSwapchain's fence wait / ReleaseStencilDsv must not race its recorder.
         _swapchain.Dispose();

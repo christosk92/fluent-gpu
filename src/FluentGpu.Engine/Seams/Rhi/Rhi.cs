@@ -484,6 +484,19 @@ public interface ISwapchain : IDisposable
     /// defers disposal until it clears).</summary>
     bool PopupAnimating => false;
 
+    /// <summary>Render thread: keep this closed popup's swapchain (its buffers, RTV heap, command list and composition chrome)
+    /// for the next popup on the same window instead of releasing it (the host's popup pool). The backend sheds what an idle
+    /// popup does not need without waiting on the GPU (the buffers shrink to 1x1 once this target's frames retired) and a
+    /// popup created but never built is built here (the pool's idle prewarm). False when the backend cannot park it: the host
+    /// then disposes it. Default false.</summary>
+    bool ParkPopup() => false;
+
+    /// <summary>Render thread: ready a parked popup swapchain (<see cref="ParkPopup"/>) for a new popup: its open/close motion
+    /// state is reset and <see cref="HasPresentedContent"/> reads false until the new popup's first frame presents, so the host's
+    /// reveal never shows the previous menu. False when it can no longer serve (released with a lost device): the host disposes
+    /// it and builds a new one. Default false.</summary>
+    bool UnparkPopup() => false;
+
     // ── Per-target diagnostics + present pacing (detached-window-render-isolation-implementation.md §3.3) ──
     // Moved off IGpuDevice: each was a device-wide LAST-WRITER field that a secondary target's submit/present could
     // silently overwrite on behalf of the primary (INCIDENT 2026-09 §1.6 item 4). Target-scoped by construction here.
