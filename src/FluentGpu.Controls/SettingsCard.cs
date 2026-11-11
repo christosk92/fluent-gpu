@@ -71,6 +71,11 @@ public static partial class SettingsCard
         /// <summary>Side of the <see cref="PartHeaderIcon"/> slot (square). Replaces the old
         /// <c>HeaderIconMaxSize</c> literal; the constant still exists as the default.</summary>
         public float HeaderIconSize { get; init; } = HeaderIconMaxSize;
+        /// <summary>The least width of the <see cref="PartContent"/> column. The default is WinUI's
+        /// <c>SettingsCardContentControlMinWidth</c> (120), which lines the controls of a card stack up on one edge (combo boxes,
+        /// buttons). A caller that keeps a narrow control beside its label (a switch, in a "label | switch" row that never wraps)
+        /// asks for the control's own width, so the header text takes the room the 120 column would leave empty.</summary>
+        public float ContentMinWidth { get; init; } = SettingsCard.ContentMinWidth;
     }
 
     public sealed record Options
@@ -305,7 +310,7 @@ public static partial class SettingsCard
             Direction = 0,
             AlignItems = FlexAlign.Center,
             Justify = wrap ? FlexJustify.Start : FlexJustify.End,
-            MinWidth = ContentMinWidth,
+            MinWidth = (o.Style ?? DefaultStyle).ContentMinWidth,
             Grow = 0f,
             Shrink = 0f,
             Children = o.Content is null ? [] : [o.Content.Value],
