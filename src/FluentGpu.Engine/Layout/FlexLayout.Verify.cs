@@ -212,7 +212,11 @@ public sealed partial class FlexLayout
             // of the result the early-out vouches for (a reveal marks the node dirty). And a recycled index's signature belongs
             // to the node that held it before: the new node was never arranged here (it is under a collapsed ancestor, or
             // collapsed itself), so there is nothing to compare (PERF r3 MODEL, C1 writers).
-            if ((_scene.Flags(n) & NodeFlags.Visible) == 0) continue;
+            // "Collapsed" is layout's own test (presence, OR a mirror-collapsed component anchor whose rendered child is out of
+            // flow). A mirror-collapsed anchor keeps its Visible bit, and its mirrored LayoutInput (a 24 DIP chevron's Width) may
+            // change while no flex parent places it (FirstVisibleChild skips it, so its signature stays the collapsed
+            // placement's); the flip back into flow marks it (SetMirrorCollapsedIfChanged).
+            if ((_scene.Flags(n) & NodeFlags.Visible) == 0 || _scene.IsLayoutCollapsed(n)) continue;
             if (i < (uint)_verifySig.Length && _verifySig[i] != 0 && _verifySigGen[i] == n.Raw.Gen)
             {
                 ulong now = VerifySig(n);

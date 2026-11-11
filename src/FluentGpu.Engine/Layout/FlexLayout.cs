@@ -241,6 +241,7 @@ public sealed partial class FlexLayout
         // way (it is keyed by generation).
         if (_memo.Length < cap) System.Array.Resize(ref _memo, cap);
         if (_arranged.Length < cap) System.Array.Resize(ref _arranged, cap);
+        if (_arrangedVer.Length < cap) System.Array.Resize(ref _arrangedVer, cap);
         if (_measuredPass.Length < cap) System.Array.Resize(ref _measuredPass, cap);
         _pass++;
     }
@@ -672,6 +673,12 @@ public sealed partial class FlexLayout
     // (which Measure also scribbles hypothetical W/H into for a not-yet-arranged pass). AuxFlags.ArrangedValid says
     // whether the slot holds a real value yet (false for a fresh/recycled node index — cleared on CreateNode).
     private RectF[] _arranged = System.Array.Empty<RectF>();
+    // The node's SubtreeVersion when that rect was placed. The Arrange early-out requires it unchanged: the frame-scoped clean
+    // bit only says nothing below was marked THIS frame, and a mark can be cleared at the frame's end without any solve having
+    // visited the node - a bind firing on a row of a detached, KeepAlive-parked subtree (its dirty chain stops at the detached
+    // top), or a mark on a node under a collapsed or not-yet-solved ancestor. The version bumps on every mark, to the root,
+    // and never resets, so it still says "something below changed since this placement" (the measure ring's own guard).
+    private uint[] _arrangedVer = System.Array.Empty<uint>();
     // Per-pass stamp grown with `_arranged`: every Measure Bounds W/H scribble records `_pass` so an Arrange early-out
     // can restore descendants this pass actually touched. A ring-hit parent never visits children — their stamp stays
     // stale and their Bounds still hold the last arranged rect (do not "restore" those).
@@ -692,7 +699,7 @@ public sealed partial class FlexLayout
         _scene.NoteCaptureChanged((int)node.Raw.Index);
         if (s_layoutOverflow) ReportOverflow(node, in next);
         uint ai = node.Raw.Index;
-        if (ai < (uint)_arranged.Length) _arranged[ai] = next;
+        if (ai < (uint)_arranged.Length) { _arranged[ai] = next; _arrangedVer[ai] = _scene.SubtreeVersion(node); }
         _scene.SetArrangedValid(node);
         NoteVerifySig(node);   // DEBUG tripwire baseline: the layout inputs this placement was computed from
         var handler = _scene.GetBoundsChangedHandler(node);   // element author's Element.OnBoundsChanged
@@ -1232,7 +1239,8 @@ public sealed partial class FlexLayout
         // --fg layout-verify: the oracle's re-solve is a FROM-SCRATCH solve by definition — every incremental
         // short-circuit is off inside it, or it would just reproduce the incremental answer it exists to check.
         if (!Verifying
-            && ei < (uint)_arranged.Length && _scene.IsArrangedValid(node) && !_scene.HasScrollInSubtree(node) && _scene.IsLayoutClean(node))
+            && ei < (uint)_arranged.Length && _scene.IsArrangedValid(node) && !_scene.HasScrollInSubtree(node) && _scene.IsLayoutClean(node)
+            && _arrangedVer[ei] == _scene.SubtreeVersion(node))
         {
             ref RectF prev = ref _arranged[ei];
             if (prev.X == x && prev.Y == y && prev.W == finalW && prev.H == finalH)
