@@ -705,17 +705,21 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             if (VideoStreamSizing.IsLaidOut(videoRect))
             {
                 var applied = new SizeI((int)snap.StreamW, (int)snap.StreamH);
-                VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, applied,
+                // The pumping binding casts its vote; the size is the largest need among the bindings that show this one swap chain.
+                VideoStreamStep step = _sizeGate.Step(binding, _naturalSize, videoRect, scale, applied,
                     (snap.Flags & VideoEngineFlags.Playing) != 0, ClockMs(), binding.Display);
                 if (!step.Request.IsEmpty)
                 {
                     _engine.Commands.Post(VideoCommandKind.StreamRect, i: step.Request.Width, j: step.Request.Height);
-                    Diag.Line($"[video] stream.size backend=mf host={binding.HostOrdinal} token={binding.Token} size={step.Request.Width}x{step.Request.Height}");   // F235: which window's slot asked (the gate makes it once per real change)
+                    // F235: which window's slot pumped, which binding's destination decided it and how many bindings voted (the gate asks once per real change)
+                    Diag.Line($"[video] stream.size backend=mf host={binding.HostOrdinal} token={binding.Token} size={step.Request.Width}x{step.Request.Height} governing={_sizeGate.GoverningToken} votes={_sizeGate.VoteCount} applied={applied.Width}x{applied.Height}");
                     Volatile.Write(ref _repaintPending, 1);
                 }
                 ArmSizeRetry(step.RetryInMs);
                 SizeI content = step.Content;
+                // One content size for every binding of this session: the swap chain's, never a binding's own request.
                 binding.SetContentSize(content, step.ContentVia, step.RequestAgeMs);
+                _sizeGate.PublishContentToVoters(binding);
                 binding.Place(new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H));
                 // No SetVisible here: visibility belongs to the element (MediaPlayerElement.PumpNow writes it LAST, ANDing
                 // active && non-empty viewport && !audioOnly). This session only expresses readiness — a bound handle on a

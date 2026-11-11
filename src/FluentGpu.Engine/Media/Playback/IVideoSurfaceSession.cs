@@ -323,14 +323,47 @@ public enum VideoContentVia : byte
 /// has held still for <see cref="SettleMs"/> (never mid-animation: DirectComposition's scale covers the gap).</item>
 /// <item>WHAT THE COMPOSITOR IS TOLD: the content size moves to a newly requested size only when the backend echoes
 /// that it APPLIED it, so DirectComposition never scales an old-size buffer by a new-size factor. Both Windows backends echo a
-/// request made while playing only once their renderer counted a frame after it, and one made while not playing right after
+/// request made while playing only once their renderer counted a frame it STARTED after it (the clear engine: the second frame
+/// counted, the first being the one in flight at the request, still drawn at the old size), and one made while not playing right after
 /// asking for the repaint; both raise a pump when the echo changes (the protected runtime's FgPrEvent_StreamApplied, the clear
 /// engine's snapshot raise). A backend that cannot echo (or has not by <see cref="EchoTimeoutMs"/> while frames are not
 /// expected) is trusted after the timeout; while frames are expected an echo is never assumed.</item>
 /// </list>
-/// A destination that is not laid out decides nothing. UI-thread only; the clock is passed in so it is testable.</summary>
+/// A destination that is not laid out decides nothing. UI-thread only; the clock is passed in so it is testable.
+/// <para><b>One stream, many bindings.</b> A session has ONE swap chain, and more than one element can present it at once (the
+/// Canvas hand-off from the style picker's card to the rail's picture, a docked video and its full-screen stage while one exits).
+/// Each binding that pumps CASTS a vote with its destination; the size is decided from the largest need among the votes that
+/// still count (the pumping binding's own, and every other binding whose slot is still live and shown: an exiting, hidden,
+/// parked or released host does not vote), so the last binding to pump is never the last word just because it pumped last.
+/// And the content size is the session's, not a binding's: <see cref="PublishContentToVoters"/> hands it to every binding that
+/// shows the picture, so no slot keeps scaling the swap chain by a size it has since left.</para>
+/// <para><b>The content follows the echo.</b> What the compositor scales from is the size the backend reports it APPLIED
+/// whenever it reports one, not the size this gate last asked for: a request superseded before its echo cannot strand the
+/// content at an older size while the buffer is at another.</para></summary>
 public sealed class VideoStreamSizeGate
 {
+    /// <summary>How many bindings of one session can vote at once (a hand-off has two; a slot reused by a new element replaces its
+    /// predecessor's vote).</summary>
+    public const int MaxVotes = 4;
+
+    private struct Vote
+    {
+        public bool Used;
+        public VideoBinding Binding;
+        public long Incarnation;
+        public RectF Rect;
+        public float Scale;
+        public VideoDisplay Display;
+    }
+
+    private readonly Vote[] _votes = new Vote[MaxVotes];
+    private SizeI _lastApplied;
+    private int _governingToken, _voteCount;
+
+    /// <summary>The token of the binding whose destination decided the size at the last step (0 for an anonymous caller).</summary>
+    public int GoverningToken => _governingToken;
+    /// <summary>How many bindings counted at the last step.</summary>
+    public int VoteCount => _voteCount;
     /// <summary>How long the destination must hold still before a stream-size change is requested.</summary>
     public const int SettleMs = 250;
     /// <summary>How long a requested size may stay unconfirmed before a paused (or non-echoing) backend is trusted.</summary>
@@ -356,20 +389,44 @@ public sealed class VideoStreamSizeGate
     /// <paramref name="display"/> is the monitor the video is on (default = unknown: the stream is never upscaled); a change of
     /// it counts as a geometry change, so a fullscreen edge settles like a resize and is never applied mid-animation.</summary>
     public VideoStreamStep Step(SizeI natural, RectF videoRect, float scale, SizeI applied, bool playing, long nowMs, VideoDisplay display = default)
-    {
-        if (!VideoStreamSizing.IsLaidOut(videoRect)) return new VideoStreamStep(default, _published, 0);
+        => Step(default, natural, videoRect, scale, applied, playing, nowMs, display);
 
-        float s = scale <= 0f ? 1f : scale;
-        int dw = Math.Max(1, (int)MathF.Round(videoRect.W * s));
-        int dh = Math.Max(1, (int)MathF.Round(videoRect.H * s));
-        bool displayChanged = display.MonitorPx != _display.MonitorPx || display.Fullscreen != _display.Fullscreen;
-        _display = display;
-        if (dw != _geomW || dh != _geomH || displayChanged) { _geomW = dw; _geomH = dh; _geomSinceMs = nowMs; }
+    /// <summary><see cref="Step(SizeI, RectF, float, SizeI, bool, long, VideoDisplay)"/> for the pump of <paramref name="binding"/>:
+    /// its destination is its vote, and the size is decided from the largest need among the votes that count (see the class
+    /// remarks). An inert binding is one anonymous voter, the behaviour of the overload without one.</summary>
+    public VideoStreamStep Step(in VideoBinding binding, SizeI natural, RectF videoRect, float scale, SizeI applied, bool playing, long nowMs, VideoDisplay display = default)
+    {
+        if (!VideoStreamSizing.IsLaidOut(videoRect)) return new VideoStreamStep(default, _published, 0) { ContentVia = _publishedVia, RequestAgeMs = _publishedAgeMs };
 
         bool naturalChanged = natural != _natural;
         _natural = natural;
 
-        SizeI desired = VideoStreamSizing.BucketedSizeFor(natural, videoRect, scale, naturalChanged ? default : _requested, display);
+        // The caller's vote, then the size every counting vote needs: the largest wins.
+        int own = Cast(binding, videoRect, scale, display);
+        SizeI current = naturalChanged ? default : _requested;
+        SizeI desired = default;
+        int gov = own;
+        _voteCount = 0;
+        for (int i = 0; i < MaxVotes; i++)
+        {
+            ref Vote v = ref _votes[i];
+            if (!v.Used) continue;
+            if (i != own && v.Binding.IsValid && !v.Binding.IsShowing(v.Incarnation)) { v = default; continue; }   // left, hidden or reused: no vote
+            _voteCount++;
+            SizeI need = VideoStreamSizing.BucketedSizeFor(natural, v.Rect, v.Scale, current, v.Display);
+            if (desired.IsEmpty || (long)need.Width * need.Height > (long)desired.Width * desired.Height) { desired = need; gov = i; }
+        }
+        ref Vote g = ref _votes[gov];
+        _governingToken = g.Binding.Token;
+
+        // Settling follows the GOVERNING destination: a change of which binding governs, or of its size or screen, is a geometry change.
+        float s = g.Scale <= 0f ? 1f : g.Scale;
+        int dw = Math.Max(1, (int)MathF.Round(g.Rect.W * s));
+        int dh = Math.Max(1, (int)MathF.Round(g.Rect.H * s));
+        bool displayChanged = g.Display.MonitorPx != _display.MonitorPx || g.Display.Fullscreen != _display.Fullscreen;
+        _display = g.Display;
+        if (dw != _geomW || dh != _geomH || displayChanged) { _geomW = dw; _geomH = dh; _geomSinceMs = nowMs; }
+
         int retry = 0;
         SizeI request = default;
         if (_requested.IsEmpty || naturalChanged)
@@ -388,6 +445,8 @@ public sealed class VideoStreamSizeGate
             _requestedAtMs = nowMs;
         }
 
+        bool appliedMoved = applied != _lastApplied;
+        _lastApplied = applied;
         if (_published.IsEmpty)
         {
             // Nothing to keep: the buffer the backend already holds (its echo) is what the compositor must scale from, else
@@ -395,6 +454,14 @@ public sealed class VideoStreamSizeGate
             _published = !applied.IsEmpty ? applied : _requested;
             _publishedVia = VideoContentVia.First;
             _publishedAgeMs = 0;
+        }
+        else if (appliedMoved && !applied.IsEmpty && applied != _published)
+        {
+            // The backend reports a buffer of a new size: that IS the content, whichever request it answers (one superseded
+            // before its echo landed included). Only the echo of the current request ends the wait below.
+            _published = applied;
+            _publishedVia = VideoContentVia.Echo;
+            _publishedAgeMs = (int)Math.Clamp(nowMs - _requestedAtMs, 0, int.MaxValue);
         }
         // Also right after the first publish: a backend that already holds a buffer (the protected runtime's natural-size
         // swap chain) is published at that buffer while a smaller bucket is requested, and it raises no event for the echo.
@@ -416,5 +483,36 @@ public sealed class VideoStreamSizeGate
             }
         }
         return new VideoStreamStep(request, _published, retry) { ContentVia = _publishedVia, RequestAgeMs = _publishedAgeMs };
+    }
+
+    /// <summary>Hand the session's content size to every OTHER binding that votes (live and shown), so a binding that is not pumping
+    /// right now never keeps scaling the one swap chain by a size the session has left. <paramref name="pumping"/> writes its own.
+    /// UI thread; value-gated by the registry.</summary>
+    public void PublishContentToVoters(in VideoBinding pumping)
+    {
+        if (_published.IsEmpty) return;
+        for (int i = 0; i < MaxVotes; i++)
+        {
+            ref Vote v = ref _votes[i];
+            if (!v.Used || !v.Binding.IsValid || v.Binding.SameSlot(pumping)) continue;
+            if (!v.Binding.IsShowing(v.Incarnation)) { v = default; continue; }
+            v.Binding.SetContentSize(_published, _publishedVia, _publishedAgeMs);
+        }
+    }
+
+    // Records the pumping binding's destination as its vote (replacing its slot's earlier one, or a predecessor's on a reused token)
+    // and returns its index. With every seat taken by live voters, the oldest-indexed other seat is given up.
+    private int Cast(in VideoBinding binding, RectF rect, float scale, VideoDisplay display)
+    {
+        long incarnation = binding.Incarnation;
+        int seat = -1, free = -1;
+        for (int i = 0; i < MaxVotes; i++)
+        {
+            if (!_votes[i].Used) { if (free < 0) free = i; continue; }
+            if (_votes[i].Binding.SameSlot(binding)) { seat = i; break; }
+        }
+        if (seat < 0) seat = free >= 0 ? free : 0;
+        _votes[seat] = new Vote { Used = true, Binding = binding, Incarnation = incarnation, Rect = rect, Scale = scale, Display = display };
+        return seat;
     }
 }

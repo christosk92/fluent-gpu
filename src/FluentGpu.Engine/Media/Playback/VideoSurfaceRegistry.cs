@@ -484,6 +484,24 @@ public sealed class VideoSurfaceRegistry
         return new SizeI((int)_entries[i].ContentW, (int)_entries[i].ContentH);
     }
 
+    /// <summary>The incarnation of slot <paramref name="token"/> (every <see cref="Acquire"/> is a new one), or 0 when it is not live. A
+    /// session that remembers a binding across pumps (its stream-size vote) compares it to tell its own element from a later one that
+    /// reuses the token.</summary>
+    public long Incarnation(int token)
+    {
+        int i = token - 1;
+        if ((uint)i >= MaxSurfaces || !_entries[i].InUse || _entries[i].ReleasePending) return 0;
+        return _entries[i].Gen;
+    }
+
+    /// <summary>True while slot <paramref name="token"/> of incarnation <paramref name="gen"/> is live and SHOWN (its element wrote it
+    /// visible): the surface is on screen. A hidden, parked or released slot is not.</summary>
+    public bool IsShowing(int token, long gen)
+    {
+        int i = token - 1;
+        return (uint)i < MaxSurfaces && _entries[i].InUse && !_entries[i].ReleasePending && _entries[i].Gen == gen && _entries[i].Visible;
+    }
+
     /// <summary>True when at least one coalesced video pump must run on the next host frame, or the render side posted results
     /// the UI thread has not folded in yet (a surface became bound, a release completed). O(1), zero-alloc.</summary>
     public bool HasPendingPumps => _pendingPumpCount > 0 || (RequireSlotBinding && Volatile.Read(ref _resultsVersion) != _resultsSeen);
@@ -914,6 +932,14 @@ public readonly struct VideoBinding
     public bool IsGeometryOnlyPump => _registry is { } r && r.IsGeometryOnlyPump(Token);
     /// <summary>The content size last written to this slot, or <see cref="SizeI.Zero"/> when none has been.</summary>
     public SizeI ContentSize => _registry?.ContentSize(Token) ?? SizeI.Zero;
+    /// <summary>The slot's current incarnation (see <see cref="VideoSurfaceRegistry.Incarnation"/>); 0 for an inert binding or a slot
+    /// that is not live.</summary>
+    public long Incarnation => _registry?.Incarnation(Token) ?? 0;
+    /// <summary>True while the slot of incarnation <paramref name="incarnation"/> is live and shown (see
+    /// <see cref="VideoSurfaceRegistry.IsShowing"/>). False for an inert binding.</summary>
+    public bool IsShowing(long incarnation) => _registry is { } r && r.IsShowing(Token, incarnation);
+    /// <summary>True when <paramref name="other"/> drives the same slot of the same registry.</summary>
+    public bool SameSlot(in VideoBinding other) => ReferenceEquals(_registry, other._registry) && Token == other.Token;
     /// <summary>Drop a pump registration returned by <see cref="RegisterPump"/>.</summary>
     public void UnregisterPump(int regId) { if (_registry is { } r) r.UnregisterPump(regId); }
     /// <summary>Transfer single-writer pump ownership of this slot to <paramref name="owner"/> (fullscreen hand-off).</summary>
