@@ -627,6 +627,9 @@ internal sealed class CommandBarFlyoutBody : Component
                 // OnKeyDown); otherwise Left/Right are consumed but move nothing — the horizontal list holds only primary
                 // commands + the MoreButton (cpp:1215, :1286-1290).
                 case Keys.Right when Secondary[j].Flyout is { Count: > 0 }: _cascade.Open(j, focusFirst: true); a.Handled = true; break;
+                // Left with a cascade of this list open (hover opened it, so focus stayed here) closes it, the innermost open
+                // level, as MenuFlyoutPresenter's Left does; focus stays on this row.
+                case Keys.Left when _cascade.OpenIndex.Peek() >= 0: _cascade.CloseChild(); a.Handled = true; break;
                 case Keys.Left or Keys.Right: a.Handled = true; break;
             }
         }

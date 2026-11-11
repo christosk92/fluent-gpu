@@ -597,7 +597,12 @@ internal sealed class MenuFlyoutPresenter : Component
             }
             else if (a.KeyCode == Keys.Left)
             {
-                if (ParentCascade is { } parent) { parent.CloseChild(); a.Handled = true; }
+                // Left closes the innermost open level. Focus on THIS level while a cascade of it is open (hover opened it, so
+                // focus never moved into it): close that cascade and stay on this row, as WinUI's Left does from inside the
+                // submenu (close it, focus back on its parent row). Only with no cascade of its own does a submenu level close
+                // itself (and a root level hand Left to the MenuBar).
+                if (cascade.OpenIndex.Peek() >= 0) { cascade.CloseChild(); a.Handled = true; }
+                else if (ParentCascade is { } parent) { parent.CloseChild(); a.Handled = true; }
                 else if (OnNavigate is { } nav) { nav(-1); a.Handled = true; }
             }
         }
