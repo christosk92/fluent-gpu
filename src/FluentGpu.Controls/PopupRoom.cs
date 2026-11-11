@@ -49,6 +49,28 @@ public static class PopupRoom
     }
 }
 
+/// <summary>A popup body's column (a header, a strip, then a scrolling list) capped at the room its placement has
+/// (<see cref="PopupRoom.Height"/>), re-read on every placement: the column keeps the parts above the list at their size and the
+/// list gives way (its scroller shrinks), so the list scrolls inside the window. ContextMenu's header-and-strip shape.</summary>
+internal sealed class PopupRoomColumn : Component
+{
+    public override Element Render()
+    {
+        var column = UseProps<BoxEl>();   // the column, re-pushed (Embed.Comp(column, () => new PopupRoomColumn()))
+        var svc = UseContext(Overlay.Service);
+        var placement = UseContext(Overlay.Placement);
+        var room = UseSignal(PopupRoom.Height(svc, placement));
+        UseEffect(() =>
+        {
+            _ = placement?.Value;
+            float h = PopupRoom.Height(svc, placement), was = room.Peek();
+            if (h != was && !(MathF.Abs(h - was) < 0.5f)) room.Value = h;
+        });
+        float now = room.Value;
+        return column with { MaxHeight = float.IsFinite(now) ? now : float.NaN };
+    }
+}
+
 /// <summary>Keyboard roving in a popup's scrolling list: keep the row the cursor moved to inside its scroller's viewport (the
 /// minimal scroll, WinUI's default BringIntoViewOptions), so Down in a list capped by <see cref="PopupRoom"/> reaches the last
 /// row and shows it. A row with no scrolling ancestor, or already in view, moves nothing. UI thread.</summary>

@@ -643,6 +643,7 @@ internal sealed class MenuFlyoutPresenter : Component
             ContentSized = true,
             MinWidth = MinWidth,
             MaxHeight = listCap.Value,
+            Shrink = 1f, MinHeight = 0f,                          // gives way inside a capped column (ContextMenu's header + strip)
             EdgeCues = ScrollEdgeCues.Auto,
             // This level's rect: its own "pointer left the menu" test, and for a cascaded level the level that opened it
             // (the aim triangle's far edge, the chain test).
