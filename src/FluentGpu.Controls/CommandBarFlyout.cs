@@ -342,6 +342,20 @@ internal sealed class CommandBarFlyoutBody : Component
         var cascade = _cascade;
         UseEffect(() => (Action?)(() => cascade.Dispose()), DepKey.Empty);   // unmount: no timer outlives the body
         var placement = UseContext(Overlay.Placement);
+        // The room the placement has (PopupRoom, the rule MenuFlyoutPresenter's list uses): the whole column is capped by it and
+        // the overflow's scroller gives way, so in a short window the header and the command row keep their size and the
+        // overflow list scrolls inside the window instead of running past its foot. Re-read on every placement (a resize, the
+        // first measured placement that decides window or not); a re-render only when it changes.
+        var roomSvc = _cascade.Overlay;
+        var room = UseSignal(PopupRoom.Height(roomSvc, placement));
+        UseEffect(() =>
+        {
+            _ = placement?.Value;
+            float h = PopupRoom.Height(roomSvc, placement), was = room.Peek();
+            if (h != was && !(MathF.Abs(h - was) < 0.5f)) room.Value = h;
+        });
+        float roomNow = room.Value;
+        float columnMax = float.IsFinite(roomNow) ? roomNow : float.NaN;
 
         bool hasSecondary = Secondary.Count > 0;
         // SecondaryCommandsOnly (themeresources:866-874): WinUI zeroes the primary row (Opacity 0 / Height 0 / not
@@ -555,7 +569,11 @@ internal sealed class CommandBarFlyoutBody : Component
         // (:1172-1188) is engine-blocked: the dispatcher consumes Tab for focus movement before node key handlers.
         void FocusNodeVisual(NodeHandle n)
         {
-            if (Context.Scene is { } sc && !n.IsNull && sc.IsLive(n)) hk.MoveFocusVisual?.Invoke(n);
+            if (Context.Scene is { } sc && !n.IsNull && sc.IsLive(n))
+            {
+                hk.MoveFocusVisual?.Invoke(n);
+                ScrollReveal.Row(sc, n);   // an overflow row past the capped viewport scrolls into view
+            }
         }
 
         void HorizontalMove(int from, int dir)
@@ -669,6 +687,7 @@ internal sealed class CommandBarFlyoutBody : Component
                 Direction = 1,
                 AlignSelf = FlexAlign.Start,
                 MaxWidth = FlyoutMaxWidth,
+                MaxHeight = columnMax,
                 OnRealized = rootCapture,
                 Children = WithHeader(menuChildren),
             };
@@ -763,6 +782,7 @@ internal sealed class CommandBarFlyoutBody : Component
             AlignSelf = FlexAlign.Start,
             MaxWidth = FlyoutMaxWidth,
             MinWidth = rootMinWidth,   // widen to fit the labeled strip's clamped columns (NaN = natural, icon-only)
+            MaxHeight = columnMax,     // the placement's room; the overflow shrinks into it (BuildOverflow)
             ClipToBounds = true,   // the expand clips must never paint past the popup's rounded corners
             OnRealized = rootCapture,
             Children = WithHeader(children),
@@ -962,12 +982,14 @@ internal sealed class CommandBarFlyoutBody : Component
             // all corners rounded.
             Corners = secondaryOnly ? Radii.OverlayAll : expandUp ? Radii.OverlayTop : Radii.OverlayBottom,
             ClipToBounds = true,
+            Shrink = 1f, MinHeight = 0f,        // gives way to the column's room cap (PopupRoom) in a short window
             OnRealized = regionCapture,         // the expand/collapse clip storyboards drive this node
             Children =
             [
                 // CommandBarOverflowPresenter ScrollViewer: MaxHeight 480, VerticalScrollMode/Visibility Auto
-                // (:532-536) — short menus size to their rows, tall ones scroll.
-                new ScrollEl { Content = column, ContentSized = true, MaxHeight = OverflowMaxHeight },
+                // (:532-536) — short menus size to their rows, tall ones scroll; less when the placement has less room
+                // (the region shrinks, the viewport with it), and a clipped list feathers the edge it overflows.
+                new ScrollEl { Content = column, ContentSized = true, MaxHeight = OverflowMaxHeight, Shrink = 1f, MinHeight = 0f, EdgeCues = ScrollEdgeCues.Auto },
             ],
         };
         // Parts: restyle the overflow chrome; the storyboard node capture, the clip and the rows always win.

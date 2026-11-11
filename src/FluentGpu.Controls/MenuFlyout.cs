@@ -436,36 +436,13 @@ internal sealed class MenuFlyoutPresenter : Component
 
     // WinUI MenuFlyoutPresenter ScrollViewer max before internal scroll (mirrors the flyout's content cap; AutoSuggest
     // uses 374 — menus share the same overlay sizing). Content shorter than this never scrolls. A placement with less room
-    // caps it lower (AvailableHeight).
+    // caps it lower (PopupRoom).
     const float MaxHeight = 468f;
 
-    /// <summary>The height this level's list may take: <see cref="MaxHeight"/>, or less when the space its placement has is
-    /// shorter - WinUI sizes the presenter to the popup's available height the same way. The space is the container
-    /// <see cref="FlyoutPositioner"/> places this popup in: the monitor work area for a popup that may still lease an OS window to
-    /// leave the window (it does, when it does not fit), else the window's root bounds (constrained, refused, in-window by fit,
-    /// or windowed only for its material, which keeps the in-window geometry). Less the positioner's margin at both ends and
-    /// the plate's own padding and ring, so the plate around the list fits too. UI thread; reads the overlay's entry without
-    /// subscribing (the caller re-reads it when the placement changes).</summary>
-    static float AvailableHeight(IOverlayService svc, Signal<OverlayPlacementInfo>? placement, MenuFlyout.Style st)
-    {
-        if (svc is not OverlayServiceImpl impl || placement is null) return MaxHeight;
-        OverlayEntry? entry = null;
-        foreach (var e in impl.Entries) if (ReferenceEquals(e.PlacementInfo, placement)) { entry = e; break; }
-        if (entry is null) return MaxHeight;
-        RectF container = impl.ViewportRect;
-        bool mayLeave = !entry.ConstrainToRootBounds && entry.Chrome is PopupChrome.Flyout or PopupChrome.CommandBar
-                        && impl.Hooks is { OpenPopupWindow: not null } && !entry.PopupWindowRefused && !entry.InWindowByFit
-                        && !entry.WindowForMaterial;
-        if (mayLeave && impl.Hooks!.GetWorkArea is { } workArea)
-        {
-            var a = entry.LastAnchorRect.IsEmpty ? container : entry.LastAnchorRect;
-            container = workArea(new Point2(a.X + a.W * 0.5f, a.Y + a.H * 0.5f));
-        }
-        if (container.IsEmpty || !float.IsFinite(container.H)) return MaxHeight;
-        var plate = entry.PlateStyle ?? st.Plate;
-        float room = container.H - 2f * FlyoutPositioner.FlyoutMargin - plate.Padding.Top - plate.Padding.Bottom - 2f * plate.BorderWidth;
-        return Math.Clamp(room, 0f, MaxHeight);
-    }
+    /// <summary>The height this level's list may take: <see cref="MaxHeight"/>, or the room its placement has
+    /// (<see cref="PopupRoom.Height"/>) when that is less.</summary>
+    static float ListCap(IOverlayService svc, Signal<OverlayPlacementInfo>? placement)
+        => MathF.Min(MaxHeight, PopupRoom.Height(svc, placement, MenuFlyout.DefaultStyle.Plate));
 
     MenuCascade? _cascade;
     NodeHandle[] _rowNodes = [];
@@ -477,14 +454,14 @@ internal sealed class MenuFlyoutPresenter : Component
         var hooks = UseContext(InputHooks.Current);
         var timers = UseContext(HostTimers.Current);
         var highlight = UseSignal(-1);                            // keyboard cursor index; -1 = none (pointer-only)
-        // The list's cap: the room this level's placement has (AvailableHeight), re-read whenever the overlay places it (a
+        // The list's cap: the room this level's placement has (PopupRoom), re-read whenever the overlay places it (a
         // window resize, the first measured placement that decides window or not) and re-rendered only when it changes.
         var placement = UseContext(Overlay.Placement);
-        var listCap = UseSignal(AvailableHeight(svc, placement, MenuFlyout.DefaultStyle));
+        var listCap = UseSignal(ListCap(svc, placement));
         UseEffect(() =>
         {
             _ = placement?.Value;
-            float cap = AvailableHeight(svc, placement, MenuFlyout.DefaultStyle);
+            float cap = ListCap(svc, placement);
             if (MathF.Abs(cap - listCap.Peek()) >= 0.5f) listCap.Value = cap;
         });
         if (_rowNodes.Length != Items.Count) _rowNodes = new NodeHandle[Items.Count];
@@ -536,7 +513,9 @@ internal sealed class MenuFlyoutPresenter : Component
             if (!IsSelectable(i)) return;
             highlight.Value = i;
             var node = _rowNodes[i];
-            if (!node.IsNull) hooks.MoveFocusVisual?.Invoke(node);
+            if (node.IsNull) return;
+            hooks.MoveFocusVisual?.Invoke(node);
+            ScrollReveal.Row(Context.Scene, node);   // a row past the capped list's viewport scrolls into view
         }
 
         void Move(int delta)
