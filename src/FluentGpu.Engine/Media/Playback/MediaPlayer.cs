@@ -574,10 +574,10 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
                 // "IsNone until the first video frame" — the headless player already does this). In-place switches keep this
                 // MediaPlayer, so without it the old surface keeps the element's hole punched and its poster down over the
                 // held outgoing frame, and the old natural size reads as "a frame was seen" to every first-frame heuristic.
-                // The new session republishes each of these from its own metadata. Known consequence: MediaPlayerElement reads an
-                // empty NaturalSize as audio-only (IsAudioOnly), so during the Opening leg of a Switch holeActive goes false
-                // and PumpNow hides the DComp child: the outgoing frame is replaced by the stage colour at once while the poster
-                // fades in, instead of crossfading over the held frame. A host with its own poster (Wavee) masks it.
+                // The new session republishes each of these from its own metadata. MediaPlayerElement does not read the reset as
+                // audio-only while its slot still shows the outgoing frame: it HOLDS that frame at its own size and placement until
+                // the new source's first frame (MediaPlayerElement.PictureShownOut), and the new session does not take the slot over
+                // before then (VideoBinding.ShowsOtherPicture).
                 _core.SetVideoSurface(default);
                 _core.SetNaturalSize(SizeI.Zero);
                 _core.SetExpectedNaturalSize(SizeI.Zero);

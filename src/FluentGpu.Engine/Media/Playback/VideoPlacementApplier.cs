@@ -666,7 +666,9 @@ internal sealed class VideoPlacementApplier
                 if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"CreateSurface -> id={s.SurfaceId.Value}");
             }
 
-            if (s.Intent.DesiredHandle != 0 && s.Intent.DesiredHandle != s.BoundHandle && _drainSeq >= s.NextBindDrain)
+            bool contentOnlyScope = scope is VideoApplyScope.Structural or VideoApplyScope.ContentOnly;
+            if (s.Intent.DesiredHandle != 0 && s.Intent.DesiredHandle != s.BoundHandle && _drainSeq >= s.NextBindDrain
+                && !(contentOnlyScope && ShowsPlacedPicture(in s)))
             {
                 // BoundHandle records only a bind the presenter reports as done: a transient CreateSurfaceFromHandle /
                 // SetContent failure leaves the slot dirty and retries with a growing backoff (2, 4 ... 64 applies), so
@@ -701,7 +703,6 @@ internal sealed class VideoPlacementApplier
             // glass already shows its hole the moment it is committed); a re-bound existing surface keeps its placement, and every
             // later move waits for the presenting turn. The slot stays dirty either way, so that turn still applies the authoritative
             // placement.
-            bool contentOnlyScope = scope is VideoApplyScope.Structural or VideoApplyScope.ContentOnly;
             if (contentOnlyScope && !created) continue;
             if (!s.HasGeometry)
             {
@@ -855,9 +856,17 @@ internal sealed class VideoPlacementApplier
 
     // ── shadow helpers ────────────────────────────────────────────────────────────────────────────────────────────
 
-    // The slot has a handle the presenter must still create a surface for or bind (the structural drain's work list).
+    // The slot has a handle the presenter must still create a surface for or bind (the structural drain's work list). A new handle
+    // for a surface that is placed and SHOWN is not structural work: it waits for the presenting turn (see ShowsPlacedPicture).
     private static bool NeedsStructural(in Slot s)
-        => s.InUse && !s.Intent.ReleasePending && s.Intent.DesiredHandle != 0 && (s.SurfaceId.IsNone || s.Intent.DesiredHandle != s.BoundHandle);
+        => s.InUse && !s.Intent.ReleasePending && s.Intent.DesiredHandle != 0
+           && (s.SurfaceId.IsNone || (s.Intent.DesiredHandle != s.BoundHandle && !ShowsPlacedPicture(in s)));
+
+    // A surface on the glass: placed and last given as visible. Its content changes hands (a re-bound handle: the next source's
+    // first frame after a held picture, a format change's new swap chain) only in a turn that also applies the placement and content
+    // size published with it. Rebound early (the structural drain, an elided turn), the new buffer would be composed at the OLD
+    // placement and content size until the presenting turn: a frame at the wrong scale. A hidden or new surface binds early as ever.
+    private static bool ShowsPlacedPicture(in Slot s) => s.Placed && s.AppliedPx.Visible && !s.SurfaceId.IsNone;
 
     private bool AnyNeedsStructural()
     {

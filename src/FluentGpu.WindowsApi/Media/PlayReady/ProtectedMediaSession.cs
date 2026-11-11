@@ -673,10 +673,15 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         // The SURFACE half (F132): hand the handle the last state pump saw to this element's binding, then size and place it.
         // It reads what the state pump published (state, natural size, surface readiness) and writes none of it, so a pump
         // with no element and an element with no pump of its own never disagree. A terminal error ends the surface work.
-        _player.Bind(binding);
         ProtectedVideoState pv = _player.State.Value;
         if (pv == ProtectedVideoState.Error) return;
         bool presenting = _player.HasFirstFrame && _player.HasSurface;
+        // A slot still showing ANOTHER picture (the element holds the previous source's last frame across an in-place switch) is
+        // taken over only with this attach's first frame: binding the new handle before it would put a swap chain with no frame
+        // of ours on screen, and sizing or placing the slot would scale the held frame by our size. Until then this pump only
+        // sizes the stream (the destination is the successor's own fit, which the element passes).
+        bool holdsOther = !presenting && binding.ShowsOtherPicture();
+        if (!holdsOther) _player.Bind(binding);
 
         // The composited surface (just bound above): size the STREAM to what the destination can show — the same rule as the
         // clear path, so a 4K rung in a 640-px card allocates a third-size buffer — and place it.
@@ -705,26 +710,24 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
                     _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
                 }
                 ArmSizeRetry(step.RetryInMs);
+                PlaceOutputProtection(binding, videoRect, scale);
+                if (holdsOther) return;
                 SizeI content = step.Content;
                 // One content size for every binding of this session: the swap chain's, never a binding's own request.
                 binding.SetContentSize(content, step.ContentVia, step.RequestAgeMs);
                 _sizeGate.PublishContentToVoters(binding);
                 binding.Place(videoRect);
-                PlaceOutputProtection(binding, videoRect, scale);
-                binding.SetVisible(presenting);   // belt-and-braces: the element ANDs the same readiness (VideoSurface) into its final write
                 sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content, videoRect, scale <= 0f ? 1f : scale)
                     { Token = binding.Token });
-            }
-            else
-            {
-                binding.SetVisible(false);
             }
         }
         else
         {
-            binding.SetVisible(false);   // detached (or not produced yet): never leave a stale slot showing
             PresizeStream(binding, videoRect, scale);
         }
+        // No SetVisible here (as on the clear path): visibility is the element's, written LAST in its pump, ANDing its activity, a
+        // non-empty viewport and this session's readiness (VideoSurface: this attach's first frame and a live surface), or holding
+        // the previous source's picture. A not-yet-presenting or detached slot is therefore hidden by the element, never shown.
     }
 
     /// <summary>Before the first swap chain: ask for the stream size the destination will need, from the opening rung's DECLARED

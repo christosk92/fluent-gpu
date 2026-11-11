@@ -502,6 +502,18 @@ public sealed class VideoSurfaceRegistry
         return (uint)i < MaxSurfaces && _entries[i].InUse && !_entries[i].ReleasePending && _entries[i].Gen == gen && _entries[i].Visible;
     }
 
+    /// <summary>True while slot <paramref name="token"/> is live, SHOWN (its element wrote it visible) and bound to a handle other than
+    /// <paramref name="handle"/> (0: any handle): the slot is showing a picture that is not that producer's. A session that has not
+    /// presented its own first frame yet must not take such a slot over (bind its handle, size or place it): the element is holding
+    /// the previous source's last frame there across a source switch, at that picture's own geometry.</summary>
+    public bool ShowsOtherPicture(int token, nuint handle)
+    {
+        int i = token - 1;
+        if ((uint)i >= MaxSurfaces || !_entries[i].InUse || _entries[i].ReleasePending) return false;
+        ref Entry e = ref _entries[i];
+        return e.Visible && e.DesiredHandle != 0 && (handle == 0 || e.DesiredHandle != handle);
+    }
+
     /// <summary>True when at least one coalesced video pump must run on the next host frame, or the render side posted results
     /// the UI thread has not folded in yet (a surface became bound, a release completed). O(1), zero-alloc.</summary>
     public bool HasPendingPumps => _pendingPumpCount > 0 || (RequireSlotBinding && Volatile.Read(ref _resultsVersion) != _resultsSeen);
@@ -938,6 +950,9 @@ public readonly struct VideoBinding
     /// <summary>True while the slot of incarnation <paramref name="incarnation"/> is live and shown (see
     /// <see cref="VideoSurfaceRegistry.IsShowing"/>). False for an inert binding.</summary>
     public bool IsShowing(long incarnation) => _registry is { } r && r.IsShowing(Token, incarnation);
+    /// <summary>True while this slot shows a picture bound to a handle other than <paramref name="handle"/> (0: any), see
+    /// <see cref="VideoSurfaceRegistry.ShowsOtherPicture"/>. False for an inert binding.</summary>
+    public bool ShowsOtherPicture(nuint handle = 0) => _registry is { } r && r.ShowsOtherPicture(Token, handle);
     /// <summary>True when <paramref name="other"/> drives the same slot of the same registry.</summary>
     public bool SameSlot(in VideoBinding other) => ReferenceEquals(_registry, other._registry) && Token == other.Token;
     /// <summary>Drop a pump registration returned by <see cref="RegisterPump"/>.</summary>

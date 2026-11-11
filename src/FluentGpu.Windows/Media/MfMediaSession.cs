@@ -686,8 +686,16 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         }
         if (_handle != 0)
         {
-            binding.Bind(_handle, _forceRebind);
-            _forceRebind = false;
+            // A slot still showing ANOTHER picture (the element holds the previous source's last frame across an in-place switch)
+            // is taken over only with this source's first frame: bound before it, the slot would show a swap chain with no frame of
+            // this source, and sized or placed, the held frame would be scaled by this source's size. Until then only the stream is
+            // sized (the element passes this source's own fit as the destination).
+            bool holdsOther = !firstFrame && binding.ShowsOtherPicture(_handle);
+            if (!holdsOther)
+            {
+                binding.Bind(_handle, _forceRebind);
+                _forceRebind = false;
+            }
             // Readiness = handle bound AND this source's first frame landed. Binding alone is not it: the swap chain of
             // a warm engine still holds the PREVIOUS video's last frame (or nothing yet) until the new source presents.
             PublishSurface(sink, firstFrame ? new VideoSurfaceId(1) : default);
@@ -717,19 +725,22 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                 }
                 ArmSizeRetry(step.RetryInMs);
                 SizeI content = step.Content;
-                // One content size for every binding of this session: the swap chain's, never a binding's own request.
-                binding.SetContentSize(content, step.ContentVia, step.RequestAgeMs);
-                _sizeGate.PublishContentToVoters(binding);
-                binding.Place(new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H));
-                // No SetVisible here: visibility belongs to the element (MediaPlayerElement.PumpNow writes it LAST, ANDing
-                // active && non-empty viewport && !audioOnly). This session only expresses readiness — a bound handle on a
-                // source whose metadata loaded — so an unconditional show can never override a parked player's hide.
-                // ALWAYS-ON placement report (no env switch): the three numbers that decide letterboxing, published on
-                // the media signal so the host log shows the realized geometry instead of leaving it to be inferred
-                // from pixels. Value-gated by the signal — an unchanged placement publishes nothing.
-                sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content,
-                    new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H), scale <= 0f ? 1f : scale)
-                    { Token = binding.Token });
+                if (!holdsOther)
+                {
+                    // One content size for every binding of this session: the swap chain's, never a binding's own request.
+                    binding.SetContentSize(content, step.ContentVia, step.RequestAgeMs);
+                    _sizeGate.PublishContentToVoters(binding);
+                    binding.Place(new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H));
+                    // No SetVisible here: visibility belongs to the element (MediaPlayerElement.PumpNow writes it LAST, ANDing
+                    // active && non-empty viewport && !audioOnly). This session only expresses readiness — a bound handle on a
+                    // source whose metadata loaded — so an unconditional show can never override a parked player's hide.
+                    // ALWAYS-ON placement report (no env switch): the three numbers that decide letterboxing, published on
+                    // the media signal so the host log shows the realized geometry instead of leaving it to be inferred
+                    // from pixels. Value-gated by the signal — an unchanged placement publishes nothing.
+                    sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content,
+                        new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H), scale <= 0f ? 1f : scale)
+                        { Token = binding.Token });
+                }
             }
             // A paused seek that just finished owes a repaint (MF does not present the landed frame by itself).
             if (snap.SeekedCount != _seekedSeen)
