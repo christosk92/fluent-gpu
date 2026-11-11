@@ -1329,7 +1329,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _queue = queue;
         SetName(_queue, "FluentGpu.CommandQueue");
         FluentGpu.Foundation.Diag.Line(
-            $"[d3d12.queue] direct priority={(qd.Priority == (int)D3D12_COMMAND_QUEUE_PRIORITY.D3D12_COMMAND_QUEUE_PRIORITY_HIGH ? "high" : "normal")}" +
+            $"[d3d12.present] queue=direct priority={(qd.Priority == (int)D3D12_COMMAND_QUEUE_PRIORITY.D3D12_COMMAND_QUEUE_PRIORITY_HIGH ? "high" : "normal")}" +
             (queueHr < 0 ? $" highRefused=0x{(uint)queueHr:X8}" : "") + " copy=normal");
         _memoryProbeObserver?.Invoke("queue-created-before-ring");
 
