@@ -170,6 +170,17 @@ public sealed partial class FlexLayout
     private struct MeasureMemo
     {
         public uint Gen; public float AvailW; public float W, H;         // within-pass memo
+        // The pass whose measure of this node last left its children's Bounds W/H at the sizes that measure gave them: set by a
+        // real descent, kept by a memo or flat hit (the children's measured sizes hold for that offer too), cleared by a ring hit
+        // (it does not descend: the children keep whatever the LAST ARRANGE gave them, at whatever width that was) and by a probe
+        // descent (the children hold probe sizes). A row's arrange reads its children's base sizes from those Bounds, so it
+        // re-measures them first when this is not the current pass (MeasureStaleRowChildren).
+        public uint KidsGen;
+        // The width, measure offer and subtree version of this node's last row arrange that ran on current children
+        // (KidsArrNodeGen = the handle generation it was for, 0 = none): arranged at that width again from that offer with
+        // nothing below marked since, its children's Bounds ARE that arrangement, which reproduces itself, so a stale KidsGen
+        // needs no re-measure (a row that only moved).
+        public float KidsArrW, KidsArrAvailW; public uint KidsArrNodeGen, KidsArrVer;
         // C1 (PERF r3 UI): the measure-validity interval of the last REAL measure this pass (FlexLayout.MeasureFlat.cs) - any
         // offer in [FlatLo, FlatHi] measures to (FlatW, FlatH) with every descendant's measured size unchanged. 0 = none.
         public uint FlatGen; public float FlatLo, FlatHi, FlatW, FlatH;
@@ -812,6 +823,7 @@ public sealed partial class FlexLayout
         {
             _dMeasureMemoHit++;
             WriteMeasuredBounds(node, ringSize.Width, ringSize.Height);
+            _memo[mi].KidsGen = 0;   // no descent: the children still hold their last ARRANGED Bounds (see MeasureMemo.KidsGen)
             // C1: the slot's interval holds for this (unchanged) subtree in this pass too, so the parent can still be flat (only with
             // ring intervals on: it extends a ring answer to other offers, as sound as the ring's dirty marks - see MeasureFlatRingEnabled).
             if (MeasureFlatEnabled && MeasureFlatRingEnabled && !_naturalProbe && !_minContentProbe && !float.IsNaN(ringLo))
@@ -923,7 +935,7 @@ public sealed partial class FlexLayout
             // The width children may occupy (content box). A stretched child in a column gets the full content width
             // (so wrapped text knows where to break); a row's children share it (an upper bound is fine for wrapping).
             float measureW = DefiniteWidth(in li, availW);
-            float childAvail = float.IsInfinity(measureW) ? measureW : MathF.Max(0f, measureW - li.Padding.Horizontal);
+            float childAvail = ChildAvail(in li, availW);
             if (li.Wrap && TryWrapMainLimit(in li, row, availW, out float wrapMainLimit))
             {
                 (w, h) = MeasureWrap(node, in li, row, wrapMainLimit);   // multi-line: main is fixed, cross grows with line count
@@ -931,26 +943,8 @@ public sealed partial class FlexLayout
             else
             {
                 flatKind = _naturalProbe ? 0 : 2;
-                // In a ROW with a definite width, a flex-grow child's real width is (childAvail − the fixed siblings),
-                // not the whole row. Measure its (possibly wrapping) content against THAT — otherwise a fixed pane +
-                // grow content wraps to the entire window and overflows. (A column already stretches children to its
-                // full width, so this only matters for the row's main axis.) NoWrap content ignores the bound, so this
-                // is a no-op except where it's needed.
-                float growAvail = childAvail;
                 float totalGrow = 0f;
-                if (row && !float.IsInfinity(childAvail))
-                {
-                    float fixedMain = 0f; int cc = 0;
-                    for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
-                    {
-                        ref LayoutInput cli2 = ref _scene.Layout(c);
-                        cc++;
-                        if (cli2.FlexGrow > 0f) { totalGrow += cli2.FlexGrow; continue; }
-                        float cm = !float.IsNaN(cli2.FlexBasis) ? cli2.FlexBasis : Measure(c, childAvail).Width;
-                        fixedMain += cm + MarginMain(cli2, row);
-                    }
-                    if (totalGrow > 0f) growAvail = MathF.Max(0f, childAvail - fixedMain - (cc > 1 ? li.Gap * (cc - 1) : 0f));
-                }
+                float growAvail = row ? RowGrowAvail(node, in li, childAvail, out totalGrow) : childAvail;
 
                 float main = 0f, cross = 0f;
                 float baseUsed = 0f, totalShrinkScaled = 0f;   // Arrange's first pass, mirrored for the shrink re-measure below
@@ -961,20 +955,7 @@ public sealed partial class FlexLayout
                 for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
                 {
                     ref LayoutInput cli = ref _scene.Layout(c);
-                    // A grow child measures at its SHARE of the leftover, not the whole of it: with several grow
-                    // children (three flex:1 1 0 cards), measuring each against the full remainder wraps its text at
-                    // ~N× the width it will actually get — fewer measured lines, a shorter row cross, and the arrange
-                    // pass (which re-measures at the true flexed width) then gets Stretch-clipped to this under-count:
-                    // every card cut mid-line. Weight-dividing makes measure equal arrange for the standard
-                    // equal-grow/basis-0 row; a grow child with a real basis still errs high (an upper bound), never low.
-                    // A column child gets the content width LESS its own cross margin — exactly what Arrange re-measures
-                    // it at. Measuring at the full content width let a wrap row inside a margined child fit on one line
-                    // here and wrap in Arrange, so the column under-reported its height by a line and the next sibling
-                    // (a virtual list's next row, below an open track drawer) painted over the extra line.
-                    float cAvail = row && cli.FlexGrow > 0f && totalGrow > 0f && !float.IsInfinity(growAvail)
-                        ? growAvail * (cli.FlexGrow / totalGrow) + (float.IsNaN(cli.FlexBasis) ? 0f : cli.FlexBasis)
-                        : row ? (cli.FlexGrow > 0f ? growAvail : childAvail)
-                        : float.IsInfinity(childAvail) ? childAvail : MathF.Max(0f, childAvail - cli.Margin.Horizontal);
+                    float cAvail = ChildMeasureOffer(in cli, row, childAvail, growAvail, totalGrow);
                     var cs = Measure(c, cAvail);
                     if (flatKind == 2 && MeasureFlatEnabled) FlatTrack(c, in cli, row, cAvail, cs, ref flatNeed, ref flatGrowScaled, ref flatFixedSum, ref flatGrowSum, ref flatKind);
                     float cMain = row ? cs.Width : cs.Height;
@@ -1055,11 +1036,109 @@ public sealed partial class FlexLayout
         h = Clamp(h, li.MinH, li.MaxH);
 
         WriteMeasuredBounds(node, w, h);
+        // This measure descended: the children now hold the sizes it gave them, unless it was a probe's (see MeasureMemo.KidsGen).
+        if (mi < (uint)_memo.Length) _memo[mi].KidsGen = _naturalProbe || _minContentProbe ? 0u : _measureGen;
         var result = new Size2(w, h);
         if (!_naturalProbe) StoreRing(node, availW, result);   // P4: always refresh the cross-pass ring — its later read validity is the clean-subtree gate above, not the write.
         if (MeasureFlatEnabled && !_naturalProbe) RecordFlat(node, in li, availW, w, h, flatKind, flatTextFree, flatTextW, flatNeed);
         if (MeasureCensusEnabled) CensusResult(node, result);
         return StoreMemo(node, availW, result);
+    }
+
+    /// <summary>The width a general flex box offered <paramref name="availW"/> gives its children: its definite content width.</summary>
+    private static float ChildAvail(in LayoutInput li, float availW)
+    {
+        float measureW = DefiniteWidth(in li, availW);
+        return float.IsInfinity(measureW) ? measureW : MathF.Max(0f, measureW - li.Padding.Horizontal);
+    }
+
+    /// <summary>A ROW's leftover for its grow children: in a row with a definite width a flex-grow child's real width is
+    /// (childAvail − the fixed siblings), not the whole row, so its (possibly wrapping) content is measured against THAT,
+    /// or a fixed pane + grow content wraps to the entire window and overflows. NoWrap content ignores the bound. Measures
+    /// each fixed child at <paramref name="childAvail"/> on the way. One home for <see cref="MeasureCore"/> and
+    /// <see cref="MeasureStaleRowChildren"/>, so the offers the arrange re-measures at can never drift from the measure's.</summary>
+    private float RowGrowAvail(NodeHandle node, in LayoutInput li, float childAvail, out float totalGrow)
+    {
+        totalGrow = 0f;
+        if (float.IsInfinity(childAvail)) return childAvail;
+        float fixedMain = 0f; int cc = 0;
+        for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
+        {
+            ref LayoutInput cli = ref _scene.Layout(c);
+            cc++;
+            if (cli.FlexGrow > 0f) { totalGrow += cli.FlexGrow; continue; }
+            float cm = !float.IsNaN(cli.FlexBasis) ? cli.FlexBasis : Measure(c, childAvail).Width;
+            fixedMain += cm + MarginMain(cli, true);
+        }
+        return totalGrow > 0f ? MathF.Max(0f, childAvail - fixedMain - (cc > 1 ? li.Gap * (cc - 1) : 0f)) : childAvail;
+    }
+
+    /// <summary>The offer a general flex box's measure gives one child (see <see cref="RowGrowAvail"/>).
+    /// A grow child measures at its SHARE of the leftover, not the whole of it: with several grow children (three flex:1 1 0
+    /// cards), measuring each against the full remainder wraps its text at ~N× the width it will actually get — fewer
+    /// measured lines, a shorter row cross, and the arrange pass (which re-measures at the true flexed width) then gets
+    /// Stretch-clipped to this under-count: every card cut mid-line. Weight-dividing makes measure equal arrange for the
+    /// standard equal-grow/basis-0 row; a grow child with a real basis still errs high (an upper bound), never low.
+    /// A column child gets the content width LESS its own cross margin — exactly what Arrange re-measures it at. Measuring
+    /// at the full content width let a wrap row inside a margined child fit on one line here and wrap in Arrange, so the
+    /// column under-reported its height by a line and the next sibling (a virtual list's next row, below an open track
+    /// drawer) painted over the extra line.</summary>
+    private static float ChildMeasureOffer(in LayoutInput cli, bool row, float childAvail, float growAvail, float totalGrow)
+        => row && cli.FlexGrow > 0f && totalGrow > 0f && !float.IsInfinity(growAvail)
+            ? growAvail * (cli.FlexGrow / totalGrow) + (float.IsNaN(cli.FlexBasis) ? 0f : cli.FlexBasis)
+            : row ? (cli.FlexGrow > 0f ? growAvail : childAvail)
+            : float.IsInfinity(childAvail) ? childAvail : MathF.Max(0f, childAvail - cli.Margin.Horizontal);
+
+    /// <summary>The row twin of the column arrange's re-measure. A row's arrange takes each child's flex base from the
+    /// child's Bounds, which only a measure that DESCENDED this pass leaves at the measured size. A cross-pass ring hit
+    /// returns the stored size without descending, so the children still hold the rect the LAST arrange gave them, at that
+    /// pass's width: offered a width it was measured at before (1410 → 1664 → 1410), a row whose Grow content has no basis
+    /// and does not shrink read its 1664 arranged width as its base, found negative free space nobody shrinks, and kept the
+    /// wider layout inside the narrower plate for good (the next passes early-out on the identical rect). Re-measure the
+    /// children at the offers <see cref="MeasureCore"/> gives them for the node's last measure this pass, so the arrange sees
+    /// exactly the Bounds a descending measure would have left. A clean child answers from its own ring at that same offer
+    /// (a few loads, no descent), and its arrange applies this rule again one level down. Nothing to do when the last
+    /// measure descended (<see cref="MeasureMemo.KidsGen"/>), so a pass that measures for real adds no call, nor when the row
+    /// is arranged at the width and from the offer of its last arrange on current children with nothing below marked since
+    /// (it only moved: its children's Bounds are already that arrangement, see <see cref="MeasureMemo.KidsArrW"/>).</summary>
+    private void MeasureStaleRowChildren(NodeHandle node, in LayoutInput li, float finalW)
+    {
+        uint i = node.Raw.Index;
+        if (i >= (uint)_memo.Length) return;
+        ref MeasureMemo m = ref _memo[i];
+        if (m.Gen != _measureGen) { if (!Verifying) m.KidsArrNodeGen = 0; return; }   // not measured this pass: nothing to reproduce, and this arrange is none on record
+        uint ver = _scene.SubtreeVersion(node);
+        if (m.KidsGen != _measureGen
+            && !(m.KidsArrNodeGen == node.Raw.Gen && m.KidsArrW == finalW && m.KidsArrAvailW == m.AvailW && m.KidsArrVer == ver
+                 && !ChildMeasuredThisPass(node)))   // a measure earlier in this pass (another offer, a probe) scribbled them: not that arrangement
+        {
+            m.KidsGen = _measureGen;
+            ReMeasureRowChildren(node, in li, m.AvailW);
+        }
+        if (Verifying) return;   // the oracle's re-solve leaves no record behind (its Bounds are put back after it)
+        // Record the arrange this call made current (the ref is re-taken: a measure never resizes _memo, but keep it local).
+        ref MeasureMemo r = ref _memo[i];
+        r.KidsArrNodeGen = node.Raw.Gen; r.KidsArrW = finalW; r.KidsArrAvailW = r.AvailW; r.KidsArrVer = ver;
+    }
+
+    private bool ChildMeasuredThisPass(NodeHandle node)
+    {
+        var c = FirstVisibleChild(node);
+        if (c.IsNull) return false;
+        uint ci = c.Raw.Index;
+        return ci < (uint)_measuredPass.Length && _measuredPass[ci] == _pass;
+    }
+
+    /// <summary>Measure a row's children at the offers <see cref="MeasureCore"/> gives them when the row is offered <paramref name="availW"/>.</summary>
+    private void ReMeasureRowChildren(NodeHandle node, in LayoutInput li, float availW)
+    {
+        float childAvail = ChildAvail(in li, availW);
+        float growAvail = RowGrowAvail(node, in li, childAvail, out float totalGrow);
+        for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
+        {
+            ref LayoutInput cli = ref _scene.Layout(c);
+            Measure(c, ChildMeasureOffer(in cli, true, childAvail, growAvail, totalGrow));
+        }
     }
 
     /// <summary>Aspect-ratio (CSS aspect-ratio): derive the missing extent for a fluid box. Explicit Width+Height both
@@ -1207,6 +1286,8 @@ public sealed partial class FlexLayout
                 Measure(c, childW);
             }
         }
+        // A row reads its children's bases from Bounds: re-measure them when the node's last measure did not descend.
+        else if (row) MeasureStaleRowChildren(node, in li, finalW);
 
         // First pass: base main sizes + counts.
         int n = 0; float usedMain = 0f, totalGrow = 0f, totalShrinkScaled = 0f;
