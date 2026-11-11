@@ -1926,10 +1926,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // no `slot` parameter to thread through — valid only inside one submit, like `_w`/`_h`/`_cmdList`.
         _ringSlot = slot;
         // Two waits, both usually no-ops: THIS target's back buffer k and the ring slot (the shared CPU-written banks).
-        if (!WaitForFenceValue(f.FenceValues[f.FrameIndex]) || !WaitForFenceValue(_ring.Fence[slot]))
+        // Timed apart (same order, same short-circuit) so a long wait can say which ledger it waited on (NoteFrameFenceWait).
+        ulong bufferFence = f.FenceValues[f.FrameIndex], ringFence = _ring.Fence[slot];
+        ulong completedAtEntry = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
+        bool bufferRetired = WaitForFenceValue(bufferFence);
+        long bufferDone = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (!bufferRetired || !WaitForFenceValue(ringFence))
             throw new InvalidOperationException("Frame fence did not reach the awaited value; submit cannot reuse its bank.");
+        long ringDone = System.Diagnostics.Stopwatch.GetTimestamp();
         f.LastFenceWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart).TotalMilliseconds;
         f.LastBufferFenceWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(latencyDone).TotalMilliseconds;
+        if (f.LastBufferFenceWaitMs >= FenceWaitNoteMs)
+            NoteFrameFenceWait(sc, f, slot, latencyDone, bufferDone, ringDone, bufferFence, ringFence, completedAtEntry);
         return slot;
     }
 

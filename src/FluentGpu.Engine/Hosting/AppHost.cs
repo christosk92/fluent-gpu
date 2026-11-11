@@ -215,7 +215,25 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// solves avoided. Equal to RootRelayoutEscapes ⇒ every escape was absorbed and no root solve ran.</summary>
     public int LocalRelayoutResolves { get; init; }
     public double AnimMs { get; init; }
+    // AnimMs sub-split (hitch attribution): a 58 ms anim phase could not be told apart between the engine tick and the
+    // video pump that rides the same span. AnimMs still covers the whole segment; these two carve out its big parts.
+    /// <summary>Of <see cref="AnimMs"/>: the <c>_anim.Tick(dtMs)</c> call alone. Always-on.</summary>
+    public double AnimTickMs { get; init; }
+    /// <summary>Of <see cref="AnimMs"/>: the phase-7.2 video pump (<c>RequestGeometryPumps</c> + <c>PumpPending</c>). Always-on.</summary>
+    public double VideoPumpMs { get; init; }
     public double RecordMs { get; init; }
+    /// <summary>ALWAYS-ON: the frame-turn tail after the submit stamp (single-thread video drain + settle present, passive
+    /// effects, settle/transaction judging, string reclaim) up to the frame-timing update. Before this field it was the
+    /// slow-frame line's "unaccounted" remainder.</summary>
+    public double PostSubmitMs { get; init; }
+    /// <summary>Of <see cref="PostSubmitMs"/>: the <c>DrainPassiveEffects()</c> call alone. Always-on.</summary>
+    public double PassiveEffectsMs { get; init; }
+    /// <summary>The longest single context's pending passive effects in this frame's drain (ms). Always-on.</summary>
+    public double SlowestEffectMs { get; init; }
+    /// <summary>The type of the <c>RenderContext.Owner</c> component of the context <see cref="SlowestEffectMs"/> timed; null
+    /// when it was a context without an owner (the reconciler's attachment context) or no context ran. A type, never the
+    /// instance: kept FrameStats copies must not retain an unmounted component.</summary>
+    public Type? SlowestEffectOwnerType { get; init; }
     /// <summary>Renderer-owned recording duration from the latest imported successful presentation (not current UI work).</summary>
     public double RenderRecordMs { get; init; }
     /// <summary>Longest UI-thread wait inside the render thread's park rendezvous (<c>RenderThread.Quiesce</c>: window resize,
@@ -7137,7 +7155,9 @@ public sealed partial class AppHost : IDisposable
             bool entranceHeld = EntrancesUnseen();
             _anim.HoldPendingStarts = entranceHeld;
             MountProf.Enter(MountProf.Anim);
+            long tAnimTick0 = Stopwatch.GetTimestamp();
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
+            long tAnimTick1 = Stopwatch.GetTimestamp();
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
             _reconciler.SettleEntranceCascades();               // 7 a cascade unit whose entrance settled stops compositing
             _reconciler.SettlePersistWaiters();                 // 7 E7: a Flow.Persist slot still waiting for a live owner has a duplicate key
@@ -7183,8 +7203,10 @@ public sealed partial class AppHost : IDisposable
             // (the video trailing the card during a drag). This compares each tracked surface's absolute rect and
             // requests a pump only when it actually moved — so it observes a frame already being produced and never
             // becomes a wake reason of its own. Must precede PumpPending so the placement drains this same frame turn.
+            long tVideoPump0 = Stopwatch.GetTimestamp();
             _videoSurfaces.RequestGeometryPumps(_scene);
             _videoSurfaces.PumpPending(_scene.DeviceScale);
+            long tVideoPump1 = Stopwatch.GetTimestamp();
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
             _connected.Settle();                               // 7 retire landed shared-element flies (reveal dest, unpin, free overlay)
             _connected.SyncDetached();                         // 7 flag-gated rebuild: mirror the engine-animated fly into its DetachedNode snapshot (RecordDetached draws it)
@@ -7701,12 +7723,15 @@ public sealed partial class AppHost : IDisposable
             // under it. Telling the window it carries live video lets it keep a throttled keep-alive instead.
             _window.SetHasLiveVideo(_videoSurfaces.HasLiveSurface);
 
+            long tEffects0 = Stopwatch.GetTimestamp();
             DrainPassiveEffects();                             // 12 passive effects
+            long tEffects1 = Stopwatch.GetTimestamp();
             if (_stTcs is not null) SettleAfterPass();         // E17c: judge the settle pass (quiet? capped?) now that every effect has run
             if (_tx is not null) TxAfterPass();                // E5: a settled transaction thaws; a rolled-back one thaws with a cut
             _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
             if (s_allocDiag) { db = Probe(SegEffects, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
+            long tPostSubmit = Stopwatch.GetTimestamp();       // the post-submit tail ends here (no phase reported it before)
             UpdateFrameTiming(frameStart);
             int componentsRendered = _reconciler.ConsumeRenderCount();
             // Always-on: a frame-over-budget log needs "did a GC land inside this frame" without a flag (three
@@ -7803,7 +7828,13 @@ public sealed partial class AppHost : IDisposable
                 ReflowSeedMs = ToMs(tLayout - tConnected),             // of which: enter/exit reflow seeding (+ scene dump)
                 LocalRelayoutResolves = _invalidator.LocalResolvesThisFrame,
                 AnimMs = ToMs(tAnim - tLayout),         // phase-7 ticks + projections
+                AnimTickMs = ToMs(tAnimTick1 - tAnimTick0),            // of which: _anim.Tick
+                VideoPumpMs = ToMs(tVideoPump1 - tVideoPump0),         // of which: phase-7.2 video geometry pump + PumpPending
                 RecordMs = ToMs(tRecord - tAnim),       // image pump + SceneRecorder (+ text shaping) + dyntext
+                PostSubmitMs = ToMs(tPostSubmit - tSubmit),            // video drain + settle present, passive effects, settle/tx, string reclaim
+                PassiveEffectsMs = ToMs(tEffects1 - tEffects0),        // of which: DrainPassiveEffects
+                SlowestEffectMs = ToMs(_slowestEffectTicks),           // of which: the longest single context's effects
+                SlowestEffectOwnerType = _slowestEffectOwnerType,
                 RenderRecordMs = recordOnRender ? _lastRenderRecordMs : 0,
                 QuiesceWaitMsMax = OwningRenderThread?.QuiesceWaitMsMax ?? 0,
                 RecordedSceneSequence = recordOnRender ? _lastRecordedFeedbackScene : 0,
@@ -9787,8 +9818,27 @@ public sealed partial class AppHost : IDisposable
         _afterFrameLayoutDrain.Clear();
     }
 
+    // The passive drain's slowest context this turn (FrameStats.SlowestEffectMs/Owner): reset per drain, read by the frame turn.
+    private long _slowestEffectTicks;
+    private Type? _slowestEffectOwnerType;
+
+    // Same iteration as DrainPendingEffectContexts (index loop re-reading Count: an effect may register a context), plus a
+    // timestamp pair per context so a slow-frame line can name the component whose effects ate the post-submit tail.
     private void DrainPassiveEffects()
-        => DrainPendingEffectContexts(_pendingPassiveEffectContexts, layout: false);
+    {
+        _slowestEffectTicks = 0;
+        _slowestEffectOwnerType = null;
+        List<RenderContext> contexts = _pendingPassiveEffectContexts;
+        for (int i = 0; i < contexts.Count; i++)
+        {
+            RenderContext ctx = contexts[i];
+            long t0 = Stopwatch.GetTimestamp();
+            Drain(ctx.PendingEffects);
+            long dt = Stopwatch.GetTimestamp() - t0;
+            if (dt > _slowestEffectTicks) { _slowestEffectTicks = dt; _slowestEffectOwnerType = ctx.Owner?.GetType(); }
+        }
+        contexts.Clear();
+    }
 
     private void RegisterPendingEffectContext(RenderContext ctx, bool layout)
         => (layout ? _pendingLayoutEffectContexts : _pendingPassiveEffectContexts).Add(ctx);
