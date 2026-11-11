@@ -69,6 +69,9 @@ public enum ImageAtlasExperiment : byte
 /// user sees, unlike <c>--screenshot</c>'s swapchain readback) to a PNG at PATH, <c>shot-delay</c> ms (default 1500) after the
 /// first presented frame; <c>shot-delay=MS</c> sets that delay; <c>shot-exit</c> ends the run after the capture. PATH cannot
 /// contain a comma (the list separator). See <c>FluentApp.CaptureWindowPng</c>.</item>
+/// <item><c>anim-scale=F</c> — a capture/inspection tool: the host scales every frame delta the animation clock advances by
+/// (<see cref="AnimScale"/>; 0.5 = every engine animation, spring and layout transition takes twice as long, each frame still
+/// one the engine really rendered). Media clocks and wall-clock timers are not scaled. Default 1 (no change).</item>
 /// </list>
 /// <item><c>no-partial-raster</c> — every invalid retained tile re-rasters whole (the sub-tile damage A/B arm,
 /// <see cref="FluentGpu.Render.Tiles.TileDamage"/>). <c>damage-validate</c> — the backend re-rasters every partially
@@ -232,6 +235,10 @@ public static class EngineSwitches
     public static int ShotWindowDelayMs = 1500;
     /// <summary><c>--fg shot-exit</c>: end the run once <see cref="ShotWindowPath"/> has been captured.</summary>
     public static bool ShotWindowExit;
+    /// <summary><c>--fg anim-scale=F</c> (0 &lt; F ≤ 4): the factor the host multiplies each frame delta of the animation clock by,
+    /// a capture tool (slow motion that is still every real frame). The video's media clock and wall-clock timers keep real time.
+    /// Default 1.</summary>
+    public static float AnimScale = 1f;
 
     /// <summary>Apply every <c>--fg</c> flag in <paramref name="args"/>.</summary>
     public static void Apply(ReadOnlySpan<string> args)
@@ -371,6 +378,10 @@ public static class EngineSwitches
                 ShotWindowDelayMs = shotMs;
                 return true;
             case "shot-exit": ShotWindowExit = true; return true;
+            case "anim-scale":
+                if (value is null || !float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float animScale) || !(animScale > 0f) || animScale > 4f) return false;
+                AnimScale = animScale;
+                return true;
             case "hidden": return HiddenMemoryBudget.TryApply(value);
             case "img-atlas":
                 switch (value)

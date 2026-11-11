@@ -6377,7 +6377,7 @@ public sealed partial class AppHost : IDisposable
                     // which Paint's step-up guard reads as display-rate and never resyncs, so an unconsumed delta handed
                     // the next input's Paint the whole gap since the last painted frame (clamped to 34 ms) and every
                     // animation that input started lurched on frame 1.
-                    float warmDtMs = _frameTime.NextDeltaMs();
+                    float warmDtMs = _frameTime.NextDeltaMs() * EngineSwitches.AnimScale;   // `--fg anim-scale` (a capture tool; default 1)
                     if (_isHeadless) _frameClockMs += warmDtMs;
                 }
                 else if (_isHeadless && _timers.Count > 0)
@@ -6783,7 +6783,7 @@ public sealed partial class AppHost : IDisposable
             // wait, so latch it resolved. Otherwise every tick after an Idle wait resynced and NextDeltaMs returned 0 for the
             // whole drag. RecommendedWaitMs re-latches the flag before the loop's next frame.
             if (keepAlive) _lastWaitWasDisplayRate = true;
-            float dtMs = _frameTime.NextDeltaMs();
+            float dtMs = _frameTime.NextDeltaMs() * EngineSwitches.AnimScale;   // `--fg anim-scale` slows every animation for a capture (default 1)
             AdvanceImagePresentationClock(); // reconcile-time image swaps must also start from current wall time
             _frameClockMs += dtMs;                             // frame-clock timer base (headless: the deterministic FixedFrameTimeSource step; ignored by the real-window wall clock)
             _scene.AnimClockMs = _frameClockMs;                // publish the ANIMATION timebase for orphan deadlines (same clamped delta the animator advances on)
