@@ -474,7 +474,7 @@ public sealed partial class AppHost : IDisposable
     // one level: every Actions.Menu submenu holds plain items). Nothing is built to fill it: it holds what was used, at most this.
     private readonly List<(IPlatformPopupWindow Window, ISwapchain Swapchain, PopupPoolKey Key)> _popupPool = new(PopupPoolCap);
     private const int PopupPoolCap = 3;
-    private int _popupParking;   // parks the render thread has not handed back yet (count toward the cap)
+    private int _popupParking;   // parks and prewarms the render thread has not handed back yet (count toward the cap)
     private readonly List<NodeHandle> _popupSkipRoots = new(2);
     private readonly List<NodeHandle> _reuseBlockRoots = new(4);   // W5: connected-anim fly anchors whose span-reuse ancestor chains the recorder blocks (spatial scoping)
     private int _popupTokenSeq;
@@ -2063,9 +2063,9 @@ public sealed partial class AppHost : IDisposable
     // ops are applied in order, and the swapchain is resolved when each one runs. A detached child's OWN swapchain resize is
     // not in the list at all: it is ONE latest-wins slot (_ownResizePending, F093), because a live resize posts one per WM_SIZE
     // and only the newest size is ever worth a ResizeBuffers.
-    // The popup pool adds three: Reuse (a pooled swapchain serves a new popup), Park (a closed popup's swapchain is kept) and
-    // DropParked (a pooled pair released for good).
-    private enum PopupRenderOp : byte { ResizeAndChrome, AnimateClose, Create, Dispose, Reuse, Park, DropParked }
+    // The popup pool adds four: Reuse (a pooled swapchain serves a new popup), Park (a closed popup's swapchain is kept),
+    // Prewarm (the idle build of one pooled popup) and DropParked (a pooled pair released for good).
+    private enum PopupRenderOp : byte { ResizeAndChrome, AnimateClose, Create, Dispose, Reuse, Park, Prewarm, DropParked }
 
     private readonly record struct PopupRenderAction(PopupRenderOp Op, PopupWindowSlot? Slot, Size2 Size, PopupChromeMetrics Chrome,
                                                      SwapchainDesc Desc = default, ISwapchain? Pooled = null,
@@ -2166,6 +2166,9 @@ public sealed partial class AppHost : IDisposable
                 case PopupRenderOp.Reuse:
                     ReusePooledSwapchainOnRender(a.Slot!, a.Pooled!, a.Desc);   // even for a slot closed meanwhile: its Park op follows
                     break;
+                case PopupRenderOp.Prewarm:
+                    PrewarmPopupOnRender(a.Window!, a.Desc, a.Key);
+                    break;
                 case PopupRenderOp.DropParked:
                     DropParkedOnRender(a.Pooled!, a.Window!);
                     break;
@@ -2242,6 +2245,21 @@ public sealed partial class AppHost : IDisposable
         if (!slot.Retired) CreatePopupSwapchainOnRender(slot, desc);
     }
 
+    /// <summary>Render thread: the idle prewarm's half: create one popup swapchain on a hidden window and park it at once
+    /// (D3D12Device.ParkPopup builds a never-built one after the owner's next present or on a turn that presents nothing, never
+    /// inside the owner's frame), so the first menu of the process finds the backdrop and the swapchain built.</summary>
+    private void PrewarmPopupOnRender(IPlatformPopupWindow window, in SwapchainDesc desc, PopupPoolKey key)
+    {
+        long t0 = Stopwatch.GetTimestamp();
+        ISwapchain? sc = null;
+        try { sc = _device.CreateSwapchain(in desc); }
+        catch (Exception ex) { Diag.Line($"[overlay.popup] prewarm failed on the render thread: {ex.Message}"); }
+        bool parked = sc is not null && sc.ParkPopup();
+        if (!parked) sc?.Dispose();
+        double ms = ToMs(Stopwatch.GetTimestamp() - t0);
+        Post(() => ReturnPrewarmedPopup(window, parked ? sc : null, key, ms));
+    }
+
     /// <summary>Render thread: a pooled pair released for good (stale key, pool full): the swapchain now (its backdrop at once,
     /// its buffers once they retired), the window back on the UI thread right after.</summary>
     private void DropParkedOnRender(ISwapchain pooled, IPlatformPopupWindow window)
@@ -2266,6 +2284,23 @@ public sealed partial class AppHost : IDisposable
         slot.ParkedSwapchain = null;
         slot.ReleaseWindowOwnership();
         PoolOrDropParked(slot.Window, sc, slot.PoolKey);
+    }
+
+    /// <summary>UI thread: the idle prewarm's swapchain is created and parked (or failed: <paramref name="sc"/> null).</summary>
+    private void ReturnPrewarmedPopup(IPlatformPopupWindow window, ISwapchain? sc, PopupPoolKey key, double renderMs)
+    {
+        _popupParking--;
+        Diag.Line(string.Create(CultureInfo.InvariantCulture,
+            $"[overlay.popup] prewarm parked={(sc is null ? 0 : 1)} prepare={_prewarmPrepareMs:F1}ms window={_prewarmWindowMs:F1}ms renderCreate={renderMs:F1}ms"));
+        if (sc is null)
+        {
+            // The backend cannot park a popup (the headless device keeps the ISwapchain default) or the build failed: there is
+            // nothing to keep warm, and trying again every check would only churn windows. Closes release as before.
+            _popupPoolClosed = true;
+            window.Dispose();
+            return;
+        }
+        PoolOrDropParked(window, sc, key);
     }
 
     /// <summary>UI thread: keep a parked pair for the next popup when it still fits (the pool has room and its key is still the
@@ -6059,6 +6094,7 @@ public sealed partial class AppHost : IDisposable
         // is still intact (posts/reactive flush have not run); this never requests a frame or touches GPU owners.
         gapT = Stopwatch.GetTimestamp();
         RunColdMaintenance();
+        TickPopupPool();   // the popup pool's idle prewarm / stale drop (cheap until its check is due)
         GapSegment(ref _gapColdTicks, gapT);
 
         // ── Cross-thread UI posts (HostDispatch.Post / UsePost) ──────────────────────────────────────────────────────
@@ -7874,7 +7910,7 @@ public sealed partial class AppHost : IDisposable
         // NO render-thread park (F207): the HWND is the UI thread's own, and the swapchain is built by the render thread (below).
         long leaseStart = Stopwatch.GetTimestamp();
         var key = PopupPoolKeyFor(material);
-        // A pooled window with its parked swapchain (a closed popup's) serves this popup: no window, no
+        // A pooled window with its parked swapchain (a closed popup's, or the idle prewarm's) serves this popup: no window, no
         // swapchain and no composition backdrop to build. Only a pair made for this key fits; stale ones are released.
         IPlatformPopupWindow? pooledWindow = null;
         ISwapchain? pooled = null;
@@ -8045,7 +8081,89 @@ public sealed partial class AppHost : IDisposable
         return new SwapchainDesc(window, new Size2(1, 1), Composited: true, DesktopAcrylic: acrylic, AcrylicTint: key.Tint, CornerRadiusPx: key.CornerRadiusPx);
     }
 
-    private bool _popupPoolClosed;                      // teardown: nothing is pooled any more
+    // ── the popup pool's idle upkeep (prewarm, stale drop) ──
+    private const long PopupPoolCheckMs = 250;          // how often an idle UI turn looks at the pool
+    private const long PopupPrewarmAfterFirstMs = 1000; // startup's first frames (the reveal, the first page) are left alone
+    private const long PopupPrewarmQuietMs = 1000;      // no interaction (press, key, wheel) for this long
+    private const WakeReasons PrewarmHeldWake = WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold | WakeReasons.TouchPress;
+    private long _popupPoolNextCheckMs;
+    private long _popupPrewarmFromMs;
+    private bool _popupPrewarmPrepared;                 // the thread-affine half (the composition compositor) ran on an earlier turn
+    private bool _popupPoolClosed;                      // teardown, or a backend that cannot park: nothing is pooled any more
+    private double _prewarmPrepareMs, _prewarmWindowMs;
+    private int _prewarmVideoVersion;
+    private long _prewarmVideoQuietFromMs;
+    private string? _prewarmWaitLogged;
+
+    /// <summary>Why the idle prewarm is holding off, logged once per change of reason (a first menu that still paid the build
+    /// is then attributable from the log). UI thread.</summary>
+    private void NotePrewarmWait(string reason)
+    {
+        if (_popupPool.Count != 0 || ReferenceEquals(_prewarmWaitLogged, reason)) return;
+        _prewarmWaitLogged = reason;
+        Diag.Line("[overlay.popup] prewarm waits: " + reason);
+    }
+
+    /// <summary>UI thread, every turn (cheap until its quarter-second check is due): keep ONE popup window with its swapchain warm for
+    /// the next menu. At idle, after startup's first frames and with nothing in flight (no menu open or closing, no interaction for
+    /// a second, no video starting), a pooled pair whose key went stale (theme, DPI, zoom, monitor) is released, and when none fits
+    /// the current key one is built: the compositor's thread-affine bring-up on one turn, the hidden window and the render thread's
+    /// create on a later one, so neither lands in the same UI turn as the other. The first menu then costs what every later one does.</summary>
+    private void TickPopupPool()
+    {
+        if (_isDetachedChild || !PopupWindowsEnabled || _popupPoolClosed || !_device.SupportsSecondarySwapchains) return;
+        long now = ColdMaintenanceNowMs;
+        if (now < _popupPoolNextCheckMs) return;
+        _popupPoolNextCheckMs = now + PopupPoolCheckMs;
+        if (_fzPhase == FreezePhase.Frozen || _hidden.Stage != HiddenStage.Visible || !_swapchain.HasPresentedContent) { NotePrewarmWait("hidden"); return; }
+        if (_popupPrewarmFromMs == 0) { _popupPrewarmFromMs = now + PopupPrewarmAfterFirstMs; return; }
+        if (now < _popupPrewarmFromMs) { NotePrewarmWait("startup"); return; }
+        if (_popupWindows.Count != 0 || _popupParking != 0) { NotePrewarmWait("menu"); return; }
+        // Interaction: an input that means a person is acting (press, release, key, wheel) in the last PopupPrewarmQuietMs, or a
+        // drag, held gesture or pressed touch live now. Not the scroll wake bits: a frame-aligned scroll producer also drives
+        // non-interactive motion (the playing deck's marquee) that never stops while music plays.
+        if ((ComputeWakeReasons() & PrewarmHeldWake) != 0
+            || (_lastInteractionMs != long.MinValue && now - _lastInteractionMs < PopupPrewarmQuietMs)) { NotePrewarmWait("interaction"); return; }
+        // A video is starting: a surface handle was bound (or re-bound) in the last PopupPrewarmQuietMs, or a pump is owed. Not a
+        // video merely on screen: a playing (or parked) video never stops being one, and its start is what must not be crowded.
+        int videoVersion = _videoSurfaces.StructuralVersion;
+        if (videoVersion != _prewarmVideoVersion) { _prewarmVideoVersion = videoVersion; _prewarmVideoQuietFromMs = now + PopupPrewarmQuietMs; }
+        if (now < _prewarmVideoQuietFromMs || _videoSurfaces.HasPendingPumps) { NotePrewarmWait("video"); return; }
+        var key = PopupPoolKeyFor(PopupWindowMaterial.TransientAcrylic);
+        bool fits = false;
+        for (int i = _popupPool.Count - 1; i >= 0; i--)
+        {
+            if (_popupPool[i].Key == key) { fits = true; continue; }
+            var stale = _popupPool[i];
+            _popupPool.RemoveAt(i);
+            DropParked(stale.Window, stale.Swapchain);
+        }
+        if (fits) return;
+        long t0 = Stopwatch.GetTimestamp();
+        if (!_popupPrewarmPrepared)
+        {
+            _device.PrepareSwapchainCreate(PopupSwapchainDesc(default, in key));   // the first-in-process compositor bring-up
+            _popupPrewarmPrepared = true;
+            _prewarmPrepareMs = ToMs(Stopwatch.GetTimestamp() - t0);
+            return;
+        }
+        var window = _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default, key.Material, key.Dark));
+        _prewarmWindowMs = ToMs(Stopwatch.GetTimestamp() - t0);
+        if (window is null) { _popupPoolClosed = true; return; }   // the platform has no popup windows: nothing to keep warm
+        var desc = PopupSwapchainDesc(window.Handle, in key);
+        _popupParking++;
+        if (OwningRenderThread is null)
+        {
+            long r0 = Stopwatch.GetTimestamp();
+            ISwapchain? sc = null;
+            try { sc = _device.CreateSwapchain(in desc); }
+            catch (Exception ex) { Diag.Line($"[overlay.popup] prewarm failed: {ex.Message}"); }
+            bool parked = sc is not null && sc.ParkPopup();
+            if (!parked) sc?.Dispose();
+            ReturnPrewarmedPopup(window, parked ? sc : null, key, ToMs(Stopwatch.GetTimestamp() - r0));
+        }
+        else PostPopupRenderAction(new PopupRenderAction(PopupRenderOp.Prewarm, null, default, default, desc, Window: window, Key: key));
+    }
 
     /// <summary>Reveal a popup window (UI thread) and time the OS call — the reveal half of its <c>[overlay.popup]</c> line.</summary>
     private static void ShowPopupWindow(PopupWindowSlot slot)
