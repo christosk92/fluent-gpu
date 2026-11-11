@@ -1306,13 +1306,31 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             $" tier={FluentGpu.Foundation.GpuProfile.Tier} driver version={(driverVersion.Length > 0 ? driverVersion : "unknown")}");
 
         _memoryProbeObserver?.Invoke("native-device-created-before-queue");
+        // The one DIRECT queue every target of ours renders on (primary, popups, pop-outs, the backdrop plane) and the
+        // image bakes execute on, created at HIGH priority: a UI frame is a fraction of a millisecond of GPU work that
+        // the user is waiting on, and at NORMAL it queued behind other clients' work on the 3D engine (the protected
+        // video pipeline, its video processor and presents) for 30-90 ms before running in 0.3 (`[d3d12.present] frame
+        // fence wait=` gpuQueuedMs vs gpuRunMs, 2026-11-11). HIGH lets the GPU scheduler run our queue ahead of
+        // normal-priority queues; GLOBAL_REALTIME needs SeIncreaseBasePriorityPrivilege and is never asked for. The
+        // image COPY queue (UploadQueue) stays NORMAL: the frame never waits on it (readiness is a fence compare, the
+        // placeholder draws until it lands), so it cannot hold a frame back, and bulk uploads must not preempt frames.
+        // A driver that refuses HIGH gets NORMAL (logged), never no queue.
         D3D12_COMMAND_QUEUE_DESC qd = default;
         qd.Type = D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT;
         qd.Flags = D3D12_COMMAND_QUEUE_FLAGS.D3D12_COMMAND_QUEUE_FLAG_NONE;
+        qd.Priority = (int)D3D12_COMMAND_QUEUE_PRIORITY.D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
         ID3D12CommandQueue* queue;
-        Check(_device->CreateCommandQueue(&qd, __uuidof<ID3D12CommandQueue>(), (void**)&queue), "CreateCommandQueue");
+        int queueHr = (int)_device->CreateCommandQueue(&qd, __uuidof<ID3D12CommandQueue>(), (void**)&queue);
+        if (queueHr < 0)
+        {
+            qd.Priority = (int)D3D12_COMMAND_QUEUE_PRIORITY.D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+            Check(_device->CreateCommandQueue(&qd, __uuidof<ID3D12CommandQueue>(), (void**)&queue), "CreateCommandQueue");
+        }
         _queue = queue;
         SetName(_queue, "FluentGpu.CommandQueue");
+        FluentGpu.Foundation.Diag.Line(
+            $"[d3d12.queue] direct priority={(qd.Priority == (int)D3D12_COMMAND_QUEUE_PRIORITY.D3D12_COMMAND_QUEUE_PRIORITY_HIGH ? "high" : "normal")}" +
+            (queueHr < 0 ? $" highRefused=0x{(uint)queueHr:X8}" : "") + " copy=normal");
         _memoryProbeObserver?.Invoke("queue-created-before-ring");
 
         // The allocator RING is device-shared, sized to SubmissionRing.Depth (Phase 1 §3.2 — was FRAME_COUNT-deep and
