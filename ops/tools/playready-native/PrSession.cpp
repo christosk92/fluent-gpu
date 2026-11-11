@@ -2629,7 +2629,8 @@ bool fgpr::SessionSeekLanded(Runtime& rt, Session& s)
 /// paused although play was requested. Runtime thread; logs only when it changes the engine.
 /// No re-applied Play on an ENDED engine, anywhere (here, the PAUSE re-assert and FRAMESTEPCOMPLETED in PrRuntime.cpp): at the
 /// natural end the engine sets paused and raises PAUSE, then ENDED, with play still wanted; a Play there restarts the media
-/// from the start and ENDED never sticks.
+/// from the start and ENDED never sticks. No Pause while a frame step is in flight: what IsPaused reads mid-step is unknown, a
+/// Pause then could keep a paused seek's new frame from being presented, and the step ends paused by itself.
 void fgpr::SessionApplyIntent(Runtime& rt, Session& s, const char* after)
 {
     if (!IsLive(rt, s) || !s.metadataSeen) return;
