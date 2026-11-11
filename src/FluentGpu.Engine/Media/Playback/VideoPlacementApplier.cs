@@ -254,6 +254,7 @@ internal sealed class VideoPlacementApplier
     private uint _drainSeq;                // applies that did work; the clock the failed-bind backoff counts in
     private int _boundBits;                // slots with a bound, committed surface (render-owned; the UI sees it through PostResult)
     private bool _boundChanged;            // this apply changed _boundBits
+    private int _censusLive, _censusPlates;   // this applier's share last published to MediaCensus (bound+shown surfaces, plates over them)
     private bool _publishDue;              // changes were applied with the device Commit deferred: readiness waits for PublishCommitted
     private bool _anyDirty;
     private bool _structuralPending;       // a live slot still needs its surface created or its handle bound
@@ -938,15 +939,27 @@ internal sealed class VideoPlacementApplier
         _registry.PostResult(i, s.Intent.Gen, s.SurfaceId.Value, ((_boundBits >> i) & 1) != 0, releaseDone: false);
     }
 
-    // The live-surface flag the window reads (SetHasLiveVideo): created, bound, visible.
+    // The live-surface flag the window reads (SetHasLiveVideo): created, bound, visible. Also this applier's share of the process's
+    // bound-surface and plate counts (MediaCensus.BoundVideoSurfaces, shown or not, and PlatesOverVideo, over shown ones: what the
+    // device's untracked-memory sampler keys on), published as deltas: zero cost while nothing changes.
     private void PublishLive()
     {
-        int mask = 0;
+        int mask = 0, live = 0, plates = 0;
         for (int i = 0; i < MaxSurfaces; i++)
         {
             ref Slot s = ref _slots[i];
-            if (s.InUse && !s.Intent.ReleasePending && s.Intent.Visible && !s.SurfaceId.IsNone && s.BoundHandle != 0) mask |= 1 << i;
+            if (!s.InUse || s.Intent.ReleasePending || s.SurfaceId.IsNone || s.BoundHandle == 0) continue;
+            live++;
+            if (!s.Intent.Visible) continue;
+            mask |= 1 << i;
+            plates += s.AppliedBackdropCount;
         }
         _registry.SetLiveMask(mask);
+        if (live != _censusLive || plates != _censusPlates)
+        {
+            MediaCensus.NoteVideoSurfaces(live - _censusLive, plates - _censusPlates);
+            _censusLive = live;
+            _censusPlates = plates;
+        }
     }
 }

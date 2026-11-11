@@ -85,6 +85,23 @@ public static class MediaCensus
     private static int s_runtimeUp;
     private static long s_runtimeStarts;
     private static int s_dualPeak;
+    private static int s_boundSurfaces, s_platesOverVideo;
+
+    /// <summary>How many video surfaces are bound on screen right now, across every window (created, bound to a producer's handle
+    /// and shown; the placement appliers publish it on the render thread at each apply). A GPU-memory sampler reads it to know when
+    /// video is up. Any thread; a plain volatile read.</summary>
+    public static int BoundVideoSurfaces => Volatile.Read(ref s_boundSurfaces);
+
+    /// <summary>How many frosted chrome plates are composed over those surfaces right now (each one a blurred copy of the video
+    /// under it, see <c>IVideoPresenter.SetBackdrops</c>). Any thread.</summary>
+    public static int PlatesOverVideo => Volatile.Read(ref s_platesOverVideo);
+
+    /// <summary>A placement applier's change of its own bound-surface and plate counts (deltas, so several windows add up).</summary>
+    internal static void NoteVideoSurfaces(int boundDelta, int platesDelta)
+    {
+        if (boundDelta != 0) Interlocked.Add(ref s_boundSurfaces, boundDelta);
+        if (platesDelta != 0) Interlocked.Add(ref s_platesOverVideo, platesDelta);
+    }
 
     /// <summary>Register a live owner; <paramref name="describe"/> is called (on the sampling thread, never under the census lock)
     /// whenever <see cref="Capture"/> runs, until <see cref="Unregister"/>. Returns the token to unregister with.</summary>

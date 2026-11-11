@@ -3902,6 +3902,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // instead of waiting up to 10/60 presents for the ordinary cadence below to first fire.
     void PublishVideoMemorySnapshot(bool force = false)
     {
+        NoteUiPresentForUntracked();   // the present stamp and the bound-video sampler's edge (D3D12Device.UntrackedVideo.cs)
         if (!force)
         {
             if (--_videoMemorySampleCountdown > 0) return;
@@ -3925,19 +3926,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _glyphs?.CachedGlyphCount ?? 0);
     }
 
-    // ── untracked growth: what the driver allocates for itself (command allocators, pipelines, descriptor and query heaps) ──
-    // The adapter's LOCAL usage minus every resource and heap this device tracks. On a UMA driver that keeps freed GPU memory
-    // it only ratchets, so the moment it jumps is the one to name: a log line per jump of more than 8 MiB between samples,
-    // with what the device did in that frame.
-    private long _lastUntracked = long.MinValue;
-    private void NoteUntrackedGrowth(long localUsage)
-    {
-        long untracked = localUsage - D3D12MemoryDiagnostics.LiveTotals().bytes;
-        if (_lastUntracked != long.MinValue && untracked - _lastUntracked > (8L << 20))
-            Diag.Line($"[d3d12.untracked] +{(untracked - _lastUntracked) / 1048576.0:0.0} MiB now {untracked / 1048576.0:0.0} MiB" +
-                $" tilesRastered={_frameTilesRastered} passes={_frameRenderPasses} segments={_frameSegments} inlineItems={_frameInlineItems} inlineReopens={_frameInlineReopens} resumes={_frameResumes} inlineGroups={_frameInlineGroups} directRegions={_frameDirectRegions} passDrawsMax={_framePassDrawsMax} passesOver80={_framePassesOverBinning} inlineByKind={string.Join("/", _frameInlineByKind)} inlineBlurred={_frameInlineBlurred} sites={PassSitesLine()}");
-        _lastUntracked = untracked;
-    }
+    // ── untracked memory (NoteUntrackedGrowth and the bound-video sampler): D3D12Device.UntrackedVideo.cs ──
 
     // DXGI_STATUS_OCCLUDED — Present succeeded but the window is fully occluded (HWND flip-model). Not reliably returned
     // for CreateSwapChainForComposition; cloak/visibility is the composition path's stand-down. DXGI_PRESENT_TEST = 1.
