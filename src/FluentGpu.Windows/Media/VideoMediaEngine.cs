@@ -509,10 +509,18 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             {
                 RECT dst = new() { left = 0, top = 0, right = w, bottom = h };
                 MFARGB border = new() { rgbBlue = 0, rgbGreen = 0, rgbRed = 0, rgbAlpha = 255 };
+                long t0 = Stopwatch.GetTimestamp();
                 int hr = _engineEx->UpdateVideoStream(null, &dst, &border);
+                double callMs = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
                 if (hr < 0) Log("UpdateVideoStream(dst)", hr);
                 else if (w > 0 && h > 0)
                 {
+                    // Always-on, once per stream-size change (cold): the resize is a Media Foundation reconfiguration whose call blocks this
+                    // thread (measured 21-90 ms shrinking from 1080p, 2-3 ms growing) and which, on the Adreno X1-85, holds the picture
+                    // ~35-42 ms some 100-200 ms later (a frame-exact desktop capture, 2026-11-11). This line dates each one in the log.
+                    if (_appliedStreamW != (uint)w || _appliedStreamH != (uint)h)
+                        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                            $"[video] stream.applied {_appliedStreamW}x{_appliedStreamH}->{w}x{h} callMs={callMs:F1}"));
                     _appliedStreamW = (uint)w; _appliedStreamH = (uint)h;
                     _frameWatch.Restart(Environment.TickCount64);   // a re-sized (re-created) stream gets a fresh no-frame window
                 }
