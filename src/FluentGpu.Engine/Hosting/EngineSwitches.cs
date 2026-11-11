@@ -56,12 +56,6 @@ public enum ImageAtlasExperiment : byte
 /// <item><c>playready-sl2000</c> — the protected runtime never probes hardware PlayReady SL3000 (the <c>.3000</c> key system with a
 /// "3000" video capability) and asks for the software SL2000 CDM it always did. Without it the runtime probes SL3000 and falls back to
 /// SL2000 when the machine cannot grant it, and logs the negotiated level (F022; default off = probe on).</item>
-/// <item><c>video-overlay</c> — a video whose rect nothing paints over is promoted ABOVE the UI plane instead of staying
-/// a hole-punched underlay, where the output's overlay probe (a D3D11 <c>CheckOverlaySupport</c>, <c>VideoOverlayProbe</c>) reports a
-/// plane and the surface has no rounded corners (F087, A/B arm, default off).</item>
-/// <item><c>video-wuc</c> — video is shown by a Windows.UI.Composition sprite whose surface brush stretches the swap chain's current
-/// buffer to the placed rect (<c>CompositionVideoPresenter</c>, its own non-topmost window target under the UI's), instead of the
-/// DirectComposition visual scaled by the believed content size (a diagnostic arm, default off).</item>
 /// <item><c>ledger</c> or <c>ledger=PATH</c> — the per-frame <see cref="FrameLedger"/> on from the first frame (CPU, memory and GPU
 /// for every frame); with a PATH, FluentApp writes the binary dump there and one CSV per stream beside it when the window closes.</item>
 /// <item><c>group-repair-validate</c> — every unblurred group surface the composite repairs in place (only the rects that
@@ -71,7 +65,7 @@ public enum ImageAtlasExperiment : byte
 /// <item><c>test-input</c> — a window accepts the private registered message <c>FluentGpu.TestInput</c> (kind + client px in
 /// wParam/lParam, see <c>Win32TestInput</c>) and turns it into the pointer events <c>WM_POINTER*</c> would, so an out-of-process
 /// e2e driver can hover, click, drag and wheel without the physical mouse (default off).</item>
-/// <item><c>shot-window=PATH</c> — capture the COMPOSED window (Mica/acrylic, the DWM frame, DComp video children: what the
+/// <item><c>shot-window=PATH</c> — capture the COMPOSED window (Mica/acrylic, the DWM frame, the video visuals: what the
 /// user sees, unlike <c>--screenshot</c>'s swapchain readback) to a PNG at PATH, <c>shot-delay</c> ms (default 1500) after the
 /// first presented frame; <c>shot-delay=MS</c> sets that delay; <c>shot-exit</c> ends the run after the capture. PATH cannot
 /// contain a comma (the list separator). See <c>FluentApp.CaptureWindowPng</c>.</item>
@@ -192,19 +186,6 @@ public static class EngineSwitches
     /// the child's present slot is already probed without waiting (F090), so the default is decided by PresentMon
     /// (MsBetweenDisplayChange) on both HWNDs with the pop-out playing, not by this flag's existence.</summary>
     public static bool NonBlockingSecondaryPresent;
-
-    /// <summary>Overlay promotion (F087, <c>--fg video-overlay</c>): a video whose rect nothing paints over (a fullscreen video with its
-    /// chrome hidden, an idle pop-out) is inserted ABOVE the UI visual and falls back to the hole-punched underlay the turn something
-    /// covers it, with a hold after each demotion; only where the output's overlay probe reports support. The UI hole stays punched in
-    /// both modes. A HYPOTHESIS arm, default off, decided by the owner's PresentMon A/B (<c>MsBetweenDisplayChange</c> and the
-    /// PresentMode column, switch on vs off), not by this flag's existence.</summary>
-    public static bool VideoOverlay;
-
-    /// <summary><c>--fg video-wuc</c>: a diagnostic arm, default off. Each composited window's video presenter is the
-    /// Windows.UI.Composition one (FluentGpu.Windows CompositionVideoPresenter: a sprite whose CompositionSurfaceBrush, Stretch=Fill,
-    /// wraps the swap-chain handle, so the compositor stretches whatever buffer the swap chain holds and no content size is told to
-    /// anyone) instead of the DirectComposition one. Read when a window's presenter is created.</summary>
-    public static bool VideoWuc;
 
     /// <summary>Skip the PlayReady SL3000 probe (F022, <c>--fg playready-sl2000</c>): the protected runtime's CDM is the software SL2000 request
     /// it has always made. The default (false) probes the hardware key system first - SL3000 is used only where the machine grants it,
@@ -331,8 +312,6 @@ public static class EngineSwitches
             case "no-vsync": NoVsync = true; return true;
             case "present-nowait": NonBlockingSecondaryPresent = true; return true;
             case "gpu-timing": GpuPassTiming = true; return true;
-            case "video-overlay": VideoOverlay = true; return true;
-            case "video-wuc": VideoWuc = true; return true;
             case "playready-sl2000": ForcePlayReadySl2000 = true; return true;
             case "frame-trace":
                 // `--fg frame-trace[=PATH]`: the frame/animation/input timeline (FrameTrace.cs); started by the platform once the host exists.

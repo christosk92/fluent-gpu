@@ -89,7 +89,7 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     /// <summary>ThemedIcon vector-layer masks drawn this frame (DrawIconMask — PathId + per-instance tint).</summary>
     public IReadOnlyList<DrawIconMaskCmd> LastIconMasks => _iconMasks;
     /// <summary>Video hole punches recorded this frame (DrawVideo — SurfaceId + erase strength VideoReady). The real
-    /// backend ERASES these rects toward premultiplied zero so the DComp video visual below the swapchain shows through;
+    /// backend ERASES these rects toward premultiplied zero so the video visual below the swapchain shows through;
     /// headless just captures the payload.</summary>
     public IReadOnlyList<DrawVideoCmd> LastVideos => _videos;
     /// <summary>General rounded-rect ERASES recorded this frame (DrawOp.EraseRoundRect) — the drop-spotlight scrim's
@@ -178,16 +178,12 @@ public sealed partial class HeadlessGpuDevice : IGpuDevice
     public void MarkRenderConfined() => _renderConfined = true;
 
     /// <summary>Test seam: the composited-video presenter this device answers for EVERY swapchain (the headless seam has no
-    /// DirectComposition). <see langword="null"/> (the default) keeps every host's video drain a no-op, as before.</summary>
+    /// compositor). <see langword="null"/> (the default) keeps every host's video drain a no-op, as before.</summary>
     public FluentGpu.Pal.IVideoPresenter? VideoPresenterForTest { get; set; }
 
     /// <summary>The pass-timeline toggle, stored (headless records no timestamps; a test feeds the swapchain's timeline seam).</summary>
     public bool GpuPassTimingEnabled { get; set; }
     public FluentGpu.Pal.IVideoPresenter? VideoPresenter => VideoPresenterForTest;
-
-    /// <summary><see cref="IGpuDevice.VideoAlphaRamp"/>: a test presenter's own answer; with none, the Windows device's under the same
-    /// switch (<c>--fg video-wuc</c>), so the inspector renders the arm a window would take (it has no picture to fade either way).</summary>
-    public bool VideoAlphaRamp => VideoPresenterForTest?.SupportsAlphaRamp ?? FluentGpu.Hosting.EngineSwitches.VideoWuc;
 
     /// <summary>Device-level composition commits (<see cref="IGpuDevice.CommitVideoComposition"/>) this run, and a hook run on
     /// each — a test's door to WHEN the host commits relative to its presents.</summary>

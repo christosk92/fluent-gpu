@@ -669,13 +669,13 @@ The single best decision (KEEP): externally-decoded video (PlayReady `MediaPlaye
 **sibling DComp visual the engine never paints into**, turning the heaviest continuous work into a non-issue on
 the single-thread v1 — it runs on the OS compositor thread by construction.
 
-### 8.1 PAL seam `IVideoPresenter` (ADD; `FluentGpu.Windows` Pal/ → DirectComposition)
+### 8.1 PAL seam `IVideoPresenter` (ADD; `FluentGpu.Windows` Pal/ → Windows.UI.Composition)
 
 ```csharp
 namespace FluentGpu.Pal;
 public readonly record struct VideoSurfaceId(uint Value);   // POD, opaque across the seam
 
-public interface IVideoPresenter           // FluentGpu.Windows Pal/ → IDCompositionDevice child visual; macOS → AVPlayerLayer
+public interface IVideoPresenter           // FluentGpu.Windows Pal/ → a composition sprite visual; macOS → AVPlayerLayer
 {
     VideoSurfaceId CreateSurface();
     void  BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle);   // the surface-handoff + DRM attach point
@@ -685,18 +685,18 @@ public interface IVideoPresenter           // FluentGpu.Windows Pal/ → IDCompo
     void  Commit();                                // flush queued Place/SetVisible/BindSurfaceHandle at phase 11
 }
 ```
-`IVideoPresenter` is the ONLY new PAL surface for video. All its `IDCompositionVisual`/`IDCompositionDevice`
+`IVideoPresenter` is the ONLY new PAL surface for video. All its composition
 ComPtrs are render-thread-confined (`hardened-v1-plan.md` §2/§4.2); `Place`/`SetVisible`/`Commit` execute on
 the render thread at phase 11. **`BindSurfaceHandle` is the surface-handoff seam** (as-built,
 `src/FluentGpu.Engine/Seams/Pal/IVideoPresenter.cs`; supersedes the earlier `GetMediaPlayerSink` sink-pull
 shape <!-- canon-allow: names the superseded seam method on purpose -->): an external owner produces a
 DirectComposition surface HANDLE (`DCompositionCreateSurfaceHandle` / `IMFMediaEngineEx::GetVideoSwapchainHandle`
-on its side), and the Windows impl wraps it via `IDCompositionDevice::CreateSurfaceFromHandle` and binds it as
-the child visual's content. FluentGpu never sees a decoded video frame. The **DRM path passes a PROTECTED
+on its side), and the Windows impl wraps it via `ICompositorInterop::CreateCompositionSurfaceForHandle` and
+binds it as the picture of a sprite whose surface brush (Stretch = Fill) stretches the swap chain's current buffer to the placed rect. FluentGpu never sees a decoded video frame. The **DRM path passes a PROTECTED
 handle here — nothing else in this seam or the renderer changes** (§8.4).
 
-> **As built (2026-09, video-smooth-switching — presenter fault semantics).** The Windows `IVideoPresenter`
-> (`DCompVideoPresenter`) never throws a failing HRESULT into the render thread's `Commit`/present path — a
+> **As built (2026-09, video-smooth-switching — presenter fault semantics; kept by `CompositionVideoPresenter`, the only
+> presenter since 2026-11-11).** The Windows `IVideoPresenter` never throws a failing HRESULT into the render thread's `Commit`/present path — a
 > device-lost or transient DComp/DXGI failure here degrades the video surface in place instead of taking down
 > the frame. Every native call is guarded by a non-throwing `Ok(hr, what)` check that logs the FIRST occurrence
 > of each distinct failing HRESULT (always-on, never behind an opt-in env var) and stays silent on repeats, then
@@ -704,22 +704,23 @@ handle here — nothing else in this seam or the renderer changes** (§8.4).
 > on a `CreateVisual` failure — `VideoSurfaceRegistry.Drain` (§8.3) sees the slot's `SurfaceId` still `IsNone`,
 > leaves the entry dirty, and retries `CreateSurface` on the next drain rather than dropping the surface
 > silently. **`BindSurfaceHandle`** leaves the slot's previously-bound content untouched on a
-> `CreateSurfaceFromHandle` failure (log-and-mark, never throw) — this **self-heals via handle-rebind**: the
+> `CreateCompositionSurfaceForHandle` failure (log-and-mark, never throw) — this **self-heals via handle-rebind**: the
 > registry only advances its `BoundHandle` bookkeeping past a call that actually returns, so a stale bind is
 > retried automatically the next time the engine publishes a *new* handle on a presentation-epoch bump
 > (FORMATCHANGE/RESOURCELOST), not by blindly re-trying the same failing handle. **`ApplyPlacement`** marks the
 > slot faulted and bails out at the first failing call (offset/transform/clip), leaving the visual at its
 > previous placement until the next `Place`/`SetVisible`/etc. call marks the slot dirty again. `Commit` itself
-> is likewise non-throwing: a failed `IDCompositionDevice::Commit` just leaves DWM showing the prior
-> composition for one turn. As-built: `src/FluentGpu.Windows/Pal/DCompVideoPresenter.cs`.
+> is likewise non-throwing: a failed compositor Commit just leaves DWM showing the prior
+> composition for one turn. As-built: `src/FluentGpu.Windows/Pal/CompositionVideoPresenter.cs`.
 
 ### 8.2 Present-tree amendment to `architecture-spec` §5.1 (one visual → multi-visual)
 
-§5.1 builds ONE opaque swapchain visual. Video needs a **root DComp visual with N children**: the **UI
-swapchain visual z-ABOVE a video child visual** whose content is the external surface.
+§5.1 builds ONE opaque swapchain visual. Video needs the **UI swapchain visual z-ABOVE a video visual** whose content is
+the external surface. As built (2026-11-11) the video visuals live on their own Windows.UI.Composition `DesktopWindowTarget`
+(non-topmost) under the window's DComp target, because a WUC visual cannot be parented under a DComp one.
 
 **Transparency protocol (the hole-punch):** the UI back buffer is **erased to transparent (premultiplied 0) in
-the `DrawVideoCmd.Dst` region**, so DComp composes the video child through the hole. Scrim, transport controls,
+the `DrawVideoCmd.Dst` region**, so DWM composes the video visual through the hole. Scrim, transport controls,
 and rounded-PiP corners are normal DrawList quads in the topmost UI visual, composited over by z-order. The
 COLOR contract (output premultiplied; swapchain `BGRA8_UNORM`) makes premul-0 a clean see-through.
 
@@ -735,7 +736,7 @@ the hole-punch present logic).
   are normal `DrawImageCmd`s drawn into the same region while `VideoReady < 1`.
 - **The 3-layer crossfade** (art → poster → live) is phase-7 composition animation over `VideoReady`; art and
   poster are this subsystem's `ImageHandle`s (so they decode/reside/evict like any image), the live layer is
-  the DComp child. There is no black frame because the lower layers paint until `VideoReady` hits 1. **As
+  the video visual. There is no black frame because the lower layers paint until `VideoReady` hits 1. **As
   built the grading is deferred** — the recorder emits `VideoReady = 1` and the app swaps poster↔hole
   discretely; a poster-drawn-after pattern must grade the *poster* (`gpu-renderer.md §7.3`).
 
@@ -1117,23 +1118,21 @@ above it. It is now a runtime with handles, spine unchanged:
   was published. `ProtectedVideoSession.Pump()` publishes and remembers the handle the snapshot reported; `Bind` hands
   it to a binding (and only a valid one), so a pump with no element never touches a binding and a later element binds
   the handle already known. `MediaPlayer.StatePumpCount` / `StatePumpAgeMs` expose the heartbeat for diagnostics.
-- **Stream size: buckets, settle, echo (F071, F051, F260).** Layout never drives the decoder's swap chain. Both sessions
+- **Stream size: buckets, settle (F071, F051, F260).** Layout never drives the decoder's swap chain. Both sessions
   size the stream through one `VideoStreamSizeGate`: a bucket of the natural frame (natural x {1, 3/4, 1/2, 1/3}, the
   smallest that covers the destination, with a 10 % shrink hysteresis), the first size and a changed natural size at once,
-  any other change only after the destination held still 250 ms (DirectComposition's LINEAR scale covers the gap). The
-  compositor's content size moves to a requested size only when the backend ECHOES it as applied
-  (`VideoEngineSnapshot.StreamW/StreamH`; the protected runtime fills them from `FgPrSnapshot.streamWidth/streamHeight`
-  after `UpdateVideoStream(dst)` and zeroes them at detach): until then DComp keeps scaling the old buffer by the old
-  size. A paused or non-echoing backend is trusted after 500 ms; a settle window or echo wait re-pumps the session through
-  a timer (the protected runtime raises no event for an applied size). A rect that is not laid out (the element pumps
+  any other change only after the destination held still 250 ms; a full-screen stay keeps one size, and a request raised
+  before an attach's first frame waits for it. The compositor stretches whatever buffer the swap chain holds to the placed
+  rect, so no size is ever told to the compositor and nothing waits for the backend to confirm one (the content-size echo
+  of the deleted DirectComposition presenter is gone). A settle window re-pumps the session through a timer. A rect that is not laid out (the element pumps
   `default` before its area exists) sizes and places nothing. Native: `FgPrSessionSetStreamSize` repaints
   (`UpdateVideoStream(null, null, null)`) while the source is not playing, as the clear path's `Repaint` does, and its
   `[cenc] stream size` log line is rate-limited to one a second (a failure always logs).
 - **Always-on log lines, one file.** `ProtectedVideoRuntime.LogSink` receives `[video]` (attach → metadata →
   canplay → first.frame `sinceAttachMs`, seek.done `ms`, prefetch.ok) and `[video.native]` lifecycle lines; the old
   `desktop-playready.log` is gone. `DesktopProtectedVideoPlayer`, its ack waits and `DrmLicenseBridge` are deleted.
-- **Rendering stays the DComp child + hole-punch.** A protected frame cannot be sampled by an unprotected shader;
-  the `FG_VIDEO_ZABOVE` diagnostic switch in `DCompVideoPresenter` is deleted with the other environment switches.
+- **Rendering stays a compositor visual + hole-punch.** A protected frame cannot be sampled by an unprotected shader;
+  the `FG_VIDEO_ZABOVE` diagnostic switch of the old DirectComposition presenter was deleted with the other environment switches.
 
 Canon: `IVideoPresenter`/`VideoSurfaceId` seam shape is owned by `pal-rhi.md`; this doc owns the present-tree
 placement + the DRM attach behavior above; the unified `IMediaPlayer`/`MediaPlayer`/`MediaRouter` + `MfMediaPlayer`

@@ -60,8 +60,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     private bool _seekPublished;
     private long _seekTargetMs;
 
-    // Decides the stream size (a bucket of the natural frame, settled, and echoed by the native snapshot before the
-    // compositor is told) — shared with the clear session. _sizeRetry re-pumps once a settle window or an echo wait ends.
+    // Decides the stream size (a bucket of the natural frame, settled) — shared with the clear session. _sizeRetry re-pumps once
+    // a settle window ends.
     private readonly VideoStreamSizeGate _sizeGate = new();
     private Timer? _sizeRetry;
     // The clock the size gate reads; a test replaces it to step time.
@@ -293,8 +293,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         RequestPump();
     }
 
-    // Asks for one more pump after `ms` (a settle window or an echo wait is pending): the native runtime raises no event for
-    // an applied stream size, and a deferred size decision must not wait for an unrelated one. Any thread.
+    // Asks for one more pump after `ms` (a settle window is pending): a deferred size decision must not wait for an unrelated
+    // event. Any thread.
     private void ArmSizeRetry(int ms)
     {
         if (ms <= 0 || _disposed) return;
@@ -690,19 +690,15 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         // It is SHOWN only while presenting (this attach's first frame and a live surface): MF's swap chain holds the
         // previous source's last frame until the new one decodes, and a detached slot would show another session's.
         // The stream is a BUCKET of the natural frame (never the raw destination), requested once the destination has held
-        // still, and the compositor keeps the previous content size until the native snapshot echoes the new one as
-        // applied. A rect that is not laid out sizes and places nothing (F051): the slot just stays hidden.
+        // still; the compositor stretches whatever buffer the swap chain holds meanwhile. A rect that is not laid out sizes and
+        // places nothing (F051): the slot just stays hidden.
         if (_player.HasSurface)
         {
             if (VideoStreamSizing.IsLaidOut(videoRect))
             {
-                // Frames are expected while the native source plays, Buffering included (a stall the snapshot reads as Playing): the
-                // echo then waits for the frame rendered after the request, and only a source that renders none (paused, ended) is
-                // trusted at the timeout - native publishes its echo at once after the repaint anyway.
                 // The pumping binding casts its vote; the size is the largest need among the bindings that show this one swap
                 // chain (an exiting, hidden or released host does not vote), as on the clear path.
-                VideoStreamStep step = _sizeGate.Step(binding, _naturalSize, videoRect, scale, _player.AppliedStreamSize,
-                    pv is ProtectedVideoState.Playing or ProtectedVideoState.Buffering, presenting, ClockMs(), binding.Display);
+                VideoStreamStep step = _sizeGate.Step(binding, _naturalSize, videoRect, scale, presenting, ClockMs(), binding.Display);
                 if (step.HoldLine is { } hold) _player.LogDiagnostic(hold);
                 if (step.StayLine is { } stay) _player.LogDiagnostic(stay);
                 if (!step.Request.IsEmpty)
@@ -716,12 +712,11 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
                 ArmSizeRetry(step.RetryInMs);
                 PlaceOutputProtection(binding, videoRect, scale);
                 if (holdsOther) return;
-                SizeI content = step.Content;
-                // One content size for every binding of this session: the swap chain's, never a binding's own request.
-                binding.SetContentSize(content, step.ContentVia, step.RequestAgeMs);
-                _sizeGate.PublishContentToVoters(binding);
+                // One stream size for every binding of this session: the swap chain's, never a binding's own request.
+                binding.SetStreamSize(step.Size);
+                _sizeGate.PublishSizeToVoters(binding);
                 binding.Place(videoRect);
-                sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content, videoRect, scale <= 0f ? 1f : scale)
+                sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, step.Size, videoRect, scale <= 0f ? 1f : scale)
                     { Token = binding.Token });
             }
         }
@@ -746,7 +741,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         if (!_naturalSize.IsEmpty || !VideoStreamSizing.IsLaidOut(videoRect)) return;
         if (_activeQuality?.Resolution is not { IsEmpty: false } declared) return;
         if (_player.Phase is not (ProtectedVideoPhase.Licensing or ProtectedVideoPhase.Buffering or ProtectedVideoPhase.Attaching)) return;
-        VideoStreamStep step = _sizeGate.Step(binding, declared, videoRect, scale, SizeI.Zero, playing: false, framePresented: false, ClockMs(), binding.Display);
+        VideoStreamStep step = _sizeGate.Step(binding, declared, videoRect, scale, framePresented: false, ClockMs(), binding.Display);
         if (step.HoldLine is { } hold) _player.LogDiagnostic(hold);
         if (step.StayLine is { } stay) _player.LogDiagnostic(stay);
         if (step.Request.IsEmpty) return;
@@ -766,7 +761,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     }
 
     /// <summary>The video rect (DIP) in device pixels, pixel rule R: X, Y, Right and Bottom each rounded independently,
-    /// midpoints away from zero, so two neighbours never differ from the DComp rect by more than the rounding itself. Pure.</summary>
+    /// midpoints away from zero, so two neighbours never differ from the composited video's rect by more than the rounding itself. Pure.</summary>
     internal static (int Left, int Top, int Right, int Bottom) OutputProtectionRect(RectF videoRect, float scale)
     {
         float s = scale <= 0f ? 1f : scale;

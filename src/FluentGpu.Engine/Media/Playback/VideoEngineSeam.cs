@@ -98,13 +98,6 @@ public struct VideoEngineSnapshot
     /// <summary>Media buffered ahead of the playhead, in ms; 0 when empty or not reported by this backend. What a seek
     /// planner checks before it asks for a fetch, and what a scrub bar's loaded band starts from.</summary>
     public long BufferedAheadMs;
-    /// <summary>The stream width (device px) the backend has APPLIED (the echo of the last <see cref="VideoCommandKind.StreamRect"/>
-    /// it carried out); 0 until one has been, and again after a new source. A consumer keeps the content size it hands the
-    /// compositor at the PREVIOUS value until this equals the size it asked for, so DirectComposition never scales a buffer
-    /// still at the old size by the new size's factor.</summary>
-    public uint StreamW;
-    /// <summary>The stream height (device px) the backend has APPLIED; see <see cref="StreamW"/>.</summary>
-    public uint StreamH;
     /// <summary>Frames the backend's video renderer has PRESENTED for the current <see cref="SourceEpoch"/> (MF's
     /// FRAMES_RENDERED, accumulated across the counter resets the engine applies after an internal flush — see
     /// <see cref="VideoFrameCounters"/>). Polled only while video is actually playing, so it is frozen while paused, parked,

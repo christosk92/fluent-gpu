@@ -5210,7 +5210,7 @@ public sealed partial class AppHost : IDisposable
         // A feedback trail (visualizer F6) still settling: the backend advances it on frames with no scene change.
         if (HasOwnLiveFeedback) r |= WakeReasons.FeedbackSettle;
         // Native engines / geometry changes request one coalesced post-layout video pump. It is deliberately distinct
-        // from playback state: a playing DComp video must not turn every host frame into a repaint.
+        // from playback state: a playing video must not turn every host frame into a repaint.
         if (_videoSurfaces.HasPendingPumps) r |= WakeReasons.VideoPumpPending;
         // A windowed popup's desktop-acrylic open reveal is driven per-frame on Present (CompositionBackdrop.TickAnimation),
         // so it needs the loop to keep presenting until it settles — otherwise (no engine animation active for windowed
@@ -5783,7 +5783,6 @@ public sealed partial class AppHost : IDisposable
         _reconciler.SetAmbient(Activation.IsActive, new Signal<object?>(_windowVisible));
         _reconciler.SetAmbient(ThemeControl.Request, new Signal<object?>((Action<float>)RequestThemeTransition));   // live re-theme trigger for app code
         _reconciler.SetAmbient(VideoCompositor.Current, new Signal<object?>(_videoSurfaces));   // video-surface intent buffer for UseVideoSurface
-        _videoSurfaces.SupportsAlphaRamp = _device.VideoAlphaRamp;   // the UI's choice between fading a picture and an opaque stand-in
         _videoSurfaces.RequireSlotBinding = !_isHeadless;   // a real host drains into a presenter: elements wait for their OWN slot's bind (the headless seam has no presenter to wait for)
         if (!_isHeadless) FluentGpu.Media.MediaCensus.RegisterRegistry(_videoSurfaces);   // F235: every window's registry joins the process-wide dual-handle scan (unregistered in FinishDispose)
         _reconciler.SetAmbient(HostTimers.Current, new Signal<object?>(_timers));   // frame-clock timer queue for the timing hooks (UseTimeout/UseInterval/UseDebouncedValue/UseThrottledValue)
@@ -7217,7 +7216,7 @@ public sealed partial class AppHost : IDisposable
             // intents, with fullscreen single-writer ownership enforced by the registry.
             // A surface's on-screen rect can move with NO layout change — a compositor-only Transform translation (a
             // draggable mini-player), a page transition, a FLIP projection. Those move the punched hole but fire no
-            // bounds-changed edge, so nothing requested a pump and the DComp child stayed at its last-pumped offset
+            // bounds-changed edge, so nothing requested a pump and the video visual stayed at its last-pumped offset
             // (the video trailing the card during a drag). This compares each tracked surface's absolute rect and
             // requests a pump only when it actually moved — so it observes a frame already being produced and never
             // becomes a wake reason of its own. Must precede PumpPending so the placement drains this same frame turn.

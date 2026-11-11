@@ -820,7 +820,7 @@ struct Session
     struct StreamProbe
     {
         bool armed = false;
-        bool echoPending = false;    // the size is published (appliedStreamW/H + FgPrEvent_StreamApplied) when the probe resolves
+        bool whilePlaying = false;   // made while the source played: a pause before its frame asks for the repaint
         int32_t w = 0, h = 0;
         int64_t calledQpc = 0;       // when UpdateVideoStream returned
         double applyMs = 0.0;        // how long UpdateVideoStream itself took
@@ -851,7 +851,7 @@ struct Session
     std::atomic<int64_t> bufferedAheadMs{ 0 };
     std::atomic<int64_t> retainedBehindMs{ 0 };
     std::atomic<int64_t> firstFrameQpc{ 0 };
-    std::atomic<int32_t> appliedStreamW{ 0 }, appliedStreamH{ 0 };   // FgPrSnapshot.streamWidth/Height: the applied stream size
+    std::atomic<int32_t> appliedStreamW{ 0 }, appliedStreamH{ 0 };   // the applied stream size (the frame-health check, the no-frame line)
     std::atomic<int64_t> framesRendered{ 0 }, framesDropped{ 0 };    // FgPrSnapshot.framesRendered/Dropped (F066), this attach
     std::atomic<int64_t> framesSampledQpc{ 0 };                      // FgPrSnapshot.framesSampledQpc: when the counters above were read
     std::atomic<int32_t> feedComplete{ 0 };                          // FgPrSnapshot.feedComplete: every track's feed reached its end

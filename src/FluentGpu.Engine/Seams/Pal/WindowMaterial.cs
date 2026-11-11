@@ -27,7 +27,7 @@ public enum WindowMaterial : byte
 /// backdrop. Everything else clears to the opaque theme ground.</param>
 /// <param name="ExtendGlass">Extend the DWM frame over the whole client (sheet of glass) so the backdrop fills the window:
 /// transparent ground and the standard frame (a custom frame owns zero margins - the Windows Terminal Mica rule).</param>
-/// <param name="VideoCapable">Video needs a composited swapchain (the DComp video visuals hang off it), whatever the material.</param>
+/// <param name="VideoCapable">Video needs a composited swapchain (the video composites beneath it, through its hole), whatever the material.</param>
 public readonly record struct ResolvedWindowMaterial(
     WindowMaterial Material, bool Composited, bool CustomFrame, bool TransparentGround, bool ExtendGlass, bool VideoCapable);
 

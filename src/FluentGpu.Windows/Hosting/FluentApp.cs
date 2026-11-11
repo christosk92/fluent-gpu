@@ -116,7 +116,7 @@ public static class FluentApp
     public static RectF WindowBoundsPx => s_window is { IsClosed: false } w ? w.OuterBoundsPx : default;
 
     /// <summary>Capture the main window as the user sees it — DWM's composite, so the Mica/acrylic backdrop, the DWM frame and
-    /// DirectComposition children (video) are in it, unlike the <c>--screenshot</c> swapchain readback — to a PNG at
+    /// composition children (video) are in it, unlike the <c>--screenshot</c> swapchain readback — to a PNG at
     /// <paramref name="path"/> (directory created, file overwritten). The visible frame bounds
     /// (<c>DWMWA_EXTENDED_FRAME_BOUNDS</c>, physical px) grown by <paramref name="padPx"/> and clipped to the virtual screen;
     /// a window another window covers is raised topmost for the grab and put back. False (with a <c>[shot-window]</c>

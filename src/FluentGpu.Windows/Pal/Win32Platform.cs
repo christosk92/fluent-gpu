@@ -2315,7 +2315,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 }
                 if (_inMoveSizeLoop)
                 {
-                    // Live video is the ONE exemption from the composited full defer: with no frames the DComp child
+                    // Live video is the ONE exemption from the composited full defer: with no frames the video visual
                     // keeps its pre-resize rect while the frame moves under it, so the picture lags the window. Fall
                     // through to the throttled paint so the hole and the child are recomputed together.
                     if (!(_composited && !_hasLiveVideo) && !ThrottleModalResizePaint()) PaintRequested?.Invoke();

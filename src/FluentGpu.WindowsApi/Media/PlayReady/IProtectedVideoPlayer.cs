@@ -166,11 +166,6 @@ public interface IProtectedVideoPlayer : IDisposable
     /// <c>[video] stream.size</c> line names which window and slot wrote it (F235; no native ABI change: the tag only rides the
     /// managed log). The default drops the tag.</summary>
     void SetStreamSize(SizeI size, int token, int host) => SetStreamSize(size);
-    /// <summary>The stream size (device px) the native engine has APPLIED, as of the last <see cref="Pump()"/>: the echo of
-    /// <see cref="SetStreamSize"/> (or the size the swap chain was created at), empty while none has been applied or the
-    /// session is detached. The owner keeps the compositor's content size at the previous value until this equals the size it
-    /// asked for, so DirectComposition never scales a buffer still at the old size by the new size's factor.</summary>
-    SizeI AppliedStreamSize { get; }
     /// <summary>Keep the protected runtime's hidden output-protection (OPM) window over this source's video, so HDCP and image
     /// constriction are attested against the monitor the picture is really on. <paramref name="hostWindow"/> is the presenting
     /// window's native handle (an HWND: the main window or a pop-out) and the rect the video's client-area rect in device

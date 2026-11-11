@@ -110,12 +110,11 @@ public readonly record struct VideoGeometry(
 /// says nothing about where it was put.
 /// <list type="bullet">
 /// <item><see cref="Natural"/> — the decoded frame size the session was told to render.</item>
-/// <item><see cref="Content"/> — the size the frame is rendered at inside the backend's own swap chain, which is also
-///   the content size handed to the compositor. Its ASPECT must equal the frame's, or the backend letterboxes inside
-///   its own destination and no compositor fit can undo it.</item>
+/// <item><see cref="Content"/> — the stream size the frame is rendered at inside the backend's own swap chain. Its ASPECT
+///   must equal the frame's, or the backend letterboxes inside its own destination and no compositor fit can undo it.</item>
 /// <item><see cref="Place"/> — the device-independent rect the compositor visual is placed at (the fitted video rect
-///   the element computed). <c>Place</c> ÷ <see cref="Content"/> is the per-axis scale the compositor applies, so
-///   equal ratios == uniform, unequal == a deliberate stretch (Fill).</item>
+///   the element computed); the compositor stretches the swap chain's buffer to it. <c>Place</c> ÷ <see cref="Content"/> is
+///   that stretch per axis, so equal ratios == uniform, unequal == a deliberate stretch (Fill).</item>
 /// </list></summary>
 public readonly record struct VideoSurfaceGeometry(SizeI Natural, SizeI Content, RectF Place, float Scale)
 {

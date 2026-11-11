@@ -129,14 +129,13 @@ public sealed class MediaPlayerElement : Component
     /// rate is not the user's to change). Null sets <see cref="Player"/> directly.</summary>
     public Action<double>? RateRequested { get; init; }
     /// <summary>Round the composited video's corners (DIP; 0 = square, the default). The frame composites in its own
-    /// DirectComposition visual OUTSIDE the UI back buffer, so a rounded parent with ClipToBounds cannot clip it — the
+    /// composition visual OUTSIDE the UI back buffer, so a rounded parent with ClipToBounds cannot clip it — the
     /// radius has to reach the compositor, which is what this does. Half the shorter side gives a circle.</summary>
     public float CornerRadius { get; init; }
     /// <summary>Fade the composited picture along an alpha ramp (<see cref="VideoAlphaRamp"/>, its span in DIP from this element's own top
     /// (or left) edge, untransformed), so where its alpha falls the window's backdrop shows through instead of an opaque ground painted
-    /// over it. Read on every placement and watched (a change re-places the picture; the element does not re-render). Only a presenter
-    /// that supports it draws it (<see cref="VideoSurfaceRegistry.SupportsAlphaRamp"/>, read from <c>VideoCompositor.Current</c>):
-    /// elsewhere the picture stays opaque, so the caller keeps its own stand-in there. Null (the default) = opaque.</summary>
+    /// over it. Read on every placement and watched (a change re-places the picture; the element does not re-render). Null (the
+    /// default) = opaque.</summary>
     public IReadSignal<VideoAlphaRamp>? AlphaRamp { get; init; }
     /// <summary>Decoration mode: a BARE composited surface that owns none of the player frame. No minimum height, no
     /// border, no poster and no status overlay; the UI-side corners follow <see cref="CornerRadius"/> instead of the
@@ -156,7 +155,7 @@ public sealed class MediaPlayerElement : Component
     /// <summary>The UI-side corner shape of the frame and the video stage. Fullscreen is square. An explicitly-set
     /// <see cref="CornerRadius"/> (&gt; 0) drives the frame regardless of <see cref="IsDecorative"/> — E2: a
     /// non-decorative (operable) player asked for e.g. <c>CornerRadius = Radii.Card</c> previously got a UI frame at
-    /// the hard-coded <see cref="Radii.OverlayAll"/> while the DComp child underneath was already told
+    /// the hard-coded <see cref="Radii.OverlayAll"/> while the video visual underneath was already told
     /// <see cref="CornerRadius"/> via <see cref="VideoSurfaceRegistry.SetCornerRadius"/> (<see cref="PumpNow"/>
     /// ~:516-517) — the UI clip and the compositor clip disagreed. <see cref="CornerRadius"/> == 0 keeps BOTH
     /// pre-existing defaults unchanged: decoration still follows its own (square-by-default) shape (a decorative
@@ -420,7 +419,7 @@ public sealed class MediaPlayerElement : Component
     private double _armedDueMs = double.PositiveInfinity;
     private bool _focusOutPending;
     // The device scale the most recent PumpNow ran at (1 until the first pump). Render-time FitVideoRect uses it so
-    // the hole's layout margins agree with the pump's DComp placement in VideoAspectMode.Native (natural is px).
+    // the hole's layout margins agree with the pump's video placement in VideoAspectMode.Native (natural is px).
     private float _lastPumpScale = 1f;
     // The natural size the most recent placed pump ran with (null until the first one). The player publishes the natural size
     // from its own state pump (F132), so it can change BEFORE a pump turn rather than inside it: a difference here is what
@@ -1045,8 +1044,8 @@ public sealed class MediaPlayerElement : Component
         //       elements.
         //   [1] "media-hole" — ALWAYS mounted. The VIDEO HOLE PUNCH (DrawOp.DrawVideo, gpu-renderer.md §7.3), laid
         //       out at EXACTLY the fitted video rect. VideoHole is a PROP (holeActive) that TOGGLES — never a
-        //       presence change — so the node and its DComp registration survive a source switch. Active, it erases
-        //       everything already recorded beneath it toward premultiplied zero, so the DComp video visual
+        //       presence change — so the node and its video registration survive a source switch. Active, it erases
+        //       everything already recorded beneath it toward premultiplied zero, so the video visual
         //       composited z-BELOW the premultiplied UI swapchain shows through at full strength instead of blending
         //       with what stayed in the back buffer. Inactive, it is an ordinary (non-erasing) transparent box.
         //   [2] "media-poster" — ALWAYS mounted, a LATER sibling of the hole. Visibility rides OPACITY (posterUp),
@@ -1056,7 +1055,7 @@ public sealed class MediaPlayerElement : Component
         //   [3…] the status overlay — a LATER sibling still, so it repaints over the video. Presence-gated (it is
         //       genuinely transient), key preserved. Then "media-caption-slot" — ALWAYS mounted, a leaf that owns the
         //       caption: it reads the active cue itself, so cue changes never re-render this element.
-        // ONE SOURCE OF TRUTH: PumpNow places the DComp visual from scene.AbsoluteTransformedRect of the "media-hole" node, so
+        // ONE SOURCE OF TRUTH: PumpNow places the video visual from scene.AbsoluteTransformedRect of the "media-hole" node, so
         // the erased region and the presented video are the same rect BY CONSTRUCTION.
         bool showStatusOverlay = statusOverlay is not null;
         var videoChildren = new Element[(showStage ? 1 : 0) + 2 + (showStatusOverlay ? 1 : 0) + 1];
@@ -1342,7 +1341,7 @@ public sealed class MediaPlayerElement : Component
         VideoBinding b = _binding;
         if (!b.IsValid) return;
         // Parked (Flow.KeepAlive) or minimized: hide the composited surface. The video visual lives in its OWN
-        // DirectComposition visual below the UI swapchain, so it is not clipped or covered by whatever the shell draws
+        // composition visual below the UI swapchain, so it is not clipped or covered by whatever the shell draws
         // next — a parked page's frame keeps compositing at its last placement (a navigated-away artist portrait on the
         // nav rail). Decorative clips SKIP the pump while inactive (they must not keep an MF session alive off-screen).
         // Non-decorative player surfaces (PiP / pop-out) still pump. A MediaPlayer advances its own state, position, duration
@@ -1449,11 +1448,11 @@ public sealed class MediaPlayerElement : Component
                 if (ModeMayOverflow(mode)) geom = h;   // the rect now derives from the AREA, so follow the area's geometry
             }
         }
-        // Track geometry so a compositor-only move (a PiP drag, a page transition) re-places the DComp child on the
+        // Track geometry so a compositor-only move (a PiP drag, a page transition) re-places the video visual on the
         // frame it moves, instead of waiting for an unrelated native/transport event to request the next pump.
         b.SetGeometryNode(geom);
         // Clip the viewport to every clipping ancestor before handing it to the presenter. The frame composites in its
-        // OWN DirectComposition visual BELOW the UI swapchain — it is not inside any scissor the UI draws with — so a
+        // OWN composition visual BELOW the UI swapchain — it is not inside any scissor the UI draws with — so a
         // viewport of the element's own rect keeps presenting at full size while the element scrolls out of its
         // scroller. That is how a video in a list ended up painted across the tab strip and the title bar.
         RectF viewport = ClipToAncestors(scene, h, area);
@@ -1491,13 +1490,13 @@ public sealed class MediaPlayerElement : Component
         // an animated placement), so nothing the session publishes changed: state, buffering, position, cue, the stream
         // rect and the ABR bookkeeping are all driven by native events and transport commands, which request a FULL pump.
         // Place the surface and stop — no PumpVideo, no per-frame Position write fanning out to every subscriber. The
-        // cached content size is only valid while it is still the size this rect needs (a pure translation never changes
+        // cached stream size is only valid while it is still the size this rect needs (a pure translation never changes
         // it; a resize inside the stream-size bucket does not either; a resize that crosses into another bucket does),
         // otherwise the turn falls through to the full pump so the stream is never left sized for a stale rect (the session's
         // size gate then holds the stream until the rect is stable). The settle timer then runs the full pump once the motion
         // has ended.
-        // A surface with no content size yet (not bound / sized) is not in motion: its turn is the full pump that sizes it.
-        SizeI cached = b.IsGeometryOnlyPump ? b.ContentSize : SizeI.Zero;
+        // A surface with no stream size yet (not bound / sized) is not in motion: its turn is the full pump that sizes it.
+        SizeI cached = b.IsGeometryOnlyPump ? b.StreamSize : SizeI.Zero;
         bool motion = !cached.IsEmpty;
         if (motion)
         {
@@ -1814,7 +1813,7 @@ public sealed class MediaPlayerElement : Component
             //
             // OpaqueSurface: every menu this transport raises — quality, speed, captions, audio track — is anchored to
             // a button that sits ON the video, so the plate is over the hole BY CONSTRUCTION. A hole is a DestOut erase
-            // and the video is a sibling DComp visual below the UI swapchain, so there is nothing there for an acrylic
+            // and the video is a composition visual below the UI swapchain, so there is nothing there for an acrylic
             // layer to blur: it would composite premultiplied zero and leave the menu as floating text. Declaring it
             // here instead of letting OverlayHost discover it geometrically makes the plate solid from frame ONE — no
             // query, no frame of latency, and no per-frame slice re-record from the answer flipping.

@@ -19,7 +19,7 @@ internal readonly record struct CaptureRect(int Left, int Top, int Right, int Bo
 
 /// <summary>
 /// Capture the COMPOSED window — what the user sees: DWM's composite of the swapchain, the Mica/acrylic backdrop, the DWM
-/// border and shadow-free frame, and DirectComposition children (video) — as a PNG. The swapchain readback
+/// border and shadow-free frame, and composition children (video) — as a PNG. The swapchain readback
 /// (<c>--screenshot</c>) sees none of those.
 /// </summary>
 /// <remarks>

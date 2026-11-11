@@ -41,7 +41,7 @@ public enum CompositeKind : byte { Tiles, Region, EraseVideoHole, Group, Backdro
 /// beneath the item's clip, blurred by <see cref="BlurSigma"/> (device px) then tinted, luminosity-washed and noised —
 /// the same terms the PushLayer acrylic carries today. The default value is "no acrylic".
 /// <para><see cref="OverVideo"/>: the plate sits over a video hole erased earlier in painter order (set per turn by the composite
-/// plan, never recorded). The mini-composite cannot see video pixels (they are a DirectComposition visual below the swapchain), so
+/// plan, never recorded). The mini-composite cannot see video pixels (they are a composition visual below the swapchain), so
 /// the backdrop there is transparent and the recipe's opaque fallback filled it flat. Over video the backend draws the frost's
 /// translucent veil instead (<see cref="VeilAlpha"/>) and the video presenter shows the recipe's first half beneath the plate
 /// (<see cref="FluentGpu.Pal.IVideoPresenter.SetBackdrops"/>): the compositor blurs the video and pulls its lightness to the tint's

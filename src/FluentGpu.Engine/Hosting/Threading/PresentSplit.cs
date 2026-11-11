@@ -15,7 +15,7 @@ namespace FluentGpu.Hosting.Threading;
 /// <item><see cref="FenceMs"/> - the back-buffer / ring-slot frame-fence wait inside the submit (the GPU still owns that buffer).</item>
 /// <item><see cref="LatencyMs"/> - a frame-latency waitable wait paid INSIDE the submit (0 when the turn already held its credit).</item>
 /// <item><see cref="PresentMs"/> - <c>IDXGISwapChain::Present</c> itself (DWM / the present queue / the driver).</item>
-/// <item><see cref="VideoMs"/> - the video hole-punch drain that rides the turn (DComp placement and the settle hint).</item>
+/// <item><see cref="VideoMs"/> - the video hole-punch drain that rides the turn (the video placement and the settle hint).</item>
 /// </list>
 /// The present-slot take that precedes the turn (the <c>waitForLatency</c> of the plan) is the <c>slot=</c> figure the pace line
 /// already carries; <see cref="Format"/> names the largest of all of them as <c>blocker=</c>, and whatever the phases do not

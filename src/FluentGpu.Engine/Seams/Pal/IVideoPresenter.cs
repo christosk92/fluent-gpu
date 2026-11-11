@@ -5,8 +5,8 @@ namespace FluentGpu.Pal;
 
 /// <summary>
 /// A POD, opaque-across-the-seam handle for one composited video surface. <c>0</c> == none. The portable core and
-/// app never see the backing <c>IDCompositionVisual</c>/<c>IDCompositionSurface</c> — only this id. (Windows maps
-/// <see cref="Value"/> → a child-visual slot; macOS would map it → an <c>AVPlayerLayer</c>.)
+/// app never see the backing composition visual or surface — only this id. (Windows maps <see cref="Value"/> → a
+/// presenter slot; macOS would map it → an <c>AVPlayerLayer</c>.)
 /// </summary>
 public readonly record struct VideoSurfaceId(uint Value)
 {
@@ -15,12 +15,12 @@ public readonly record struct VideoSurfaceId(uint Value)
 
 /// <summary>
 /// The video-compositing PAL seam (<c>docs/plans/video-compositing-spine-design.md §4</c>,
-/// <c>docs/plans/video-phase1-plan.md §4</c> — DRM-free spine). Composites externally-produced video as a sibling
-/// DirectComposition visual the engine never paints into: a child visual z-BELOW the UI swapchain visual, revealed
-/// through a premultiplied-0 hole-punch in the UI back buffer (or, while the host promotes it through <see cref="SetOverlay"/>,
-/// ABOVE that visual over the same hole). The portable core references only this interface (it
-/// stays TerraFX-free); every <c>IDCompositionVisual</c>/<c>IDCompositionSurface</c> ComPtr lives behind the Windows
-/// leaf (<c>FluentGpu.Windows/Pal/DCompVideoPresenter.cs</c>), render-thread-confined like the rest of the device.
+/// <c>docs/plans/video-phase1-plan.md §4</c> — DRM-free spine). Composites externally-produced video the engine never paints
+/// into, z-BELOW the UI swapchain, revealed through a premultiplied-0 hole-punch in the UI back buffer. The portable core
+/// references only this interface (it stays TerraFX-free); every composition object lives behind the Windows leaf
+/// (<c>FluentGpu.Windows/Pal/CompositionVideoPresenter.cs</c>: a Windows.UI.Composition sprite whose surface brush stretches the
+/// swap chain's current buffer to the placed rect, on its own window target beneath the UI's), render-thread-confined like the
+/// rest of the device.
 /// </summary>
 /// <remarks>
 /// Threading: every method is executed on the RENDER/submit thread (phase 11 for <see cref="Place"/>/
@@ -122,13 +122,13 @@ public struct VideoAlphaRamp : IEquatable<VideoAlphaRamp>
 
 public interface IVideoPresenter
 {
-    /// <summary>Allocate a video child visual (hidden until <see cref="BindSurfaceHandle"/> + <see cref="Place"/>).</summary>
+    /// <summary>Allocate a video surface (hidden until <see cref="BindSurfaceHandle"/> + <see cref="Place"/>).</summary>
     VideoSurfaceId CreateSurface();
 
     /// <summary>
     /// The surface-handoff seam. An external owner produces a DirectComposition surface HANDLE
     /// (<c>DCompositionCreateSurfaceHandle</c> on its side); the Windows impl wraps it via
-    /// <c>IDCompositionDevice::CreateSurfaceFromHandle</c> and binds it as the child visual's content. Phase 1
+    /// <c>ICompositorInterop::CreateCompositionSurfaceForHandle</c> and binds it as the surface's picture. Phase 1
     /// (DRM-free) passes an UNPROTECTED handle; the DRM phase passes a PROTECTED handle here — and NOTHING else in
     /// this seam or the renderer changes. This is the single DRM attach point.
     /// <para>Returns <see langword="true"/> only when the handle is now the surface's content. On failure it returns
@@ -138,8 +138,8 @@ public interface IVideoPresenter
     bool BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle);
 
     /// <summary>
-    /// Position/clip the child visual to <paramref name="deviceRect"/> (device px) at draw order <paramref name="z"/>
-    /// (higher Z composites above lower Z, always below the UI visual). Queued for the frame's <see cref="Commit"/>; the
+    /// Position the surface's picture, stretched, to <paramref name="deviceRect"/> (device px) at draw order <paramref name="z"/>
+    /// (higher Z composites above lower Z, always below the UI swapchain). Queued for the frame's <see cref="Commit"/>; the
     /// matching hole-punch in the UI back buffer is the source of truth for the visible rect. <paramref name="opacity"/> is retained metadata (the graded reveal is done UI-side).
     /// </summary>
     void Place(VideoSurfaceId id, RectF deviceRect, float opacity, int z);
@@ -148,60 +148,31 @@ public interface IVideoPresenter
     /// UniformToFill can place an oversized, centered frame and crop it to the element without distortion.</summary>
     void SetViewport(VideoSurfaceId id, RectF deviceRect) { }
 
-    /// <summary>Show/hide the child visual (queued for the next <see cref="Commit"/>). Hiding removes the visual from the
+    /// <summary>Show/hide the surface (queued for the next <see cref="Commit"/>). Hiding removes its visual from the
     /// composition tree rather than clipping it to nothing; showing re-inserts it at its Z with its content still bound.</summary>
     void SetVisible(VideoSurfaceId id, bool visible);
 
-    /// <summary>
-    /// The externally-produced content's native pixel size (e.g. the decoder swapchain's 1920×1080). The presenter scales
-    /// that content to exactly fill the <see cref="Place"/> device rect (the rect is already aspect-fit by the caller), so
-    /// the frame fits its container instead of being shown 1:1 and cropped. A <c>0×0</c> size means "unknown yet" — the
-    /// presenter then places 1:1 (the pre-scale fallback). Default no-op so headless/test presenters need not implement it.
-    /// </summary>
-    void SetContentSize(VideoSurfaceId id, uint width, uint height) { }
-
     /// <summary>Round the corners of the composited surface's clip (the viewport within the placed rect) by <paramref name="radiiPx"/>
     /// (device px, per corner; all <c>0</c> = square, the default). The compositor clips the CONTENT, which a UI-side rounded parent
-    /// cannot do — a video child visual composites outside the UI back buffer, so it ignores the caller's ClipToBounds. The caller
+    /// cannot do — the video composites outside the UI back buffer, so it ignores the caller's ClipToBounds. The caller
     /// passes the element's own radius and, at a corner a rounded ancestor clip cuts, that clip's arc. Half the shorter side gives a
     /// circle. Default no-op so headless/test presenters need not implement it.</summary>
     void SetCornerRadii(VideoSurfaceId id, CornerRadius4 radiiPx) { }
-
-    /// <summary>True when this presenter's output reported overlay-plane support for the video (F087: the Windows probe,
-    /// <see cref="FluentGpu.Media.VideoOverlayCaps"/>), so a surface may be promoted ABOVE the UI plane through
-    /// <see cref="SetOverlay"/>. Default false: a headless / test presenter, or an output that was not probed or reported no plane,
-    /// keeps every surface an underlay.</summary>
-    bool SupportsOverlay => false;
-
-    /// <summary>
-    /// Overlay mode (F087): <see langword="true"/> moves the child visual ABOVE the UI visual (inserted above it, in the same
-    /// <c>(Z, slot)</c> order among the other promoted surfaces), <see langword="false"/> returns it to its place BELOW the UI visual.
-    /// The caller promotes only a surface whose rect nothing paints over, and demotes it on the turn something does; the UI back
-    /// buffer's hole stays punched in both modes, so only the visual's z-order changes. Queued for the next <see cref="Commit"/>
-    /// like every other mutation. Default no-op so headless/test presenters need not implement it.
-    /// </summary>
-    void SetOverlay(VideoSurfaceId id, bool above) { }
 
     /// <summary>The frosted plates over this surface's hole (an acrylic surface composited after the hole in painter order): show a
     /// BLURRED copy of the video beneath each, clipped to the plate, so the swapchain's translucent veil over the hole reads as acrylic
     /// over the video instead of a flat fill (<see cref="FluentGpu.Rhi.AcrylicRecipe.OverVideo"/>). The UI back buffer cannot sample
     /// video pixels, so the blur is the compositor's. An empty span removes them all. Queued for the next <see cref="Commit"/>; a
-    /// presenter compares with what it shows and does nothing when nothing changed. Default no-op: a headless / test presenter, or one
-    /// whose compositor has no effects, keeps the plain video (the veil then lies over the sharp frame).</summary>
+    /// presenter compares with what it shows and does nothing when nothing changed. Default no-op: a headless / test presenter keeps
+    /// the plain video (the veil then lies over the sharp frame).</summary>
     void SetBackdrops(VideoSurfaceId id, ReadOnlySpan<VideoBackdropPx> backdrops) { }
-
-    /// <summary>True when this presenter draws a surface through its <see cref="SetAlphaRamp"/> (the picture's alpha falls along the ramp
-    /// and the window's backdrop shows through where it does). Default false: the DirectComposition presenter cannot mask a swap-chain
-    /// visual, a headless / test presenter has no picture, and both ignore the ramp, so a caller that fades the picture this way must keep
-    /// an opaque stand-in where it is not supported.</summary>
-    bool SupportsAlphaRamp => false;
 
     /// <summary>Fade the surface's picture along <paramref name="rampPx"/> (device px from the placed rect's leading edge along the ramp's
     /// axis; <see cref="VideoAlphaRamp.IsNone"/> = opaque again). Queued for the next <see cref="Commit"/>; a presenter compares with what it
-    /// shows. Default no-op (see <see cref="SupportsAlphaRamp"/>).</summary>
+    /// shows. Default no-op: a headless / test presenter has no picture to fade.</summary>
     void SetAlphaRamp(VideoSurfaceId id, in VideoAlphaRamp rampPx) { }
 
-    /// <summary>Tear down one surface (removes the child visual, releases its content). Cold path.</summary>
+    /// <summary>Tear down one surface (removes its visuals, releases its content). Cold path.</summary>
     void Destroy(VideoSurfaceId id);
 
     /// <summary>
@@ -220,7 +191,7 @@ public interface IVideoPresenter
 
     /// <summary>
     /// <see cref="ApplyPending"/> plus the device flush: all queued mutations become one
-    /// <c>IDCompositionDevice::Commit</c> — the per-frame commit at phase 11 (the "two-clock tear" lock: the hole
+    /// compositor commit — the per-frame commit at phase 11 (the "two-clock tear" lock: the hole
     /// rides the same frame-turn's <c>Present</c>). No-op when nothing is dirty.
     /// </summary>
     void Commit();

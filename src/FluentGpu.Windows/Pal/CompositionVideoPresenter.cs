@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using FluentGpu.Foundation;
-using FluentGpu.Hosting;
 using FluentGpu.Rhi.D3D12;
 using TerraFX.Interop.Windows;
 using TerraFX.Interop.WinRT;
@@ -12,19 +11,17 @@ using static TerraFX.Interop.WinRT.WinRT;
 namespace FluentGpu.Pal.Windows;
 
 /// <summary>
-/// The Windows <see cref="IVideoPresenter"/> on <c>Windows.UI.Composition</c> (<c>--fg video-wuc</c>, <see cref="EngineSwitches.VideoWuc"/>).
-/// Each slot's picture is a SpriteVisual whose <c>CompositionSurfaceBrush</c> (Stretch = Fill, linear) wraps the swap-chain handle
+/// The Windows <see cref="IVideoPresenter"/>, on <c>Windows.UI.Composition</c>. Each slot's picture is a SpriteVisual whose <c>CompositionSurfaceBrush</c> (Stretch = Fill, linear) wraps the swap-chain handle
 /// (<c>ICompositorInterop::CreateCompositionSurfaceForHandle</c>): the compositor stretches whatever buffer the swap chain holds on the
 /// frame it composes to the sprite's size, so no content size is told to anyone and a stream-size change can never be drawn at a
-/// believed scale (<see cref="SetContentSize"/> is deliberately the interface's no-op).
+/// believed scale.
 /// <para>A WUC visual cannot be parented under a DComp visual, so the tree lives on the device's own video compositor
 /// (<see cref="D3D12Device.EnsureVideoCompositor"/>, a CompositorController committed by the render thread) in a second, NON-topmost
 /// <c>DesktopWindowTarget</c> on this window's HWND: beneath the DComp target that holds the UI swap chain, revealed through the UI's
-/// premultiplied-0 hole exactly like the DComp presenter's underlay. One presenter per composited swap chain (the primary window, a
+/// premultiplied-0 hole. One presenter per composited swap chain (the primary window, a
 /// pop-out, the mini player), each with its own target and root container.</para>
 /// <para>Per slot: <c>Node</c> (a container at the placed rect's whole-px origin, the rect's size, SOFT border mode so the arcs
-/// anti-alias) clipped by one <c>RectangleClip</c> (the viewport within the rect, with the four corner radii: the DComp presenter's
-/// rounded <c>IDCompositionRectangleClip</c>) → an opaque black backing sprite under the video sprite (both the placed rect, HARD
+/// anti-alias) clipped by one <c>RectangleClip</c> (the viewport within the rect, with the four corner radii) → an opaque black backing sprite under the video sprite (both the placed rect, HARD
 /// edges). One clip, because nested rounded <c>CompositionGeometricClip</c>s do not intersect: the composed result keeps the arc of
 /// only one of them (measured: a (12,12,0,0) slot built as a top-left and a top-right clip showed the top-left arc alone, in either
 /// nesting order), while nested <c>RectangleClip</c>s do. A hidden slot is removed from the root collection; Z order among slots is
@@ -36,7 +33,7 @@ namespace FluentGpu.Pal.Windows;
 /// <c>CompositionBackdropBrush</c> (what is already composed beneath the sprite: the video and its backing) through a Gaussian blur
 /// (border HARD) and the acrylic's luminosity step (a LinearTransfer); sigma and the step are the brush's animatable properties, so a
 /// fading plate writes scalars, never a brush. The plate's opacity is the sprite's.</para>
-/// <para>Alpha ramp (<see cref="SetAlphaRamp"/>, <see cref="SupportsAlphaRamp"/>): a slot whose picture fades draws its video sprite through
+/// <para>Alpha ramp (<see cref="SetAlphaRamp"/>): a slot whose picture fades draws its video sprite through
 /// a <c>CompositionMaskBrush</c> (source: the slot's surface brush; mask: one <c>CompositionLinearGradientBrush</c> per slot, ABSOLUTE
 /// mapping in the sprite's px, white stops carrying the ramp's alphas, clamped past either end), so where the picture's alpha falls the
 /// window's own backdrop shows through, as it does wherever the UI is translucent. The black backing takes the same mask (a second mask
@@ -44,7 +41,7 @@ namespace FluentGpu.Pal.Windows;
 /// black rather than the backdrop, and under a fading picture it must fade with it, or the faded part would read as black, not as the
 /// backdrop. A cleared ramp puts the plain brushes back. The gradient and its stops are built with the slot's first ramp and kept; a
 /// changed ramp rewrites only the points and stops that differ.</para>
-/// <para>Render-thread confined like the DComp presenter. Place / SetViewport / SetCornerRadii / SetVisible only record;
+/// <para>Render-thread confined like the rest of the device. Place / SetViewport / SetCornerRadii / SetVisible only record;
 /// <see cref="ApplyPending"/> first lets the device pump the compositor's queue (only on a turn that moves no picture), then writes
 /// only what changed (a pure move writes one Offset) and
 /// notes that the controller owes a Commit, which the host makes once per turn right after the Present that carries the hole
@@ -116,8 +113,6 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         public float Opacity, Sigma, Slope, Lift;
     }
 
-    private static bool s_overlayNoted;
-
     private readonly D3D12Device _device;
     private readonly D3D12Swapchain _target;
     private readonly Slot[] _slots = new Slot[MaxSurfaces];
@@ -145,18 +140,13 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     private ICompositionBrush* _black;   // the backing sprites' shared opaque black brush
     private bool _rootFailed;      // the window's target could not be built: logged once, not retried
 
-    // Fault-logging dedup for Ok(): per presenter, keyed on the raw HRESULT (the DComp presenter's rule).
+    // Fault-logging dedup for Ok(): per presenter, keyed on the raw HRESULT.
     private readonly HashSet<uint> _loggedHrs = new();
 
     public CompositionVideoPresenter(D3D12Device device, D3D12Swapchain target)
     {
         _device = device;
         _target = target;
-        if (EngineSwitches.VideoOverlay && !s_overlayNoted)
-        {
-            s_overlayNoted = true;
-            Diag.Line("[video.surface] [video.wuc] --fg video-overlay is not supported by the composition presenter (the video tree sits under the UI's target)");
-        }
     }
 
     private ICompositor* Comp => _device.VideoCompositor;
@@ -345,7 +335,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         _device.AssertRenderThread();
         ref Slot s = ref Get(id);
         if (s.Z != z && s.InTree) s.Restack = true;   // a place in the root collection is fixed at insertion: a Z change re-inserts
-        s.Rect = deviceRect; s.Z = z;                 // opacity is retained metadata the DComp presenter ignores too (UI-side reveal)
+        s.Rect = deviceRect; s.Z = z;                 // opacity is retained metadata (the graded reveal is done UI-side)
         s.Dirty = true; _anyDirty = true;
     }
 
@@ -378,8 +368,6 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         s.Radii = r;
         s.Dirty = true; _anyDirty = true;
     }
-
-    public bool SupportsAlphaRamp => true;
 
     public void SetAlphaRamp(VideoSurfaceId id, in VideoAlphaRamp rampPx)
     {
@@ -625,8 +613,8 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
             VideoBackdropPx b = _want[pi];
             float l = b.Rect.X - s.Rect.X, t = b.Rect.Y - s.Rect.Y, w = MathF.Max(0f, b.Rect.W), h = MathF.Max(0f, b.Rect.H);
             wrote |= ApplyClip(p.Clip, ref p.Held, l, t, l + w, t + h, b.Radii);
-            // The blur's input: the plate's neighbourhood (3 sigma reaches 99.7 % of the kernel), never another plate (the DComp
-            // presenter's rule; here it also keeps one plate's backdrop free of another's frost), clamped to the visible box. The
+            // The blur's input: the plate's neighbourhood (3 sigma reaches 99.7 % of the kernel), never another plate (it keeps
+            // one plate's backdrop free of another's frost), clamped to the visible box. The
             // brush's HARD border clamps at the sprite's edge, so a plate with no reach reads the same at its own border.
             float sigma = Math.Clamp(b.Sigma, 0f, MaxBlurSigma);
             float reach = PlateReach(idx, k, want, 3f * sigma);
@@ -680,7 +668,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         return reach;
     }
 
-    // The acrylic recipe's LUMINOSITY step (the DComp presenter's LuminosityMatrix, as the LinearTransfer's slope and offset): scaling
+    // The acrylic recipe's LUMINOSITY step (as the LinearTransfer's slope and offset): scaling
     // RGB toward black (a dark tint) or toward white (a light one) moves lightness while keeping hue and saturation, by the factor that
     // takes a typical video's lightness (LumRef) to the tint's: out = in * slope + lift. Pure, allocation-free.
     private const float LumRef = 0.45f;
@@ -948,7 +936,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         return wrote;
     }
 
-    // A rounded clip (l, t, r, b) with each radius clamped to half the box's extent per axis (the DComp presenter's rule), writing only
+    // A rounded clip (l, t, r, b) with each radius clamped to half the box's extent per axis, writing only
     // what differs from `held`. True when anything was written.
     private bool ApplyClip(IRectangleClip* rc, ref RoundedBox held, float l, float t, float r, float b, CornerRadius4 rad)
     {
@@ -1032,7 +1020,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         if (_comp2Ramp != null) { _comp2Ramp->Release(); _comp2Ramp = null; }
     }
 
-    /// <summary>Non-throwing HRESULT check (the DComp presenter's rule): nothing here throws into the render thread's commit path.
+    /// <summary>Non-throwing HRESULT check: nothing here throws into the render thread's commit path.
     /// Logs the first occurrence of each distinct HRESULT and returns false so the caller degrades in place.</summary>
     private bool Ok(HRESULT hr, string what)
     {

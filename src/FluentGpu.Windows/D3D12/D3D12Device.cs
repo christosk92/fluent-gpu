@@ -316,43 +316,31 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // DirectComposition (Mica path): the swapchain is composed onto the HWND so DWM's Mica shows through transparent pixels.
     private IDCompositionDevice* _dcomp;
 
-    // Video compositing spine (M0): the DComp video presenter shares this device's ONE IDCompositionDevice
-    // (docs/plans/video-compositing-spine-design.md §4/§13.6). Each COMPOSITED swapchain gets its own presenter bound to
-    // ITS DComp root (stored on D3D12Swapchain.VideoPresenter) — the primary window and a detached video window each get
-    // one; all share _dcomp. Lazily created via GetVideoPresenter(...); render-thread-confined.
+    // Video compositing: each COMPOSITED swapchain gets its own presenter (stored on D3D12Swapchain.VideoPresenter), a
+    // Windows.UI.Composition tree on this device's one video compositor (D3D12Device.VideoCompositor.cs), in its own window target
+    // beneath the one that holds the UI swap chain. The primary window and a detached video window each get one. Lazily created via
+    // GetVideoPresenter(...); render-thread-confined.
 
-    // The shared IDCompositionDevice + the primary swapchain's DComp root/UI visual, for the video presenter (same assembly).
-    internal IDCompositionDevice* DcompDevice => _dcomp;
-    internal D3D12Swapchain? PrimarySwapchain => _primarySwapchain;
     internal void AssertRenderThread() => AssertSubmitThread();
 
     /// <summary>
-    /// The DRM-free video-compositing seam (<c>IVideoPresenter</c>), sharing this device's single
-    /// <c>IDCompositionDevice</c> and the primary swapchain's DComp root visual. Lazily created on first access; must be
-    /// touched only after the primary swapchain's DComp graph is bound (render-thread-confined). Returns null if there is
-    /// no composited primary swapchain (opaque HWND path has no DComp tree).
+    /// The DRM-free video-compositing seam (<c>IVideoPresenter</c>) of the primary swapchain. Lazily created on first access
+    /// (render-thread-confined). Returns null if there is no composited primary swapchain (the opaque HWND path has no
+    /// composition tree to put the UI's hole over).
     /// </summary>
     public FluentGpu.Pal.IVideoPresenter? GetVideoPresenter() => GetVideoPresenter(_primarySwapchain);
 
-    /// <summary><see cref="IGpuDevice.GetVideoPresenter(ISwapchain)"/> — the per-window video presenter bound to
-    /// <paramref name="swapchain"/>'s DComp root. Lazily creates + caches one presenter per COMPOSITED swapchain (stored
-    /// on <see cref="D3D12Swapchain.VideoPresenter"/>); null when the target is null / not composited. Render-thread
-    /// confined. The primary window and a detached video window each get their own; all share this device's one
-    /// <c>IDCompositionDevice</c>.</summary>
+    /// <summary><see cref="IGpuDevice.GetVideoPresenter(ISwapchain)"/> — the per-window video presenter of
+    /// <paramref name="swapchain"/>: a <see cref="FluentGpu.Pal.Windows.CompositionVideoPresenter"/>, whose surface brush stretches the
+    /// swap chain's current buffer to the placed rect. Lazily creates + caches one presenter per COMPOSITED swapchain (stored on
+    /// <see cref="D3D12Swapchain.VideoPresenter"/>); null when the target is null / not composited. Render-thread confined. The
+    /// primary window and a detached video window each get their own; all share this device's one video compositor.</summary>
     public FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(ISwapchain swapchain)
     {
         AssertSubmitThread();
         if (swapchain is not D3D12Swapchain { Composited: true } sc) return null;
-        // --fg video-wuc: the Windows.UI.Composition presenter (a surface brush stretches the swap chain's real buffer) instead.
-        return sc.VideoPresenter ??= FluentGpu.Hosting.EngineSwitches.VideoWuc
-            ? new FluentGpu.Pal.Windows.CompositionVideoPresenter(this, sc)
-            : new FluentGpu.Pal.Windows.DCompVideoPresenter(this, sc);
+        return sc.VideoPresenter ??= new FluentGpu.Pal.Windows.CompositionVideoPresenter(this, sc);
     }
-
-    /// <summary><see cref="IGpuDevice.VideoAlphaRamp"/>: the presenter kind <see cref="GetVideoPresenter(ISwapchain)"/> makes. The
-    /// composition presenter (<c>--fg video-wuc</c>) masks its sprites with the ramp; the DirectComposition one cannot mask a swap-chain
-    /// visual.</summary>
-    public bool VideoAlphaRamp => FluentGpu.Hosting.EngineSwitches.VideoWuc;
 
     private FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(D3D12Swapchain? swapchain)
         => swapchain is null ? null : GetVideoPresenter((ISwapchain)swapchain);
@@ -1527,13 +1515,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         AssertSubmitThread();   // seam: the DComp device is render-thread-confined once a render thread exists (no-op in pure single-thread)
         if (_dcomp != null) return;
         IDCompositionDevice* dc;
-        // DCompositionCreateDevice3 hands back the SAME v1 interface every caller uses (targets, visuals, surfaces from handles), but a
-        // device of the Windows 10 family: its visuals answer IDCompositionVisual3 and it answers IDCompositionDevice3, whose effects
-        // the video presenter's frosted-plate blur needs (DCompVideoPresenter.SetBackdrops). A v1 DCompositionCreateDevice device
-        // refuses that QueryInterface (E_NOINTERFACE, measured), so it stays only as the fallback: the plates are then a veil over
-        // the sharp video, nothing else changes.
-        if ((int)DCompositionCreateDevice3(null, __uuidof<IDCompositionDevice>(), (void**)&dc) < 0)
-            Check(DCompositionCreateDevice(null, __uuidof<IDCompositionDevice>(), (void**)&dc), "DCompositionCreateDevice");
+        Check(DCompositionCreateDevice(null, __uuidof<IDCompositionDevice>(), (void**)&dc), "DCompositionCreateDevice");
         _dcomp = dc;
     }
 
@@ -1549,10 +1531,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         IDCompositionTarget* dcompTarget;
         Check(_dcomp->CreateTargetForHwnd(target.Hwnd, BOOL.TRUE, &dcompTarget), "CreateTargetForHwnd");
         target.DcompTarget = dcompTarget;
-        // Video spine (M0, docs/plans/video-compositing-spine-design.md §3.2): a ROOT visual wrapping the UI child, so
-        // video child visuals can be lazily inserted z-BELOW the UI. With zero video children this is behaviorally
-        // identical to the old single-visual tree (root → one UI child on top). Back-compat: nothing about the swapchain,
-        // RTVs, present, or the SetContent-survives-ResizeBuffers property changes.
+        // A ROOT visual wrapping the UI child (--fg backdrop-plane puts its plane beneath the UI child). Nothing about the
+        // swapchain, RTVs, present, or the SetContent-survives-ResizeBuffers property depends on it. Video is not in this tree: it
+        // lives on its own window target beneath this one (CompositionVideoPresenter).
         IDCompositionVisual* root;
         Check(_dcomp->CreateVisual(&root), "CreateVisual(root)");
         target.DcompRoot = root;
@@ -1560,26 +1541,22 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Check(_dcomp->CreateVisual(&visual), "CreateVisual(ui)");
         target.DcompVisual = visual;
         Check(target.DcompVisual->SetContent((IUnknown*)target.SwapChain), "Visual.SetContent");
-        // UI child on TOP of the root (insertAbove=TRUE, ref=null). Video children go under it via AddVisual(child,
-        // insertAbove=FALSE, ref=uiVisual) in DCompVideoPresenter — strictly beneath, revealed by the premul-0 hole.
+        // UI child on TOP of the root (insertAbove=TRUE, ref=null).
         Check(target.DcompRoot->AddVisual(target.DcompVisual, BOOL.TRUE, null), "Root.AddVisual(ui)");
         Check(target.DcompTarget->SetRoot(target.DcompRoot), "Target.SetRoot(root)");
         Check(_dcomp->Commit(), "DComp.Commit");
         target.DcompBindPending = false;
-        // No re-attach of video children here: DComp visuals cannot move between IDCompositionDevice instances, so a device
-        // recovery disposes the presenter (RecoverDevice) and the video registry rebuilds its surfaces on a fresh one; a
-        // child created before this first lazy bind attaches on the presenter's next Commit.
     }
 
     // Producer swapchains that render into engine-owned shareable DComp surface handles (M0 test surfaces). Kept alive
-    // for the device lifetime so the DWM-side CreateSurfaceFromHandle reads live pixels; released in Dispose.
+    // for the device lifetime so the compositor's wrapped surface reads live pixels; released in Dispose.
     private readonly List<nint> _testSurfaceSwapchains = new();
 
     /// <summary>
     /// M0 (docs/plans/video-phase1-plan.md §4, correction #4): create a REAL shareable DirectComposition surface via
     /// <c>DCompositionCreateSurfaceHandle</c>, render a recognizable test pattern into it through a
-    /// composition-surface-handle DXGI swapchain, and return the handle. The video presenter binds it with
-    /// <c>CreateSurfaceFromHandle</c> — so <c>BindSurfaceHandle</c> is exercised end-to-end with no media/decoder/DRM.
+    /// composition-surface-handle DXGI swapchain, and return the handle. The video presenter wraps it
+    /// (<c>ICompositorInterop::CreateCompositionSurfaceForHandle</c>) — so <c>BindSurfaceHandle</c> is exercised end-to-end with no media/decoder/DRM.
     /// The pattern is a two-tone split (magenta right / cyan left) so the composited blend is unmistakably the surface,
     /// not a flat fill. Render-thread-confined; the producer swapchain is retained for the device lifetime.
     /// </summary>
@@ -4651,29 +4628,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public ulong CompletedSubmitSerial
         => _fence == null ? ulong.MaxValue : global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
 
-    // F080: edits the video presenters applied to the shared IDCompositionDevice that no Commit has flushed yet. Every
-    // presenter shares the device's one IDCompositionDevice, so ONE commit per render turn (CommitVideoComposition) flushes the
-    // parent's and every pop-out's tree together instead of one commit per window landing in different DWM frames.
-    private bool _videoCommitDue;
-    private uint _videoCommitFailedHr;   // the last failing HRESULT logged (one line per distinct value)
-
-    /// <summary>A presenter applied composition edits that need a device commit (render thread).</summary>
-    internal void NoteVideoCommitDue() => _videoCommitDue = true;
-
     /// <inheritdoc/>
+    /// <remarks>F080: every presenter shares the device's one video compositor, so ONE commit per render turn flushes the parent's and
+    /// every pop-out's tree together instead of one commit per window landing in different DWM frames: the controller's Commit, only
+    /// when a presenter wrote to the tree (D3D12Device.VideoCompositor.cs).</remarks>
     public void CommitVideoComposition()
     {
         AssertSubmitThread();
-        CommitVideoCompositor();   // --fg video-wuc: the controller's Commit, only when the WUC tree was written (D3D12Device.VideoCompositor.cs)
-        if (!_videoCommitDue) return;
-        _videoCommitDue = false;
-        if (_dcomp == null) return;
-        HRESULT hr = _dcomp->Commit();   // non-throwing, like the presenter's own edits: a failure leaves DWM on the prior composition
-        if ((int)hr < 0 && _videoCommitFailedHr != (uint)hr)
-        {
-            _videoCommitFailedHr = (uint)hr;
-            Diag.Line($"[video.presenter] device Commit failed: 0x{(uint)hr:X8}");
-        }
+        CommitVideoCompositor();
     }
 
     // TryTakePresentSlot's grace timer (render-thread owned; created on the first bounded take, closed in Dispose). A plain
@@ -5375,9 +5337,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Line($"[d3d12.teardown] phase=target-drain target={target.Ordinal} recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
         DrainForTeardown(TargetFenceHorizon(target.Frame), signal: false);
         ReleaseSwapchainResources(target);
-        // Release this swapchain's video presenter AFTER its resources (its DcompRoot is now null → DetachChild no-ops)
-        // but while the shared _dcomp is still alive (so the presenter's own child-visual ComPtrs release cleanly). This
-        // is the teardown path when a detached video window's swapchain is closed.
+        // Release this swapchain's video presenter (its window target, visuals and wrapped surfaces) after its resources. This is
+        // the teardown path when a detached video window's swapchain is closed.
         (target.VideoPresenter as System.IDisposable)?.Dispose();
         target.VideoPresenter = null;
         _swapchains.Remove(target);
@@ -5500,17 +5461,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         for (int i = 0; i < _swapchains.Count; i++)
         {
             ReleaseSwapchainResources(_swapchains[i]);
-            // The video presenter's child visuals / wrapped surfaces were created by the DComp device released in step 2
-            // and cannot be parented under the new device's root: dispose it now (its DcompRoot is already null, so it only
-            // frees its own ComPtrs, while _dcomp is still alive) and let GetVideoPresenter build a fresh one on the new
-            // device. VideoSurfaceRegistry.Drain sees the new instance and re-creates, re-binds and re-places every live surface.
+            // The video presenter is rebuilt with the device: dispose it now (it frees its own visuals and wrapped surfaces; the
+            // video compositor itself survives the recovery) and let GetVideoPresenter build a fresh one. VideoSurfaceRegistry.Drain
+            // sees the new instance and re-creates, re-binds and re-places every live surface.
             (_swapchains[i].VideoPresenter as System.IDisposable)?.Dispose();
             _swapchains[i].VideoPresenter = null;
             _swapchains[i].Disposed = false;
         }
-        // The presenters' backing visuals are gone with them; the shared black backing content was built on the queue
-        // released below, so drop it too — the next video slot recreates it (EnsureVideoBacking) on the new device.
-        ReleaseVideoBacking();
         ReleaseBackdropPlane();   // --fg backdrop-plane: its visual / swapchain belong to the dying DComp device and queue
         // 2. Release device-level ComPtrs + pipelines (null the pipe fields so EnsurePipelines re-runs). NO WaitForGpu.
         ReleaseGpuTimingResources();
@@ -5520,7 +5477,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // to release here (the old single call site this replaced).
         if (_infoQueue != null) { _infoQueue->Release(); _infoQueue = null; }
         if (_dcomp != null) { _dcomp->Release(); _dcomp = null; }
-        _videoCommitDue = false;   // the edits it described went with the old composition device
         _glyphs?.Dispose(); _glyphs = null;
         _imagePipe?.Dispose(); _imagePipe = null;
         _bakedBlur?.Dispose(); _bakedBlur = null;
@@ -5604,9 +5560,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Line($"[d3d12.teardown] phase=device-release recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
         for (int i = _swapchains.Count - 1; i >= 0; i--)
         {
-            // Video spine: release each swapchain's presenter (child visuals + wrapped surface content) BEFORE the shared
-            // _dcomp below. ReleaseSwapchainResources has already nulled this swapchain's DcompRoot, so the presenter's
-            // DetachChild no-ops (guarded) — it only frees its own child ComPtrs.
+            // Release each swapchain's video presenter (its window target, visuals and wrapped surfaces) before the video
+            // compositor below.
             ReleaseSwapchainResources(_swapchains[i]);
             (_swapchains[i].VideoPresenter as System.IDisposable)?.Dispose();
             _swapchains[i].VideoPresenter = null;
@@ -5616,9 +5571,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         foreach (nint sc in _testSurfaceSwapchains)
             if (sc != 0) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release((void*)sc);
         _testSurfaceSwapchains.Clear();
-        ReleaseVideoBacking();   // after every presenter (their backing visuals share this content), before the DComp device
         ReleaseBackdropPlane();  // --fg backdrop-plane
-        ReleaseVideoCompositor();   // --fg video-wuc: after every presenter
+        ReleaseVideoCompositor();   // after every presenter
         if (_dcomp != null) { _dcomp->Release(); _dcomp = null; }
         _glyphs?.Dispose(); _glyphs = null;
         _imagePipe?.Dispose(); _imagePipe = null;
@@ -5753,10 +5707,10 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     // lives ONLY on Frame (below) — never copied into (or back out of) a device working field, so a detached child's
     // create/dispose/resize can no longer clobber another target's in-flight recording (INCIDENT 2026-09 §1.2/§1.3/§1.4).
     internal IDCompositionTarget* DcompTarget;
-    internal IDCompositionVisual* DcompRoot;     // video spine (M0): the tree root — UI child z-above, video children z-below
+    internal IDCompositionVisual* DcompRoot;     // the tree root: the UI child on top (--fg backdrop-plane's plane beneath it)
     internal IDCompositionVisual* DcompVisual;   // the UI child (owns the swapchain content); topmost, painted every frame
     internal bool DcompBindPending;   // seam: DComp graph deferred out of UI-thread InitSwapChain; bound on the presenting thread (see BindDComp)
-    internal FluentGpu.Pal.IVideoPresenter? VideoPresenter;   // per-window video presenter for THIS swapchain (DComp, or WUC under --fg video-wuc; lazily created; disposed with the swapchain)
+    internal FluentGpu.Pal.IVideoPresenter? VideoPresenter;   // per-window video presenter for THIS swapchain (lazily created; disposed with the swapchain)
     internal CompositionBackdrop? Backdrop;   // non-null ⇒ WUC desktop-acrylic popup (replaces the DComp path)
     // This target's per-submit recording + damage/present state (Phase 1 §3.1). Created once, here, never rebuilt —
     // BeginTargetFrame/EndTargetFrame take a reference to it for the duration of one submit; nothing ever copies it

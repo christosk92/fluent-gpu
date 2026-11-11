@@ -6,9 +6,9 @@ using static TerraFX.Interop.WinRT.WinRT;
 
 namespace FluentGpu.Rhi.D3D12;
 
-// --fg video-wuc: the Windows.UI.Composition compositor the CompositionVideoPresenters build their trees on. A WUC sprite cannot be
+// The Windows.UI.Composition compositor the CompositionVideoPresenters build their trees on. A WUC sprite cannot be
 // parented under a DComp visual (E_NOINTERFACE both ways, measured), so the video lives on its own compositor, owned by a
-// CompositorController: nothing reaches the screen until the render thread calls its Commit, exactly like the DComp device's. Created
+// CompositorController: nothing reaches the screen until the render thread calls its Commit (CommitVideoComposition). Created
 // lazily on the RENDER thread and confined to it; it does not depend on the D3D12 device, so a device recovery keeps it (only the
 // presenters are rebuilt). Released with the device.
 public sealed unsafe partial class D3D12Device

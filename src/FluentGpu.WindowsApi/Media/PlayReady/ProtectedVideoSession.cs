@@ -138,8 +138,6 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     private readonly string? _openingRepresentationId;
     private bool _leftOpeningRepresentation;
     private int _streamW = -1, _streamH = -1;
-    // The stream size native reports as applied, from the last pump's snapshot (UI thread; empty while detached).
-    private SizeI _appliedStream;
     // The native renderer's frame counters from the last pump's snapshot (UI thread; F066).
     private long _framesRendered, _framesDropped;
     // The native feed reached the end of every track, as of the last pump's snapshot (written on the UI thread, read on any).
@@ -684,9 +682,6 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     }
 
     /// <inheritdoc/>
-    public SizeI AppliedStreamSize => _appliedStream;
-
-    /// <inheritdoc/>
     public long FramesRendered => _framesRendered;
     /// <inheritdoc/>
     public long FramesDropped => _framesDropped;
@@ -836,7 +831,6 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
                 _streamW = -1; _streamH = -1;
             }
         }
-        _appliedStream = n.StreamWidth > 0 && n.StreamHeight > 0 ? new SizeI(n.StreamWidth, n.StreamHeight) : SizeI.Zero;
         _framesRendered = Math.Max(0, n.FramesRendered);
         _framesDropped = Math.Max(0, n.FramesDropped);
         _feedComplete = n.FeedComplete != 0;
@@ -962,8 +956,6 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
             ErrorHr = n.ErrorHr,
             FirstFrameTimestamp = firstFrame ? n.FirstFrameQpc : 0,
             BufferedAheadMs = n.BufferedAheadMs,
-            StreamW = (uint)Math.Max(0, n.StreamWidth),
-            StreamH = (uint)Math.Max(0, n.StreamHeight),
             FramesRendered = Math.Max(0, n.FramesRendered),
             FramesDropped = Math.Max(0, n.FramesDropped),
         };
@@ -1021,9 +1013,6 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
 
             case PrNative.EvSizeChanged:
                 LogVideo($"size.changed key={_logKey} size={a}x{b}");
-                break;
-
-            case PrNative.EvStreamApplied:   // the native "[cenc] stream size ... firstFrameAfterMs=" line already says when and why
                 break;
 
             case PrNative.EvFeedStalled:

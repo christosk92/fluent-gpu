@@ -232,7 +232,7 @@ public sealed record BoxEl : Element
     public bool TabShape { get => (_cPaint ?? BoxColdPaint.Default).TabShape; init { if (!EqualityComparer<bool>.Default.Equals((_cPaint ?? BoxColdPaint.Default).TabShape, value)) CPaint.TabShape = value; } } // selected TabView header: rounded top + bottom flares
     public float TabFlareRadius { get => (_cPaint ?? BoxColdPaint.Default).TabFlareRadius; init { if (!EqualityComparer<float>.Default.Equals((_cPaint ?? BoxColdPaint.Default).TabFlareRadius, value)) CPaint.TabFlareRadius = value; } }
     /// <summary>Punch a VIDEO HOLE at this box (DrawOp.DrawVideo): instead of painting, the box ERASES the UI pixels
-    /// already painted under it toward premultiplied zero, so the DComp video visual composited BELOW the swapchain shows
+    /// already painted under it toward premultiplied zero, so the video visual composited BELOW the swapchain shows
     /// through. Painter-ordered — anything recorded after it (letterbox bars, transport chrome) paints back OVER the
     /// video. Supersedes <see cref="Fill"/> for this node; see gpu-renderer.md §7.3 for the offscreen-layer limitation
     /// (inside an opacity/blur/acrylic layer the erase hits the layer RT, not the back buffer).</summary>

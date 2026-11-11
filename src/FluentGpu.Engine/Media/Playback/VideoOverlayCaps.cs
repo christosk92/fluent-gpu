@@ -17,15 +17,15 @@ public enum OverlayPlaneSupport : byte
 /// <summary>
 /// F087: the overlay-plane support one display output reported for NV12 / YUY2 / BGRA (<c>IDXGIOutput3::CheckOverlaySupport</c>, asked
 /// with a D3D11 device by the Windows <c>VideoOverlayProbe</c>, once per output a video meets). It is the ONE verdict the
-/// <c>[d3d12.present]</c> / <c>[video.overlay]</c> lines and the overlay promotion (<c>IVideoPresenter.SupportsOverlay</c>) read, so a
-/// claim about direct scan-out is only ever made from a probe result. A default value is "not probed": nothing is promoted.
+/// <c>[d3d12.present]</c> / <c>[video.overlay]</c> lines read, so a claim about direct scan-out is only ever made from a probe
+/// result. A default value is "not probed".
 /// The media engines' output format is NOT chosen from it: in windowless mode the Simple Video Renderer presents the decoder's NV12
 /// itself (see <c>VideoMediaEngine.CreateEngine</c>).
 /// </summary>
 public readonly record struct VideoOverlayCaps(bool Probed, OverlayPlaneSupport Nv12, OverlayPlaneSupport Yuy2, OverlayPlaneSupport Bgra)
 {
-    /// <summary>Any probed format can take a hardware plane - the precondition of placing the video above the UI plane.</summary>
-    public bool AnyPromotable => Probed && (Nv12 != OverlayPlaneSupport.None || Yuy2 != OverlayPlaneSupport.None || Bgra != OverlayPlaneSupport.None);
+    /// <summary>Any probed format can take a hardware plane.</summary>
+    public bool AnyPlane => Probed && (Nv12 != OverlayPlaneSupport.None || Yuy2 != OverlayPlaneSupport.None || Bgra != OverlayPlaneSupport.None);
 
     /// <summary>The caps from the raw <c>DXGI_OVERLAY_SUPPORT_FLAG</c> words of the three probed formats (bits other than DIRECT / SCALING are dropped).</summary>
     public static VideoOverlayCaps FromDxgiFlags(uint nv12, uint yuy2, uint bgra)

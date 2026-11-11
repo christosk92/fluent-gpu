@@ -296,7 +296,7 @@ static class Program
 
         // M0 of the DRM-free video compositing spine: restructured DComp present tree + IVideoPresenter + an
         // engine-owned test surface through the real CreateSurfaceFromHandle path + a graded hole, captured to a PNG
-        // (docs/plans/video-phase1-plan.md §4). `--video-m0 <png>` [--frames N]. Screen capture (the DComp child is
+        // (docs/plans/video-phase1-plan.md §4). `--video-m0 <png>` [--frames N]. Screen capture (the video visual is
         // composited by DWM, not in our back buffer), so it needs a live composited desktop session.
         int vm0 = Array.IndexOf(args, "--video-m0");
         if (vm0 >= 0)
@@ -312,7 +312,7 @@ static class Program
 
         // M3 of the DRM-free video compositing spine: IMFMediaEngineEx windowless-swapchain decode of a CLEAR MP4 →
         // GetVideoSwapchainHandle → the SAME IVideoPresenter M0 proved, composited z-below the UI. `--video-real <png>`
-        // [--frames N]. Screen capture (the DComp child is composited by DWM), needs a live composited desktop session.
+        // [--frames N]. Screen capture (the video visual is composited by DWM), needs a live composited desktop session.
         int vreal = Array.IndexOf(args, "--video-real");
         if (vreal >= 0)
         {

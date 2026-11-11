@@ -74,7 +74,7 @@ internal sealed unsafe class RoundRectPipeline : IDisposable
     private ID3D12PipelineState* _psoOpaque;
     // The video hole punch (DrawOp.DrawVideo): the SAME SDF shader on a DestOut blend (ZERO/INV_SRC_ALPHA, color+alpha),
     // so an instance colored (0,0,0,VideoReady) yields dst' = dst×(1−VideoReady·cov·opacity) — the already-painted UI is
-    // erased toward premultiplied zero and the DComp video visual below the swapchain shows through. Unlike the opaque
+    // erased toward premultiplied zero and the video visual below the swapchain shows through. Unlike the opaque
     // fast path this is CORRECTNESS, not an optimization: there is no equivalent fallback, so its build throws.
     private ID3D12PipelineState* _psoDestOut;
     private ID3D12PipelineState* _psoAdd;   // RectPass.Additive

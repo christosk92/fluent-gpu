@@ -799,7 +799,7 @@ never touched by a device-lost event.
 
 ---
 
-## 7. NEW PAL seam: `IVideoPresenter` (DComp sibling visual; FluentGpu never touches video pixels)
+## 7. NEW PAL seam: `IVideoPresenter` (a compositor visual below the UI; FluentGpu never touches video pixels)
 
 ```csharp
 namespace FluentGpu.Pal;
@@ -808,21 +808,23 @@ public readonly struct VideoSurfaceId { public readonly uint Value; }   // POD; 
 
 public interface IVideoPresenter
 {
-    VideoSurfaceId CreateSurface();                            // adds a DComp child visual below the swapchain
+    VideoSurfaceId CreateSurface();                            // adds a composition visual below the swapchain
     void BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle);   // surface-handoff + DRM attach point
     void Place(VideoSurfaceId id, in RectPx deviceRect, float opacity, int z); // off-loop transform poke
     void SetVisible(VideoSurfaceId id, bool visible);
     void Destroy(VideoSurfaceId id);
-    void Commit();                                             // flush queued mutations in one DComp Commit (phase 11)
+    void Commit();                                             // flush queued mutations in one compositor Commit (phase 11)
 }
 ```
 
-`FluentGpu.Windows` Pal/ → DComp child visual (as-built `FluentGpu.Windows/Pal/DCompVideoPresenter.cs`,
-`src/FluentGpu.Engine/Seams/Pal/IVideoPresenter.cs`) whose content is an external DirectComposition surface
+`FluentGpu.Windows` Pal/ → a Windows.UI.Composition sprite (as-built `FluentGpu.Windows/Pal/CompositionVideoPresenter.cs`,
+`src/FluentGpu.Engine/Seams/Pal/IVideoPresenter.cs`: its surface brush, Stretch = Fill, stretches the swap chain's current buffer to
+the placed rect, on the window's own non-topmost `DesktopWindowTarget` beneath the UI's DComp target; the DirectComposition presenter
+that scaled by a declared content size was deleted on 2026-11-11) whose content is an external DirectComposition surface
 **handle** the app's video backend produces (native in-process PlayReady CDM / clear `IMFMediaEngineEx`
 windowless-swapchain). **`BindSurfaceHandle` is the surface-handoff seam** — an external owner creates the
 handle (`DCompositionCreateSurfaceHandle` / `GetVideoSwapchainHandle`) and the Windows impl wraps it via
-`IDCompositionDevice::CreateSurfaceFromHandle`; it is also the **single DRM attach point** (a PROTECTED handle
+`ICompositorInterop::CreateCompositionSurfaceForHandle`; it is also the **single DRM attach point** (a PROTECTED handle
 changes nothing else in the seam). Supersedes the earlier `GetMediaPlayerSink` sink-pull shape
 <!-- canon-allow: names the superseded seam method on purpose -->. FluentGpu records only `DrawVideoCmd` (the
 hole-punch) and pokes `Place`. **The heaviest continuous work is off our thread by construction** — this is the

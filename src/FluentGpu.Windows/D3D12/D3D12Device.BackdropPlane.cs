@@ -226,12 +226,13 @@ public sealed unsafe partial class D3D12Device
         if ((int)hr < 0) Console.Error.WriteLine("[backdrop.plane] " + what + " failed: 0x" + ((uint)hr).ToString("X8", CultureInfo.InvariantCulture));
     }
 
-    /// <summary>The visual at the very BOTTOM of the root's children (below the video underlays and the UI), then Commit.</summary>
+    /// <summary>The visual at the very BOTTOM of the root's children (below the UI), then Commit. The video is not in this tree: its
+    /// own window target sits beneath this whole DComp target, so while engaged this opaque plane hides any video under it.</summary>
     private bool PlaneAttach(D3D12Swapchain sc)
     {
         if (_planeVisual == null || sc.DcompRoot == null) return false;
         // AddVisual with a NULL reference: insertAbove=TRUE places the visual BELOW all its siblings (insertAbove=FALSE would
-        // place it on top; see DCompVideoPresenter.CreateBacking's note).
+        // place it on top).
         HRESULT hr = sc.DcompRoot->AddVisual(_planeVisual, BOOL.TRUE, null);
         if ((int)hr < 0)
         {

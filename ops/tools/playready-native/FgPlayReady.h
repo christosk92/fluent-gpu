@@ -120,8 +120,6 @@ enum FgPrEvent
     FgPrEvent_LicenseRevoked = 53,   // a USABLE license's key went INTERNAL_ERROR / RELEASED / OUTPUT_NOT_ALLOWED and will never
                                      // decrypt again: a = hr (0x8004800N, N = the status), b = the MF_MEDIAKEY_STATUS. It is evicted
                                      // (an attached session keeps the object until it detaches); the next acquire re-issues it
-    FgPrEvent_StreamApplied = 54,    // FgPrSnapshot.streamWidth/Height now name a size a frame was rendered at: a = width, b = height.
-                                     // Raised when a FgPrSessionSetStreamSize request's echo is published (see streamWidth)
 };
 
 /// FgPrSnapshot.state — the lifecycle the managed ProtectedVideoState maps one-to-one.
@@ -215,13 +213,6 @@ typedef struct FgPrSnapshot
     uint64_t bytesDownloaded;
     uint64_t downloadElapsedMs;
     uint64_t storeBytes;            // what the SegmentStore currently holds (the counted half of the memory budget)
-    int32_t streamWidth, streamHeight;   // the stream size the swap chain HOLDS A FRAME AT: its creation size, or the last
-                                         // FgPrSessionSetStreamSize once the renderer counted a frame after its UpdateVideoStream
-                                         // (FRAMES_RENDERED moved; a source that is not playing renders none, so its repaint is
-                                         // asked for and the size published at once). 0x0 while none has been or the session is
-                                         // detached. The managed side keeps the compositor's content size at the previous value
-                                         // until this equals the size it asked for (an echo, not a guess); FgPrEvent_StreamApplied
-                                         // says when it changed
     int64_t framesRendered;         // IMFMediaEngineEx FRAMES_RENDERED / FRAMES_DROPPED for THIS attach, polled every ~500 ms while the
     int64_t framesDropped;          // source plays and accumulated across the counter resets MF applies after a flush; frozen while
                                     // paused / seeking / waiting, 0 until the first poll. A source playing with NO rendered frame for 10 s
@@ -342,7 +333,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSeek(FgPrRuntime rt, FgPrSess
 __declspec(dllexport) int32_t __stdcall FgPrSessionSetVolume(FgPrRuntime rt, FgPrSession s, double volume);
 __declspec(dllexport) int32_t __stdcall FgPrSessionSetRate(FgPrRuntime rt, FgPrSession s, double rate);
 
-/// Size the engine's video stream to what the destination can actually show (the clear path's ContentSizeFor
+/// Size the engine's video stream to what the destination can actually show (the clear path's bucketed size
 /// discipline). Applied with IMFMediaEngineEx::UpdateVideoStream on the runtime thread; a 4K stream in a 640 px card
 /// then allocates 640 px buffers. Passing 0×0 restores the natural size.
 __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rt, FgPrSession s, int32_t width,

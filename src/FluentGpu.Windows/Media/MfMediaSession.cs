@@ -107,13 +107,12 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         sink.VideoSurface(id);
     }
     // Decides the size (px) the video stream is rendered at inside MF's own swap chain — a BUCKET of the natural frame size
-    // (natural x {1, 3/4, 1/2, 1/3}), NOT the destination rect: MF renders the frame 1:1 into its swap chain and
-    // DirectComposition performs the fit — see the §3 comment in PumpVideo. It also holds the compositor's content size at
-    // the previous value until the engine echoes the new size as applied (VideoEngineSnapshot.StreamW/H).
+    // (natural x {1, 3/4, 1/2, 1/3}), NOT the destination rect: MF renders the frame 1:1 into its swap chain and the
+    // compositor stretches it to the fit — see the §3 comment in PumpVideo.
     private readonly VideoStreamSizeGate _sizeGate = new();
-    // Re-pumps the session once a settle window or an echo wait ends (the pump is event-driven and nothing else would).
+    // Re-pumps the session once a settle window ends (the pump is event-driven and nothing else would).
     private Timer? _sizeRetry;
-    // The clock the size gate's settle window and echo timeout read; a test replaces it to step time.
+    // The clock the size gate's settle window reads; a test replaces it to step time.
     internal Func<long> ClockMs { get; set; } = static () => Environment.TickCount64;
     private PlaybackState _publishedState = PlaybackState.Opening;
     // The last command bitset actually pushed to the sink. Value-gated here so re-computing every pump costs a
@@ -700,38 +699,34 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             // a warm engine still holds the PREVIOUS video's last frame (or nothing yet) until the new source presents.
             PublishSurface(sink, firstFrame ? new VideoSurfaceId(1) : default);
 
-            // MF renders the FULL decoded frame 1:1 into its own swap chain, and DirectComposition performs the
-            // fit — the same contract the protected/PlayReady path has always used. The stream is sized to a bucket
-            // of the natural frame (natural x {1, 3/4, 1/2, 1/3}, the smallest that still covers the destination),
+            // MF renders the FULL decoded frame 1:1 into its own swap chain, and the compositor stretches whatever
+            // buffer it holds to the fit — the same contract the protected/PlayReady path uses. The stream is sized to a
+            // bucket of the natural frame (natural x {1, 3/4, 1/2, 1/3}, the smallest that still covers the destination),
             // so a 4K frame in a 640-px card does not allocate 4K buffers and a resize gesture does not re-allocate
-            // the swap chain per layout: a new bucket is requested only once the destination has held still, and the
-            // compositor keeps scaling the PREVIOUS content size until the engine echoes the new one as applied. One
+            // the swap chain per layout: a new bucket is requested only once the destination has held still. One
             // factor on both axes, so the ratio — the thing the fit depends on — is preserved exactly.
             // An area that is not laid out (the element pumps with an empty rect before it exists, or after it
             // collapsed) is no destination: it sizes nothing and places nothing (F051), while everything above still
             // published.
             if (VideoStreamSizing.IsLaidOut(videoRect))
             {
-                var applied = new SizeI((int)snap.StreamW, (int)snap.StreamH);
                 // The pumping binding casts its vote; the size is the largest need among the bindings that show this one swap chain.
-                VideoStreamStep step = _sizeGate.Step(binding, _naturalSize, videoRect, scale, applied,
-                    (snap.Flags & VideoEngineFlags.Playing) != 0, firstFrame, ClockMs(), binding.Display);
+                VideoStreamStep step = _sizeGate.Step(binding, _naturalSize, videoRect, scale, firstFrame, ClockMs(), binding.Display);
                 if (step.HoldLine is { } hold) Diag.Line("[video] " + hold);
                 if (step.StayLine is { } stay) Diag.Line("[video] " + stay);
                 if (!step.Request.IsEmpty)
                 {
                     _engine.Commands.Post(VideoCommandKind.StreamRect, i: step.Request.Width, j: step.Request.Height);
                     // F235: which window's slot pumped, which binding's destination decided it and how many bindings voted (the gate asks once per real change)
-                    Diag.Line($"[video] stream.size backend=mf host={binding.HostOrdinal} token={binding.Token} size={step.Request.Width}x{step.Request.Height} governing={_sizeGate.GoverningToken} votes={_sizeGate.VoteCount} applied={applied.Width}x{applied.Height}");
+                    Diag.Line($"[video] stream.size backend=mf host={binding.HostOrdinal} token={binding.Token} size={step.Request.Width}x{step.Request.Height} governing={_sizeGate.GoverningToken} votes={_sizeGate.VoteCount}");
                     Volatile.Write(ref _repaintPending, 1);
                 }
                 ArmSizeRetry(step.RetryInMs);
-                SizeI content = step.Content;
                 if (!holdsOther)
                 {
-                    // One content size for every binding of this session: the swap chain's, never a binding's own request.
-                    binding.SetContentSize(content, step.ContentVia, step.RequestAgeMs);
-                    _sizeGate.PublishContentToVoters(binding);
+                    // One stream size for every binding of this session: the swap chain's, never a binding's own request.
+                    binding.SetStreamSize(step.Size);
+                    _sizeGate.PublishSizeToVoters(binding);
                     binding.Place(new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H));
                     // No SetVisible here: visibility belongs to the element (MediaPlayerElement.PumpNow writes it LAST, ANDing
                     // active && non-empty viewport && !audioOnly). This session only expresses readiness — a bound handle on a
@@ -739,7 +734,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                     // ALWAYS-ON placement report (no env switch): the three numbers that decide letterboxing, published on
                     // the media signal so the host log shows the realized geometry instead of leaving it to be inferred
                     // from pixels. Value-gated by the signal — an unchanged placement publishes nothing.
-                    sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content,
+                    sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, step.Size,
                         new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H), scale <= 0f ? 1f : scale)
                         { Token = binding.Token });
                 }
@@ -780,13 +775,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             ? MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate
             : MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate | MediaCommandFlags.StepFrame;
 
-    /// <summary>The continuous (unbucketed) stream/content size for a destination — owned by
-    /// <see cref="VideoStreamSizing.ContentSizeFor"/>. The session itself sizes the stream through its
-    /// <see cref="VideoStreamSizeGate"/> (buckets, settle, echo), shared with the protected session.</summary>
-    internal static SizeI ContentSizeFor(SizeI natural, RectF videoRect, float scale)
-        => VideoStreamSizing.ContentSizeFor(natural, videoRect, scale);
-
-    // Asks for one more pump after `ms` (a settle window or an echo wait is pending). The pump is event-driven, so without
+    // Asks for one more pump after `ms` (a settle window is pending). The pump is event-driven, so without
     // this a size decision deferred to "once the geometry is stable" would wait for an unrelated event. Any thread.
     private void ArmSizeRetry(int ms)
     {

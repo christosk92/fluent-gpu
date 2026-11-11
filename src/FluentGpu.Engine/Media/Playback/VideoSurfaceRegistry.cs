@@ -46,10 +46,7 @@ public sealed class VideoSurfaceRegistry
         public RectF ViewportDip;     // visible container; smaller than RectDip for center-crop
         public float RadiusDip;         // corner radius in DIP (0 = square). Scaled to device px at apply, like the rect.
         public VideoAlphaRamp Ramp;     // the picture's alpha ramp, window DIP (none = opaque). Laid on the placed rect, scaled and posed at apply.
-        public uint ContentW, ContentH; // the content's native pixel size (e.g. decoder swapchain) — the presenter scales it to fill the rect (0 = unknown)
-        public VideoContentVia ContentVia;   // how the current content size came to be, its request's age when written, and when (diagnostics)
-        public int ContentAgeMs;
-        public long ContentSetTicks;
+        public SizeI StreamPx;        // the stream size (device px) the owning session sized its swap chain to; the owner's own pumps read it, the render side never does
         public bool Visible;
         public int Z;
         public nuint DesiredHandle;   // the DComp surface handle to bind (0 = none produced yet)
@@ -214,25 +211,16 @@ public sealed class VideoSurfaceRegistry
         MarkDirty();
     }
 
-    /// <summary>Set the content's native pixel size (decoder swapchain size) so the presenter can scale it to fill the
-    /// rect instead of showing it 1:1 (cropped). Value-gated.</summary>
-    public void SetContentSize(int token, uint width, uint height) => SetContentSize(token, width, height, VideoContentVia.None, 0);
-
-    /// <summary><see cref="SetContentSize(int, uint, uint)"/> that also says how the size came to be and how old its request was
-    /// (<paramref name="requestAgeMs"/>, ms), for the applier's <c>[video.surface] content</c> line. Only a CHANGED size records them.</summary>
-    public void SetContentSize(int token, uint width, uint height, VideoContentVia via, int requestAgeMs)
+    /// <summary>Record the stream size (device px) the owning session sized its swap chain to (<see cref="VideoStreamStep.Size"/>). The
+    /// presenter stretches whatever buffer the swap chain holds, so nothing drawn reads it: the owner's geometry-only pump does
+    /// (<see cref="StreamSize"/>). UI thread.</summary>
+    public void SetStreamSize(int token, SizeI px)
     {
         ThreadGuard.AssertNotRender();
-        ref Entry e = ref Slot(token);
-        if (e.ContentW == width && e.ContentH == height) return;
-        e.ContentW = width; e.ContentH = height;
-        e.ContentVia = via;
-        e.ContentAgeMs = requestAgeMs;
-        e.ContentSetTicks = System.Diagnostics.Stopwatch.GetTimestamp();
-        MarkDirty();
+        Slot(token).StreamPx = px;
     }
 
-    /// <summary>Round the composited surface's corners (DIP; 0 = square). The video child visual composites outside the
+    /// <summary>Round the composited surface's corners (DIP; 0 = square). The video visual composites outside the
     /// UI back buffer, so a UI-side rounded parent cannot clip it — this is the only way to get a non-rectangular video.
     /// Value-gated.</summary>
     public void SetCornerRadius(int token, float radiusDip)
@@ -244,8 +232,7 @@ public sealed class VideoSurfaceRegistry
         MarkDirty();
     }
 
-    /// <summary>Fade the picture along <paramref name="rampDip"/> (window DIP along its axis; none = opaque).
-    /// Only a presenter that <see cref="SupportsAlphaRamp"/> draws it. Value-gated.</summary>
+    /// <summary>Fade the picture along <paramref name="rampDip"/> (window DIP along its axis; none = opaque). Value-gated.</summary>
     public void SetAlphaRamp(int token, in VideoAlphaRamp rampDip)
     {
         ThreadGuard.AssertNotRender();
@@ -254,12 +241,6 @@ public sealed class VideoSurfaceRegistry
         e.Ramp = rampDip;
         MarkDirty();
     }
-
-    /// <summary>True when the presenters this registry's window drains into draw a surface's alpha ramp
-    /// (<see cref="IVideoPresenter.SupportsAlphaRamp"/>): the host sets it once at construction from its device
-    /// (<see cref="FluentGpu.Rhi.IGpuDevice.VideoAlphaRamp"/>), so the UI can choose, at render, between fading the picture and painting an
-    /// opaque stand-in over it. UI thread.</summary>
-    public bool SupportsAlphaRamp { get; set; }
 
     /// <summary>Show/hide the surface. Value-gated.</summary>
     public void SetVisible(int token, bool visible)
@@ -509,14 +490,14 @@ public sealed class VideoSurfaceRegistry
     /// outside a pump invocation.</summary>
     public bool IsGeometryOnlyPump(int token) => token > 0 && _geometryOnlyToken == token;
 
-    /// <summary>The content size (device px) last written for <paramref name="token"/> by the session that owns the
+    /// <summary>The stream size (device px) last written for <paramref name="token"/> by the session that owns the
     /// surface — <see cref="SizeI.Zero"/> until one has (the surface is not bound / sized yet). A geometry-only pump
-    /// reads it to decide that the cached content size is still the right one for the rect it is placing.</summary>
-    public SizeI ContentSize(int token)
+    /// reads it to decide that the stream is still sized right for the rect it is placing.</summary>
+    public SizeI StreamSize(int token)
     {
         int i = token - 1;
         if ((uint)i >= MaxSurfaces || !_entries[i].InUse || _entries[i].ReleasePending) return SizeI.Zero;
-        return new SizeI((int)_entries[i].ContentW, (int)_entries[i].ContentH);
+        return _entries[i].StreamPx;
     }
 
     /// <summary>The incarnation of slot <paramref name="token"/> (every <see cref="Acquire"/> is a new one), or 0 when it is not live. A
@@ -574,7 +555,7 @@ public sealed class VideoSurfaceRegistry
     /// <para>Why this exists: a surface's on-screen rect can change with NO layout change at all — a compositor-only
     /// <c>Transform</c> translation (Wavee's draggable mini-player), a page transition, a FLIP projection. Those move
     /// the punched hole (it is painted through the node's transform) but fire no bounds-changed edge, so nothing
-    /// requested a pump and the DirectComposition child stayed at its last-pumped offset until some unrelated event
+    /// requested a pump and the video visual stayed at its last-pumped offset until some unrelated event
     /// (a native state change, a transport command) happened to request one. That is the video visibly trailing the
     /// card during a drag.</para></summary>
     public void SetGeometryNode(int token, NodeHandle node)
@@ -678,9 +659,7 @@ public sealed class VideoSurfaceRegistry
             {
                 Token = i + 1, Gen = e.Gen, HandleSeq = e.HandleSeq, DesiredHandle = e.DesiredHandle,
                 ReleasePending = e.ReleasePending, HasGeometry = true, Seq = seq, Visible = e.Visible,
-                RectDip = e.RectDip, ViewportDip = e.ViewportDip, RadiusDip = e.RadiusDip, Ramp = e.Ramp,
-                ContentW = e.ContentW, ContentH = e.ContentH, Z = e.Z,
-                ContentVia = e.ContentVia, ContentAgeMs = e.ContentAgeMs, ContentSetTicks = e.ContentSetTicks,
+                RectDip = e.RectDip, ViewportDip = e.ViewportDip, RadiusDip = e.RadiusDip, Ramp = e.Ramp, Z = e.Z,
             };
             // The hole this surface sits behind, as the UI sees it NOW: only when the tracked node's rect is the rect the owner
             // placed (the hole node itself - the usual Uniform / Fill case). An owner that places a different rect than the node it
@@ -939,19 +918,13 @@ public readonly struct VideoBinding
     public void Place(RectF rectDip, int z = 0) { if (_registry is { } r) r.Place(Token, rectDip, z); }
     /// <summary>Set the visible container. Oversized content is center-clipped to this rect.</summary>
     public void SetViewport(RectF rectDip) { if (_registry is { } r) r.SetViewport(Token, rectDip); }
-    /// <summary>Set the content's native pixel size (decoder swapchain size) so the frame scales to fill the rect.</summary>
     /// <summary>Round this surface's corners (DIP). Half the shorter side gives a circle.</summary>
     public void SetCornerRadius(float radiusDip) { if (_registry is { } r) r.SetCornerRadius(Token, radiusDip); }
     /// <summary>Fade this surface's picture along <paramref name="rampDip"/> (window DIP; none = opaque).</summary>
     public void SetAlphaRamp(in VideoAlphaRamp rampDip) { if (_registry is { } r) r.SetAlphaRamp(Token, in rampDip); }
-    public void SetContentSize(SizeI px) { if (_registry is { } r) r.SetContentSize(Token, (uint)Math.Max(0, px.Width), (uint)Math.Max(0, px.Height)); }
-    /// <summary><see cref="SetContentSize(SizeI)"/> with how the size came to be and its request's age in ms (the stream-size gate's
-    /// <see cref="VideoStreamStep.ContentVia"/> / <see cref="VideoStreamStep.RequestAgeMs"/>): diagnostics for the applier's
-    /// <c>[video.surface] content</c> line, nothing drawn depends on them.</summary>
-    public void SetContentSize(SizeI px, VideoContentVia via, int requestAgeMs)
-    {
-        if (_registry is { } r) r.SetContentSize(Token, (uint)Math.Max(0, px.Width), (uint)Math.Max(0, px.Height), via, requestAgeMs);
-    }
+    /// <summary>Record the stream size (device px) the owning session sized its swap chain to (see
+    /// <see cref="VideoSurfaceRegistry.SetStreamSize"/>).</summary>
+    public void SetStreamSize(SizeI px) { if (_registry is { } r) r.SetStreamSize(Token, px); }
     /// <summary>Show/hide the surface.</summary>
     public void SetVisible(bool visible) { if (_registry is { } r) r.SetVisible(Token, visible); }
     /// <summary>Declare the scene node whose absolute rect this surface follows, so a compositor-only move (a drag, a
@@ -979,8 +952,8 @@ public readonly struct VideoBinding
     /// <summary>True while the pump running now was requested only because this surface's rect moved (see
     /// <see cref="VideoSurfaceRegistry.IsGeometryOnlyPump"/>). False for an inert binding or outside a pump.</summary>
     public bool IsGeometryOnlyPump => _registry is { } r && r.IsGeometryOnlyPump(Token);
-    /// <summary>The content size last written to this slot, or <see cref="SizeI.Zero"/> when none has been.</summary>
-    public SizeI ContentSize => _registry?.ContentSize(Token) ?? SizeI.Zero;
+    /// <summary>The stream size last written to this slot, or <see cref="SizeI.Zero"/> when none has been.</summary>
+    public SizeI StreamSize => _registry?.StreamSize(Token) ?? SizeI.Zero;
     /// <summary>The slot's current incarnation (see <see cref="VideoSurfaceRegistry.Incarnation"/>); 0 for an inert binding or a slot
     /// that is not live.</summary>
     public long Incarnation => _registry?.Incarnation(Token) ?? 0;

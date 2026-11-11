@@ -205,26 +205,20 @@ public partial interface IGpuDevice : IDisposable
     /// VRAM-pressure eviction (adreno-hang-fixes.md M5); default keeps every other backend unaffected.</summary>
     bool TryGetVramUsage(out long usedBytes, out long budgetBytes) { usedBytes = 0; budgetBytes = 0; return false; }
 
-    /// <summary>The composited-video presenter (DirectComposition child visuals for externally-produced video / protected
+    /// <summary>The composited-video presenter (composition visuals for externally-produced video / protected
     /// DRM surfaces), or <see langword="null"/> when this backend/target cannot composite video — the headless seam, or
     /// an opaque non-composited window. Default <see langword="null"/> keeps every non-D3D12 backend AND the headless
     /// test seam free of video, so the host's phase-11 video-surface drain is a no-op there and the zero-alloc gates are
-    /// untouched by construction. The D3D12 backend returns its render-thread-confined <c>DCompVideoPresenter</c> (only
-    /// while the primary swapchain is composited).</summary>
+    /// untouched by construction. The D3D12 backend returns its render-thread-confined <c>CompositionVideoPresenter</c>
+    /// (only while the primary swapchain is composited).</summary>
     FluentGpu.Pal.IVideoPresenter? VideoPresenter => null;
 
-    /// <summary>The composited-video presenter bound to a SPECIFIC swapchain's DirectComposition root — the per-window
+    /// <summary>The composited-video presenter bound to a SPECIFIC swapchain's window — the per-window
     /// form of <see cref="VideoPresenter"/> (which targets the primary swapchain). A detached/secondary video window
-    /// passes its own swapchain here so its video child visuals attach under ITS DComp root, not the primary's. Returns
+    /// passes its own swapchain here so its video composites under ITS window, not the primary's. Returns
     /// <see langword="null"/> when the target is not composited / the backend cannot composite video. Default routes to
     /// the primary <see cref="VideoPresenter"/> so single-window backends are unaffected.</summary>
     FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(ISwapchain swapchain) => VideoPresenter;
-
-    /// <summary>Whether the video presenters this device makes draw a surface's alpha ramp
-    /// (<see cref="FluentGpu.Pal.IVideoPresenter.SupportsAlphaRamp"/>), answered without making one: the presenters are render-thread
-    /// confined, and the UI must choose at render between fading the picture and painting an opaque stand-in over it. A constant per
-    /// device; any thread. Default false.</summary>
-    bool VideoAlphaRamp => false;
 
     /// <summary>The ONE device-level composition flush of a render turn (F080): every presenter's queued mutations
     /// (<see cref="FluentGpu.Pal.IVideoPresenter.ApplyPending"/>) are made visible by a single commit on the shared composition

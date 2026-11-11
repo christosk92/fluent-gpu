@@ -180,7 +180,7 @@ Read `FrameStats` from `RunFrame()`:
   scene tree to stderr, `--fg diag` enables engine diagnostics (the full list: `FluentGpu.Hosting.EngineSwitches`).
   The old `FG_SCROLLLOG` scrollbar trace no longer exists.
 - **See what the user sees: `--fg shot-window=PATH`.** `--screenshot` reads the swapchain back, so the Mica/acrylic
-  backdrop, the DWM frame and DirectComposition children (video) are missing from it. `shot-window` instead grabs
+  backdrop, the DWM frame and composition children (video) are missing from it. `shot-window` instead grabs
   DWM's composite of the window (its `DWMWA_EXTENDED_FRAME_BOUNDS`, physical px, clipped to the virtual screen) to a
   PNG, `shot-delay` ms after the first presented frame (default 1500): `--fg shot-window=C:\shots\main.png,shot-delay=3000,shot-exit`.
   `shot-exit` ends the run after the capture, so an agent or script can launch, capture and read the PNG. The path
