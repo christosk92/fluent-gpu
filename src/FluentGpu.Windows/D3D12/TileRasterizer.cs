@@ -29,6 +29,8 @@ namespace FluentGpu.Rhi.D3D12;
 //    into a scratch surface of the target's size (+ the blur halo) and composites back at its alpha / feather / blur; an
 //    acrylic PushLayer erases the frosted rect from what the slice drew before it (the composite draws the backdrop
 //    beneath the slice's tiles).
+// The DIRECT route (a detached window, a windowed popup: D3D12Device.SubmitStreaming) replays its whole stream through the
+// same machinery as ONE target, its back buffer at offset 0, so its layers render exactly as the main window's do.
 public sealed unsafe partial class D3D12Device
 {
     /// <summary>The canonical replay viewport extent (device px) and logical size basis — see the file header.</summary>
@@ -44,9 +46,13 @@ public sealed unsafe partial class D3D12Device
         public PushLayerCmd L;
         public int Scratch;          // −1 = drawn flat (acrylic erase / no scratch)
         public int Halo;
+        public int Ox, Oy, Gw, Gh;   // the scratch: its pixel 0 at parent target px (Ox, Oy), Gw × Gh px used
         public D3D12_CPU_DESCRIPTOR_HANDLE ParentRtv;
         public int ParentW, ParentH, ParentTlx, ParentTly;
     }
+    /// <summary>The replay in progress is a DIRECT submit's whole stream into its own back buffer (<see cref="SubmitStreaming"/>):
+    /// its groups bound their scratch (<see cref="BoundGroup"/>) and an acrylic layer paints its fallback.</summary>
+    private bool _directReplay;
     private readonly List<InlineGroup> _inlineGroups = new(8);
     private readonly int[] _prefixOpen = new int[64];
 
@@ -379,10 +385,11 @@ public sealed unsafe partial class D3D12Device
         _frameLayerOps++;
         if (L.Kind == (int)LayerKind.Acrylic)
         {
+            if (_directReplay) DrawAcrylicFallback(in L);
             // The slice composites ABOVE its frosted backdrop: remove what the slice drew before the surface under its
             // rounded rect (its own shadow, a plate) so the frost reads through exactly as it did when the backdrop
             // composited at push time. A feathered surface keeps what is above its feather.
-            if (L.FeatherFrac <= 0f && L.GroupAlpha > 0f
+            else if (L.FeatherFrac <= 0f && L.GroupAlpha > 0f
                 && !Cull(L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H, 1f, 0f, 0f, 1f, 0f, 0f, RepaintCull.AaHaloDip))
             {
                 CoverPendingText(L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H, 1f, 0f, 0f, 1f, 0f, 0f, RepaintCull.AaHaloDip);
@@ -406,25 +413,78 @@ public sealed unsafe partial class D3D12Device
         // blur's downsample factor, rounded up to even for the factor-1 case (TileGrid.OriginGrid).
         int halo = (L.Kind == (int)LayerKind.Blur || L.Kind == (int)LayerKind.EdgeFade) && L.BlurSigma > 0f
             ? (SelfBlurRegion.TapRadius(L.BlurSigma) + 1) & ~1 : 0;
-        int gw = _replayW + 2 * halo, gh = _replayH + 2 * halo;
-        int scratch = _surfaces!.AcquireScratch(gw, gh, _fenceValue + 1);
+        // The scratch covers the parent target grown by the halo; a direct replay's only what the group can reach.
+        int ox = -halo, oy = -halo, gw = _replayW + 2 * halo, gh = _replayH + 2 * halo;
+        if (_directReplay) BoundGroup(in L, halo, ref ox, ref oy, ref gw, ref gh);
+        int scratch = _surfaces is null || _compositor is null ? -1 : _surfaces.AcquireScratch(gw, gh, _fenceValue + 1);
         if (scratch < 0) { _inlineGroups.Add(new InlineGroup { L = L, Scratch = -1 }); return; }
         _frameInlineGroups++;
         if ((uint)L.Kind < (uint)_frameInlineByKind.Length) _frameInlineByKind[L.Kind]++;
         if (halo > 0) _frameInlineBlurred++;
         var g = new InlineGroup
         {
-            L = L, Scratch = scratch, Halo = halo,
+            L = L, Scratch = scratch, Halo = halo, Ox = ox, Oy = oy, Gw = gw, Gh = gh,
             ParentRtv = _replayRtv, ParentW = _replayW, ParentH = _replayH, ParentTlx = _replayTlx, ParentTly = _replayTly,
         };
         _inlineGroups.Add(g);
         EndPassIfOpen();
         ScratchBarrier(scratch, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        var rtv = _surfaces.ScratchRtv(scratch);
+        var rtv = _surfaces!.ScratchRtv(scratch);
         BeginPass(rtv, gw, gh, PassLoad.Clear);
         _replayRtv = rtv;
-        SetReplayTarget(g.ParentTlx + halo, g.ParentTly + halo, gw, gh);
+        // scratch px = parent px − (ox, oy) = replay px + parent TopLeft − (ox, oy)
+        SetReplayTarget(g.ParentTlx - ox, g.ParentTly - oy, gw, gh);
         InvalidateCmdState();
+    }
+
+    /// <summary>A direct replay's parent is the whole window, so a group's scratch would be the window's size (+ the halo) for every
+    /// layer, each cleared, blurred and composited whole. Bound it to what the group can composite — the open scissor ∩ its
+    /// composite clip, <see cref="CloseInlineLayer"/>'s own cut — grown by the halo (the source pixels a blur pulls in), with its
+    /// origin on a 32 px grid of the parent so a blur's downsample phase does not move with the content. In parent target px; never
+    /// past the whole-target scratch it replaces.</summary>
+    private void BoundGroup(in PushLayerCmd L, int halo, ref int ox, ref int oy, ref int gw, ref int gh)
+    {
+        const int Grid = 32;
+        float s = _frameScale <= 0f ? 1f : _frameScale;
+        RECT sc = ClampToReplay(CurrentScissorRect());
+        int l = sc.left + _replayTlx, t = sc.top + _replayTly, r = sc.right + _replayTlx, b = sc.bottom + _replayTly;
+        if (!L.CompositeClip.IsEmpty && !L.CompositeClip.IsInfinite)
+        {
+            RectF cc = L.CompositeClip;
+            l = Math.Max(l, (int)MathF.Floor(cc.X * s) + _replayTlx); t = Math.Max(t, (int)MathF.Floor(cc.Y * s) + _replayTly);
+            r = Math.Min(r, (int)MathF.Ceiling(cc.Right * s) + _replayTlx); b = Math.Min(b, (int)MathF.Ceiling(cc.Bottom * s) + _replayTly);
+        }
+        l = Math.Clamp(l, 0, _replayW); t = Math.Clamp(t, 0, _replayH);
+        r = Math.Clamp(r, l, _replayW); b = Math.Clamp(b, t, _replayH);
+        int gl = Math.Max(-halo, (int)MathF.Floor(l / (float)Grid) * Grid - halo);
+        int gt = Math.Max(-halo, (int)MathF.Floor(t / (float)Grid) * Grid - halo);
+        int gr = Math.Min(_replayW + halo, (int)MathF.Ceiling(r / (float)Grid) * Grid + halo);
+        int gb = Math.Min(_replayH + halo, (int)MathF.Ceiling(b / (float)Grid) * Grid + halo);
+        ox = gl; oy = gt;
+        gw = Math.Max(1, gr - gl); gh = Math.Max(1, gb - gt);
+    }
+
+    /// <summary>An acrylic layer on a direct replay: nothing composites a backdrop beneath a direct target (a windowed popup or a
+    /// detached window has the OS material behind it, not a retained composite), so the layer's opaque FallbackColor base — the first
+    /// thing the composite's backdrop pass lays down under the blur — is painted in its place (WinUI's own no-transparency answer for
+    /// the surface, never a see-through plate of floating text). The recorder has already dropped the node's duplicate Fallback fill.
+    /// Rect and radii are window DIP, so the transform is identity.</summary>
+    private void DrawAcrylicFallback(in PushLayerCmd L)
+    {
+        if (L.Fallback.A <= 0f || L.GroupAlpha <= 0f) return;
+        if (Cull(L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H, 1f, 0f, 0f, 1f, 0f, 0f, RepaintCull.AaHaloDip)) return;
+        CoverPendingText(L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H, 1f, 0f, 0f, 1f, 0f, 0f, RepaintCull.AaHaloDip);
+        var inst = new RectInstance
+        {
+            PosX = L.DeviceRect.X, PosY = L.DeviceRect.Y, W = L.DeviceRect.W, H = L.DeviceRect.H,
+            RTL = L.Radii.TopLeft, RTR = L.Radii.TopRight, RBR = L.Radii.BottomRight, RBL = L.Radii.BottomLeft,
+            R = L.Fallback.R, G = L.Fallback.G, B = L.Fallback.B, A = L.Fallback.A,
+            M11 = 1f, M12 = 0f, M21 = 0f, M22 = 1f, Dx = 0f, Dy = 0f, Opacity = L.GroupAlpha,
+        };
+        ApplyRoundedClip(ref inst);
+        _rectInsts.Add(inst);
+        _frameRectCount++;
+        PushRun(PrimKind.Rect);
     }
 
     private void CloseInlineLayer()
@@ -435,9 +495,8 @@ public sealed unsafe partial class D3D12Device
         FlushSegment(_streamLw, _streamLh);
         EndPassIfOpen();
         ScratchBarrier(g.Scratch, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        int gw = g.ParentW + 2 * g.Halo, gh = g.ParentH + 2 * g.Halo;
         int src = g.Scratch, down = 1;
-        if (g.Halo > 0) src = BlurSurface(g.Scratch, gw, gh, g.L.BlurSigma, out down);
+        if (g.Halo > 0) src = BlurSurface(g.Scratch, g.Gw, g.Gh, g.L.BlurSigma, out down);
 
         // back onto the parent target
         BeginPass(g.ParentRtv, g.ParentW, g.ParentH, PassLoad.Preserve);
@@ -466,12 +525,12 @@ public sealed unsafe partial class D3D12Device
         }
         if (down == 1)
         {
-            _compositor.SourceOrigin(g.Halo, g.Halo);
+            _compositor.SourceOrigin(-g.Ox, -g.Oy);
             _compositor.Draw(_cmdList, SliceCompositor.Pso.Load, _surfaces!.ScratchSrv(src));
         }
         else
         {
-            _compositor.SampleMap(-g.Halo, -g.Halo, 1f / (down * _surfaces!.ScratchW(src)), 1f / (down * _surfaces.ScratchH(src)));
+            _compositor.SampleMap(g.Ox, g.Oy, 1f / (down * _surfaces!.ScratchW(src)), 1f / (down * _surfaces.ScratchH(src)));
             _compositor.Draw(_cmdList, SliceCompositor.Pso.Sample, _surfaces.ScratchSrv(src));
         }
         if (src != g.Scratch) _surfaces.ReleaseScratch(src);

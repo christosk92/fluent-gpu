@@ -2401,7 +2401,7 @@ internal sealed partial class SceneRecordingContext
                 // Only an EXACT match is dropped: a hover wash, a tinted card, any fill that is not literally the
                 // layer's own base still paints. Where the layer does NOT run the spec is absent (Materials policy off,
                 // a video hole, an OS-backed popup — all clear it) or the backend supplies the Fallback itself
-                // (SubmitStreaming's PushLayer, the non-primary-swapchain route), so the solid plate survives.
+                // (the direct route's acrylic fallback, the non-primary-swapchain route), so the solid plate survives.
                 // Only where the layer was actually RECORDED (acrylicLayer: an acrylic slice's own walk, whose Backdrop
                 // item frosts the plate, or a standalone stream): an acrylic that could not be cut keeps this fill — it
                 // is the whole surface there.

@@ -1773,8 +1773,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// <summary>
     /// The DIRECT route: clear + replay one stream straight into a swapchain's back buffer inside one render pass (CLEAR →
     /// STORE — no <c>ClearRenderTargetView</c>). Only targets that do not composite take it — windowed popups and
-    /// detached pop-outs (OS-backed acrylic, no engine layers: a stray PushLayer draws its acrylic fallback flat). The
-    /// primary window composites its retained tiles (<see cref="SubmitComposite"/>).
+    /// detached windows (the mini player, the video pop-out). Their opacity / blur / edge-fade layers render through scratch
+    /// surfaces as the main window's do (<see cref="SubmitStreaming"/>); an acrylic layer paints its fallback (the OS
+    /// material is their backdrop). The primary window composites its retained tiles (<see cref="SubmitComposite"/>).
     /// </summary>
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
     {
@@ -1802,13 +1803,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _imageClockMs = ctx.ImageClockMs;
         ResetFrameCounters();
         BeginPipesFrame(slot);
-        float lw = _w / _frameScale, lh = _h / _frameScale;
 
         f.TextRepaintPending = false;
         BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, ctx.Clear);
         PassToScene();   // pass timeline — boundary: the clear is part of the pass begin, scene drawing starts
-        SetFullViewport();
-        SubmitStreaming(drawList, lw, lh, rtv);
+        SubmitStreaming(drawList, rtv, slot);
         EndPassIfOpen();
         NoteFaithfulness(f);
         PublishDecodeDiagnostics();
@@ -2603,33 +2602,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     PushRun(PrimKind.VideoHole);
                     break;
                 }
+                // Layers are scope ops too: every live walk (a tile, a region, the direct route) opens and closes them in
+                // ApplyScopeOp before DecodeOne. This arm keeps the legacy whole-stream Decode() path byte-aligned.
                 case DrawOp.PushLayer:
-                {
-                    // This route composites NO layers: it is a NON-PRIMARY swapchain (a popup window, a detached pop-out)
-                    // with no retained composite behind it. An Acrylic layer's opaque FallbackColor base — the first
-                    // thing the composite's backdrop pass lays down under the blur — is therefore never produced here, and the recorder
-                    // has already dropped the node's duplicate Fallback fill (it would occlude the frost wherever the
-                    // layer DOES run). Paint the fallback in its place: WinUI's own no-transparency answer for the
-                    // surface, instead of a see-through plate of floating text. Rect + radii are already device-space,
-                    // so the transform is identity.
-                    var L = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<PushLayerCmd>();
-                    if (L.Kind != (int)LayerKind.Acrylic || L.Fallback.A <= 0f || L.GroupAlpha <= 0f) break;
-                    if (Cull(L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H, 1f, 0f, 0f, 1f, 0f, 0f, RepaintCull.AaHaloDip)) break;
-                    CoverPendingText(L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H, 1f, 0f, 0f, 1f, 0f, 0f, RepaintCull.AaHaloDip);
-                    var linst = new RectInstance
-                    {
-                        PosX = L.DeviceRect.X, PosY = L.DeviceRect.Y, W = L.DeviceRect.W, H = L.DeviceRect.H,
-                        RTL = L.Radii.TopLeft, RTR = L.Radii.TopRight, RBR = L.Radii.BottomRight, RBL = L.Radii.BottomLeft,
-                        R = L.Fallback.R, G = L.Fallback.G, B = L.Fallback.B, A = L.Fallback.A,
-                        M11 = 1f, M12 = 0f, M21 = 0f, M22 = 1f, Dx = 0f, Dy = 0f, Opacity = L.GroupAlpha,
-                    };
-                    ApplyRoundedClip(ref linst);
-                    _rectInsts.Add(linst);
-                    _frameRectCount++;
-                    PushRun(PrimKind.Rect);
                     break;
-                }
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>();
                     break;
@@ -2733,16 +2710,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _imageDraws.Add((inst, im.ImageId));
         _frameImageCount++;
         PushRun(PrimKind.Image);
-    }
-
-    private void SetFullViewport()
-    {
-        _targetOriginX = 0; _targetOriginY = 0;
-        _targetWidth = (int)_w; _targetHeight = (int)_h;
-        D3D12_VIEWPORT vpd = new() { TopLeftX = 0, TopLeftY = 0, Width = _w, Height = _h, MinDepth = 0, MaxDepth = 1 };
-        _cmdList->RSSetViewports(1, &vpd);
-        RecCoalesced(RecordedOp.Viewport, _w, _h);
-        SetFullScissor();
     }
 
     // The frame's OUTERMOST scissor: the whole current target, expressed in the replay's pixel space (a target whose
@@ -3588,63 +3555,44 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         ClearInsts();
     }
 
-    // <paramref name="targetRtv"/> is the RTV this walk is painting into (the back buffer on the FullDirect route, a
-    // tile or degraded chunk on the composite route). A tier-3 stencil scope needs it in order to re-attach the target WITH the
-    // depth-stencil view — the only reason a streaming walk needs to know its own target at all.
-    private void SubmitStreaming(ReadOnlySpan<byte> drawList, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
+    /// <summary>The DIRECT route's walk: the whole stream replayed into <paramref name="targetRtv"/> (the back buffer, its pass open)
+    /// as ONE replay target at offset 0 — the tile rasterizer's canonical viewport and its scope handling
+    /// (<see cref="ReplayStream"/>). A clip, a stencil clip and an opacity / blur / edge-fade layer are what they are in a tile: the
+    /// layer's subtree renders into a scratch surface and composites back at its alpha, feather and blur, so a detached window draws
+    /// the same scene as the main window does. This walk used to skip every layer, drawing its subtree flat: a mini player's lyric
+    /// lines lost their dimming, blur and edge fades. The scratch SRVs go into <paramref name="slot"/>'s bank
+    /// (<see cref="SurfacePool.UseBank"/>).</summary>
+    private void SubmitStreaming(ReadOnlySpan<byte> drawList, D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, int slot)
     {
-        _streamLw = lw; _streamLh = lh;
+        float s = _frameScale <= 0f ? 1f : _frameScale;
+        int bankWas = _surfaces?.UseBank(slot) ?? -1;
+        _replayClampOn = false;
+        _replayRtv = targetRtv;
+        _streamLw = _streamLh = CanonicalViewport / s;
         ClearInsts();
         _blendAdditive = false;   // a walk never inherits the previous stream's paint blend
         _clipStack.Clear();
         _roundedClipStack.Clear();
+        SetReplayTarget(0, 0, (int)_w, (int)_h);
+        _cullActive = true;
         ResetDesiredScissor();
-        int pos = 0;
-        while (pos + sizeof(int) <= drawList.Length)
+        int baseGroups = _inlineGroups.Count;
+        _directReplay = true;
+        try
         {
-            DrawOp op = (DrawOp)MemoryMarshal.Read<int>(drawList.Slice(pos));
-            if (op == DrawOp.PushClip)
-            {
-                pos += sizeof(int);
-                var clip = MemoryMarshal.Read<ClipCmd>(drawList.Slice(pos));
-                pos += Unsafe.SizeOf<ClipCmd>();
-                _frameClipOps++;
-                PushScissor(in clip);
-                EnsureDesiredScissor(CurrentScissorRect(), lw, lh);
-                continue;
-            }
-            if (op == DrawOp.PopClip)
-            {
-                pos += sizeof(int);
-                _frameClipOps++;
-                PopScissor();
-                EnsureDesiredScissor(CurrentScissorRect(), lw, lh);
-                continue;
-            }
-            if (op == DrawOp.PushStencilClip)
-            {
-                pos += sizeof(int);
-                var sc = MemoryMarshal.Read<PushStencilClipCmd>(drawList.Slice(pos));
-                pos += Unsafe.SizeOf<PushStencilClipCmd>();
-                _frameClipOps++;
-                BeginStencilScope(in sc, lw, lh, targetRtv);
-                continue;
-            }
-            if (op == DrawOp.PopStencilClip)
-            {
-                pos += sizeof(int);
-                var sc = MemoryMarshal.Read<PopStencilClipCmd>(drawList.Slice(pos));
-                pos += Unsafe.SizeOf<PopStencilClipCmd>();
-                _frameClipOps++;
-                EndStencilScope(in sc, lw, lh, targetRtv);
-                continue;
-            }
-            pos = DecodeOne(drawList, pos);
+            ReplayStream(drawList, 0f, 0f, default, default);
+            FlushSegment(_streamLw, _streamLh);
+            while (_inlineGroups.Count > baseGroups) CloseInlineLayer();
         }
-        FlushSegment(lw, lh);
-        EndStencilScopesAtSubmitEnd(targetRtv);
+        finally
+        {
+            _directReplay = false;
+            if (bankWas >= 0) _surfaces!.UseBank(bankWas);
+        }
+        EndStencilScopesAtSubmitEnd(_replayRtv);
         _clipStack.Clear();
         _roundedClipStack.Clear();
+        _cullActive = false;
         _desiredScissor = FullScissorRect();
         _desiredScissorValid = true;
         SetFullScissor();

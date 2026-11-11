@@ -160,6 +160,18 @@ internal sealed unsafe class SurfacePool : IDisposable
         EnforceFreeCap(turn, weak);
     }
 
+    /// <summary>A DIRECT submit (a detached window, a windowed popup) leases scratch for its layers between two composite turns: its
+    /// SRVs go into the bank of ITS ring slot, which is rewritten only once that slot's own fence has retired. The bank of the
+    /// last composite turn (still in flight, or reused when its slot comes round) never sees a descriptor written for this submit.
+    /// The turn stays the composite's: scratch that turn used is never replaced under it. Returns the bank in force, which the
+    /// submit puts back when it ends.</summary>
+    public int UseBank(int bank)
+    {
+        int was = _bank;
+        _bank = bank;
+        return was;
+    }
+
     /// <summary>Release every retired texture whose last use the GPU has passed. Also the idle path's drain (a retire made
     /// between turns would otherwise wait for the next composite, which an idle app never runs).</summary>
     public void DrainRetired(ulong completedFence)
