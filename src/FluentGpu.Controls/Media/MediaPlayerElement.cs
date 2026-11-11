@@ -339,7 +339,7 @@ public sealed class MediaPlayerElement : Component
         _resolveFocusOut = ResolveFocusOut;
         _onWake = OnWake;
         _onMoveSizeEnded = OnMoveSizeEnded;
-        _onWindowBlur = OnWindowBlur;
+        _onWindowLeave = OnWindowLeave;
         _seedPointerPresence = SeedPointerPresence;
         _onPointerMoved = OnPointerMoved;
     }
@@ -416,7 +416,7 @@ public sealed class MediaPlayerElement : Component
     private SizeI? _pumpedNatural;
     private bool _cursorHidden;
     private NodeHandle _playerRoot;
-    private readonly Action _resolveFocusOut, _onWake, _onMoveSizeEnded, _onWindowBlur, _seedPointerPresence;
+    private readonly Action _resolveFocusOut, _onWake, _onMoveSizeEnded, _onWindowLeave, _seedPointerPresence;
     private readonly Action<Point2> _onPointerMoved;
     private bool _pressIsTouch, _moveInFlight;
     // When the last OS move loop ended (host timer clock). A press within the double-click window of it is never the
@@ -468,9 +468,9 @@ public sealed class MediaPlayerElement : Component
         Sync();
     }
 
-    /// <summary>The window lost activation: the user switched away, so this is a real leave wherever the pointer was
-    /// (and the dispatcher has already dropped every cursor override).</summary>
-    private void OnWindowBlur() { _vis?.PointerLeft(Now()); Sync(); }
+    /// <summary>The window lost activation (the user switched away; the dispatcher has already dropped every cursor override),
+    /// or the hovering pointer left the window: a real leave wherever hover was, the player's own exit included or not.</summary>
+    private void OnWindowLeave() { _vis?.PointerLeft(Now()); Sync(); }
 
     private bool CursorHidingAllowed() => CursorAutoHide switch
     {
@@ -845,21 +845,26 @@ public sealed class MediaPlayerElement : Component
         bool presentedFullscreen = PresentingFullscreen || fullscreen.Value;   // subscribe: the policy edge must re-render
         UseEffect(() => { vis.SetCursorMayHide(CursorHidingAllowed(), Now()); Sync(); }, presentedFullscreen ? 1 : 0);
 
-        // An OS move/size loop of the host window reports its end through the host; a window blur is a LEAVE. The
-        // dispatcher drops the pointer position before the blur's exits run, so a hovered player's HandleExit already
-        // reads it as a leave; this subscription covers the blur that finds the player NOT hovered (a scrim had taken
-        // hover, or no pointer event since mount), where no exit fires and the controls would linger over a window the
-        // user has switched away from. (InputHooks.PointerLeftWindowObserved fires on a blur only while the pointer is
-        // in, so it would miss the second case.)
+        // An OS move/size loop of the host window reports its end through the host; a window blur and the pointer leaving
+        // the window are LEAVES. A hovered player's HandleExit already reads either as a leave (the dispatcher drops the
+        // pointer position before the blur's exits run, and a move out of the window exits the hovered chain); these two
+        // subscriptions cover the leave that finds the player NOT hovered (a scrim or a menu had taken hover, or no
+        // pointer event since mount), where no exit fires and the controls would linger: over a window the user has
+        // switched away from (the blur), or, once that menu closes with the pointer outside, over a window the pointer
+        // has left (InputHooks.PointerLeftWindowObserved). Both are needed: the window edge fires on a blur only while the
+        // pointer is in, and a blur never fires for a pointer that just leaves an active window. Both land in the same
+        // idempotent PointerLeft (a blur with the pointer in raises both: the earlier deadline stands).
         UseEffect(() =>
         {
             if (hooks is null) return (Action?)null;
             hooks.WindowMoveSizeEndedObserved += _onMoveSizeEnded;
-            hooks.WindowBlurObserved += _onWindowBlur;
+            hooks.WindowBlurObserved += _onWindowLeave;
+            hooks.PointerLeftWindowObserved += _onWindowLeave;
             return () =>
             {
                 hooks.WindowMoveSizeEndedObserved -= _onMoveSizeEnded;
-                hooks.WindowBlurObserved -= _onWindowBlur;
+                hooks.WindowBlurObserved -= _onWindowLeave;
+                hooks.PointerLeftWindowObserved -= _onWindowLeave;
             };
         }, DepKey.Empty);
         // PART A: claim ChromeFeed on mount, release it on unmount — but only if it is STILL this instance. A keyed
