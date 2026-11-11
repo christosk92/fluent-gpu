@@ -702,7 +702,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
                 // The pumping binding casts its vote; the size is the largest need among the bindings that show this one swap
                 // chain (an exiting, hidden or released host does not vote), as on the clear path.
                 VideoStreamStep step = _sizeGate.Step(binding, _naturalSize, videoRect, scale, _player.AppliedStreamSize,
-                    pv is ProtectedVideoState.Playing or ProtectedVideoState.Buffering, ClockMs(), binding.Display);
+                    pv is ProtectedVideoState.Playing or ProtectedVideoState.Buffering, presenting, ClockMs(), binding.Display);
+                if (step.HoldLine is { } hold) _player.LogDiagnostic(hold);
+                if (step.StayLine is { } stay) _player.LogDiagnostic(stay);
                 if (!step.Request.IsEmpty)
                 {
                     // Which binding's destination decided it and how many voted (the gate asks once per real change; the player's
@@ -744,7 +746,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         if (!_naturalSize.IsEmpty || !VideoStreamSizing.IsLaidOut(videoRect)) return;
         if (_activeQuality?.Resolution is not { IsEmpty: false } declared) return;
         if (_player.Phase is not (ProtectedVideoPhase.Licensing or ProtectedVideoPhase.Buffering or ProtectedVideoPhase.Attaching)) return;
-        VideoStreamStep step = _sizeGate.Step(binding, declared, videoRect, scale, SizeI.Zero, playing: false, ClockMs(), binding.Display);
+        VideoStreamStep step = _sizeGate.Step(binding, declared, videoRect, scale, SizeI.Zero, playing: false, framePresented: false, ClockMs(), binding.Display);
+        if (step.HoldLine is { } hold) _player.LogDiagnostic(hold);
+        if (step.StayLine is { } stay) _player.LogDiagnostic(stay);
         if (step.Request.IsEmpty) return;
         _player.LogDiagnostic($"stream.gate size={step.Request.Width}x{step.Request.Height} pumping={binding.Token} " +
                               $"governing={_sizeGate.GoverningToken} votes={_sizeGate.VoteCount} before=metadata declared={declared.Width}x{declared.Height}");

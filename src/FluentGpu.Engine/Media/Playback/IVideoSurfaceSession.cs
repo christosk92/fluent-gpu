@@ -1,5 +1,6 @@
 using System;
 using FluentGpu.Foundation;
+using FluentGpu.Hosting;
 
 namespace FluentGpu.Media;
 
@@ -202,7 +203,9 @@ public static class VideoStreamSizing
     /// the destination's own size, upscaled by Media Foundation, capped at <c>max(monitor, natural)</c> and kept while it stays
     /// within a few percent of the destination. A fullscreen window whose video fills the monitor asks for exactly the
     /// monitor-fit size. A <paramref name="display"/> with no monitor size never upscales. A natural size that is not known
-    /// yet answers the destination itself. Pure.</summary>
+    /// yet answers the destination itself. Under <c>--fg video-wuc</c> that full-screen video begins a stay instead: the stay
+    /// size (<see cref="TryStaySize"/>), kept for any destination while the window is full screen and it is the size in use.
+    /// Pure.</summary>
     public static SizeI BucketedSizeFor(SizeI natural, RectF videoRect, float scale, SizeI current, VideoDisplay display = default)
     {
         float s = scale <= 0f ? 1f : scale;
@@ -212,6 +215,12 @@ public static class VideoStreamSizing
         float need = NeedFactor(natural, dw, dh, display, out bool exact);
         if (!float.IsFinite(need)) return natural;
         float cap = MaxFactor(natural, display);
+        // --fg video-wuc: the compositor stretches whatever buffer the swap chain holds, so a size change buys no correctness,
+        // only quality, and costs a decoder gap. A full-screen stay has ONE size: it begins where the destination is the
+        // full-screen video (exact), and while the window stays full screen the size in use (current) IS the memory, kept
+        // through a Theatre toggle, a pane or an aspect-mode change. The stay size is the cap, never below what any picture
+        // inside the stay would get otherwise.
+        if (EngineSwitches.VideoWuc && TryStaySize(natural, display, out SizeI stay) && (exact || current == stay)) return stay;
         if (exact) return ScaledSize(natural, MathF.Min(need, cap));   // the monitor-fit size itself: no bucket, no hysteresis
         if (need > 1f + CoverEps && cap > 1f + CoverEps)
         {
@@ -233,6 +242,17 @@ public static class VideoStreamSizing
             && (have <= candidate + CoverEps || need > candidate * ShrinkMargin))
             return current;
         return SizeAtFraction(natural, candidate);
+    }
+
+    /// <summary>The one stream size of a full-screen stay (<c>--fg video-wuc</c>): <c>natural x</c> the cap (the monitor's size on the
+    /// more magnified axis, never below the natural frame). False outside a full-screen window with a known monitor, or before
+    /// the natural size is known.</summary>
+    internal static bool TryStaySize(SizeI natural, VideoDisplay display, out SizeI stay)
+    {
+        stay = default;
+        if (!display.Fullscreen || !display.HasMonitor || natural.Width <= 0 || natural.Height <= 0) return false;
+        stay = ScaledSize(natural, MaxFactor(natural, display));
+        return true;
     }
 
     private static SizeI SizeAtFraction(SizeI natural, float fraction)
@@ -291,6 +311,13 @@ public readonly struct VideoStreamStep
     /// first size). Only meaningful on the decision whose <see cref="Content"/> changed.</summary>
     public int RequestAgeMs { get; init; }
 
+    /// <summary><c>--fg video-wuc</c> only: the <c>stream.stay enter|exit ...</c> line when this decision began or ended a full-screen
+    /// stay, else null. The session writes it to the [video] timeline (once per edge, never per frame).</summary>
+    public string? StayLine { get; init; }
+    /// <summary><c>--fg video-wuc</c> only: the <c>stream.hold want=WxH before=first-frame</c> line when this decision held a new
+    /// request until the attach's first frame, else null. The session writes it to the [video] timeline.</summary>
+    public string? HoldLine { get; init; }
+
     /// <summary>One decision: what to ask the backend, what the compositor may scale from, and when to look again.</summary>
     public VideoStreamStep(SizeI request, SizeI content, int retryInMs)
     {
@@ -320,7 +347,9 @@ public enum VideoContentVia : byte
 /// <item>WHAT size: <see cref="VideoStreamSizing.BucketedSizeFor"/> (natural x {1, 3/4, 1/2, 1/3} below the frame, the
 /// on-screen size up to max(monitor, natural) above it, with hysteresis).</item>
 /// <item>WHEN: the first size at once and a changed natural size at once; any other change only after the destination
-/// has held still for <see cref="SettleMs"/> (never mid-animation: DirectComposition's scale covers the gap).</item>
+/// has held still for <see cref="SettleMs"/> (never mid-animation: DirectComposition's scale covers the gap). Under
+/// <c>--fg video-wuc</c> the request that begins a full-screen stay also goes at once, and a request raised between an attach's
+/// first request and its first frame is held until that frame, then posted at once.</item>
 /// <item>WHAT THE COMPOSITOR IS TOLD: the content size moves to a newly requested size only when the backend echoes
 /// that it APPLIED it, so DirectComposition never scales an old-size buffer by a new-size factor. Both Windows backends echo a
 /// request made while playing only once their renderer counted a frame it STARTED after it (the clear engine: the second frame
@@ -378,6 +407,10 @@ public sealed class VideoStreamSizeGate
     private long _geomSinceMs, _requestedAtMs;
     private VideoContentVia _publishedVia;
     private int _publishedAgeMs;
+    // --fg video-wuc only. The full-screen stay in use (empty = none); whether this attach has posted its first request and
+    // presented its first frame; the request held until that frame (and whether it is a natural-size re-post).
+    private SizeI _stay, _heldWant;
+    private bool _attachRequested, _framePresented, _held, _heldRepost;
 
     /// <summary>The size last handed to the backend (empty before the first decision).</summary>
     public SizeI Requested => _requested;
@@ -385,25 +418,29 @@ public sealed class VideoStreamSizeGate
     public SizeI Published => _published;
 
     /// <summary>Decide one pump. <paramref name="applied"/> is the backend's echo of the stream size it last applied
-    /// (empty = none yet / not reported); <paramref name="playing"/> is whether frames are being presented right now.
+    /// (empty = none yet / not reported); <paramref name="playing"/> is whether frames are being presented right now;
+    /// <paramref name="framePresented"/> is whether this attach's first frame has been presented (read only under
+    /// <c>--fg video-wuc</c>: a request raised between the attach's first request and its first frame is held until then).
     /// <paramref name="display"/> is the monitor the video is on (default = unknown: the stream is never upscaled); a change of
     /// it counts as a geometry change, so a fullscreen edge settles like a resize and is never applied mid-animation.</summary>
-    public VideoStreamStep Step(SizeI natural, RectF videoRect, float scale, SizeI applied, bool playing, long nowMs, VideoDisplay display = default)
-        => Step(default, natural, videoRect, scale, applied, playing, nowMs, display);
+    public VideoStreamStep Step(SizeI natural, RectF videoRect, float scale, SizeI applied, bool playing, bool framePresented, long nowMs, VideoDisplay display = default)
+        => Step(default, natural, videoRect, scale, applied, playing, framePresented, nowMs, display);
 
-    /// <summary><see cref="Step(SizeI, RectF, float, SizeI, bool, long, VideoDisplay)"/> for the pump of <paramref name="binding"/>:
+    /// <summary><see cref="Step(SizeI, RectF, float, SizeI, bool, bool, long, VideoDisplay)"/> for the pump of <paramref name="binding"/>:
     /// its destination is its vote, and the size is decided from the largest need among the votes that count (see the class
     /// remarks). An inert binding is one anonymous voter, the behaviour of the overload without one.</summary>
-    public VideoStreamStep Step(in VideoBinding binding, SizeI natural, RectF videoRect, float scale, SizeI applied, bool playing, long nowMs, VideoDisplay display = default)
+    public VideoStreamStep Step(in VideoBinding binding, SizeI natural, RectF videoRect, float scale, SizeI applied, bool playing, bool framePresented, long nowMs, VideoDisplay display = default)
     {
         if (!VideoStreamSizing.IsLaidOut(videoRect)) return new VideoStreamStep(default, _published, 0) { ContentVia = _publishedVia, RequestAgeMs = _publishedAgeMs };
 
         bool naturalChanged = natural != _natural;
         _natural = natural;
+        bool wuc = EngineSwitches.VideoWuc;
 
-        // The caller's vote, then the size every counting vote needs: the largest wins.
+        // The caller's vote, then the size every counting vote needs: the largest wins. A natural-size re-post held for the first
+        // frame (--fg video-wuc) has nothing to keep either, as if it had been posted.
         int own = Cast(binding, videoRect, scale, display);
-        SizeI current = naturalChanged ? default : _requested;
+        SizeI current = naturalChanged || _heldRepost ? default : _requested;
         SizeI desired = default;
         int gov = own;
         _voteCount = 0;
@@ -427,17 +464,70 @@ public sealed class VideoStreamSizeGate
         _display = g.Display;
         if (dw != _geomW || dh != _geomH || displayChanged) { _geomW = dw; _geomH = dh; _geomSinceMs = nowMs; }
 
+        // --fg video-wuc: the size a full-screen stay keeps for the governing destination (empty outside a full-screen window).
+        SizeI stay = wuc && VideoStreamSizing.TryStaySize(natural, g.Display, out SizeI st) ? st : default;
+
         int retry = 0;
         SizeI request = default;
         if (_requested.IsEmpty || naturalChanged)
         {
             request = desired;   // the first size, or a new frame size: not a layout change, nothing to wait out
         }
+        else if (desired != _requested && !stay.IsEmpty && desired == stay)
+        {
+            // --fg video-wuc: the request that BEGINS a full-screen stay goes at once. It is a discrete edge, not a layout
+            // settling, and the compositor stretches the old buffer meanwhile, so nothing is drawn at a wrong scale.
+            request = desired;
+        }
         else if (desired != _requested)
         {
             long stable = nowMs - _geomSinceMs;
             if (stable >= SettleMs) request = desired;
             else retry = (int)(SettleMs - stable);
+        }
+
+        string? holdLine = null, stayLine = null;
+        if (wuc)
+        {
+            // A new attach (its first frame gone again on the same session) starts over: its first request goes at once.
+            if (_framePresented && !framePresented) _attachRequested = false;
+            _framePresented = framePresented;
+            if (!framePresented && _attachRequested)
+            {
+                // Between the attach's first request (the one Media Foundation builds its swap chain at) and its first frame, a
+                // further request costs one more swap-chain rebuild: hold what was raised, and post it with the first frame.
+                if (!request.IsEmpty)
+                {
+                    _heldRepost |= naturalChanged;
+                    if (!_held || request != _heldWant) holdLine = $"stream.hold want={request.Width}x{request.Height} before=first-frame";
+                    _held = true;
+                    _heldWant = request;
+                    request = default;
+                }
+            }
+            else if (_held && framePresented)
+            {
+                // The first frame is here: the held request goes at once (no settle), for the destination as it is now; a held
+                // natural-size re-post is posted even when it asks for the same size again, as it would have been.
+                if (desired != _requested || _heldRepost) request = desired;
+                _held = false;
+                _heldRepost = false;
+                _heldWant = default;
+            }
+            if (!request.IsEmpty) _attachRequested = true;
+
+            // The stay's edges, once each: it begins with the request for the stay size in a full-screen window (a new natural size
+            // inside one begins the next), and ends when the window leaves full screen or another size is asked for in it.
+            if (!request.IsEmpty && request == stay && request != _stay)
+            {
+                _stay = stay;
+                stayLine = $"stream.stay enter size={stay.Width}x{stay.Height} natural={natural.Width}x{natural.Height} monitor={g.Display.MonitorPx.Width}x{g.Display.MonitorPx.Height}";
+            }
+            else if (!_stay.IsEmpty && (stay.IsEmpty || (!request.IsEmpty && request != stay)))
+            {
+                stayLine = $"stream.stay exit size={_stay.Width}x{_stay.Height}";
+                _stay = default;
+            }
         }
         if (!request.IsEmpty)
         {
@@ -482,7 +572,7 @@ public sealed class VideoStreamSizeGate
                 retry = retry > 0 ? Math.Min(retry, poll) : poll;
             }
         }
-        return new VideoStreamStep(request, _published, retry) { ContentVia = _publishedVia, RequestAgeMs = _publishedAgeMs };
+        return new VideoStreamStep(request, _published, retry) { ContentVia = _publishedVia, RequestAgeMs = _publishedAgeMs, StayLine = stayLine, HoldLine = holdLine };
     }
 
     /// <summary>Hand the session's content size to every OTHER binding that votes (live and shown), so a binding that is not pumping

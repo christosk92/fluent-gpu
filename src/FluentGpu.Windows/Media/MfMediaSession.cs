@@ -715,7 +715,9 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                 var applied = new SizeI((int)snap.StreamW, (int)snap.StreamH);
                 // The pumping binding casts its vote; the size is the largest need among the bindings that show this one swap chain.
                 VideoStreamStep step = _sizeGate.Step(binding, _naturalSize, videoRect, scale, applied,
-                    (snap.Flags & VideoEngineFlags.Playing) != 0, ClockMs(), binding.Display);
+                    (snap.Flags & VideoEngineFlags.Playing) != 0, firstFrame, ClockMs(), binding.Display);
+                if (step.HoldLine is { } hold) Diag.Line("[video] " + hold);
+                if (step.StayLine is { } stay) Diag.Line("[video] " + stay);
                 if (!step.Request.IsEmpty)
                 {
                     _engine.Commands.Post(VideoCommandKind.StreamRect, i: step.Request.Width, j: step.Request.Height);
