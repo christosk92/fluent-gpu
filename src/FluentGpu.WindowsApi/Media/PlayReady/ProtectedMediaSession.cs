@@ -218,8 +218,17 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         // so the size request reaches native before LOADEDMETADATA and MF's first swap chain is built at that size (PumpGeometry).
         if (_activeQuality?.Resolution is { IsEmpty: false } declared) sink.ExpectedNaturalSize(declared);
         StartOnce();
+        // A representation is requested only when it differs from the one the source opened on: re-requesting the opening rung
+        // made the source deliver a format change at its first sample. "Opened on" is a TRUE init-url match (FindInitialQuality
+        // falls back to the first rung when none matches).
         if (!_qualitySelection.IsAuto && _qualitySelection.VariantId is { } initialPin)
-            RequestRepresentation(initialPin, PinRetainMs, Environment.TickCount64);
+        {
+            if (_videoTrack is not null && FindRepresentation(_videoTrack, initialPin) is { } pinned
+                && string.Equals(pinned.InitUrl, _request.InitUrl, StringComparison.Ordinal))
+                _player.LogDiagnostic($"pin.open id={initialPin} {pinned.Quality.Resolution.Width}x{pinned.Quality.Resolution.Height} opened on the pinned rung, no request");
+            else
+                RequestRepresentation(initialPin, PinRetainMs, Environment.TickCount64);
+        }
         RequestPump();
     }
 

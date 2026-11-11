@@ -4251,8 +4251,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         if (completed >= v) return true;
         Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(_fence, v, (void*)_fenceEvent), "SetEventOnCompletion");   // GEN-COM (wired)
-        if (_signalDeviceLostInsteadOfThrow) return WaitFenceEventBounded(v, forceResetOnStall: true);   // Step 4: no INFINITE hang on a lost device (async); frame fence gates presentation → force a clean reset on a hard stall
+        long stallQpc = System.Diagnostics.Stopwatch.GetTimestamp();   // PresentStall: the blocking wait's start
+        if (_signalDeviceLostInsteadOfThrow) { bool retired = WaitFenceEventBounded(v, forceResetOnStall: true); NoteFenceWaitEnd(stallQpc, v, completed); return retired; }   // Step 4: no INFINITE hang on a lost device (async); frame fence gates presentation → force a clean reset on a hard stall
         uint wait = WaitForSingleObject(_fenceEvent, INFINITE);
+        NoteFenceWaitEnd(stallQpc, v, completed);
         if (wait == 0xFFFFFFFFu) throw new InvalidOperationException("WaitForSingleObject(frame fence) failed.");
         completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
         if (completed == ulong.MaxValue)
@@ -4527,6 +4529,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             ? WaitLatencyOrAbort(sc.FrameLatencyWaitable, livenessMs)   // bounded: a lost device must not wedge the loop
             : WaitForSlotWithin(sc.FrameLatencyWaitable, timeoutMs);
         sc.Frame.LastLatencyWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        NoteSlotWaitEnd(sc, wait);   // PresentStall: an edge line when the wait ran >= 100 ms
         // A park request ended the wait: nothing was taken, whatever the form - the credit stays un-held and the caller parks.
         if (wait == LatencyWait.Aborted) return false;
         if (timeoutMs < 0 && wait == LatencyWait.TimedOut) NoteSlotLivenessTimeout(sc, livenessMs);
@@ -5016,6 +5019,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (end <= begin) return;
         double ms = (end - begin) * 1000.0 / _gpuExecutionTsFreq;
         if (!double.IsFinite(ms) || ms <= 0.0) return;
+        NoteGpuRun(ms, ownerSubmit);   // PresentStall: an edge line when our own frame ran >= 100 ms on the GPU
         long now = System.Diagnostics.Stopwatch.GetTimestamp();
         owner.PublishGpuRenderSample(ms, ownerSubmit, now, GpuTicksToQpc(begin, now), GpuTicksToQpc(end, now));
     }
