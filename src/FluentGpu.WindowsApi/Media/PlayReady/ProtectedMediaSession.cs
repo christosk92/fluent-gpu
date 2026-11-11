@@ -689,12 +689,23 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
                 // Frames are expected while the native source plays, Buffering included (a stall the snapshot reads as Playing): the
                 // echo then waits for the frame rendered after the request, and only a source that renders none (paused, ended) is
                 // trusted at the timeout - native publishes its echo at once after the repaint anyway.
-                VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, _player.AppliedStreamSize,
+                // The pumping binding casts its vote; the size is the largest need among the bindings that show this one swap
+                // chain (an exiting, hidden or released host does not vote), as on the clear path.
+                VideoStreamStep step = _sizeGate.Step(binding, _naturalSize, videoRect, scale, _player.AppliedStreamSize,
                     pv is ProtectedVideoState.Playing or ProtectedVideoState.Buffering, ClockMs(), binding.Display);
-                if (!step.Request.IsEmpty) _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
+                if (!step.Request.IsEmpty)
+                {
+                    // Which binding's destination decided it and how many voted (the gate asks once per real change; the player's
+                    // own stream.size line follows when the request reaches native).
+                    _player.LogDiagnostic($"stream.gate size={step.Request.Width}x{step.Request.Height} pumping={binding.Token} " +
+                                          $"governing={_sizeGate.GoverningToken} votes={_sizeGate.VoteCount}");
+                    _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
+                }
                 ArmSizeRetry(step.RetryInMs);
                 SizeI content = step.Content;
+                // One content size for every binding of this session: the swap chain's, never a binding's own request.
                 binding.SetContentSize(content, step.ContentVia, step.RequestAgeMs);
+                _sizeGate.PublishContentToVoters(binding);
                 binding.Place(videoRect);
                 PlaceOutputProtection(binding, videoRect, scale);
                 binding.SetVisible(presenting);   // belt-and-braces: the element ANDs the same readiness (VideoSurface) into its final write
