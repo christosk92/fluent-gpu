@@ -188,4 +188,26 @@ public interface IFontSystem
         ink = default;
         return false;
     }
+
+    /// <summary>What the layout DREW for the run laid out as <see cref="Measure(StringId, in TextStyle, float)"/> lays it
+    /// (the style as given: its trim and line cap included): the line count, whether the layout cut content (an ellipsized
+    /// or trim-cut line, lines dropped past <c>MaxLines</c>, an overflow suffix) and whether it drew an ellipsis glyph (see
+    /// <see cref="TextDrawn"/>). Pure: a span run's link/decoration artifacts are not republished. False when the backend
+    /// cannot say what its draw does (the headless model, which never draws). Cold path: inspection and lint only, never
+    /// per frame (it lays the run out again).</summary>
+    bool TryMeasureDrawn(StringId text, in TextStyle style, float maxWidth, out TextDrawn drawn)
+    {
+        drawn = default;
+        return false;
+    }
 }
+
+/// <summary>The facts of one drawn layout of a run (<see cref="IFontSystem.TryMeasureDrawn"/>). <see cref="Lines"/> is the
+/// laid line count. <see cref="Cut"/>: the layout does not show all of the run's content: a line was ellipsized or cut by
+/// the trim, or content was dropped past <c>MaxLines</c> (at a hard break, at the wrap on the last allowed line, or
+/// replaced by an overflow suffix). Content the layout draws whole past its box (a no-wrap run without a trim, a whole-word
+/// overhang, more lines than the box is tall) is not <see cref="Cut"/>: the box clips that, the layout did not.
+/// <see cref="Ellipsis"/>: an ellipsis glyph ("…") was drawn on some line (implies <see cref="Cut"/>).
+/// <see cref="Overhang"/>: a WRAPPING layout drew a line whose visible width (hanging trailing whitespace excluded) runs past
+/// the wrap width (a <c>WrapWholeWords</c> word wider than the box); always false for a no-wrap layout.</summary>
+public readonly record struct TextDrawn(int Lines, bool Cut, bool Ellipsis, bool Overhang = false);
