@@ -141,6 +141,11 @@ public sealed class MediaPlayerElement : Component
     /// small decorative slot that same floor turns the composited rect into a capsule that overflows its container.</summary>
     public bool IsDecorative { get; init; }
 
+    /// <summary>The host sizes the player itself (a docked cap, a floating card the host clamps to its own floor): the 160 DIP floor above
+    /// is dropped, so the video area never outgrows the host's box and what is stacked at its foot (an on-media transport) stays inside the
+    /// host's clip. Nothing else of <see cref="IsDecorative"/> applies.</summary>
+    public bool HostSized { get; init; }
+
     /// <summary>The UI-side corner shape of the frame and the video stage. Fullscreen is square. An explicitly-set
     /// <see cref="CornerRadius"/> (&gt; 0) drives the frame regardless of <see cref="IsDecorative"/> — E2: a
     /// non-decorative (operable) player asked for e.g. <c>CornerRadius = Radii.Card</c> previously got a UI frame at
@@ -1104,7 +1109,7 @@ public sealed class MediaPlayerElement : Component
             Direction = 1,
             Grow = 1f,
             Shrink = 1f, MinWidth = 0f,
-            MinHeight = VideoAreaMinHeight(PresentingFullscreen, IsDecorative),
+            MinHeight = VideoAreaMinHeight(PresentingFullscreen, IsDecorative || HostSized),
             ClipToBounds = true,
             Corners = FrameCorners,
             Fill = ColorF.Transparent,
