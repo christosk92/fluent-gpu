@@ -810,6 +810,17 @@ public interface IPlatformWindow : IDisposable
     FluentGpu.Media.SizeI MonitorSizePx => default;
     /// <summary>Enter/leave borderless monitor fullscreen, restoring the exact prior window placement on exit.</summary>
     void SetFullscreen(bool fullscreen) { }
+    /// <summary>The host opts in to <see cref="HasPendingBounds"/>: it commits a held window change right before the first present
+    /// at its client size (<see cref="CommitPendingBounds"/>). Off (the default), <see cref="SetFullscreen"/> changes the window at once.</summary>
+    bool SyncBoundsWithPresent { get => false; set { } }
+    /// <summary>True while a window change (full screen on/off) is held for the first frame at its client size. Read from the
+    /// presenting thread.</summary>
+    bool HasPendingBounds => false;
+    /// <summary>The client size, physical px, the held change (<see cref="HasPendingBounds"/>) will produce.</summary>
+    Size2 PendingBoundsClientPx => default;
+    /// <summary>Apply the held window change now. Any thread: on the window's own thread it applies directly; on another thread it
+    /// posts to the window's thread and waits (bounded) until that thread has applied it. A no-op when nothing is pending.</summary>
+    void CommitPendingBounds() { }
     void CloseWindow() { }
 
     /// <summary>Asked before the window closes (Win32 <c>WM_CLOSE</c>: the caption close button, Alt+F4, the system

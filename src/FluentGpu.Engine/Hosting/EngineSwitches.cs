@@ -123,7 +123,9 @@ public enum ImageAtlasExperiment : byte
 /// placed resources in pooled heaps (the A/B arm of <see cref="FluentGpu.Render.Tiles.TileMemory.PlacedTiles"/>).
 /// <c>heap-probe</c> — time committed / heap / placed creates and releases once at device init. <c>heap-log</c> — a line per
 /// tile heap create / release. <c>pixel-slides</c> — a sliding transition layer re-rasters its members at their exact phase
-/// every frame instead of compositing its group surface bilinearly (the A/B arm of the slide groups).</item>
+/// every frame instead of compositing its group surface bilinearly (the A/B arm of the slide groups).
+/// <c>no-window-sync</c> — a full-screen toggle changes the window at once instead of holding the window change for the first
+/// frame presented at the new size (the A/B arm).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -177,6 +179,9 @@ public static class EngineSwitches
     public static bool OpaqueWindow;
     /// <summary>High-resolution waitable-timer frame waits (default on).</summary>
     public static bool PreciseWait = true;
+    /// <summary>A full-screen toggle holds the window's style + rect change until the render thread presents the first frame at
+    /// the new client size, so DWM gets both in one refresh (default on; <c>--fg no-window-sync</c> changes the window at once).</summary>
+    public static bool WindowSizeSync = true;
     /// <summary>Present at sync-interval 0 (+ ALLOW_TEARING) instead of 1.</summary>
     public static bool NoVsync;
     /// <summary>Start the host with its pass-granular GPU timeline on.</summary>
@@ -368,6 +373,7 @@ public static class EngineSwitches
             case "shape-validate": FluentGpu.Text.TextDiagnostics.ShapeValidate = true; return true;
             case "no-shape-prefetch": FluentGpu.Text.TextDiagnostics.NoShapePrefetch = true; return true;
             case "no-partial-keep": FluentGpu.Render.SceneRecordingContext.PartialKeepEnabled = false; return true;
+            case "no-window-sync": WindowSizeSync = false; return true;
             case "damage-log": FluentGpu.Render.Tiles.TileDamage.Log = true; return true;
             case "no-precise-present": FluentGpu.Render.Tiles.TileDamage.PrecisePresent = false; return true;
             case "present-structure-diff": FluentGpu.Render.Tiles.TileDamage.PresentStructureDiff = true; return true;

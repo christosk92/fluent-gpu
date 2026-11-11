@@ -2769,7 +2769,11 @@ public sealed partial class AppHost : IDisposable
         // E2: the freeze directive acts here so the owed-present retry (which passes no hold) carries it too.
         if (rf.Freeze != Threading.FreezeKind.None || _frozenSnapshot is not null) FreezeBeforePresent(in rf, ref hold, renderClock: true);
         if (hold) _swapchain.HoldNextPresent();   // one-shot, consumed by the present below
-        else if (!_isDetachedChild) RunBeforePresentWork(rf.PublishSeq);   // EP9: queued DWM writes land right before the present that shows their pixels
+        else if (!_isDetachedChild)
+        {
+            RunBeforePresentWork(rf.PublishSeq);   // EP9: queued DWM writes land right before the present that shows their pixels
+            CommitWindowBoundsBeforePresent();
+        }
         if (UsesNonBlockingPresent(_isDetachedChild, _parentRenderThread is not null, EngineSwitches.NonBlockingSecondaryPresent))
         {
             if (!_swapchain.PresentNoWait())
@@ -5326,6 +5330,7 @@ public sealed partial class AppHost : IDisposable
         _app = app;
         _fonts = fonts;
         _isDetachedChild = isDetachedChild;
+        window.SyncBoundsWithPresent = !isDetachedChild;   // CommitWindowBoundsBeforePresent runs on the main host's presents only
         int sliceSurfaceCap = SliceSurfaceCapFor(window);
         int sliceTileCap = Math.Max(SliceTileCap, sliceSurfaceCap);   // one slice may hold the whole resident set
         _uiTiles = new(SliceTableCap, sliceTileCap, sliceSurfaceCap);
@@ -7626,7 +7631,11 @@ public sealed partial class AppHost : IDisposable
                         }
                         tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
                         if (heldInline) _swapchain.HoldNextPresent();
-                        else if (!_isDetachedChild) RunBeforePresentWork(rf.PublishSeq);   // EP9: ordered DWM writes (see QueueBeforePresent)
+                        else if (!_isDetachedChild)
+                        {
+                            RunBeforePresentWork(rf.PublishSeq);   // EP9: ordered DWM writes (see QueueBeforePresent)
+                            CommitWindowBoundsBeforePresent();
+                        }
                         _swapchain.Present();                       // 11 present (UI thread)
                         if (heldInline && _swapchain.LastPresentHeld) _framesHeld++;
                         else

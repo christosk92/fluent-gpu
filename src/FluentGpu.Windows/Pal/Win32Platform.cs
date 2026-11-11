@@ -349,6 +349,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     private const nuint MoveLoopTimerId = 1;   // SetTimer id for the modal move/size loop keep-alive pump
     private const nuint LiftTimerId = 2;       // SetTimer id for the touchpad wheel-fallback silence-lift check (fires even when no frames pump)
+    private const nuint PendingBoundsTimerId = 3;   // SetTimer id: a held full-screen window change no present committed is applied anyway
+    private const uint PendingBoundsTimeoutMs = 250;
+    private const uint CommitWaitMs = 100;          // the presenting thread's one bounded wait for the window thread to apply the change
     // ── Pointer input (EnableMouseInPointer): the WM_MOUSE* client stream is retired — mouse, touch and pen all arrive
     //    here as WM_POINTER* (PT_MOUSE/PT_TOUCH/PT_PEN/PT_TOUCHPAD). One contact = one PointerId; implicit contact→window capture
     //    replaces the SetCapture refcount. WM_POINTERWHEEL/HWHEEL REPLACE WM_MOUSEWHEEL/HWHEEL once mouse-in-pointer is on.
@@ -427,6 +430,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // Private posted message: open the system menu at (x, y) screen px OUTSIDE the frame (IPlatformWindow.ShowSystemMenu
     // is called from input dispatch; TrackPopupMenu runs a modal loop, so it must not run inside RunFrame). WM_APP range.
     private const uint WM_FG_SHOWSYSMENU = 0x8000 + 0x0F51;
+    // Private posted message: apply the held full-screen window change (IPlatformWindow.CommitPendingBounds from the render
+    // thread). wParam = the pending change's generation; a message for an older one is a no-op.
+    private const uint WM_FG_COMMITBOUNDS = 0x8000 + 0x0F52;
 
     // `--fg nc` (EngineSwitches.NcDiag): trace custom-frame caption-button non-client input — which WM_NC* messages actually arrive over a
     // button and whether synthesis runs — to stderr. Off by default (zero cost); diagnoses "no hover / clicks don't
@@ -716,6 +722,20 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private bool _windowedWasZoomed;
     private nint _windowedStyle;
     private RECT _windowedRect;
+    private int _windowedClientW, _windowedClientH;   // the client size when full screen was entered: the exit's target client size
+    // A full-screen window change held for the first frame presented at its client size (SetFullscreen, deferred path): the
+    // style + rect wait here until the presenting thread commits them (CommitPendingBounds), or the timer applies them anyway.
+    private volatile bool _boundsPending;
+    private bool _pendingOn;
+    private RECT _pendingRect;
+    private nint _pendingStyle;
+    private int _pendingClientW, _pendingClientH;
+    private long _pendingSinceQpc;
+    private bool _applyingPending;            // inside ApplyPendingBounds's SetWindowPos (its WM_SIZE needs no paint)
+    private volatile int _pendingGen;         // bumped per deferred request; WM_FG_COMMITBOUNDS carries the one it was posted for
+    private volatile int _commitPostedGen;    // the generation a commit was already posted for: later presents do not wait again
+    private HANDLE _boundsAppliedEvent;       // auto-reset: the window thread applied the held change (lazy)
+    private uint _windowThreadId;             // the thread that created the HWND (its messages run there)
     private HANDLE _preciseWaitTimer;       // lazy one-shot timer for display-rate waits
     private bool _preciseWaitUnavailable;   // sticky creation failure => plain timeout forever
     private HANDLE _presentAckEvent;        // auto-reset: general cross-thread Wake signal waited with messages (not message-only)
@@ -822,6 +842,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 HWND.NULL, HMENU.NULL, hinst, (void*)GCHandle.ToIntPtr(_self));
         }
         s_constructing = null;
+        _windowThreadId = GetCurrentThreadId();
         if (InstanceIdentity.Current is { Length: > 0 } instanceId)
             SetInstanceProp((nint)_hwnd.Value, InstanceIdentity.WindowPropertyName, (nint)InstanceIdentity.TagOf(instanceId));
         _textInput = new Win32TextInput(_hwnd);
@@ -1113,6 +1134,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     private void ResizeClientPhysical(int w, int h)
     {
+        if (_boundsPending) ApplyPendingBounds("flush");   // a held full-screen change first: this resize frames the window it leaves
         RECT rc = new() { left = 0, top = 0, right = w, bottom = h };
         AdjustForFrame(&rc);
         _hostResizing = true;   // the WM_SIZE this raises (synchronously) is the engine's, not the user's — see _fitTargetW
@@ -1201,7 +1223,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     public void SetFullscreen(bool fullscreen)
     {
+        // A change still held for its first frame is applied first: the request below samples the window it left (a rapid
+        // on→off must restore from the real borderless state, and off→on must sample the real windowed one).
+        if (_boundsPending) ApplyPendingBounds("flush");
         if (_fullscreen == fullscreen) return;
+        bool wasIconic = IsIconic(_hwnd);
         if (fullscreen)
         {
             // A minimized window has no usable geometry: GetWindowRect reads its (-32000,-32000) parking spot (the "windowed"
@@ -1220,41 +1246,117 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             mi.cbSize = (uint)sizeof(MONITORINFO);
             HMONITOR monitor = MonitorFromWindow(_hwnd, MONITOR_DEFAULTTONEAREST);
             if (!GetMonitorInfoW(monitor, &mi)) return;
+            _windowedClientW = _w; _windowedClientH = _h;
 
             _fullscreen = true;
-            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-            SetWindowLongPtrW(_hwnd, GWL_STYLE, _windowedStyle & ~(nint)WS_OVERLAPPEDWINDOW);
             RECT r = mi.rcMonitor;
-            SetWindowPos(_hwnd, HWND.NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
-                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-            NoteFullscreenEdge(true, t0, r);
+            nint style = _windowedStyle & ~(nint)WS_OVERLAPPEDWINDOW;
+            if (!TryDeferBounds(true, style, r, r.right - r.left, r.bottom - r.top, wasIconic))
+                ApplyFullscreenBounds(true, style, r, "immediate", 0);
         }
         else
         {
             _fullscreen = false;
-            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-            SetWindowLongPtrW(_hwnd, GWL_STYLE, _windowedStyle);
             RECT r = _windowedRect;
-            SetWindowPos(_hwnd, HWND.NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
-                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-            NoteFullscreenEdge(false, t0, r);
-            // Entering fullscreen never un-maximized the window (only its STYLE and rect changed), so in the common case
-            // it is still WS_MAXIMIZE-flagged and _windowedRect already IS the maximized geometry — the restore above is
-            // the whole job and a second SW_MAXIMIZE is a redundant geometry change (another WM_NCCALCSIZE +
-            // WM_WINDOWPOSCHANGED + swapchain resize, i.e. a guaranteed RepaintFullReason.TargetInvalidated frame).
-            // Only re-maximize when the zoomed state was genuinely lost while fullscreen.
-            if (_windowedWasZoomed && !IsZoomed(_hwnd)) ShowWindow(_hwnd, SW_MAXIMIZE);
+            // The re-maximize edge case (see ApplyFullscreenBounds) needs its ShowWindow right after the restore: immediate.
+            bool immediate = _windowedClientW <= 0 || _windowedClientH <= 0 || (_windowedWasZoomed && !IsZoomed(_hwnd));
+            if (immediate || !TryDeferBounds(false, _windowedStyle, r, _windowedClientW, _windowedClientH, wasIconic))
+                ApplyFullscreenBounds(false, _windowedStyle, r, "immediate", 0);
         }
         _queue.Enqueue(new InputEvent(InputKind.WindowStateChanged, default, 0, 0, TimestampMs: Now()));
     }
 
+    /// <summary>The full-screen window change itself (style + rect), both paths: at the request (immediate) or when the held
+    /// change is applied (<see cref="ApplyPendingBounds"/>).</summary>
+    private void ApplyFullscreenBounds(bool on, nint style, RECT r, string sync, double heldMs)
+    {
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        SetWindowLongPtrW(_hwnd, GWL_STYLE, style);
+        SetWindowPos(_hwnd, HWND.NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        NoteFullscreenEdge(on, t0, r, sync, heldMs);
+        // Entering fullscreen never un-maximized the window (only its STYLE and rect changed), so in the common case
+        // it is still WS_MAXIMIZE-flagged and _windowedRect already IS the maximized geometry — the restore above is
+        // the whole job and a second SW_MAXIMIZE is a redundant geometry change (another WM_NCCALCSIZE +
+        // WM_WINDOWPOSCHANGED + swapchain resize, i.e. a guaranteed RepaintFullReason.TargetInvalidated frame).
+        // Only re-maximize when the zoomed state was genuinely lost while fullscreen.
+        if (!on && _windowedWasZoomed && !IsZoomed(_hwnd)) ShowWindow(_hwnd, SW_MAXIMIZE);
+    }
+
+    /// <summary>Hold the full-screen window change for the first frame presented at its client size (EngineSwitches.WindowSizeSync):
+    /// the client size is reported at once (<see cref="ClientSizePx"/>), so the host resizes the swapchain, lays out and renders at
+    /// the new size as it would after the change, and its presenting thread commits the change right before that frame's present
+    /// (<see cref="CommitPendingBounds"/>): DWM gets the new rect and the frame drawn for it in the same refresh. False = change at once.</summary>
+    private bool TryDeferBounds(bool on, nint style, RECT r, int clientW, int clientH, bool wasIconic)
+    {
+        if (!FluentGpu.Hosting.EngineSwitches.WindowSizeSync || !SyncBoundsWithPresent || _pinnedSurface || _closed) return false;
+        if (wasIconic || IsIconic(_hwnd) || IsWindowVisible(_hwnd) == 0) return false;
+        if (clientW <= 0 || clientH <= 0 || (clientW == _w && clientH == _h)) return false;
+        if (_boundsAppliedEvent == HANDLE.NULL) _boundsAppliedEvent = CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null);
+        if (_boundsAppliedEvent == HANDLE.NULL) return false;
+        _pendingOn = on;
+        _pendingRect = r;
+        _pendingStyle = style;
+        _pendingClientW = clientW; _pendingClientH = clientH;
+        _w = clientW; _h = clientH;   // ClientSizePx: the host's EnsureSize sees the new size on its next frame
+        _pendingSinceQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        _pendingGen++;
+        _boundsPending = true;        // last: the presenting thread reads the record only after this
+        SetTimer(_hwnd, PendingBoundsTimerId, PendingBoundsTimeoutMs, null);
+        // The synchronous WM_SIZE inside SetWindowPos used to ask for this frame: keep starting the new-size frame as early.
+        PaintRequested?.Invoke();
+        return true;
+    }
+
+    /// <summary>Window thread: apply the held full-screen change now (<paramref name="how"/>: present / timer / flush). No-op when
+    /// nothing is pending. Clears the pending flag only after SetWindowPos returned, then releases a presenting thread waiting
+    /// in <see cref="CommitPendingBounds"/>.</summary>
+    private void ApplyPendingBounds(string how)
+    {
+        if (!_boundsPending || _hwnd == HWND.NULL || _closed) return;
+        KillTimer(_hwnd, PendingBoundsTimerId);
+        double heldMs = (System.Diagnostics.Stopwatch.GetTimestamp() - _pendingSinceQpc) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        _applyingPending = true;
+        _hostResizing = true;   // the engine's change, never the user's resize (UserResizeEpoch), even if the OS clamps it
+        try { ApplyFullscreenBounds(_pendingOn, _pendingStyle, _pendingRect, how, heldMs); }
+        finally { _applyingPending = false; _hostResizing = false; }
+        _boundsPending = false;
+        if (_boundsAppliedEvent != HANDLE.NULL) SetEvent(_boundsAppliedEvent);
+    }
+
+    public bool SyncBoundsWithPresent { get; set; }
+    public bool HasPendingBounds => _boundsPending;
+    public Size2 PendingBoundsClientPx => new(_pendingClientW, _pendingClientH);
+
+    /// <summary>Apply the held full-screen change now (<see cref="IPlatformWindow.CommitPendingBounds"/>). On the window's thread it
+    /// applies directly; from the presenting thread it posts to the window's thread and waits ONCE, at most
+    /// <see cref="CommitWaitMs"/>: a stalled UI thread never hangs presentation (the present goes ahead and the posted message
+    /// still applies the change when the UI thread runs). A change already posted for is not waited on again.</summary>
+    public void CommitPendingBounds()
+    {
+        if (!_boundsPending || _closed) return;
+        if (GetCurrentThreadId() == _windowThreadId) { ApplyPendingBounds("present"); return; }
+        int gen = _pendingGen;
+        if (_commitPostedGen == gen) return;   // already posted (and timed out) for this change: present straight through
+        HANDLE ev = _boundsAppliedEvent;
+        if (ev == HANDLE.NULL) return;
+        _commitPostedGen = gen;
+        ResetEvent(ev);
+        if (!_boundsPending || _pendingGen != gen) return;   // applied (or replaced) meanwhile: nothing to wait for
+        if (!PostMessageW(_hwnd, WM_FG_COMMITBOUNDS, (WPARAM)(nuint)(uint)gen, 0)) return;
+        if (WaitForSingleObject(ev, CommitWaitMs) == WAIT_TIMEOUT)
+            FluentGpu.Foundation.Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"[window.fullscreen] commit wait timed out after {CommitWaitMs} ms: presenting; the window change follows when the UI thread runs"));
+    }
+
     // The always-on [window.fullscreen] line (one per edge): how long the style change + SetWindowPos took on this thread (it
-    // dispatches WM_NCCALCSIZE / WM_SIZE synchronously, so it includes whatever those run) and the client size it left.
-    private void NoteFullscreenEdge(bool on, long t0, RECT outer)
+    // dispatches WM_NCCALCSIZE / WM_SIZE synchronously, so it includes whatever those run) and the client size it left; sync =
+    // how the change was applied (immediate at the request, or held and applied by the present / the timer / a later request).
+    private void NoteFullscreenEdge(bool on, long t0, RECT outer, string sync, double heldMs)
     {
         double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         FluentGpu.Foundation.Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
-            $"[window.fullscreen] on={(on ? 1 : 0)} setWindowPosMs={ms:F2} outer={outer.right - outer.left}x{outer.bottom - outer.top} client={_w}x{_h}"));
+            $"[window.fullscreen] on={(on ? 1 : 0)} setWindowPosMs={ms:F2} outer={outer.right - outer.left}x{outer.bottom - outer.top} client={_w}x{_h} sync={sync} heldMs={heldMs:F2}"));
     }
 
     public void Minimize() => PostMessageW(_hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
@@ -2074,12 +2176,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _dm?.Dispose();   // DManip: Stop/RemoveEventHandler/Disable/Abandon/Deactivate + Release all + free the sink CCW (needs a live HWND for Deactivate)
         _dm = null;
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
-        if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); KillTimer(_hwnd, LiftTimerId); DestroyWindow(_hwnd); }
+        _boundsPending = false;   // a held full-screen change dies with the window: nothing to apply
+        if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); KillTimer(_hwnd, LiftTimerId); KillTimer(_hwnd, PendingBoundsTimerId); DestroyWindow(_hwnd); }
         // Stop the vblank waiter BEFORE the events it and the render thread signal are closed.
         _compositorClock?.Dispose();
         _compositorClock = null;
         if (_preciseWaitTimer != HANDLE.NULL) { CloseHandle(_preciseWaitTimer); _preciseWaitTimer = HANDLE.NULL; }
         if (_presentAckEvent != HANDLE.NULL) { CloseHandle(_presentAckEvent); _presentAckEvent = HANDLE.NULL; }
+        if (_boundsAppliedEvent != HANDLE.NULL) { CloseHandle(_boundsAppliedEvent); _boundsAppliedEvent = HANDLE.NULL; }
         // The UIA provider CCW is intentionally LEAKED (not freed): UIA may still hold a ref after the HWND dies and a
         // synchronous free would risk a use-after-free. A few bytes, one per window, reclaimed at process exit.
         if (_uiaProvider != null)
@@ -2181,8 +2285,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // zoom edge-detect below would mis-fire on the maximized→minimize edge (IsZoomed false while iconic).
                 if ((nuint)wParam == SIZE_MINIMIZED) { _lastSizeKind = SIZE_MINIMIZED; return true; }
                 if (_inMoveSizeLoop) _sizedInMoveSizeLoop = true;
+                bool heldSizeArrived = false;   // ApplyPendingBounds's own WM_SIZE, at the size the host already rendered
                 {
                     int nw = (int)(lp & 0xFFFF), nh = (int)((lp >> 16) & 0xFFFF);
+                    // …and the window already reported it: an intermediate WM_SIZE in the held period (adopted by the host)
+                    // means this one paints as usual.
+                    heldSizeArrived = _applyingPending && nw == _pendingClientW && nh == _pendingClientH && _w == nw && _h == nh;
                     nuint kind = (nuint)wParam;
                     // IPlatformWindow.UserResizeEpoch, the no-modal-loop half (see _fitTargetW): a restored→restored size
                     // change the engine did not request, at an unchanged DPI, that is not the last size-to-content target.
@@ -2216,7 +2324,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     ModalLoopTick?.Invoke();
                     return true;
                 }
-                PaintRequested?.Invoke();
+                // A held full-screen change applied at its present: the host already laid out and rendered this size, and a
+                // paint here would run a whole host frame inside SetWindowPos while the presenting thread waits. A size the
+                // prediction missed (an OS clamp) paints as before and the normal resize path corrects it.
+                if (!heldSizeArrived) PaintRequested?.Invoke();
                 return true;
             case 0x02E0:   // WM_DPICHANGED (WinUser.h — not surfaced by the TerraFX static-import set)
             {
@@ -2339,6 +2450,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     // the enqueued ScrollEnd is drained by the very next PumpInto. Idempotent (elapsed-guarded) with the
                     // per-frame check; whichever runs first disarms and KillTimers.
                     TryEmitFallbackLift();
+                    return true;
+                }
+                if ((nuint)wParam == PendingBoundsTimerId)
+                {
+                    // No present committed the held full-screen change in time (no frame at its size reached a present):
+                    // apply it anyway. A tick left over from an earlier change (re-armed since) finds too little elapsed and waits.
+                    KillTimer(hWnd, PendingBoundsTimerId);
+                    if (_boundsPending && (System.Diagnostics.Stopwatch.GetTimestamp() - _pendingSinceQpc) * 1000
+                        < (long)PendingBoundsTimeoutMs / 2 * System.Diagnostics.Stopwatch.Frequency)
+                        SetTimer(hWnd, PendingBoundsTimerId, PendingBoundsTimeoutMs, null);
+                    else ApplyPendingBounds("timer");
                     return true;
                 }
                 return false;
@@ -2724,6 +2846,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
             case WM_FG_SHOWSYSMENU:   // IPlatformWindow.ShowSystemMenu (posted: runs from the pump, outside the frame)
                 ShowSystemMenuCore(hWnd, (short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
+                result = 0;
+                return true;
+
+            case WM_FG_COMMITBOUNDS:   // IPlatformWindow.CommitPendingBounds from the presenting thread (posted)
+                // Only the change it was posted for: a late message for an already applied one is a no-op, and never applies
+                // a newer request before ITS first frame is presented.
+                if (_boundsPending && (uint)(nuint)wParam == (uint)_pendingGen) ApplyPendingBounds("present");
                 result = 0;
                 return true;
 
