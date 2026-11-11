@@ -9246,18 +9246,43 @@ public sealed partial class AppHost : IDisposable
         }
         else if (OwningRenderThread is { } rt)
         {
+            long q0 = Stopwatch.GetTimestamp();
             rt.Quiesce();
+            long q1 = Stopwatch.GetTimestamp();
             try { _renderSeam.InvalidateTarget(); _swapchain.Resize(s); }
             catch (Exception) when (_device.NoteIfDeviceLost()) { }
             finally { rt.Resume(); }
+            NoteWindowResize(s, "parked", ToMs(q1 - q0), ToMs(Stopwatch.GetTimestamp() - q1));
         }
         else
         {
+            long r0 = Stopwatch.GetTimestamp();
             try { _swapchain.Resize(s); }
             catch (Exception) when (_device.NoteIfDeviceLost()) { }
+            NoteWindowResize(s, "inline", 0, ToMs(Stopwatch.GetTimestamp() - r0));
         }
         _needFullLayout = true;
         return true;
+    }
+
+    // [window.resize] rate limit (UI thread): at most one line per 100 ms, the lines it stood in for counted on the next.
+    private long _resizeLogQpc;
+    private int _resizeLogSuppressed;
+
+    /// <summary>The always-on <c>[window.resize]</c> line of one swapchain resize of THIS host's window (UI thread): the size, the
+    /// path (<c>parked</c>: the UI parked the render thread for it; <c>inline</c>: no render thread), how long the park took to
+    /// reach (<c>quiesceMs</c>, the render thread finishing its turn), the backend's fence wait and buffer rebuild, and the whole
+    /// resize. A resize is an edge (a window size change), never per frame; a burst is rate-limited.</summary>
+    private void NoteWindowResize(Size2 px, string path, double quiesceMs, double resizeMs)
+    {
+        long now = Stopwatch.GetTimestamp();
+        if (_resizeLogQpc != 0 && now - _resizeLogQpc < Stopwatch.Frequency / 10) { _resizeLogSuppressed++; return; }
+        _resizeLogQpc = now;
+        int suppressed = _resizeLogSuppressed;
+        _resizeLogSuppressed = 0;
+        var (waitGpuMs, buffersMs) = _swapchain.LastResizeSplit;
+        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[window.resize] px={px.Width:F0}x{px.Height:F0} path={path} quiesceMs={quiesceMs:F2} waitGpuMs={waitGpuMs:F2} buffersMs={buffersMs:F2} resizeMs={resizeMs:F2} suppressed={suppressed}"));
     }
 
     private Size2 ClientSizeDip()

@@ -1222,18 +1222,22 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             if (!GetMonitorInfoW(monitor, &mi)) return;
 
             _fullscreen = true;
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             SetWindowLongPtrW(_hwnd, GWL_STYLE, _windowedStyle & ~(nint)WS_OVERLAPPEDWINDOW);
             RECT r = mi.rcMonitor;
             SetWindowPos(_hwnd, HWND.NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            NoteFullscreenEdge(true, t0, r);
         }
         else
         {
             _fullscreen = false;
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             SetWindowLongPtrW(_hwnd, GWL_STYLE, _windowedStyle);
             RECT r = _windowedRect;
             SetWindowPos(_hwnd, HWND.NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            NoteFullscreenEdge(false, t0, r);
             // Entering fullscreen never un-maximized the window (only its STYLE and rect changed), so in the common case
             // it is still WS_MAXIMIZE-flagged and _windowedRect already IS the maximized geometry — the restore above is
             // the whole job and a second SW_MAXIMIZE is a redundant geometry change (another WM_NCCALCSIZE +
@@ -1242,6 +1246,15 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             if (_windowedWasZoomed && !IsZoomed(_hwnd)) ShowWindow(_hwnd, SW_MAXIMIZE);
         }
         _queue.Enqueue(new InputEvent(InputKind.WindowStateChanged, default, 0, 0, TimestampMs: Now()));
+    }
+
+    // The always-on [window.fullscreen] line (one per edge): how long the style change + SetWindowPos took on this thread (it
+    // dispatches WM_NCCALCSIZE / WM_SIZE synchronously, so it includes whatever those run) and the client size it left.
+    private void NoteFullscreenEdge(bool on, long t0, RECT outer)
+    {
+        double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        FluentGpu.Foundation.Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[window.fullscreen] on={(on ? 1 : 0)} setWindowPosMs={ms:F2} outer={outer.right - outer.left}x{outer.bottom - outer.top} client={_w}x{_h}"));
     }
 
     public void Minimize() => PostMessageW(_hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);

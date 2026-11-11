@@ -112,6 +112,10 @@ public struct VideoEngineSnapshot
     /// accumulation as <see cref="FramesRendered"/>). Counts only the renderer's own drops: a frame the compositor missed
     /// after the swap chain presented it is invisible here, which is what <see cref="RenderedFrameWatch"/> backstops.</summary>
     public long FramesDropped;
+    /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> at which <see cref="FramesRendered"/> /
+    /// <see cref="FramesDropped"/> were last read from the renderer (0 = never this source): a reader differences two snapshots over
+    /// the time between their samples, not between its own reads.</summary>
+    public long FramesSampledTimestamp;
 }
 
 /// <summary>Accumulates a media engine's rendered/dropped frame counters across the resets it applies: Media Foundation

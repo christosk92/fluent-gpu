@@ -46,6 +46,9 @@ public sealed class VideoSurfaceRegistry
         public RectF ViewportDip;     // visible container; smaller than RectDip for center-crop
         public float RadiusDip;         // corner radius in DIP (0 = square). Scaled to device px at apply, like the rect.
         public uint ContentW, ContentH; // the content's native pixel size (e.g. decoder swapchain) — the presenter scales it to fill the rect (0 = unknown)
+        public VideoContentVia ContentVia;   // how the current content size came to be, its request's age when written, and when (diagnostics)
+        public int ContentAgeMs;
+        public long ContentSetTicks;
         public bool Visible;
         public int Z;
         public nuint DesiredHandle;   // the DComp surface handle to bind (0 = none produced yet)
@@ -195,12 +198,19 @@ public sealed class VideoSurfaceRegistry
 
     /// <summary>Set the content's native pixel size (decoder swapchain size) so the presenter can scale it to fill the
     /// rect instead of showing it 1:1 (cropped). Value-gated.</summary>
-    public void SetContentSize(int token, uint width, uint height)
+    public void SetContentSize(int token, uint width, uint height) => SetContentSize(token, width, height, VideoContentVia.None, 0);
+
+    /// <summary><see cref="SetContentSize(int, uint, uint)"/> that also says how the size came to be and how old its request was
+    /// (<paramref name="requestAgeMs"/>, ms), for the applier's <c>[video.surface] content</c> line. Only a CHANGED size records them.</summary>
+    public void SetContentSize(int token, uint width, uint height, VideoContentVia via, int requestAgeMs)
     {
         ThreadGuard.AssertNotRender();
         ref Entry e = ref Slot(token);
         if (e.ContentW == width && e.ContentH == height) return;
         e.ContentW = width; e.ContentH = height;
+        e.ContentVia = via;
+        e.ContentAgeMs = requestAgeMs;
+        e.ContentSetTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         MarkDirty();
     }
 
@@ -605,6 +615,7 @@ public sealed class VideoSurfaceRegistry
                 ReleasePending = e.ReleasePending, HasGeometry = true, Seq = seq, Visible = e.Visible,
                 RectDip = e.RectDip, ViewportDip = e.ViewportDip, RadiusDip = e.RadiusDip,
                 ContentW = e.ContentW, ContentH = e.ContentH, Z = e.Z,
+                ContentVia = e.ContentVia, ContentAgeMs = e.ContentAgeMs, ContentSetTicks = e.ContentSetTicks,
             };
             // The hole this surface sits behind, as the UI sees it NOW: only when the tracked node's rect is the rect the owner
             // placed (the hole node itself - the usual Uniform / Fill case). An owner that places a different rect than the node it
@@ -867,6 +878,13 @@ public readonly struct VideoBinding
     /// <summary>Round this surface's corners (DIP). Half the shorter side gives a circle.</summary>
     public void SetCornerRadius(float radiusDip) { if (_registry is { } r) r.SetCornerRadius(Token, radiusDip); }
     public void SetContentSize(SizeI px) { if (_registry is { } r) r.SetContentSize(Token, (uint)Math.Max(0, px.Width), (uint)Math.Max(0, px.Height)); }
+    /// <summary><see cref="SetContentSize(SizeI)"/> with how the size came to be and its request's age in ms (the stream-size gate's
+    /// <see cref="VideoStreamStep.ContentVia"/> / <see cref="VideoStreamStep.RequestAgeMs"/>): diagnostics for the applier's
+    /// <c>[video.surface] content</c> line, nothing drawn depends on them.</summary>
+    public void SetContentSize(SizeI px, VideoContentVia via, int requestAgeMs)
+    {
+        if (_registry is { } r) r.SetContentSize(Token, (uint)Math.Max(0, px.Width), (uint)Math.Max(0, px.Height), via, requestAgeMs);
+    }
     /// <summary>Show/hide the surface.</summary>
     public void SetVisible(bool visible) { if (_registry is { } r) r.SetVisible(Token, visible); }
     /// <summary>Declare the scene node whose absolute rect this surface follows, so a compositor-only move (a drag, a

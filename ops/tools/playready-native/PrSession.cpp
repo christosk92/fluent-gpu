@@ -1012,6 +1012,7 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
     }
     if (vp.atEnd && !video->IsComplete()) video->MarkComplete();
     if (audio && ap.atEnd && !audio->IsComplete()) audio->MarkComplete();
+    s.feedComplete.store(video->IsComplete() && (!audio || audio->IsComplete()) ? 1 : 0, std::memory_order_release);
 
     if (vp.idx < 0 && ap.idx < 0)
     {
@@ -1553,6 +1554,7 @@ static void PollFrameHealth(Runtime& rt, Session& s)
             s.frames.Observe(rendered, dropped);
             s.framesRendered.store(s.frames.rendered, std::memory_order_release);
             s.framesDropped.store(s.frames.dropped, std::memory_order_release);
+            s.framesSampledQpc.store(fgpr::QpcNow(), std::memory_order_release);
         }
     }
     // A statistics read that fails or comes back empty is telemetry trouble, never a hang (Chromium skips its rendered-frame check
@@ -1595,6 +1597,8 @@ static void DetachInternal(Runtime& rt, Session& s, bool releaseSource)
     RetireSwapchainHandle(rt, s.swapchainHandle.exchange(0, std::memory_order_acq_rel));   // F198: closed after the grace, not leaked
     s.appliedStreamW.store(0, std::memory_order_release);
     s.appliedStreamH.store(0, std::memory_order_release);
+    s.streamProbe = Session::StreamProbe{};   // a stream-size probe in flight dies with the attach (its poll sees the new gen)
+    ++s.streamProbeGen;
     s.seeking.store(0, std::memory_order_release);
     s.engineSeekInFlight = false;   // the engine's seek dies with the detach: no SEEKED of it will ever reach this session
     if (s.deferredSeek.valid)
@@ -1760,6 +1764,10 @@ static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
     }
     rt.engineSource = s.handle;
     RebaseFrameStats(rt, s);   // F066
+    s.swapchainBuilds = 0;     // the "[cenc] swapchain build=" count is per attach
+    s.lastSwapchainBuildQpc = 0;
+    s.streamProbe = Session::StreamProbe{};
+    ++s.streamProbeGen;
     Raise(s.handle, FgPrEvent_Attached, attachMs);
 
     const double volume = (double)s.volumeMicro.load(std::memory_order_acquire) / 1000000.0;
@@ -1856,6 +1864,103 @@ winrt::com_ptr<::IUnknown> fgpr::SessionSourceForUrl(const wchar_t* url)
     return unknown;
 }
 
+/// One "[cenc] swapchain build=" line per swap chain MF hands this attach (a handle the runtime adopted that differs from the one
+/// it held): which build of the attach it is, why (the metadata publication, a RESOURCELOST re-raise, a FORMATCHANGE re-creation),
+/// its size, how long after the attach and after the previous build it landed, and what the UpdateVideoStream / handle query
+/// that produced it cost on the runtime thread (0 when it was not this turn's call). Cold: a few per attach.
+static void NoteSwapchainBuild(Session& s, const char* reason, LONG w, LONG h, int64_t updateTicks, int64_t handleTicks)
+{
+    const int64_t now = fgpr::QpcNow();
+    ++s.swapchainBuilds;
+    const int64_t sincePrevMs = s.lastSwapchainBuildQpc ? fgpr::QpcToMs(now - s.lastSwapchainBuildQpc) : -1;
+    s.lastSwapchainBuildQpc = now;
+    const double f = 1000.0 / (double)fgpr::QpcFrequency();
+    char tail[160];
+    snprintf(tail, sizeof(tail), " updateMs=%.2f handleMs=%.2f", (double)updateTicks * f, (double)handleTicks * f);
+    fgpr::RaiseLog(s.handle, "[cenc] swapchain build=" + std::to_string(s.swapchainBuilds) + " reason=" + reason + " size=" +
+                             std::to_string((long)w) + "x" + std::to_string((long)h) + " sinceAttachMs=" +
+                             std::to_string((long long)fgpr::MsSinceQpc(s.attachPostedQpc)) + " sincePrevBuildMs=" +
+                             std::to_string((long long)sincePrevMs) + tail);
+}
+
+// ── the stream-size probe: when does the first frame at a new stream size land? ──────────────────────────────────────────
+// After FgPrSessionSetStreamSize's UpdateVideoStream(dst), the renderer's FRAMES_RENDERED moving past the value it read when
+// the call returned is the first frame drawn into the resized swap chain. Polled on the runtime thread (PostAfter), fast for
+// the first second (a frame is due within a frame period while playing), then slowly; a newer request, a detach or an attach
+// supersedes it (streamProbeGen). One "[cenc] stream size ... firstFrameAfterMs=" line per resolved request.
+namespace
+{
+constexpr int32_t kStreamProbeFastMs = 4;
+constexpr int64_t kStreamProbeFastWindowMs = 1000;
+constexpr int32_t kStreamProbeSlowMs = 100;
+constexpr int64_t kStreamProbeGiveUpMs = 10000;
+}
+
+static void ScheduleStreamProbe(Runtime& rt, const std::shared_ptr<Session>& sp, int32_t delayMs);
+
+static void ResolveStreamProbe(Session& s, int64_t afterMs, const char* how)
+{
+    const Session::StreamProbe p = s.streamProbe;
+    s.streamProbe.armed = false;
+    char tail[200];
+    snprintf(tail, sizeof(tail), " applyMs=%.2f firstFrameAfterMs=%lld polls=%d via=%s state=%d", p.applyMs, (long long)afterMs,
+             p.polls, how, (int)s.state.load(std::memory_order_acquire));
+    fgpr::RaiseLog(s.handle, "[cenc] stream size " + std::to_string(p.w) + "x" + std::to_string(p.h) + tail);
+}
+
+static void PollStreamProbe(Runtime& rt, const std::shared_ptr<Session>& sp, uint64_t gen)
+{
+    Session& s = *sp;
+    if (gen != s.streamProbeGen || !s.streamProbe.armed) return;
+    if (!IsLive(rt, s)) { s.streamProbe.armed = false; return; }
+    s.streamProbe.polls++;
+    const int64_t afterMs = fgpr::QpcToMs(fgpr::QpcNow() - s.streamProbe.calledQpc);
+    uint32_t rendered = 0, dropped = 0;
+    if (!ReadEngineFrameStats(rt, rendered, dropped))
+    {
+        ResolveStreamProbe(s, -1, "unreadable");
+        return;
+    }
+    if (rendered < s.streamProbe.baseRendered) s.streamProbe.baseRendered = rendered;   // MF reset the counters (a flush): rebase
+    else if (rendered > s.streamProbe.baseRendered)
+    {
+        ResolveStreamProbe(s, afterMs, "frame");
+        return;
+    }
+    if (afterMs >= kStreamProbeGiveUpMs)
+    {
+        ResolveStreamProbe(s, -1, "none");
+        return;
+    }
+    ScheduleStreamProbe(rt, sp, afterMs < kStreamProbeFastWindowMs ? kStreamProbeFastMs : kStreamProbeSlowMs);
+}
+
+static void ScheduleStreamProbe(Runtime& rt, const std::shared_ptr<Session>& sp, int32_t delayMs)
+{
+    Runtime* raw = &rt;   // the runtime thread runs the item and owns a strong ref for as long as it does
+    std::weak_ptr<Session> weak = sp;
+    const uint64_t gen = sp->streamProbeGen;
+    rt.queue.PostAfter(delayMs, [raw, weak, gen] {
+        if (std::shared_ptr<Session> live = weak.lock()) PollStreamProbe(*raw, live, gen);
+    });
+}
+
+/// Arm the probe for an UpdateVideoStream(dst) that just returned (runtime thread).
+static void ArmStreamProbe(Runtime& rt, const std::shared_ptr<Session>& sp, int32_t w, int32_t h, int64_t calledQpc, double applyMs)
+{
+    Session& s = *sp;
+    ++s.streamProbeGen;
+    uint32_t rendered = 0, dropped = 0;
+    const bool readable = ReadEngineFrameStats(rt, rendered, dropped);
+    s.streamProbe = Session::StreamProbe{ true, w, h, calledQpc, applyMs, rendered, 0 };
+    if (!readable)
+    {
+        ResolveStreamProbe(s, -1, "unreadable");
+        return;
+    }
+    ScheduleStreamProbe(rt, sp, kStreamProbeFastMs);
+}
+
 void fgpr::SessionPublishHandle(Runtime& rt, Session& s, bool reRaise)
 {
     if (!IsLive(rt, s) || !s.metadataSeen) return;
@@ -1875,7 +1980,9 @@ void fgpr::SessionPublishHandle(Runtime& rt, Session& s, bool reRaise)
     // MF only creates the windowless swap chain once UpdateVideoStream has given it a NON-ZERO destination
     // rectangle, so the rect is logged with the first handle query: a {0,0,0,0} or 1x1 dst here is the bug, not
     // the handle. An invalid handle on a SUCCEEDED (typically S_FALSE) hr means "not ready yet", never "done".
+    const int64_t updateQpc = fgpr::QpcNow();
     HRESULT hu = rt.engineEx->UpdateVideoStream(nullptr, &dst, &border);
+    const int64_t updateTicks = fgpr::QpcNow() - updateQpc;
     if (SUCCEEDED(hu))
     {
         // The echo the managed side waits for before it scales by this size (see FgPrSnapshot.streamWidth).
@@ -1892,7 +1999,9 @@ void fgpr::SessionPublishHandle(Runtime& rt, Session& s, bool reRaise)
             rt.engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);
     }
     HANDLE handle = nullptr;
+    const int64_t handleQpc = fgpr::QpcNow();
     HRESULT hr = rt.engineEx->GetVideoSwapchainHandle(&handle);
+    const int64_t handleTicks = fgpr::QpcNow() - handleQpc;
     const bool usable = SUCCEEDED(hr) && handle != nullptr && handle != INVALID_HANDLE_VALUE;
     if (!usable)
     {
@@ -1904,6 +2013,7 @@ void fgpr::SessionPublishHandle(Runtime& rt, Session& s, bool reRaise)
     }
     const uint64_t value = (uint64_t)(uintptr_t)handle;
     const uint64_t prev = AdoptSwapchainHandle(rt, s, value);   // F198: the runtime owns it; the one it replaces is retired
+    if (prev != value) NoteSwapchainBuild(s, reRaise ? "reraise" : "metadata", dst.right, dst.bottom, updateTicks, handleTicks);
     if (prev != value || reRaise)
     {
         fgpr::RaiseLog(s.handle, "[cenc] " + std::to_string(nvw) + "x" + std::to_string(nvh) +
@@ -1939,6 +2049,7 @@ void fgpr::SessionOnFormatChange(Runtime& rt, Session& s)
     if (FAILED(hr) || handle == nullptr || handle == INVALID_HANDLE_VALUE) return;
     const uint64_t value = (uint64_t)(uintptr_t)handle;
     if (AdoptSwapchainHandle(rt, s, value) == value) return;   // F198
+    NoteSwapchainBuild(s, "formatchange", (LONG)nvw, (LONG)nvh, 0, 0);
     fgpr::RaiseLog(s.handle, "[cenc] format change: swap-chain handle=" + std::to_string(value) + " (re-created)");
     Raise(s.handle, FgPrEvent_Handle, (int64_t)value);
 }
@@ -2547,9 +2658,13 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rtH
         RECT dst = { 0, 0, (LONG)(s.streamWidth ? (DWORD)s.streamWidth : nvw), (LONG)(s.streamHeight ? (DWORD)s.streamHeight : nvh) };
         if (dst.right <= 0 || dst.bottom <= 0) return;
         MFARGB border = { 0, 0, 0, 255 };
+        const int64_t callQpc = fgpr::QpcNow();
         HRESULT hr = rt.engineEx->UpdateVideoStream(nullptr, &dst, &border);
+        const int64_t returnedQpc = fgpr::QpcNow();
+        const double applyMs = (double)(returnedQpc - callQpc) * 1000.0 / (double)fgpr::QpcFrequency();
         if (SUCCEEDED(hr))
         {
+            ArmStreamProbe(rt, sp, (int32_t)dst.right, (int32_t)dst.bottom, returnedQpc, applyMs);
             // The compositor scales the swap chain's CURRENT frame by the new size's factor, but that frame was rendered at the
             // old size: unless the source is playing (its next frame is rendered at the new size anyway), repaint so the frame
             // DirectComposition scales is one MF rendered for this destination (the clear path's StreamRect + Repaint).
@@ -2566,8 +2681,10 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rtH
         if (FAILED(hr) || s.lastStreamLogQpc == 0 || now - s.lastStreamLogQpc >= fgpr::QpcFrequency())
         {
             s.lastStreamLogQpc = now;
+            char applied[48];
+            snprintf(applied, sizeof(applied), " applyMs=%.2f", applyMs);
             fgpr::RaiseLog(s.handle, "[cenc] stream size " + std::to_string(dst.right) + "x" + std::to_string(dst.bottom) +
-                                     (s.streamWidth ? "" : " (natural)") + " hr=" + fgpr::Hex(hr));
+                                     (s.streamWidth ? "" : " (natural)") + " hr=" + fgpr::Hex(hr) + applied);
         }
     });
 }
@@ -2646,6 +2763,9 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSnapshot(FgPrRuntime rtHandle
     out->streamHeight = s.appliedStreamH.load(std::memory_order_acquire);
     out->framesRendered = s.framesRendered.load(std::memory_order_acquire);
     out->framesDropped = s.framesDropped.load(std::memory_order_acquire);
+    out->framesSampledQpc = s.framesSampledQpc.load(std::memory_order_acquire);
+    out->feedComplete = s.feedComplete.load(std::memory_order_acquire);
+    out->reserved0 = 0;
     return S_OK;
 }
 

@@ -30,6 +30,10 @@ internal struct VideoPresentIntent
     public float RadiusDip;
     public uint ContentW, ContentH;
     public int Z;
+    // Diagnostics only (the [video.surface] content line): how ContentW/H came to be, its request's age when the UI wrote it, and when.
+    public VideoContentVia ContentVia;
+    public int ContentAgeMs;
+    public long ContentSetTicks;
 }
 
 /// <summary>One video hole as the render thread's composite placed it this turn (<c>SliceRecorder.PlaceVideoErases</c>): the hole's
@@ -366,6 +370,7 @@ internal sealed class VideoPlacementApplier
     {
         dst.RectDip = src.RectDip; dst.ViewportDip = src.ViewportDip; dst.RadiusDip = src.RadiusDip;
         dst.ContentW = src.ContentW; dst.ContentH = src.ContentH; dst.Visible = src.Visible; dst.Z = src.Z;
+        dst.ContentVia = src.ContentVia; dst.ContentAgeMs = src.ContentAgeMs; dst.ContentSetTicks = src.ContentSetTicks;
         dst.HasHoleOrigin = src.HasHoleOrigin; dst.HoleX = src.HoleX; dst.HoleY = src.HoleY; dst.HoleW = src.HoleW; dst.HoleH = src.HoleH;
         dst.HasGeometry = true;
     }
@@ -747,6 +752,11 @@ internal sealed class VideoPlacementApplier
         // The posed travel of the hole this surface sits behind: the same slice pose the composite just applied, so the video moves
         // exactly as far as the hole (ComputePlacement; only a presenting turn poses, the early drain places at the published rect).
         ComputePlacement(in s.Intent, scale, posed, scope, out PlacementPx p);
+        // The compositor's declared content size flips HERE (the scale DComp applies is the rect over this size), so the edge is logged
+        // with how long after its request it reached the glass and whether the backend echoed it: a picture drawn at the wrong scale
+        // for a few frames is a gap between this line and the decoder's first frame at the new size.
+        if ((p.ContentW != s.AppliedPx.ContentW || p.ContentH != s.AppliedPx.ContentH) && p.ContentW != 0 && p.ContentH != 0)
+            NoteContentEdge(in s, i, in p);
         presenter.SetContentSize(s.SurfaceId, p.ContentW, p.ContentH);   // so it scales the frame to fill `dev` (not 1:1-cropped)
         presenter.Place(s.SurfaceId, p.Dev, 1f, p.Z);
         if (!p.ViewportEmpty) presenter.SetViewport(s.SurfaceId, p.Viewport);
@@ -785,6 +795,21 @@ internal sealed class VideoPlacementApplier
         if (announce)
             Diag.Line($"[video.surface] place token={i + 1} id={s.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) content={p.ContentW}x{p.ContentH} visible={p.Visible} scale={scale:0.##}");
         if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"Place id={s.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) visible={p.Visible} scale={scale:0.##} pose=({p.Dx:0.##},{p.Dy:0.##})");
+    }
+
+    // Cold: once per content-size edge (a stream-size change, a new surface), never per frame.
+    private static void NoteContentEdge(in Slot s, int i, in PlacementPx p)
+    {
+        long sinceRequestMs = s.Intent.ContentSetTicks == 0 ? -1
+            : s.Intent.ContentAgeMs + (long)System.Diagnostics.Stopwatch.GetElapsedTime(s.Intent.ContentSetTicks).TotalMilliseconds;
+        string echo = s.Intent.ContentVia switch
+        {
+            VideoContentVia.First => "first",
+            VideoContentVia.Echo => "echo",
+            VideoContentVia.Timeout => "timeout",
+            _ => "none",
+        };
+        Diag.Line($"[video.surface] content token={i + 1} from={s.AppliedPx.ContentW}x{s.AppliedPx.ContentH} to={p.ContentW}x{p.ContentH} sinceRequestMs={sinceRequestMs} echo={echo}");
     }
 
     /// <summary>Changes were applied with the device commit deferred and no commit has been published for them yet: the host

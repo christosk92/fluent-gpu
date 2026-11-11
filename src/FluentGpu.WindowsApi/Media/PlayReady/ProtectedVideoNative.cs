@@ -162,6 +162,9 @@ internal static unsafe partial class PrNative
         public int StreamHeight;
         public long FramesRendered;
         public long FramesDropped;
+        public long FramesSampledQpc;
+        public int FeedComplete;
+        public int Reserved0;
     }
 
     /// <summary>Blittable mirror of <c>FgPrProbeResult</c> — what the demuxer found in a local fragmented MP4.</summary>

@@ -5119,7 +5119,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Phase 1 (§3.4, pal-rhi.md §5.4 as designed): CPU-wait only the fence values THIS target's in-flight work
         // stamped — its submits AND its last present (TargetFenceHorizon) — never a full device drain: a detached child's
         // resize must not stall the main window's recorder, and the old back buffers must not be released under a present.
+        long resizeT0 = System.Diagnostics.Stopwatch.GetTimestamp();
         WaitForFenceValue(TargetFenceHorizon(target.Frame));
+        long resizeT1 = System.Diagnostics.Stopwatch.GetTimestamp();
         // Swapchain-sized; recreated lazily at the new size on the next stencil scope. EXPLICIT target (INCIDENT 2026-09
         // §1.4): the old no-arg release freed only the working copy — this clears the target's own storage directly
         // (Phase 1 removes the working-copy concept structurally, so there is no reload to guard against any more).
@@ -5140,6 +5142,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _w = w; _h = h;
         CreateRtvs(target);
         target.Backdrop?.SetBounds(w, h);   // resize the WUC backdrop/content visuals to match
+        long resizeT2 = System.Diagnostics.Stopwatch.GetTimestamp();
+        target.LastResizeWaitGpuMs = (resizeT1 - resizeT0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        target.LastResizeBuffersMs = (resizeT2 - resizeT1) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         EndTargetFrame();
     }
 
@@ -5507,6 +5512,9 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal int PpPresentCount;
     internal bool PpNeedFullPresent;
     internal uint W, H;
+    // The last size-changing Resize's split (D3D12Device.Resize): the fence wait and the ResizeBuffers + RTV rebuild, ms.
+    internal double LastResizeWaitGpuMs, LastResizeBuffersMs;
+    public (double WaitGpuMs, double BuffersMs) LastResizeSplit => (LastResizeWaitGpuMs, LastResizeBuffersMs);
     // FrameIndex, StencilDsv/StencilDsvHeap/StencilDsvW/StencilDsvH DELETED (Phase 1, detached-window-render-
     // isolation-implementation.md §3.1/§3.5): they were the Activate/StoreActive per-target mirror of state that now
     // lives ONLY on Frame (below) — never copied into (or back out of) a device working field, so a detached child's

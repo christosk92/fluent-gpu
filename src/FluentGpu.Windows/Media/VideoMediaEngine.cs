@@ -202,6 +202,8 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     // Engine thread only: the stream size the last StreamRect actually applied (UpdateVideoStream(dst) succeeded) — published
     // as VideoEngineSnapshot.StreamW/H, the echo a session keeps its compositor content size behind. Per source.
     private uint _appliedStreamW, _appliedStreamH;
+    // Engine thread only: when PollFrameStats last read the counters (VideoEngineSnapshot.FramesSampledTimestamp; 0 = never this source).
+    private long _framesSampledTicks;
     private VideoEngineSnapshot _lastPublished;
     private long _lastRaiseTicks;
     // Engine thread only: the source loops (the Loop command), the loop seam's measurement (LoopSeamProbe: its period is the gapless
@@ -522,7 +524,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         _appliedStreamW = 0; _appliedStreamH = 0;
         _cachedHandle = 0; _handleQueriedForEpoch = -1;
         _handles.Retire(Environment.TickCount64);   // F198: the old source's handle is superseded; it is closed a replacement or a grace later
-        _frames.Reset(); _frameWatch.Reset(); _nextStatsPollMs = 0; _frameStatsReadable = false;
+        _frames.Reset(); _frameWatch.Reset(); _nextStatsPollMs = 0; _frameStatsReadable = false; _framesSampledTicks = 0;
         _cachedDuration = 0;
         _seam.Reset(_seam.Period); _lastPosition = 0;
         // The source changed, so whatever swap-chain handle the old one produced is invalid, exactly like a native
@@ -725,6 +727,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             StreamH = _appliedStreamH,
             FramesRendered = _frames.Rendered,
             FramesDropped = _frames.Dropped,
+            FramesSampledTimestamp = _framesSampledTicks,
         };
         _snapshot.Publish(snap);
 
@@ -787,7 +790,11 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private void PollFrameStats()
     {
         _frameStatsReadable = TryReadFrameStats(out uint rendered, out uint dropped);
-        if (_frameStatsReadable) _frames.Observe(rendered, dropped);
+        if (_frameStatsReadable)
+        {
+            _frames.Observe(rendered, dropped);
+            _framesSampledTicks = Stopwatch.GetTimestamp();
+        }
     }
 
     // A new source starts counting from whatever the (warm) engine's counters read now: MF resets them itself once the new source

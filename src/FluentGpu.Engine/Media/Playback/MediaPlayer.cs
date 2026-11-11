@@ -128,6 +128,17 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
         return false;
     }
 
+    /// <summary>The connected session's renderer frame counters as the engine last read them, with the instant they were read
+    /// (<see cref="MediaFrameCounters"/>). <see cref="Statistics"/> carries them as of the last state pump, which is not on the
+    /// counters' own cadence; a reader that differences counters over time reads this instead. Any thread, no allocation. False
+    /// when the session has none (none connected, not opened, not sampled yet, or not a <see cref="IMediaFrameCounterSource"/>).</summary>
+    public bool TryReadFrameCounters(out MediaFrameCounters counters)
+    {
+        if (!_disposed && _session is IMediaFrameCounterSource source && source.TryReadFrameCounters(out counters)) return true;
+        counters = default;
+        return false;
+    }
+
     // ── the one-call easy path (all funnel into Play(MediaSource)) ───────────────────────────────────────────────────
 
     /// <summary>Play a URI or local path (auto buffering / SMTC / default tracks).</summary>

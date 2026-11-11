@@ -84,6 +84,17 @@ public interface IProtectedVideoPlayer : IDisposable
     /// <summary>F066: frames the native renderer DROPPED for the attached source (FRAMES_DROPPED, same accumulation as
     /// <see cref="FramesRendered"/>), as of the last <see cref="Pump()"/>. Counts only the renderer's own drops.</summary>
     long FramesDropped => 0;
+    /// <summary>The native renderer's frame counters as the runtime last READ them (rendered, dropped, and the QPC of that read),
+    /// now rather than as of the last <see cref="Pump()"/>. Any thread, never blocks, never allocates. False while there is no
+    /// sample. Default false: a player with no native engine.</summary>
+    bool TryReadFrameCounters(out MediaFrameCounters counters)
+    {
+        counters = default;
+        return false;
+    }
+    /// <summary>True once every track's feed reached the end of the track (nothing more will be fetched, so no buffer event will
+    /// pump the session again), as of the last <see cref="Pump()"/>. Default false.</summary>
+    bool FeedComplete => false;
     /// <summary>True while a seek is in flight (a JOINING state: the previous frame stays on screen).</summary>
     bool IsSeeking { get; }
     /// <summary>The last seek's landed position in ms, or -1 while none has landed since the last seek was issued.</summary>

@@ -808,6 +808,23 @@ struct Session
     int32_t streamWidth = 0, streamHeight = 0;    // FgPrSessionSetStreamSize (0×0 = natural)
     int64_t lastStreamLogQpc = 0;                 // runtime thread: when the "[cenc] stream size" line was last written
     int32_t handleTries = 0;
+    // The swap chains MF built for this attach (each handle the runtime adopted: the metadata publication, a FORMATCHANGE or
+    // RESOURCELOST re-creation), and when the last one landed: the "[cenc] swapchain build=" lines. Reset with every attach.
+    int32_t swapchainBuilds = 0;
+    int64_t lastSwapchainBuildQpc = 0;
+    // The stream-size probe (runtime thread): after an UpdateVideoStream(dst) of FgPrSessionSetStreamSize, the first frame the
+    // renderer counts (FRAMES_RENDERED moving past `baseRendered`) is the first one drawn into the resized swap chain. `gen`
+    // advances on every new request, detach and attach, so a poll of a superseded request is a no-op.
+    struct StreamProbe
+    {
+        bool armed = false;
+        int32_t w = 0, h = 0;
+        int64_t calledQpc = 0;       // when UpdateVideoStream returned
+        double applyMs = 0.0;        // how long UpdateVideoStream itself took
+        uint32_t baseRendered = 0;   // the raw FRAMES_RENDERED when it returned
+        int32_t polls = 0;
+    } streamProbe;
+    uint64_t streamProbeGen = 0;
     // F066 (runtime thread): the renderer's frame counters accumulated across MF's post-flush resets, when they were last read,
     // and the no-rendered-frame watch. Reset with every attach; the accumulated totals are published through the atomics below.
     health::FrameCounters frames;
@@ -833,6 +850,8 @@ struct Session
     std::atomic<int64_t> firstFrameQpc{ 0 };
     std::atomic<int32_t> appliedStreamW{ 0 }, appliedStreamH{ 0 };   // FgPrSnapshot.streamWidth/Height: the applied stream size
     std::atomic<int64_t> framesRendered{ 0 }, framesDropped{ 0 };    // FgPrSnapshot.framesRendered/Dropped (F066), this attach
+    std::atomic<int64_t> framesSampledQpc{ 0 };                      // FgPrSnapshot.framesSampledQpc: when the counters above were read
+    std::atomic<int32_t> feedComplete{ 0 };                          // FgPrSnapshot.feedComplete: every track's feed reached its end
     std::atomic<uint64_t> bytesDownloaded{ 0 };
     std::atomic<uint64_t> downloadElapsedMs{ 0 };
 

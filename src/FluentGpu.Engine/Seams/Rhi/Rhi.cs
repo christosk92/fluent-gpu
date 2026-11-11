@@ -395,6 +395,11 @@ public interface ISwapchain : IDisposable
     void Resize(Size2 px);
     void Present();
 
+    /// <summary>Where the last <see cref="Resize"/> that changed the size spent its time, in ms: the CPU wait for this target's
+    /// in-flight GPU work (<c>WaitGpuMs</c>) and the buffer reallocation itself (<c>BuffersMs</c>). Diagnostics only (the
+    /// <c>[window.resize]</c> line); the default (a backend that does not measure) is zero.</summary>
+    (double WaitGpuMs, double BuffersMs) LastResizeSplit => default;
+
     /// <summary>Present WITHOUT blocking the calling thread on this target's present queue (DXGI_PRESENT_DO_NOT_WAIT): the
     /// non-blocking secondary present (F085) a detached pop-out's frame takes on the render thread it shares with the main
     /// window. True when the frame is queued, stood down or otherwise handled exactly as <see cref="Present"/> would have

@@ -142,6 +142,8 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     private SizeI _appliedStream;
     // The native renderer's frame counters from the last pump's snapshot (UI thread; F066).
     private long _framesRendered, _framesDropped;
+    // The native feed reached the end of every track, as of the last pump's snapshot (written on the UI thread, read on any).
+    private volatile bool _feedComplete;
     // The OPM window placement native last ACCEPTED (host 0 = none): value-gates PlaceOutputProtectionWindow, and is cleared at
     // every attach because another session (the other window's) may have moved the one shared window since.
     private nuint _opmHost;
@@ -334,6 +336,19 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         running = n.State == PrNative.StatePlaying && n.Seeking == 0 && !waiting && Volatile.Read(ref _attached) != 0;
         return true;
     }
+    /// <inheritdoc/>
+    public bool TryReadFrameCounters(out MediaFrameCounters counters)
+    {
+        counters = default;
+        ulong s = _s;
+        if (_disposed || s == 0 || _startupError is not null) return false;
+        PrNative.Snapshot n = default;
+        if (_native.SessionSnapshot(_rt.Handle, s, ref n) < 0 || n.FramesSampledQpc == 0) return false;
+        counters = new MediaFrameCounters(Math.Max(0, n.FramesRendered), Math.Max(0, n.FramesDropped), n.FramesSampledQpc);
+        return true;
+    }
+    /// <inheritdoc/>
+    public bool FeedComplete => _feedComplete;
     /// <inheritdoc/>
     public bool IsSeeking => Volatile.Read(ref _seekPending) != 0;
     /// <inheritdoc/>
@@ -824,6 +839,7 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         _appliedStream = n.StreamWidth > 0 && n.StreamHeight > 0 ? new SizeI(n.StreamWidth, n.StreamHeight) : SizeI.Zero;
         _framesRendered = Math.Max(0, n.FramesRendered);
         _framesDropped = Math.Max(0, n.FramesDropped);
+        _feedComplete = n.FeedComplete != 0;
         Volatile.Write(ref _forwardBufferedMs, Math.Max(0, n.BufferedAheadMs));
         Volatile.Write(ref _retainedBehindMs, Math.Max(0, n.RetainedBehindMs));
         if (n.ActiveRepresentation >= 0 && _videoTrack is { } track && n.ActiveRepresentation < track.Representations.Count)

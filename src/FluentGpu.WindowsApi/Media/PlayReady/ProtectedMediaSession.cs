@@ -29,7 +29,7 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 /// a typed failure (Drm while the license is pending or the topology is being built, Network while the store is still
 /// empty). It is armed once at connect and disarmed by the first frame; it is a deadline, not a poll.</para>
 /// </summary>
-public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource, IMediaClockSource
+public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource, IMediaClockSource, IMediaFrameCounterSource
 {
     private readonly IProtectedVideoPlayer _player;
     private readonly ProtectedVideoRequest _request;
@@ -235,6 +235,14 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         if (!_player.TryReadClock(out long ms, out long qpc, out bool running)) return false;
         sample = new MediaClockSample(TimeSpan.FromMilliseconds(ms), qpc, _rate, running);
         return true;
+    }
+
+    /// <summary>The native renderer's frame counters as the runtime last read them (<see cref="IMediaFrameCounterSource"/>), between
+    /// pumps. Any thread; no allocation.</summary>
+    public bool TryReadFrameCounters(out MediaFrameCounters counters)
+    {
+        counters = default;
+        return !_disposed && _player.TryReadFrameCounters(out counters);
     }
 
     private void OnPlayerPumpRequested() => RequestPump();
@@ -683,7 +691,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
                 if (!step.Request.IsEmpty) _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
                 ArmSizeRetry(step.RetryInMs);
                 SizeI content = step.Content;
-                binding.SetContentSize(content);
+                binding.SetContentSize(content, step.ContentVia, step.RequestAgeMs);
                 binding.Place(videoRect);
                 PlaceOutputProtection(binding, videoRect, scale);
                 binding.SetVisible(presenting);   // belt-and-braces: the element ANDs the same readiness (VideoSurface) into its final write

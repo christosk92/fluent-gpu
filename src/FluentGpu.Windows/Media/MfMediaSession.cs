@@ -36,7 +36,7 @@ namespace FluentGpu.Media.Windows;
 ///   <see cref="VideoDelivery.CompositedSurface"/> — the shipping Path A (spec §9.1).</item>
 /// </list>
 /// </summary>
-public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource, IMediaClockSource
+public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource, IMediaClockSource, IMediaFrameCounterSource
 {
     private readonly IVideoEngine _engine;
     // The source-switch generation THIS session owns (IVideoEngine.PostSetSource's return value). A snapshot whose
@@ -177,6 +177,19 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         if (snap.SourceEpoch != _sourceEpoch || (snap.Flags & VideoEngineFlags.MetadataLoaded) == 0 || snap.PositionTimestamp == 0) return false;
         bool running = (snap.Flags & (VideoEngineFlags.Playing | VideoEngineFlags.Waiting | VideoEngineFlags.Seeking)) == VideoEngineFlags.Playing;
         sample = new MediaClockSample(TimeSpan.FromSeconds(Math.Max(0, snap.PositionSeconds)), snap.PositionTimestamp, snap.PlaybackRate, running);
+        return true;
+    }
+
+    /// <summary>The renderer's frame counters as the engine thread last read them (<see cref="IMediaFrameCounterSource"/>), from the
+    /// snapshot it republishes every self-refresh. A snapshot of another source epoch is no count of THIS session's. Any thread; no
+    /// allocation.</summary>
+    public bool TryReadFrameCounters(out MediaFrameCounters counters)
+    {
+        counters = default;
+        if (_disposed) return false;
+        VideoEngineSnapshot snap = _engine.Snapshot;
+        if (snap.SourceEpoch != _sourceEpoch || snap.FramesSampledTimestamp == 0) return false;
+        counters = new MediaFrameCounters(snap.FramesRendered, snap.FramesDropped, snap.FramesSampledTimestamp);
         return true;
     }
 
@@ -702,7 +715,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                 }
                 ArmSizeRetry(step.RetryInMs);
                 SizeI content = step.Content;
-                binding.SetContentSize(content);
+                binding.SetContentSize(content, step.ContentVia, step.RequestAgeMs);
                 binding.Place(new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H));
                 // No SetVisible here: visibility belongs to the element (MediaPlayerElement.PumpNow writes it LAST, ANDing
                 // active && non-empty viewport && !audioOnly). This session only expresses readiness — a bound handle on a

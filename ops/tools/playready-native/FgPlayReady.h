@@ -221,6 +221,11 @@ typedef struct FgPrSnapshot
     int64_t framesDropped;          // source plays and accumulated across the counter resets MF applies after a flush; frozen while
                                     // paused / seeking / waiting, 0 until the first poll. A source playing with NO rendered frame for 10 s
                                     // raises FgPrEvent_Error(a = MF_MEDIA_ENGINE_ERR_DECODE, b = 0x800705B4 ERROR_TIMEOUT)
+    int64_t framesSampledQpc;       // QPC ticks at which framesRendered/framesDropped were read (0 = never): a reader differences two
+                                    // snapshots over the time between their samples, not between its own reads
+    int32_t feedComplete;           // 1 once every track's feed reached the end of the track (nothing more will be fetched, so no
+                                    // buffer event will come); 0 again after a seek re-opens the feed
+    int32_t reserved0;
 } FgPrSnapshot;
 
 /// What FgPrProbeFile answers about a local fragmented MP4 — the demuxer gate's read-out (tests only; no CDM, no GPU).

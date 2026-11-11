@@ -94,6 +94,19 @@ public interface IMediaClockSource
     bool TryReadClock(out MediaClockSample sample);
 }
 
+/// <summary>The renderer's frame counters as the engine last READ them (not as of the last state pump): rendered and dropped
+/// frames of the current source, and the <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> they were read at (0 = never).
+/// A reader differences two samples over the time between their <see cref="SampledTimestamp"/>s.</summary>
+public readonly record struct MediaFrameCounters(long Rendered, long Dropped, long SampledTimestamp);
+
+/// <summary>A session whose frame counters can be read between state pumps (the published <c>PlaybackStatistics</c> is the
+/// counters as of the last pump).</summary>
+public interface IMediaFrameCounterSource
+{
+    /// <summary>The engine's latest counter sample. Any thread; never blocks, never allocates. False while there is none.</summary>
+    bool TryReadFrameCounters(out MediaFrameCounters counters);
+}
+
 /// <summary>How big a composited video stream should be. ONE owner for both Windows backends (the clear
 /// <c>MfMediaSession</c> and the protected <c>ProtectedMediaSession</c>), so the two can never disagree about the buffer
 /// a destination is worth. <see cref="ContentSizeFor"/> is the continuous ideal; the sessions size the stream with
@@ -271,6 +284,13 @@ public readonly struct VideoStreamStep
     /// pending): request one more pump after this many milliseconds.</summary>
     public readonly int RetryInMs;
 
+    /// <summary>Why <see cref="Content"/> is what it is: the first size, the backend's echo, or the timeout trust (for the
+    /// <c>[video.surface] content</c> line; it changes nothing that is drawn).</summary>
+    public VideoContentVia ContentVia { get; init; }
+    /// <summary>How long before this decision the size that <see cref="Content"/> settled on was requested, in ms (0 for the
+    /// first size). Only meaningful on the decision whose <see cref="Content"/> changed.</summary>
+    public int RequestAgeMs { get; init; }
+
     /// <summary>One decision: what to ask the backend, what the compositor may scale from, and when to look again.</summary>
     public VideoStreamStep(SizeI request, SizeI content, int retryInMs)
     {
@@ -278,6 +298,20 @@ public readonly struct VideoStreamStep
         Content = content;
         RetryInMs = retryInMs;
     }
+}
+
+/// <summary>How a published content size came to be (diagnostics only: the <c>[video.surface] content</c> line).</summary>
+public enum VideoContentVia : byte
+{
+    /// <summary>Not reported (a caller that does not say).</summary>
+    None = 0,
+    /// <summary>The first size of a surface: the buffer the backend already holds, or the one just requested.</summary>
+    First,
+    /// <summary>The backend echoed the requested size as applied.</summary>
+    Echo,
+    /// <summary>No echo by <see cref="VideoStreamSizeGate.EchoTimeoutMs"/> while frames were not expected (paused) or the backend
+    /// cannot echo: the request was trusted.</summary>
+    Timeout,
 }
 
 /// <summary>The per-session policy that keeps the decoder's swap chain from following layout (F071), shared by both
@@ -305,6 +339,8 @@ public sealed class VideoStreamSizeGate
     private VideoDisplay _display;
     private int _geomW, _geomH;
     private long _geomSinceMs, _requestedAtMs;
+    private VideoContentVia _publishedVia;
+    private int _publishedAgeMs;
 
     /// <summary>The size last handed to the backend (empty before the first decision).</summary>
     public SizeI Requested => _requested;
@@ -353,6 +389,8 @@ public sealed class VideoStreamSizeGate
             // Nothing to keep: the buffer the backend already holds (its echo) is what the compositor must scale from, else
             // the size just requested (a backend with no buffer yet creates it at that size).
             _published = !applied.IsEmpty ? applied : _requested;
+            _publishedVia = VideoContentVia.First;
+            _publishedAgeMs = 0;
         }
         // Also right after the first publish: a backend that already holds a buffer (the protected runtime's natural-size
         // swap chain) is published at that buffer while a smaller bucket is requested, and it raises no event for the echo.
@@ -361,13 +399,18 @@ public sealed class VideoStreamSizeGate
             long waited = nowMs - _requestedAtMs;
             bool echoed = applied == _requested;
             bool trust = (!playing || applied.IsEmpty) && waited >= EchoTimeoutMs;
-            if (echoed || trust) _published = _requested;
+            if (echoed || trust)
+            {
+                _published = _requested;
+                _publishedVia = echoed ? VideoContentVia.Echo : VideoContentVia.Timeout;
+                _publishedAgeMs = (int)Math.Clamp(waited, 0, int.MaxValue);
+            }
             else if (waited < EchoTimeoutMs)
             {
                 int poll = (int)Math.Min(EchoPollMs, EchoTimeoutMs - waited);
                 retry = retry > 0 ? Math.Min(retry, poll) : poll;
             }
         }
-        return new VideoStreamStep(request, _published, retry);
+        return new VideoStreamStep(request, _published, retry) { ContentVia = _publishedVia, RequestAgeMs = _publishedAgeMs };
     }
 }
