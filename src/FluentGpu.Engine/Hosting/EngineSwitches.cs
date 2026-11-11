@@ -59,6 +59,9 @@ public enum ImageAtlasExperiment : byte
 /// <item><c>video-overlay</c> — a video whose rect nothing paints over is promoted ABOVE the UI plane instead of staying
 /// a hole-punched underlay, where the output's overlay probe (a D3D11 <c>CheckOverlaySupport</c>, <c>VideoOverlayProbe</c>) reports a
 /// plane and the surface has no rounded corners (F087, A/B arm, default off).</item>
+/// <item><c>video-wuc</c> — video is shown by a Windows.UI.Composition sprite whose surface brush stretches the swap chain's current
+/// buffer to the placed rect (<c>CompositionVideoPresenter</c>, its own non-topmost window target under the UI's), instead of the
+/// DirectComposition visual scaled by the believed content size (a diagnostic arm, default off).</item>
 /// <item><c>ledger</c> or <c>ledger=PATH</c> — the per-frame <see cref="FrameLedger"/> on from the first frame (CPU, memory and GPU
 /// for every frame); with a PATH, FluentApp writes the binary dump there and one CSV per stream beside it when the window closes.</item>
 /// <item><c>group-repair-validate</c> — every unblurred group surface the composite repairs in place (only the rects that
@@ -192,6 +195,12 @@ public static class EngineSwitches
     /// PresentMode column, switch on vs off), not by this flag's existence.</summary>
     public static bool VideoOverlay;
 
+    /// <summary><c>--fg video-wuc</c>: a diagnostic arm, default off. Each composited window's video presenter is the
+    /// Windows.UI.Composition one (FluentGpu.Windows CompositionVideoPresenter: a sprite whose CompositionSurfaceBrush, Stretch=Fill,
+    /// wraps the swap-chain handle, so the compositor stretches whatever buffer the swap chain holds and no content size is told to
+    /// anyone) instead of the DirectComposition one. Read when a window's presenter is created.</summary>
+    public static bool VideoWuc;
+
     /// <summary>Skip the PlayReady SL3000 probe (F022, <c>--fg playready-sl2000</c>): the protected runtime's CDM is the software SL2000 request
     /// it has always made. The default (false) probes the hardware key system first - SL3000 is used only where the machine grants it,
     /// otherwise the runtime falls back to SL2000 - and the negotiated level is logged once per runtime. Read once, when the native runtime
@@ -318,6 +327,7 @@ public static class EngineSwitches
             case "present-nowait": NonBlockingSecondaryPresent = true; return true;
             case "gpu-timing": GpuPassTiming = true; return true;
             case "video-overlay": VideoOverlay = true; return true;
+            case "video-wuc": VideoWuc = true; return true;
             case "playready-sl2000": ForcePlayReadySl2000 = true; return true;
             case "frame-trace":
                 // `--fg frame-trace[=PATH]`: the frame/animation/input timeline (FrameTrace.cs); started by the platform once the host exists.
