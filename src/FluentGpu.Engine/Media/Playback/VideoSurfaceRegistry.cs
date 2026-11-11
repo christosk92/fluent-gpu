@@ -157,9 +157,26 @@ public sealed class VideoSurfaceRegistry
 
     // ── UI-thread API (the hook / the media-player façade) ─────────────────────────────────────────────────────────
 
+    /// <summary>Surface slots reserved so far (<see cref="Acquire"/>, successful or not): a player asks for its surface before any
+    /// handle exists, so a reader that must not crowd a video's bring-up (the host's popup prewarm) sees the start here, seconds
+    /// before the first bind on a protected stream. UI thread.</summary>
+    public int AcquireCount { get; private set; }
+
+    /// <summary>A reserved slot whose player has not produced a surface handle yet (a video still bringing up). UI thread.</summary>
+    public bool HasUnboundSurface
+    {
+        get
+        {
+            for (int i = 0; i < MaxSurfaces; i++)
+                if (_entries[i].InUse && !_entries[i].ReleasePending && _entries[i].DesiredHandle == 0) return true;
+            return false;
+        }
+    }
+
     /// <summary>Reserve a surface slot. Returns a token (>0) or 0 when the pool is exhausted.</summary>
     public int Acquire()
     {
+        AcquireCount++;
         ThreadGuard.AssertNotRender();
         ImportResults();   // a slot the render side finished releasing comes back before the search
         for (int i = 0; i < MaxSurfaces; i++)

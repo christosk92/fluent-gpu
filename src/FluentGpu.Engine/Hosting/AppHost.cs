@@ -8144,7 +8144,8 @@ public sealed partial class AppHost : IDisposable
     private bool _popupPoolClosed;                      // teardown, or a backend that cannot park: nothing is pooled any more
     private double _prewarmPrepareMs, _prewarmWindowMs;
     private int _prewarmVideoVersion;
-    private long _prewarmVideoQuietFromMs;
+    private long _prewarmVideoQuietFromMs, _prewarmVideoSeenMs;
+    private const long PopupPrewarmVideoBringUpMs = 10_000;   // the longest a reserved-but-unbound video surface holds the prewarm
     private PopupPoolKey _prewarmKeySeen;
     private long _prewarmKeyQuietFromMs;
     private long _popupDisabledSinceMs;
@@ -8222,12 +8223,15 @@ public sealed partial class AppHost : IDisposable
         if (now < _prewarmRetryAtMs) { NotePrewarmWait("retry"); return; }
         if ((ComputeWakeReasons() & PrewarmHeldWake) != 0
             || (_lastPrewarmInputMs != long.MinValue && now - _lastPrewarmInputMs < PopupPrewarmQuietMs)) { NotePrewarmWait("interaction"); return; }
-        // A video is starting: a surface handle was bound or re-bound in the last PopupPrewarmQuietMs, or the registry holds intents
-        // not yet published (a slot just acquired or placed), or a pump is owed. A video merely on screen does not hold it: a playing
-        // video never stops being one. (The registry exposes no acquire count: a player's own bring-up before its first intent is not
-        // seen here.)
-        int videoVersion = _videoSurfaces.StructuralVersion;
-        if (videoVersion != _prewarmVideoVersion) { _prewarmVideoVersion = videoVersion; _prewarmVideoQuietFromMs = now + PopupPrewarmQuietMs; }
+        // A video is starting: a player asked for a surface (an acquire) or a surface handle was bound or re-bound in the last
+        // PopupPrewarmQuietMs, or the registry holds intents not yet published, or a pump is owed. A video merely on screen does not
+        // hold it: a playing video never stops being one.
+        int videoVersion = _videoSurfaces.StructuralVersion + _videoSurfaces.AcquireCount;   // a bind, or a player asking for a surface
+        if (videoVersion != _prewarmVideoVersion) { _prewarmVideoVersion = videoVersion; _prewarmVideoQuietFromMs = now + PopupPrewarmQuietMs; _prewarmVideoSeenMs = now; }
+        // A player that asked for a surface and has no handle yet is still bringing up (a protected stream: seconds): hold until its
+        // first bind, at most PopupPrewarmVideoBringUpMs after the change (a slot reserved for a video that never starts cannot hold
+        // the prewarm off for the session).
+        if (_videoSurfaces.HasUnboundSurface && now - _prewarmVideoSeenMs < PopupPrewarmVideoBringUpMs) _prewarmVideoQuietFromMs = Math.Max(_prewarmVideoQuietFromMs, now + 1);
         if (_videoSurfaces.HasUnpublishedChanges) _prewarmVideoQuietFromMs = now + PopupPrewarmQuietMs;
         if (now < _prewarmVideoQuietFromMs || _videoSurfaces.HasPendingPumps) { NotePrewarmWait("video"); return; }
         var key = PopupPoolKeyFor(PopupWindowMaterial.TransientAcrylic);
