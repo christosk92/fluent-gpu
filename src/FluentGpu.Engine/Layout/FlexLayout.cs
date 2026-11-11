@@ -1021,7 +1021,7 @@ public sealed partial class FlexLayout
                 // frame while the orphan paints at its last full Bounds. ONLY such an orphan is folded in — see
                 // AddOrphanMain. Read the live LayoutInput — no recursive Measure (content is frozen; the Size track
                 // writes the animating extent).
-                if (flatKind == 2 && !float.IsNegativeInfinity(flatGrowScaled))   // a grow child's low-end share: (FlatLo - basis)·G/g + fixed + gaps
+                if (flatKind == 2 && !float.IsNegativeInfinity(flatGrowScaled))   // a grow child's low-end share: (FlatLo - basis)·G/g + fixed + all main margins + gaps
                     flatNeed = MathF.Max(flatNeed, flatGrowScaled * flatGrowSum + flatFixedSum + (n > 1 ? li.Gap * (n - 1) : 0f));
                 int nBeforeOrphans = n;
                 AddOrphanMain(node, row, ref main, ref cross, ref n);
@@ -1060,9 +1060,12 @@ public sealed partial class FlexLayout
     }
 
     /// <summary>A ROW's leftover for its grow children: in a row with a definite width a flex-grow child's real width is
-    /// (childAvail − the fixed siblings), not the whole row, so its (possibly wrapping) content is measured against THAT,
-    /// or a fixed pane + grow content wraps to the entire window and overflows. NoWrap content ignores the bound. Measures
-    /// each fixed child at <paramref name="childAvail"/> on the way. One home for <see cref="MeasureCore"/> and
+    /// its share of Arrange's free space, not the whole row, so its (possibly wrapping) content is measured against THAT,
+    /// or a fixed pane + grow content wraps to the entire window and overflows. The leftover is childAvail less the fixed
+    /// siblings with their main margins, less the grow children's own main margins, less the gaps: what Arrange's free
+    /// space is for basis-0 grow children (it counts every child's margin before it shares), so a wrapping grow child
+    /// breaks its lines here where it breaks them arranged. NoWrap content ignores the bound. Measures each fixed child at
+    /// <paramref name="childAvail"/> on the way. One home for <see cref="MeasureCore"/> and
     /// <see cref="MeasureStaleRowChildren"/>, so the offers the arrange re-measures at can never drift from the measure's.</summary>
     private float RowGrowAvail(NodeHandle node, in LayoutInput li, float childAvail, out float totalGrow)
     {
@@ -1073,7 +1076,7 @@ public sealed partial class FlexLayout
         {
             ref LayoutInput cli = ref _scene.Layout(c);
             cc++;
-            if (cli.FlexGrow > 0f) { totalGrow += cli.FlexGrow; continue; }
+            if (cli.FlexGrow > 0f) { totalGrow += cli.FlexGrow; fixedMain += MarginMain(cli, true); continue; }
             float cm = !float.IsNaN(cli.FlexBasis) ? cli.FlexBasis : Measure(c, childAvail).Width;
             fixedMain += cm + MarginMain(cli, true);
         }
@@ -1084,8 +1087,10 @@ public sealed partial class FlexLayout
     /// A grow child measures at its SHARE of the leftover, not the whole of it: with several grow children (three flex:1 1 0
     /// cards), measuring each against the full remainder wraps its text at ~N× the width it will actually get — fewer
     /// measured lines, a shorter row cross, and the arrange pass (which re-measures at the true flexed width) then gets
-    /// Stretch-clipped to this under-count: every card cut mid-line. Weight-dividing makes measure equal arrange for the
-    /// standard equal-grow/basis-0 row; a grow child with a real basis still errs high (an upper bound), never low.
+    /// Stretch-clipped to this under-count: every card cut mid-line. A grow child is offered basis + leftover·(g/G), the
+    /// leftover already net of every child's main margin and the gaps, which equals Arrange's width for the standard
+    /// grow/basis-0 row, margins or not; a grow child with a real basis still errs high (an upper bound: Arrange takes the
+    /// grow children's bases out of the free space too), never low.
     /// A column child gets the content width LESS its own cross margin — exactly what Arrange re-measures it at. Measuring
     /// at the full content width let a wrap row inside a margined child fit on one line here and wrap in Arrange, so the
     /// column under-reported its height by a line and the next sibling (a virtual list's next row, below an open track
