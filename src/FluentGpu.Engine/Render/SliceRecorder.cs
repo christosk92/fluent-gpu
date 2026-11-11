@@ -50,8 +50,9 @@ public enum SliceRole : byte
 /// <param name="PartialKeeps">Slices whose own arena was kept whole although something below them changed: the change lay only
 /// inside child slices, which were walked directly (<see cref="Reentered"/>) instead of re-walking this one.</param>
 /// <param name="Reentered">Dirty nested slices walked directly under a partially kept parent.</param>
+/// <param name="MarkerPatches">Child markers rewritten in place in a partially kept arena (an overflow cue's bands moved).</param>
 public readonly record struct SliceRecordStats(int Slices, int Walked, int Kept, int EffectSlices, int Folded, long BytesRecorded, bool KeptAll,
-    int AcrylicSlices = 0, int AcrylicFallbacks = 0, int FreeFades = 0, int SigMissWalks = 0, int PartialKeeps = 0, int Reentered = 0);
+    int AcrylicSlices = 0, int AcrylicFallbacks = 0, int FreeFades = 0, int SigMissWalks = 0, int PartialKeeps = 0, int Reentered = 0, int MarkerPatches = 0);
 
 /// <summary>
 /// The recorder partition of the retained tiled content layer (docs/plans/scroll-gpu-retained-tiles-implementation.md
@@ -247,7 +248,7 @@ public sealed partial class SliceRecorder
     private SceneRecordingContext.CutEntry[] _cuts = new SceneRecordingContext.CutEntry[32];
 
     private uint _frame;
-    private int _walked, _kept, _effects, _folded, _acrylics, _acrylicFallbacks, _freeFades, _partialKeeps, _reentered;
+    private int _walked, _kept, _effects, _folded, _acrylics, _acrylicFallbacks, _freeFades, _partialKeeps, _reentered, _markerPatches;
     private long _bytes;
     private bool _keptAll;
 
@@ -373,6 +374,21 @@ public sealed partial class SliceRecorder
     }
 
     internal DrawList Arena(int slot) => _arenas[slot]!;
+
+    /// <summary>A partial keep rewrote the marker of child slice <paramref name="childSlot"/> in place in the kept arena of
+    /// <paramref name="arenaSlot"/> (an overflow cue's bands, <c>SceneRecorder.PartialKeep.cs</c>): the arena's bytes are a new
+    /// buffer generation, so nothing derived from the old bytes is reused (its scan — markers, segments, content hash — is redone
+    /// at the next composite; spans recorded under the old generation miss), and the child's own copy of its marker layer follows.
+    /// The prior buffer is untouched, so its generation stands.</summary>
+    internal void NoteMarkerPatched(int arenaSlot, int childSlot, in PushLayerCmd layer)
+    {
+        _curGen[arenaSlot] = NewGen();
+        EnsureScanStorage(_recs.Length);
+        _scanGen[arenaSlot] = 0;
+        _recs[childSlot].Layer = layer;
+        _markerPatches++;
+    }
+
     internal ulong CurGen(int slot) => _curGen[slot];
     internal ulong PriorGen(int slot) => _priorGen[slot];
     internal bool IsRegisteredThisPass(int slot) => _recs[slot].RegFrame == _frame;
@@ -901,7 +917,7 @@ public sealed partial class SliceRecorder
     {
         if (++_frame == 0) _frame = 1;
         _passInlineSticky = ForceInlineStickyClip;
-        _walked = _kept = _effects = _folded = _acrylics = _acrylicFallbacks = _freeFades = _partialKeeps = _reentered = 0;
+        _walked = _kept = _effects = _folded = _acrylics = _acrylicFallbacks = _freeFades = _partialKeeps = _reentered = _markerPatches = 0;
         HoldBudgets();
         _sigMissWalks = 0;
         _bytes = 0;
@@ -1125,7 +1141,7 @@ public sealed partial class SliceRecorder
         }
         _recs[RootSlot].RegFrame = _frame;
         LastStats = new SliceRecordStats(LiveSlices, _walked, _kept, _effects, _folded, _bytes, keptAll,
-            _acrylics, _acrylicFallbacks, _freeFades, _sigMissWalks, _partialKeeps, _reentered);
+            _acrylics, _acrylicFallbacks, _freeFades, _sigMissWalks, _partialKeeps, _reentered, _markerPatches);
     }
 
     /// <summary>A composite-only turn (no pass): the census reports it.</summary>

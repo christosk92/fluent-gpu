@@ -23,8 +23,11 @@ namespace FluentGpu.Render;
 // not an opacity group (its marker carries its content's drawn extent) and does not sit under a hover-elevate clip root.
 // An overflow cue (a marquee's clip: EdgeFadeSpec.OverflowTail) breaks the premise the same way: its marker's bands, and
 // whether it is a Layer cut at all, are resolved from its CONTENT's posed translate, which stamps no bit on the cue's node. So
-// a cut node with a cue is re-entered only while the cue resolves to the bands its marker holds (CutEntry.Cue*), and a cue
-// node on a dirty path that holds no cut falls back. Anything else falls back to the full re-walk.
+// the cut entry remembers what the cue resolved to (CutEntry.Cue*). When it now resolves to other bands of the same edge-fade
+// Layer marker (a feather ramping in or out: every turn of a ramp), that marker's fade edges and left/right bands are rewritten
+// in place in the kept arena (QueueCuePatch / ApplyCuePatches: a new buffer generation for that arena, so its scan is redone);
+// any other change of the cue — it appears or goes, or resolves to no fade on either side — and a cue node on a dirty path
+// that holds no cut fall back. Anything else falls back to the full re-walk.
 //
 // `--fg rewalk-validate` takes the full re-walk wherever a partial keep would have been taken, and counts every kept arena
 // whose re-walk wrote different bytes, every cut whose inputs differ from its saved entry, and every cut whose walk offset or
@@ -36,7 +39,7 @@ internal sealed partial class SceneRecordingContext
     /// <summary><c>--fg rewalk-validate</c>: never keep partially; re-walk and check that it would have been exact.</summary>
     internal static bool PartialKeepValidate;
 
-    private static int s_validatedKeeps, s_keepMismatches, s_keepDrift, s_entryMismatches, s_entryDrift, s_offsetMismatches, s_cutsChecked;
+    private static int s_validatedKeeps, s_keepMismatches, s_keepDrift, s_entryMismatches, s_entryDrift, s_offsetMismatches, s_cutsChecked, s_cuePatches;
     private static long s_lastValidateLog;
 
     internal const byte CutTranslation = 1, CutLayer = 2, CutBoundary = 3;
@@ -71,7 +74,20 @@ internal sealed partial class SceneRecordingContext
         public bool OverflowCue;
         public EdgeMask CueEdges;
         public float CueLeft, CueRight;
+        public float CueScaleX;       // an edge-fade Layer cut: its bands' DIP→device px scale; 0 = not an edge fade
+        public int MarkerAt;          // a group Layer cut: where its marker op started in the parent's arena; -1 = none
     }
+
+    /// <summary>A marker a partial keep rewrites in place (an overflow cue whose bands moved), found by the probe and applied
+    /// only once the whole probe succeeds.</summary>
+    private struct CuePatch
+    {
+        public int ArenaSlot, ChildSlot, At;
+        public EdgeMask Edges;
+        public float Left, Right;
+    }
+    private CuePatch[] _cuePatches = new CuePatch[4];
+    private int _cuePatchCount;
 
     /// <summary>What an overflow cue on <paramref name="node"/> resolves to under the current poses — the one part of a
     /// marker that reads state BELOW its node (<see cref="TryResolveEdgeFade"/>, whose explicit branch this mirrors). False
@@ -96,7 +112,7 @@ internal sealed partial class SceneRecordingContext
     private void NoteCut(SceneRecordingSnapshot scene, SliceRecorder sl, int slot, NodeHandle node, byte kind, bool opacityGroup,
         in Affine2D parentWorld, float parentOpacity, int depth, in RectF walkClip, float parentScaleX, float parentScaleY,
         bool parentInMotion, bool parentScrollInMotion, in InheritedState inherited, bool carryAdditive, in SliceCtx saved,
-        in RectF sliceClipPart, ref RecordAccumulator stats)
+        in RectF sliceClipPart, ref RecordAccumulator stats, int markerAt = -1, float cueScaleX = 0f)
     {
         var e = new CutEntry
         {
@@ -106,7 +122,7 @@ internal sealed partial class SceneRecordingContext
             ParentScrollInMotion = parentScrollInMotion, Inherited = inherited, SelfHasLocal = stats.SelfHasLocal,
             SelfLocal = stats.SelfLocal, SelfOmitLayer = stats.SelfOmitLayer, SelfPose = stats.SelfPose,
             SelfAcrylic = stats.SelfAcrylic, SelfStickyClip = stats.SelfStickyClip, CarryAdditive = carryAdditive,
-            ParentAdditiveDepth = saved.AdditiveDepth, SliceClipPart = sliceClipPart,
+            ParentAdditiveDepth = saved.AdditiveDepth, SliceClipPart = sliceClipPart, CueScaleX = cueScaleX, MarkerAt = markerAt,
         };
         // every kind: a cue resolving to no fade leaves its node uncut or cut as a boundary, and one resolving to a fade cuts a Layer
         e.OverflowCue = ResolveOverflowCue(scene, node, out e.CueEdges, out e.CueLeft, out e.CueRight);
@@ -152,7 +168,11 @@ internal sealed partial class SceneRecordingContext
         if (sl.RefusedCut(selfSlot)) return false;
         int probe = sl.BeginProbe(selfSlot, scene.Capacity);
         int dirty = 0;
+        _cuePatchCount = 0;
         if (!ProbeOwnWalk(scene, node, sl, spans, spanFrame, inMotion, rootPosed, ref dirty) || dirty == 0) return false;
+        // the markers whose overflow cue moved: rewritten in place in the kept bytes (under validation too — the patched bytes
+        // become the prior buffer the full re-walk is checked against, so the check covers the patch)
+        ApplyCuePatches(sl);
         if (PartialKeepValidate)
         {
             // take the full re-walk; its end checks it wrote exactly the kept bytes (EndWalk → ValidateKept)
@@ -235,7 +255,9 @@ internal sealed partial class SceneRecordingContext
         if (e.OpacityGroup || e.Inherited.UnderElevateRoot != 0) return false;
         // an overflow cue's marker follows its content's pose: the parent keeps it only while the cue resolves as it did then
         bool cue = ResolveOverflowCue(scene, c, out EdgeMask cueEdges, out float cueLeft, out float cueRight);
-        if (cue != e.OverflowCue || (cue && (cueEdges != e.CueEdges || cueLeft != e.CueLeft || cueRight != e.CueRight))) return false;
+        if (cue != e.OverflowCue) return false;
+        if (cue && (cueEdges != e.CueEdges || cueLeft != e.CueLeft || cueRight != e.CueRight)
+            && !QueueCuePatch(sl, slot, in e, cueEdges, cueLeft, cueRight)) return false;
         // the motion gate is the one cut input that changes with no dirty bit (a transform write ends without one)
         if (e.ParentInMotion != inMotion) return false;
         if (spans.IsBlocked((int)c.Raw.Index, spanFrame)) return false;
@@ -243,6 +265,75 @@ internal sealed partial class SceneRecordingContext
         sl.MarkReenter(slot);
         dirty++;
         return true;
+    }
+
+    /// <summary>The overflow cue of the Layer cut at <paramref name="slot"/> resolves to other bands than its marker holds. When
+    /// that is ALL that changed — it was and still is an edge-fade Layer marker (a fade before and after: the same cut, kind and
+    /// flags; every other input of the marker is the cut's own, unchanged state) and the marker is found in the parent's kept
+    /// arena — queue a rewrite of its fade edges and left/right bands, exactly as the cut computes them. False = take the walk.</summary>
+    private bool QueueCuePatch(SliceRecorder sl, int slot, in CutEntry e, EdgeMask edges, float left, float right)
+    {
+        if (e.Kind != CutLayer || e.CueScaleX <= 0f || e.MarkerAt < 0 || e.CueEdges == EdgeMask.None || edges == EdgeMask.None) return false;
+        DrawList arena = sl.Arena(e.ParentSlot);
+        int at = FindMarker(arena, e.MarkerAt, e.NodeIndex, e.Gen, (int)sl.RoleOf(slot));
+        if (at < 0) return false;
+        CompositeSliceCmd m = arena.ReadCompositeSlice(at);
+        if (!m.Has(CompositeSliceFlags.Layer) || m.Layer.Kind != (int)LayerKind.EdgeFade) return false;
+        if (_cuePatchCount == _cuePatches.Length) Array.Resize(ref _cuePatches, _cuePatchCount * 2);
+        _cuePatches[_cuePatchCount++] = new CuePatch { ArenaSlot = e.ParentSlot, ChildSlot = slot, At = at, Edges = edges, Left = left, Right = right };
+        return true;
+    }
+
+    /// <summary>The op start of the marker of (<paramref name="nodeIndex"/>, <paramref name="gen"/>, <paramref name="sub"/>) in
+    /// <paramref name="arena"/>'s current bytes: at <paramref name="hint"/> (where the cut wrote it) when it is still there, else
+    /// by stepping the ops (a span copy may have moved it). −1 = not there.</summary>
+    private static int FindMarker(DrawList arena, int hint, int nodeIndex, uint gen, int sub)
+    {
+        ReadOnlySpan<byte> b = arena.Bytes;
+        int size = System.Runtime.CompilerServices.Unsafe.SizeOf<CompositeSliceCmd>();
+        if (IsMarkerAt(b, hint, size, nodeIndex, gen, sub)) return hint;
+        int pos = 0;
+        while (pos + sizeof(int) <= b.Length)
+        {
+            var op = (DrawOp)System.Runtime.InteropServices.MemoryMarshal.Read<int>(b[pos..]);
+            if (!FluentGpu.Rhi.RepaintStreamSafety.TryBodySize(op, out int body)) return -1;
+            if (op == DrawOp.CompositeSlice && IsMarkerAt(b, pos, size, nodeIndex, gen, sub)) return pos;
+            pos += sizeof(int) + body;
+        }
+        return -1;
+    }
+
+    private static bool IsMarkerAt(ReadOnlySpan<byte> b, int at, int size, int nodeIndex, uint gen, int sub)
+    {
+        if (at < 0 || at + sizeof(int) + size > b.Length
+            || (DrawOp)System.Runtime.InteropServices.MemoryMarshal.Read<int>(b[at..]) != DrawOp.CompositeSlice) return false;
+        var m = System.Runtime.InteropServices.MemoryMarshal.Read<CompositeSliceCmd>(b[(at + sizeof(int))..]);
+        return m.NodeIndex == nodeIndex && m.Gen == gen && m.Sub == sub && m.Kind == (int)Tiles.SliceKind.Effect;
+    }
+
+    /// <summary>Rewrite every queued marker in its kept arena: the fade edges and left/right bands the cut would write now (the
+    /// same arithmetic as <c>DrawList.EdgeFadeLayerCmd</c> over the cut's scale), and the cut entry follows.</summary>
+    private void ApplyCuePatches(SliceRecorder sl)
+    {
+        for (int i = 0; i < _cuePatchCount; i++)
+        {
+            ref CuePatch p = ref _cuePatches[i];
+            ref CutEntry e = ref sl.CutOf(p.ChildSlot);
+            DrawList arena = sl.Arena(p.ArenaSlot);
+            CompositeSliceCmd m = arena.ReadCompositeSlice(p.At);
+            float sx = e.CueScaleX;
+            PushLayerCmd layer = m.Layer with
+            {
+                FadeEdges = (int)p.Edges,
+                FadeBandL = MathF.Max(0f, (p.Edges & EdgeMask.Left) != 0 ? p.Left * sx : 0f),
+                FadeBandR = MathF.Max(0f, (p.Edges & EdgeMask.Right) != 0 ? p.Right * sx : 0f),
+            };
+            arena.PatchCompositeSlice(p.At, m with { Layer = layer });
+            s_cuePatches++;
+            sl.NoteMarkerPatched(p.ArenaSlot, p.ChildSlot, in layer);
+            e.CueEdges = p.Edges; e.CueLeft = p.Left; e.CueRight = p.Right; e.MarkerAt = p.At;
+        }
+        _cuePatchCount = 0;
     }
 
     /// <summary>Register a partially kept slice's unit: its sub-slices kept with it (their children handled the same way), its
@@ -481,6 +572,6 @@ internal sealed partial class SceneRecordingContext
         long now = Environment.TickCount64;
         if (now - s_lastValidateLog < 2000) return;
         s_lastValidateLog = now;
-        Console.Error.WriteLine($"[rewalk-validate] {(s_keepMismatches + s_entryMismatches + s_offsetMismatches == 0 ? "ok" : "FAIL")} keepsChecked={s_validatedKeeps} keepMismatches={s_keepMismatches} keepDrift={s_keepDrift} cutsChecked={s_cutsChecked} entryMismatches={s_entryMismatches} entryDrift={s_entryDrift} offsetMismatches={s_offsetMismatches}");
+        Console.Error.WriteLine($"[rewalk-validate] {(s_keepMismatches + s_entryMismatches + s_offsetMismatches == 0 ? "ok" : "FAIL")} keepsChecked={s_validatedKeeps} keepMismatches={s_keepMismatches} keepDrift={s_keepDrift} cutsChecked={s_cutsChecked} entryMismatches={s_entryMismatches} entryDrift={s_entryDrift} offsetMismatches={s_offsetMismatches} cuePatches={s_cuePatches}");
     }
 }

@@ -1638,10 +1638,11 @@ internal sealed partial class SceneRecordingContext
         if (isEdgeFade && edgeFade.WhileStuck && !stickyCut && !fadeClipped) isEdgeFade = false;
         PushLayerCmd groupLayer = default;
         RectF groupSourceClip = default;
+        float efsx = 0f;   // an edge fade's DIP→device px scale (left/right bands): a partial keep re-scales a patched overflow cue's bands by it
         if (isEdgeFade)
         {
             // DIP→device px scale from this node's own box (uniform DPI ⇒ sx≈sy); corners + bands scale with it.
-            float efsx = b.W > 0.01f ? deviceBounds.W / b.W : 1f;
+            efsx = b.W > 0.01f ? deviceBounds.W / b.W : 1f;
             float efsy = b.H > 0.01f ? deviceBounds.H / b.H : 1f;
             var efc = new CornerRadius4(p.Corners.TopLeft * efsx, p.Corners.TopRight * efsx, p.Corners.BottomRight * efsx, p.Corners.BottomLeft * efsx);
             RectF edgeCompositeClip = deviceBounds.Intersect(clip);
@@ -1817,7 +1818,8 @@ internal sealed partial class SceneRecordingContext
                     EnterSlice(ref stats, sl, slot, layerDx, layerDy, carryAdditive: true);
                     RectF walkClip = posedLayer ? RectF.Infinite : clip;
                     NoteCut(scene, sl, slot, node, CutLayer, isOpacityGroup, in parentWorld, parentOpacity, depth, walkClip, parentScaleX, parentScaleY,
-                        parentInMotion, parentScrollInMotion, in inherited, true, in saved, posedLayer ? clip : RectF.Infinite, ref stats);
+                        parentInMotion, parentScrollInMotion, in inherited, true, in saved, posedLayer ? clip : RectF.Infinite, ref stats,
+                        markerAt: group ? markerAt : -1, cueScaleX: isEdgeFade ? efsx : 0f);
                     SpanRecordResult res;
                     try
                     {
