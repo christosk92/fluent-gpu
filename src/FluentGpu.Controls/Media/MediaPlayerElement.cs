@@ -1533,14 +1533,14 @@ public sealed class MediaPlayerElement : Component
         // it; a resize inside the stream-size bucket does not either; a resize that crosses into another bucket does),
         // otherwise the turn falls through to the full pump so the stream is never left sized for a stale rect (the session's
         // size gate then holds the stream until the rect is stable). The settle timer then runs the full pump once the motion
-        // has ended.
+        // has ended. A stream pinned to the natural size (the protected path) serves every rect: no rect ever resizes it.
         // A surface with no stream size yet (not bound / sized) is not in motion: its turn is the full pump that sizes it.
         SizeI cached = b.IsGeometryOnlyPump ? b.StreamSize : SizeI.Zero;
         bool motion = !cached.IsEmpty;
         if (motion)
         {
             NoteGeometryMotion();
-            if (!audioOnly && VideoStreamSizing.Serves(cached, natural, videoRect, s, b.Display))
+            if (!audioOnly && (b.StreamPinned || VideoStreamSizing.Serves(cached, natural, videoRect, s, b.Display)))
             {
                 b.Place(videoRect);
                 ShowSlot(b, active && (holding || !Player.VideoSurface.Peek().IsNone));   // the viewport is non-empty and the frame has video here (checked above); AND the session's per-attach readiness (or a held picture)

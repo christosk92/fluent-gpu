@@ -60,12 +60,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     private bool _seekPublished;
     private long _seekTargetMs;
 
-    // Decides the stream size (a bucket of the natural frame, settled) — shared with the clear session. _sizeRetry re-pumps once
-    // a settle window ends.
-    private readonly VideoStreamSizeGate _sizeGate = new();
-    private Timer? _sizeRetry;
-    // The clock the size gate reads; a test replaces it to step time.
-    internal Func<long> ClockMs { get; set; } = static () => Environment.TickCount64;
+    // Decides the stream size: pinned to the natural size for the life of the attach, so no layout, full-screen edge or window
+    // move ever makes Media Foundation free and rebuild its protected frame-buffer pool (a desktop-wide stall).
+    private readonly VideoStreamSizeGate _sizeGate = new(pinned: true);
 
     // The CANPLAY deadline (a single one-shot timer; fires one pump).
     private Timer? _startDeadline;
@@ -291,16 +288,6 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     {
         Volatile.Write(ref _deadlinePassed, 1);
         RequestPump();
-    }
-
-    // Asks for one more pump after `ms` (a settle window is pending): a deferred size decision must not wait for an unrelated
-    // event. Any thread.
-    private void ArmSizeRetry(int ms)
-    {
-        if (ms <= 0 || _disposed) return;
-        _sizeRetry ??= new Timer(static s => ((ProtectedMediaSession)s!).RequestPump(), this, Timeout.Infinite, Timeout.Infinite);
-        try { _sizeRetry.Change(ms, Timeout.Infinite); }
-        catch (ObjectDisposedException) { }   // disposed from another thread between the check and here
     }
 
     private void DisarmStartDeadline()
@@ -690,69 +677,40 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         bool holdsOther = !presenting && binding.ShowsOtherPicture();
         if (!holdsOther) _player.Bind(binding);
 
-        // The composited surface (just bound above): size the STREAM to what the destination can show — the same rule as the
-        // clear path, so a 4K rung in a 640-px card allocates a third-size buffer — and place it.
+        // The composited surface (just bound above): the STREAM is pinned to the natural size and the compositor stretches it to
+        // the placed rect, in every presenter (docked, floating, pop-out, mini, Theatre, Cinema, full screen). Every
+        // UpdateVideoStream(dst) makes Media Foundation free its pool of dst-sized protected buffers and build a new one, and with
+        // protected content that free or build stalls the whole desktop, so no layout, full-screen edge or window move resizes it:
+        // only the attach's first known natural size and a rung change ask (the gate's pinned mode).
+        // No request before the surface exists: native builds the first swap chain at LOADEDMETADATA at the native size (no
+        // stream size set = natural), which IS the size the pin then asks for, and native skips an unchanged size, so the first
+        // build is the only one. A presize from the manifest's declared size could only be wrong (a decoder that reports another
+        // size would build twice).
         // It is SHOWN only while presenting (this attach's first frame and a live surface): MF's swap chain holds the
         // previous source's last frame until the new one decodes, and a detached slot would show another session's.
-        // The stream is a BUCKET of the natural frame (never the raw destination), requested once the destination has held
-        // still; the compositor stretches whatever buffer the swap chain holds meanwhile. A rect that is not laid out sizes and
-        // places nothing (F051): the slot just stays hidden.
-        if (_player.HasSurface)
+        // A rect that is not laid out sizes and places nothing (F051): the slot just stays hidden.
+        if (_player.HasSurface && VideoStreamSizing.IsLaidOut(videoRect))
         {
-            if (VideoStreamSizing.IsLaidOut(videoRect))
+            VideoStreamStep step = _sizeGate.Pin(binding, _naturalSize, videoRect);
+            if (!step.Request.IsEmpty)
             {
-                // The pumping binding casts its vote; the size is the largest need among the bindings that show this one swap
-                // chain (an exiting, hidden or released host does not vote), as on the clear path.
-                VideoStreamStep step = _sizeGate.Step(binding, _naturalSize, videoRect, scale, presenting, ClockMs(), binding.Display);
-                if (step.HoldLine is { } hold) _player.LogDiagnostic(hold);
-                if (step.StayLine is { } stay) _player.LogDiagnostic(stay);
-                if (!step.Request.IsEmpty)
-                {
-                    // Which binding's destination decided it and how many voted (the gate asks once per real change; the player's
-                    // own stream.size line follows when the request reaches native).
-                    _player.LogDiagnostic($"stream.gate size={step.Request.Width}x{step.Request.Height} pumping={binding.Token} " +
-                                          $"governing={_sizeGate.GoverningToken} votes={_sizeGate.VoteCount}");
-                    _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
-                }
-                ArmSizeRetry(step.RetryInMs);
-                PlaceOutputProtection(binding, videoRect, scale);
-                if (holdsOther) return;
-                // One stream size for every binding of this session: the swap chain's, never a binding's own request.
-                binding.SetStreamSize(step.Size);
-                _sizeGate.PublishSizeToVoters(binding);
-                binding.Place(videoRect);
-                sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, step.Size, videoRect, scale <= 0f ? 1f : scale)
-                    { Token = binding.Token });
+                // Always on, once per request (the attach's natural size, a rung change); the player's own stream.size line follows
+                // when the request reaches native.
+                _player.LogDiagnostic($"{step.PinLine} pumping={binding.Token} votes={_sizeGate.VoteCount}");
+                _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
             }
-        }
-        else
-        {
-            PresizeStream(binding, videoRect, scale);
+            PlaceOutputProtection(binding, videoRect, scale);
+            if (holdsOther) return;
+            // One stream size for every binding of this session: the swap chain's, never a binding's own request.
+            binding.SetStreamSize(step.Size, pinned: true);
+            _sizeGate.PublishSizeToVoters(binding);
+            binding.Place(videoRect);
+            sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, step.Size, videoRect, scale <= 0f ? 1f : scale)
+                { Token = binding.Token });
         }
         // No SetVisible here (as on the clear path): visibility is the element's, written LAST in its pump, ANDing its activity, a
         // non-empty viewport and this session's readiness (VideoSurface: this attach's first frame and a live surface), or holding
         // the previous source's picture. A not-yet-presenting or detached slot is therefore hidden by the element, never shown.
-    }
-
-    /// <summary>Before the first swap chain: ask for the stream size the destination will need, from the opening rung's DECLARED
-    /// size, so native holds it when LOADEDMETADATA builds the chain (SessionPublishHandle builds at the session's stream size when
-    /// one is set) and the build MF would otherwise make at the native size, followed by a second one for our request a few ms
-    /// later, is one build. Only while attached and before metadata: a request before the attach is dropped by the player (and would
-    /// leave the gate believing it was sent), one after metadata is the ordinary step above. The decoder's own size, once reported,
-    /// is the gate's natural from then on: equal to the declared one (the usual case) it asks for nothing more; different, it asks
-    /// at once, as before.</summary>
-    private void PresizeStream(in VideoBinding binding, RectF videoRect, float scale)
-    {
-        if (!_naturalSize.IsEmpty || !VideoStreamSizing.IsLaidOut(videoRect)) return;
-        if (_activeQuality?.Resolution is not { IsEmpty: false } declared) return;
-        if (_player.Phase is not (ProtectedVideoPhase.Licensing or ProtectedVideoPhase.Buffering or ProtectedVideoPhase.Attaching)) return;
-        VideoStreamStep step = _sizeGate.Step(binding, declared, videoRect, scale, framePresented: false, ClockMs(), binding.Display);
-        if (step.HoldLine is { } hold) _player.LogDiagnostic(hold);
-        if (step.StayLine is { } stay) _player.LogDiagnostic(stay);
-        if (step.Request.IsEmpty) return;
-        _player.LogDiagnostic($"stream.gate size={step.Request.Width}x{step.Request.Height} pumping={binding.Token} " +
-                              $"governing={_sizeGate.GoverningToken} votes={_sizeGate.VoteCount} before=metadata declared={declared.Width}x{declared.Height}");
-        _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
     }
 
     /// <summary>Keep the runtime's hidden OPM window over the video (F264): the placed rect in device pixels of the presenting
@@ -1040,7 +998,6 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _disposed = true;
         _sink = null;
         DisarmStartDeadline();
-        _sizeRetry?.Dispose();
         PumpRequested = null;
         _player.PumpRequested -= OnPlayerPumpRequested;
         // Detach + destroy are posted native work items (non-blocking); the runtime and its engine stay warm.

@@ -107,11 +107,11 @@ public interface IMediaFrameCounterSource
     bool TryReadFrameCounters(out MediaFrameCounters counters);
 }
 
-/// <summary>How big a composited video stream should be. ONE owner for both Windows backends (the clear
-/// <c>MfMediaSession</c> and the protected <c>ProtectedMediaSession</c>), so the two can never disagree about the buffer
-/// a destination is worth: the sessions size the stream with <see cref="BucketedSizeFor"/> through a
-/// <see cref="VideoStreamSizeGate"/> so layout never drives the swap chain. The compositor stretches whatever buffer the swap chain
-/// holds to the placed rect, so the stream size decides quality and memory, never where or how big the picture is.
+/// <summary>How big a composited video stream should be for the clear <c>MfMediaSession</c>: it sizes the stream with
+/// <see cref="BucketedSizeFor"/> through a <see cref="VideoStreamSizeGate"/> so layout never drives the swap chain. (The
+/// protected <c>ProtectedMediaSession</c> pins its stream to the natural size instead: see the gate's pinned mode.) The
+/// compositor stretches whatever buffer the swap chain holds to the placed rect, so the stream size decides quality and
+/// memory, never where or how big the picture is.
 /// <para>The stream follows the on-screen size in BOTH directions (F089): below the natural frame it is a bucket of it, above
 /// it the stream is upscaled by Media Foundation's video processor (filtered) instead of by the compositor's stretch,
 /// up to <c>max(monitor, natural)</c>, and a fullscreen presentation asks for the monitor-fit size outright. Without a
@@ -284,6 +284,9 @@ public readonly struct VideoStreamStep
     /// <summary>The <c>stream.hold want=WxH before=first-frame</c> line when this decision held a new
     /// request until the attach's first frame, else null. The session writes it to the [video] timeline.</summary>
     public string? HoldLine { get; init; }
+    /// <summary>A pinned gate's <c>stream.pin size=WxH why=natural|natural-changed</c> line when this decision is a request, else
+    /// null. The session writes it to the [video] timeline (once per request: once per attach and once per rung change).</summary>
+    public string? PinLine { get; init; }
 
     /// <summary>One decision: what to ask the backend, the stream size in use, and when to look again.</summary>
     public VideoStreamStep(SizeI request, SizeI size, int retryInMs)
@@ -311,9 +314,25 @@ public readonly struct VideoStreamStep
 /// still count (the pumping binding's own, and every other binding whose slot is still live and shown: an exiting, hidden,
 /// parked or released host does not vote), so the last binding to pump is never the last word just because it pumped last.
 /// And the stream size is the session's, not a binding's: <see cref="PublishSizeToVoters"/> hands it to every binding that
-/// shows the picture, so no slot's geometry-only pump judges its rect against a size the session has left.</para></summary>
+/// shows the picture, so no slot's geometry-only pump judges its rect against a size the session has left.</para>
+/// <para><b>Pinned (the protected path).</b> A gate built with <c>pinned: true</c> decides with <see cref="Pin"/> instead of
+/// <see cref="Step"/> and sizes the stream to the video's own natural size for the life of the attach: it requests the natural size once it is known and again only when it changes (a rung
+/// change). Geometry, votes, the display and full-screen edges never produce a request, there is no settle and no first-frame
+/// hold. Every <c>UpdateVideoStream(dst)</c> makes Media Foundation free and rebuild its whole pool of dst-sized frame buffers,
+/// and with protected content a large free or build stalls the desktop (100-350 ms at a full-screen edge), so a protected stream
+/// never follows layout; the compositor stretches the natural-size buffer to any placed rect. Votes are still recorded so
+/// <see cref="PublishSizeToVoters"/> hands the size to every binding that shows the picture.</para></summary>
 public sealed class VideoStreamSizeGate
 {
+    /// <summary>A gate that follows the destination (buckets, settle, full-screen stay): the clear path.</summary>
+    public VideoStreamSizeGate() { }
+
+    /// <summary>A gate that pins the stream to the natural size when <paramref name="pinned"/> (see the class remarks).</summary>
+    public VideoStreamSizeGate(bool pinned) => Pinned = pinned;
+
+    /// <summary>True when the stream is pinned to the natural size (the protected path): no destination ever resizes it.</summary>
+    public bool Pinned { get; }
+
     /// <summary>How many bindings of one session can vote at once (a hand-off has two; a slot reused by a new element replaces its
     /// predecessor's vote).</summary>
     public const int MaxVotes = 4;
@@ -358,6 +377,7 @@ public sealed class VideoStreamSizeGate
     /// like a resize and is never applied mid-animation.</summary>
     public VideoStreamStep Step(in VideoBinding binding, SizeI natural, RectF videoRect, float scale, bool framePresented, long nowMs, VideoDisplay display = default)
     {
+        if (Pinned) throw new InvalidOperationException("A pinned gate decides with Pin, not Step.");
         if (!VideoStreamSizing.IsLaidOut(videoRect)) return new VideoStreamStep(default, _requested, 0);
 
         bool naturalChanged = natural != _natural;
@@ -456,6 +476,31 @@ public sealed class VideoStreamSizeGate
         return new VideoStreamStep(request, _requested, retry) { StayLine = stayLine, HoldLine = holdLine };
     }
 
+    /// <summary>A pinned gate's decision for one pump of <paramref name="binding"/>: the natural size, asked for when it is first known
+    /// and again only when it changes (a rung change). The destination never asks: <paramref name="videoRect"/> only records the
+    /// binding's vote (a rect that is not laid out records none), so <see cref="PublishSizeToVoters"/> reaches every binding that
+    /// shows the picture. UI thread.</summary>
+    public VideoStreamStep Pin(in VideoBinding binding, SizeI natural, RectF videoRect)
+    {
+        if (!Pinned) throw new InvalidOperationException("Pin needs a pinned gate.");
+        if (!VideoStreamSizing.IsLaidOut(videoRect)) return new VideoStreamStep(default, _requested, 0);
+        int own = Cast(binding, videoRect, 1f, default);
+        _voteCount = 0;
+        for (int i = 0; i < MaxVotes; i++)
+        {
+            ref Vote v = ref _votes[i];
+            if (!v.Used) continue;
+            if (i != own && v.Binding.IsValid && !v.Binding.IsShowing(v.Incarnation)) { v = default; continue; }
+            _voteCount++;
+        }
+        _governingToken = binding.Token;
+        if (natural.IsEmpty || natural.Width <= 0 || natural.Height <= 0 || natural == _requested)
+            return new VideoStreamStep(default, _requested, 0);
+        string why = _requested.IsEmpty ? "natural" : "natural-changed";
+        _requested = natural;
+        return new VideoStreamStep(natural, natural, 0) { PinLine = $"stream.pin size={natural.Width}x{natural.Height} why={why}" };
+    }
+
     /// <summary>Hand the session's stream size to every OTHER binding that votes (live and shown), so a binding that is not pumping
     /// right now never judges its geometry-only turns against a size the session has left. <paramref name="pumping"/> writes its own.
     /// UI thread.</summary>
@@ -467,7 +512,7 @@ public sealed class VideoStreamSizeGate
             ref Vote v = ref _votes[i];
             if (!v.Used || !v.Binding.IsValid || v.Binding.SameSlot(pumping)) continue;
             if (!v.Binding.IsShowing(v.Incarnation)) { v = default; continue; }
-            v.Binding.SetStreamSize(_requested);
+            v.Binding.SetStreamSize(_requested, Pinned);
         }
     }
 

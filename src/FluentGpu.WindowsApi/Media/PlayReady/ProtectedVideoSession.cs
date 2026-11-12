@@ -835,13 +835,8 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         if (n.Width > 0 && n.Height > 0)
         {
             var size = new Size2(n.Width, n.Height);
-            if (!_naturalSize.Peek().Equals(size))
-            {
-                _naturalSize.Value = size;
-                // The stream size is derived FROM the natural size (a rung switch changes it), so it is re-asserted: the
-                // next SetStreamSize reaches native even when the derived size equals the one sent before.
-                _streamW = -1; _streamH = -1;
-            }
+            // The stream is pinned to the natural size, so a new natural size is a new request by itself (ProtectedMediaSession).
+            if (!_naturalSize.Peek().Equals(size)) _naturalSize.Value = size;
         }
         _framesRendered = Math.Max(0, n.FramesRendered);
         _framesDropped = Math.Max(0, n.FramesDropped);

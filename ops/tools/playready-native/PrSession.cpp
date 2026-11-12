@@ -2012,7 +2012,9 @@ void fgpr::SessionPublishHandle(Runtime& rt, Session& s, bool reRaise)
 
     DWORD nvw = 0, nvh = 0;
     rt.engine->GetNativeVideoSize(&nvw, &nvh);
-    if (!nvw || !nvh)
+    const bool nativeKnown = nvw && nvh;
+    const int32_t engineNativeW = nativeKnown ? (int32_t)nvw : 0, engineNativeH = nativeKnown ? (int32_t)nvh : 0;
+    if (!nativeKnown)
     {
         std::lock_guard<std::mutex> g(s.feedMx);
         nvw = s.videoInfo.width ? s.videoInfo.width : 1280;
@@ -2033,6 +2035,8 @@ void fgpr::SessionPublishHandle(Runtime& rt, Session& s, bool reRaise)
                                  s.appliedStreamH.load(std::memory_order_relaxed) != (int32_t)dst.bottom;
         s.appliedStreamW.store((int32_t)dst.right, std::memory_order_release);
         s.appliedStreamH.store((int32_t)dst.bottom, std::memory_order_release);
+        s.appliedNativeW = engineNativeW;
+        s.appliedNativeH = engineNativeH;
         // F066: a re-sized (re-created) stream gets a fresh no-frame window. Only a CHANGED size: this runs on every call while no
         // handle has been obtained yet, and restarting each time would keep a source that never gets a swap chain from ever timing out.
         if (sizeChanged) s.frameWatch.Restart(TickMs());
@@ -2729,6 +2733,21 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rtH
         rt.engine->GetNativeVideoSize(&nvw, &nvh);
         RECT dst = { 0, 0, (LONG)(s.streamWidth ? (DWORD)s.streamWidth : nvw), (LONG)(s.streamHeight ? (DWORD)s.streamHeight : nvh) };
         if (dst.right <= 0 || dst.bottom <= 0) return;
+        // Every UpdateVideoStream(dst), an unchanged size included, makes MF free its pool of dst-sized frame buffers and build a
+        // new one; with protected content that free or build stalls the whole desktop. The size already applied, while the
+        // engine's native size is the one it was applied at, changes nothing: skip it (Chromium skips unchanged sizes too).
+        if ((int32_t)dst.right == s.appliedStreamW.load(std::memory_order_acquire) &&
+            (int32_t)dst.bottom == s.appliedStreamH.load(std::memory_order_acquire) &&
+            (int32_t)nvw == s.appliedNativeW && (int32_t)nvh == s.appliedNativeH)
+        {
+            if (!s.streamSkipLogged)
+            {
+                s.streamSkipLogged = true;
+                fgpr::RaiseLog(s.handle, "[cenc] stream size skip (unchanged) " + std::to_string(dst.right) + "x" +
+                                         std::to_string(dst.bottom) + " native=" + std::to_string(nvw) + "x" + std::to_string(nvh));
+            }
+            return;
+        }
         MFARGB border = { 0, 0, 0, 255 };
         const int64_t callQpc = fgpr::QpcNow();
         HRESULT hr = rt.engineEx->UpdateVideoStream(nullptr, &dst, &border);
@@ -2744,6 +2763,8 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rtH
             ArmStreamProbe(rt, sp, (int32_t)dst.right, (int32_t)dst.bottom, returnedQpc, applyMs, playing);
             s.appliedStreamW.store((int32_t)dst.right, std::memory_order_release);
             s.appliedStreamH.store((int32_t)dst.bottom, std::memory_order_release);
+            s.appliedNativeW = (int32_t)nvw;
+            s.appliedNativeH = (int32_t)nvh;
             s.frameWatch.Restart(TickMs());   // F066
         }
         // Rate-limited (one line a second; a failure always): the size used to log once per change, and a resize gesture

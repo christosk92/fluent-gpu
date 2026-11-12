@@ -1105,8 +1105,8 @@ above it. It is now a runtime with handles, spine unchanged:
   (`CencDemuxTests`).
 - **Event-driven presentation.** `FIRSTFRAMEREADY` / CANPLAY / SEEKED / errors are native events → one coalesced
   `IVideoPumpSource.PumpRequested` → `ProtectedMediaSession.PumpState` reads ONE snapshot and publishes state — no poll
-  timer, no transport ack wait, no seek suppression window. The protected stream is sized with the SAME
-  `VideoStreamSizeGate` as the clear path (next bullet). `VideoEngineSnapshot` gained `FirstFrameTimestamp` and
+  timer, no transport ack wait, no seek suppression window. The protected stream is PINNED to the natural size by a
+  pinned `VideoStreamSizeGate` (next bullet). `VideoEngineSnapshot` gained `FirstFrameTimestamp` and
   `BufferedAheadMs`, and the protected session publishes that same POD.
 - **The control plane leaves the element (F132).** The session pump has two halves (`IVideoSurfaceSession.PumpState` /
   `PumpGeometry`; `PumpVideo` is both, and a session that has not split gets default-interface fallbacks to it).
@@ -1118,8 +1118,18 @@ above it. It is now a runtime with handles, spine unchanged:
   was published. `ProtectedVideoSession.Pump()` publishes and remembers the handle the snapshot reported; `Bind` hands
   it to a binding (and only a valid one), so a pump with no element never touches a binding and a later element binds
   the handle already known. `MediaPlayer.StatePumpCount` / `StatePumpAgeMs` expose the heartbeat for diagnostics.
-- **Stream size: buckets, settle (F071, F051, F260).** Layout never drives the decoder's swap chain. Both sessions
-  size the stream through one `VideoStreamSizeGate`: a bucket of the natural frame (natural x {1, 3/4, 1/2, 1/3}, the
+- **Stream size: pinned on the protected path.** Every `UpdateVideoStream(dst)`, an unchanged size included, makes
+  Media Foundation free its pool of dst-sized frame buffers and build a new one 1-2 s later; with protected content a
+  large free or build stalls the whole desktop (100-350 ms at a full-screen edge). So `ProtectedMediaSession` builds its
+  gate `pinned: true` and decides with `Pin`: the stream is the natural size, asked for once it is known and again only
+  at a rung change (one always-on `[video] stream.pin size=WxH why=natural|natural-changed` line per request); geometry,
+  full-screen edges and window moves never ask, and there is no presize before metadata (native builds the first swap
+  chain at the native size, which is the size the pin asks for). The registry slot records the size as pinned
+  (`StreamPinned`), so a geometry-only element pump never needs the session. Native `FgPrSessionSetStreamSize` skips a
+  request equal to the applied size while the native size is unchanged (`[cenc] stream size skip (unchanged)`, logged
+  once per session). The compositor stretches the natural-size buffer to every presenter's rect.
+- **Stream size: buckets, settle (F071, F051, F260), the clear path.** Layout never drives the decoder's swap chain.
+  `MfMediaSession` sizes the stream through a `VideoStreamSizeGate`: a bucket of the natural frame (natural x {1, 3/4, 1/2, 1/3}, the
   smallest that covers the destination, with a 10 % shrink hysteresis), the first size and a changed natural size at once,
   any other change only after the destination held still 250 ms; a full-screen stay keeps one size, and a request raised
   before an attach's first frame waits for it. The compositor stretches whatever buffer the swap chain holds to the placed

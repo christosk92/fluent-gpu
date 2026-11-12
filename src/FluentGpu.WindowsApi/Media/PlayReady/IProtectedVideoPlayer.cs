@@ -159,7 +159,8 @@ public interface IProtectedVideoPlayer : IDisposable
     void SetVolume(float volume);
     /// <summary>Set the playback rate.</summary>
     void SetRate(float rate);
-    /// <summary>Size the engine's video stream to what the destination can show (device px); empty restores natural.</summary>
+    /// <summary>Size the engine's video stream (device px); empty restores natural. The session pins it to the natural size and
+    /// asks again only when that changes: every real resize rebuilds Media Foundation's protected frame-buffer pool.</summary>
     void SetStreamSize(SizeI size);
     /// <summary>The attributed form of <see cref="SetStreamSize(SizeI)"/>: the same request, tagged with the registry
     /// <paramref name="token"/> of the slot asking and the <paramref name="host"/> ordinal of its window (0 main, 1.. a pop-out) so the

@@ -47,6 +47,7 @@ public sealed class VideoSurfaceRegistry
         public float RadiusDip;         // corner radius in DIP (0 = square). Scaled to device px at apply, like the rect.
         public VideoAlphaRamp Ramp;     // the picture's alpha ramp, window DIP (none = opaque). Laid on the placed rect, scaled and posed at apply.
         public SizeI StreamPx;        // the stream size (device px) the owning session sized its swap chain to; the owner's own pumps read it, the render side never does
+        public bool StreamPinned;     // StreamPx is pinned to the natural size (the protected path): no destination resizes it
         public bool Visible;
         public int Z;
         public nuint DesiredHandle;   // the DComp surface handle to bind (0 = none produced yet)
@@ -213,11 +214,14 @@ public sealed class VideoSurfaceRegistry
 
     /// <summary>Record the stream size (device px) the owning session sized its swap chain to (<see cref="VideoStreamStep.Size"/>). The
     /// presenter stretches whatever buffer the swap chain holds, so nothing drawn reads it: the owner's geometry-only pump does
-    /// (<see cref="StreamSize"/>). UI thread.</summary>
-    public void SetStreamSize(int token, SizeI px)
+    /// (<see cref="StreamSize"/>). <paramref name="pinned"/>: the session pins the stream to the natural size, so no destination
+    /// resizes it (<see cref="StreamPinned"/>). UI thread.</summary>
+    public void SetStreamSize(int token, SizeI px, bool pinned = false)
     {
         ThreadGuard.AssertNotRender();
-        Slot(token).StreamPx = px;
+        ref Entry e = ref Slot(token);
+        e.StreamPx = px;
+        e.StreamPinned = pinned;
     }
 
     /// <summary>Round the composited surface's corners (DIP; 0 = square). The video visual composites outside the
@@ -498,6 +502,14 @@ public sealed class VideoSurfaceRegistry
         int i = token - 1;
         if ((uint)i >= MaxSurfaces || !_entries[i].InUse || _entries[i].ReleasePending) return SizeI.Zero;
         return _entries[i].StreamPx;
+    }
+
+    /// <summary>True when the stream size last written for <paramref name="token"/> is pinned to the natural size (the protected
+    /// path): a geometry-only pump never needs the session then, whatever the rect.</summary>
+    public bool StreamPinned(int token)
+    {
+        int i = token - 1;
+        return (uint)i < MaxSurfaces && _entries[i].InUse && !_entries[i].ReleasePending && _entries[i].StreamPinned;
     }
 
     /// <summary>The incarnation of slot <paramref name="token"/> (every <see cref="Acquire"/> is a new one), or 0 when it is not live. A
@@ -924,7 +936,7 @@ public readonly struct VideoBinding
     public void SetAlphaRamp(in VideoAlphaRamp rampDip) { if (_registry is { } r) r.SetAlphaRamp(Token, in rampDip); }
     /// <summary>Record the stream size (device px) the owning session sized its swap chain to (see
     /// <see cref="VideoSurfaceRegistry.SetStreamSize"/>).</summary>
-    public void SetStreamSize(SizeI px) { if (_registry is { } r) r.SetStreamSize(Token, px); }
+    public void SetStreamSize(SizeI px, bool pinned = false) { if (_registry is { } r) r.SetStreamSize(Token, px, pinned); }
     /// <summary>Show/hide the surface.</summary>
     public void SetVisible(bool visible) { if (_registry is { } r) r.SetVisible(Token, visible); }
     /// <summary>Declare the scene node whose absolute rect this surface follows, so a compositor-only move (a drag, a
@@ -954,6 +966,8 @@ public readonly struct VideoBinding
     public bool IsGeometryOnlyPump => _registry is { } r && r.IsGeometryOnlyPump(Token);
     /// <summary>The stream size last written to this slot, or <see cref="SizeI.Zero"/> when none has been.</summary>
     public SizeI StreamSize => _registry?.StreamSize(Token) ?? SizeI.Zero;
+    /// <summary>True when that stream size is pinned to the natural size (see <see cref="VideoSurfaceRegistry.StreamPinned"/>).</summary>
+    public bool StreamPinned => _registry is { } r && r.StreamPinned(Token);
     /// <summary>The slot's current incarnation (see <see cref="VideoSurfaceRegistry.Incarnation"/>); 0 for an inert binding or a slot
     /// that is not live.</summary>
     public long Incarnation => _registry?.Incarnation(Token) ?? 0;

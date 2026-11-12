@@ -104,7 +104,7 @@ enum FgPrEvent
                                            // the buffer (its picture shows later, at FgPrEvent_Representation)
     FgPrEvent_SizeChanged = 46,      // MF_MEDIA_ENGINE_EVENT_FORMATCHANGE reported a new natural size: a = width, b = height
                                      // (FgPrSnapshot.width/height already read it). A size report only: it never touches the
-                                     // swap chain; the managed side re-asserts its stream size from the new natural size.
+                                     // swap chain; the managed side pins its stream size to the new natural size.
     FgPrEvent_FeedStalled = 47,      // a segment GET failed and the feeder is retrying it (capped back-off, never an end of
                                      // track): a = the segment index, b = the HTTP status (0 = transport failure; 401/403 are
                                      // the signed-URL-expired answers). Raised once per stall; FgPrEvent_FeedRecovered ends it
@@ -350,9 +350,10 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSeek(FgPrRuntime rt, FgPrSess
 __declspec(dllexport) int32_t __stdcall FgPrSessionSetVolume(FgPrRuntime rt, FgPrSession s, double volume);
 __declspec(dllexport) int32_t __stdcall FgPrSessionSetRate(FgPrRuntime rt, FgPrSession s, double rate);
 
-/// Size the engine's video stream to what the destination can actually show (the clear path's bucketed size
-/// discipline). Applied with IMFMediaEngineEx::UpdateVideoStream on the runtime thread; a 4K stream in a 640 px card
-/// then allocates 640 px buffers. Passing 0×0 restores the natural size.
+/// Size the engine's video stream (the managed session pins it to the natural size). Applied with
+/// IMFMediaEngineEx::UpdateVideoStream on the runtime thread, which makes MF free its pool of dst-sized frame buffers and build
+/// a new one even for an unchanged size; with protected content that stalls the desktop, so a request equal to the applied
+/// size while the native size is unchanged is skipped. Passing 0×0 restores the natural size.
 __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rt, FgPrSession s, int32_t width,
                                                                  int32_t height);
 

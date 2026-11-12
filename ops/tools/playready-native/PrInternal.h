@@ -844,6 +844,11 @@ struct Session
     std::atomic<int64_t> rateMicro{ 1000000 };
     int32_t streamWidth = 0, streamHeight = 0;    // FgPrSessionSetStreamSize (0×0 = natural)
     int64_t lastStreamLogQpc = 0;                 // runtime thread: when the "[cenc] stream size" line was last written
+    // Runtime thread: the engine's native video size when the applied stream size (appliedStreamW/H) was applied, so
+    // FgPrSessionSetStreamSize can skip an UpdateVideoStream that would change nothing (every one rebuilds MF's buffer pool),
+    // and whether that skip was logged (once per session).
+    int32_t appliedNativeW = 0, appliedNativeH = 0;
+    bool streamSkipLogged = false;
     int32_t handleTries = 0;
     // The swap chains MF built for this attach (each handle the runtime adopted: the metadata publication, a FORMATCHANGE or
     // RESOURCELOST re-creation), and when the last one landed: the "[cenc] swapchain build=" lines. Reset with every attach.
