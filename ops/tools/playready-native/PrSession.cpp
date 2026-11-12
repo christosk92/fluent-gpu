@@ -1752,6 +1752,17 @@ static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
         if (FAILED(hd)) fgpr::RaiseLog(s.handle, "[transport] DEFAULT RATE hr=" + fgpr::Hex(hd));
     }
 
+    // A protected start's audio sink activates the default render endpoint asynchronously, and mfcore's policy engine can read
+    // it before that finishes (MfAudioGuard.h). The runtime warms the endpoint (AudioWarm.h); a warm-up still running now -
+    // the bring-up's own, or one after a default-device change - is let finish first. Idle (the usual case) costs nothing.
+    if (encrypted)
+    {
+        const int64_t warmWaitMs = rt.audioWarm.WaitIdle(500);
+        if (warmWaitMs > 0)
+            fgpr::RaiseLog(s.handle, "[audio.warm] attach waited " + std::to_string((long long)warmWaitMs) +
+                                     "ms for the default render endpoint's warm-up");
+    }
+
     const std::wstring url = L"cenc://fluentgpu/" + std::to_wstring(s.handle);
     BSTR burl = SysAllocString(url.c_str());
     const int64_t ssT0 = fgpr::PhaseBegin(s.handle, L"setsource.begin");   // the freeze trail

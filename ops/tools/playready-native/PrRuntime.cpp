@@ -576,6 +576,49 @@ static bool OpmWindowDisabled()
     return n == 1 && value[0] == L'1';
 }
 
+// ── The mfcore audio OTA guard's runtime half (MfAudioGuard.h) ──────────────────────────────────────────────────────
+// When the guard fails a session start with its stand-in, mfcore completes the Start with kStandInHr and the media engine is
+// expected to raise ERROR for it (OnEngineEvent reports it as kStandInHr, whatever the engine wrapped it in). The backstop is
+// for an engine that says nothing: kGuardBackstopMs later, an attach that is still the current one, not in Error and with no
+// frame ever presented is failed here with kStandInHr. Either way the managed side reads a transient start failure and
+// re-opens the video once (ProtectedRuntimeFaults.IsTransientStart). An attach that already presented a frame before the
+// failed start is left to the engine's own ERROR.
+static constexpr int32_t kGuardBackstopMs = 2500;
+
+static void GuardBackstop(fgpr::Runtime& rt, uint64_t session, uint64_t gen, int64_t caughtQpc)
+{
+    if (!rt.Ready() || session == 0 || rt.attached.load(std::memory_order_acquire) != session ||
+        rt.attachGen.load(std::memory_order_acquire) != gen)
+        return;
+    std::shared_ptr<fgpr::Session> sp = fgpr::SessionByHandle(session);
+    if (!sp) return;
+    fgpr::Session& s = *sp;
+    if (s.attachPending || s.state.load(std::memory_order_acquire) == FgPrState_Error) return;
+    if (s.firstFrameQpc.load(std::memory_order_acquire) != 0) return;
+    const HRESULT hr = fgpr::mfguard::kStandInHr;
+    fgpr::RaiseLog(s.handle, "[mf.guard] no engine error " + std::to_string((long long)fgpr::MsSinceQpc(caughtQpc)) +
+                             "ms after the stand-in failed the session start: failing the attach hr=" + fgpr::Hex(hr));
+    s.errorHr.store((int32_t)hr, std::memory_order_release);
+    s.state.store(FgPrState_Error, std::memory_order_release);
+    Raise(s.handle, FgPrEvent_Error, 1 /*MF_MEDIA_ENGINE_ERR_ABORTED*/, (int64_t)(int32_t)hr);
+}
+
+/// The guard's fallback, on the faulting MF thread inside the vectored handler: mark the current attach and arm the backstop.
+/// Touches only atomics and the work queue's leaf lock (never a lock an MF thread could be holding).
+static void OnGuardFallback(void* ctx)
+{
+    auto* rt = static_cast<fgpr::Runtime*>(ctx);
+    if (!rt) return;
+    const uint64_t gen = rt->attachGen.load(std::memory_order_acquire);
+    const uint64_t session = rt->attached.load(std::memory_order_acquire);
+    const int64_t qpc = fgpr::QpcNow();
+    rt->guardFailedGen.store(gen + 1, std::memory_order_release);
+    rt->queue.PostAfter(kGuardBackstopMs, [rt, session, gen, qpc] { GuardBackstop(*rt, session, gen, qpc); });
+}
+
+static void RuntimeLog(const std::string& line) { fgpr::RaiseLog(0, line); }
+static void RuntimePhase(const wchar_t* name, int64_t qpc, int64_t durTicks) { fgpr::RaisePhase(0, name, qpc, durTicks); }
+
 static HRESULT BringUp(fgpr::Runtime& rt)
 {
     auto hx = [](HRESULT h){ std::stringstream s; s << "0x" << std::hex << (uint32_t)h; return s.str(); };
@@ -587,6 +630,13 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     if (FAILED(hr)) { LogLine("[runtime] MFStartup hr=" + hx(hr)); return hr; }
     rt.mfStarted = true;
     rt.mfReady.store(true, std::memory_order_release);   // the feeder may now build its Media Foundation source
+    // The default render endpoint's warm-up runs on its own thread, alongside the rest of the bring-up (AudioWarm.h).
+    rt.audioWarm.Start(&RuntimeLog, &RuntimePhase);
+    // The in-process guard for mfcore's audio OTA race (MfAudioGuard.h) arms on a helper thread too: its scan pages in ~7 MB of
+    // mfcore (27 ms cold on the owner's box), which the CDM creation below hides. Joined before BringUp returns, on every path,
+    // so it is armed before any session can start. Logs whether it armed; an unarmed guard changes nothing.
+    std::thread armer([&rt] { fgpr::mfguard::Install(&RuntimeLog, &OnGuardFallback, &rt); });
+    struct JoinOnExit { std::thread& t; ~JoinOnExit() { if (t.joinable()) t.join(); } } armerJoin{ armer };
 
     // ── D3D11 + MF DXGI manager (shared, multithread-protected). ─────────────────────────────────────────────────────
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
@@ -770,6 +820,9 @@ static void TearDown(fgpr::Runtime& rt)
     rt.mfReady.store(false, std::memory_order_release);
     if (rt.mfStarted) { MFShutdown(); rt.mfStarted = false; }
     fgpr::PhaseEnd(0, L"runtime.release.end", releaseT0);
+    // After MFShutdown: no Media Foundation work item of this runtime can still reach the guarded instruction.
+    fgpr::mfguard::Uninstall();
+    rt.audioWarm.Stop();
     if (rt.comInitialized) { CoUninitialize(); rt.comInitialized = false; }
 }
 
@@ -952,6 +1005,14 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
             const int64_t code = (int64_t)err->GetErrorCode();
             HRESULT hr = err->GetExtendedErrorCode();
             if (SUCCEEDED(hr)) hr = (HRESULT)p2;
+            // The mfcore guard failed this attach's session start with its stand-in (MfAudioGuard.h): whatever the engine made
+            // of it, it is that transient start failure, the one a re-open cures.
+            if (rt.guardFailedGen.load(std::memory_order_acquire) == attachGen + 1 && hr != fgpr::mfguard::kStandInHr)
+            {
+                fgpr::RaiseLog(h, "[mf.guard] the engine reported code=" + std::to_string((long long)code) + " hr=" + fgpr::Hex(hr) +
+                                  " for the start the guard failed: reported as hr=" + fgpr::Hex(fgpr::mfguard::kStandInHr));
+                hr = fgpr::mfguard::kStandInHr;
+            }
             fgpr::RaiseLog(h, "[cenc] media ERROR code=" + std::to_string((long long)code) + " hr=" + fgpr::Hex(hr));
             s.errorHr.store((int32_t)hr, std::memory_order_release);
             s.state.store(FgPrState_Error, std::memory_order_release);

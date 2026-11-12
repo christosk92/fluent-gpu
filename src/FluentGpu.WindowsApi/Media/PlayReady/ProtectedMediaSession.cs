@@ -499,7 +499,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     /// cures (the runtime was replaced after a device removal/reset or a hardware-DRM context reset, or never came up) is
     /// <see cref="MediaRecovery.Retryable"/> in a NON-DRM category with the HRESULT as <see cref="MediaError.UnderlyingCode"/>:
     /// the owner reopens the source in place instead of telling the user their license failed. Anything else keeps the
-    /// historical <see cref="MediaErrorCategory.Drm"/> + <see cref="MediaRecovery.NeedsLicense"/>. Pure.
+    /// historical <see cref="MediaErrorCategory.Drm"/> + <see cref="MediaRecovery.NeedsLicense"/>. A start the native mfcore guard
+    /// failed (<see cref="ProtectedRuntimeFaults.IsTransientStart"/>) is retryable on the SAME runtime: the owner re-opens it. Pure.
     /// </summary>
     internal static MediaError ProtectedFailure(string? message, int hr, bool needsRuntimeRebuild, MediaLocus? locus)
     {
@@ -507,6 +508,10 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             return new MediaError(MediaErrorCategory.Output,
                 message ?? $"The protected video pipeline was reset (0x{unchecked((uint)hr):X8}).",
                 hr != 0 ? hr : null, locus, MediaRecovery.Retryable);
+        if (ProtectedRuntimeFaults.IsTransientStart(hr))
+            return new MediaError(MediaErrorCategory.Output,
+                message ?? $"The protected video's audio output was not ready when it started (0x{unchecked((uint)hr):X8}).",
+                hr, locus, MediaRecovery.Retryable);
         return new MediaError(MediaErrorCategory.Drm,
             message ?? "Protected playback failed (CDM/license).", null, locus, MediaRecovery.NeedsLicense);
     }

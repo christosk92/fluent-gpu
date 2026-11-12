@@ -1520,6 +1520,15 @@ internal static class ProtectedRuntimeFaults
     /// <summary>True for an HRESULT after which the runtime must be rebuilt, not retried.</summary>
     internal static bool IsRuntimeReset(int hr)
         => hr is TeeInvalidHwDrmState or AsdActiveDisplayFail or DxgiDeviceRemoved or DxgiDeviceReset or MfShutdown or NoRenderedFrame;
+
+    /// <summary>AUDCLNT_E_NOT_INITIALIZED - what the native runtime reports when its mfcore guard (MfAudioGuard.h) failed a
+    /// protected session start: Media Foundation's policy engine read the audio sink's trusted output before the sink's
+    /// asynchronous audio-client set-up had finished (a Windows race that used to be an access violation in mfcore).</summary>
+    internal const int AudioOutputNotReady = unchecked((int)0x88890001);
+
+    /// <summary>True for a protected start that failed on a transient race: the engine, the CDM and the source are fine, so the
+    /// owner re-opens the video in place (once) instead of rebuilding the runtime or reporting a licence failure.</summary>
+    internal static bool IsTransientStart(int hr) => hr == AudioOutputNotReady;
 }
 
 /// <summary>Where a license relay's answer goes: the native <c>FgPrLicenseDeliver</c> in production, a recorder in the

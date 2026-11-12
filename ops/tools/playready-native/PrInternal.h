@@ -71,6 +71,8 @@
 #include "FgPlayReady.h"
 #include "EventRing.h"
 #include "OpmWindow.h"
+#include "MfAudioGuard.h"
+#include "AudioWarm.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -688,6 +690,13 @@ struct Runtime
     /// Joins destroyed sessions' feeder threads off the runtime thread (PrSession.cpp DestroyInternal); drained before
     /// Media Foundation is shut down and shut down by FgPrRuntimeDestroy.
     handover::FeederReaper reaper;
+
+    /// The default render endpoint's warm-up (AudioWarm.h): started by BringUp, waited on (only while one runs) by a protected
+    /// attach before its SetSource, stopped by TearDown.
+    AudioWarmer audioWarm;
+    /// attachGen + 1 of the attach whose session start the mfcore guard (MfAudioGuard.h) failed with its stand-in, else 0.
+    /// Written by the guard's fallback on the MF thread; read by the ERROR event and the backstop on the runtime thread.
+    std::atomic<uint64_t> guardFailedGen{ 0 };
 
     bool Ready() const { return bringUp.load(std::memory_order_acquire) == S_OK && !shuttingDown.load(std::memory_order_acquire); }
     int64_t UptimeMs() const { return MsSinceQpc(createdQpc); }
