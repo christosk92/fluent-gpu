@@ -12,8 +12,10 @@
 //                    thread with a work queue. Every verb below is a work item on that thread; nothing polls.
 //   * FgPrLicense  — one per KID: an open CDM key session, acquired the moment a manifest is known (PlayReady's
 //                    "proactive acquisition") and kept until it expires or is evicted.
-//   * FgPrSession  — one per source: a CencMediaSource over a byte-capped, time-windowed SegmentStore, opened AT
-//                    the carried start position. The switch is FgPrSessionAttach = ONE SetSource on the live engine.
+//   * FgPrSession  — one per video: its tracks over a byte-capped, time-windowed SegmentStore, opened AT the carried
+//                    start position. The engine plays sessions as PROGRAMS of ONE persistent source: the first
+//                    FgPrSessionAttach loads it (SetSource), every later one binds the next session into it - pause,
+//                    bind, seek, play - with no SetSource, so the protected decoder, renderer and swap chain stay.
 //
 // Every call is NON-BLOCKING unless its comment says otherwise; the only blocking export is FgPrRuntimeDestroy
 // (it joins the runtime thread, bounded). Handles are opaque uint64_t and 0 is never a valid handle. A call with a
@@ -83,17 +85,21 @@ enum FgPrEvent
     FgPrEvent_Metadata = 30,         // a = duration ms, b = (width << 32) | height
     FgPrEvent_CanPlay = 31,          // a = startCorrectionMs: how far behind the carried start the engine clock was and had to be sought
                                      // (the second source Start the CANPLAY fallback costs; 0 = the engine adopted the carried start)
-    FgPrEvent_FirstFrame = 32,       // MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY; a = presentation position ms, b = the QPC it was stamped at
-                                     // (FgPrSnapshot.firstFrameQpc): the first-frame time on the native clock, not the dequeue time
-    FgPrEvent_Handle = 33,           // a = the DComp swapchain handle (re-raised on RESOURCELOST, and when the value changes). The RUNTIME
-                                     // owns it: the consumer binds it (CreateSurfaceFromHandle takes its own reference) and never closes
-                                     // it; a replaced one (or the one of a detached session) is closed ~2 s after it was superseded
+    FgPrEvent_FirstFrame = 32,       // the attach's first frame: MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY for a load, the rendered-frame
+                                     // counter moving after the switch's seek for a program switch. a = presentation position ms, b = the
+                                     // QPC it was stamped at (FgPrSnapshot.firstFrameQpc): the native clock, not the dequeue time
+    FgPrEvent_Handle = 33,           // a = the DComp swapchain handle, raised to an attached session when it is news to it. The RUNTIME
+                                     // owns it and keeps ONE value per swap chain (every program of the source publishes the same one;
+                                     // FgPrSnapshot.handleGeneration says when it names a new one, or RESOURCELOST wants a re-bind). The
+                                     // consumer binds it (CreateSurfaceFromHandle takes its own reference) and never closes it; a
+                                     // replaced one is closed ~2 s after it was superseded
     FgPrEvent_Position = 34,         // a = position ms, b = QPC ticks of the sample — ≤ 4 Hz, never a pump trigger
     FgPrEvent_Seeking = 35,          // a = target ms
     FgPrEvent_Seeked = 36,           // a = landed ms, b = ms since the seek was posted
     FgPrEvent_Playing = 37,
     FgPrEvent_Paused = 38,
-    FgPrEvent_Ended = 39,
+    FgPrEvent_Ended = 39,            // the program played out: every track drained and the clock reached what they delivered (no
+                                     // stream ever ends - the source carries the next video - so the runtime raises this itself)
     FgPrEvent_Error = 40,            // a = MF_MEDIA_ENGINE_ERR, b = hr
     FgPrEvent_Representation = 41,   // a = the representation index ON SCREEN: delivery just handed the decoder its first sample
                                      // (-1 = the OPENING representation: delivery crossed back into it)
@@ -124,9 +130,24 @@ enum FgPrEvent
                                      // established on the video's display and the trust authority let playback fall back (a
                                      // constricted or blanked picture). a = param1, b = param2 as the engine raised them
     FgPrEvent_Phase = 55,            // one step of a protected start or end that could block the GPU or the compositor (the freeze
-                                     // trail): `text` = the step name ("d3d11.device.begin", "setsource.end", "first.frame", ...,
-                                     // optionally a space and detail), a = the QPC it was stamped at, b = the step's duration in QPC
-                                     // ticks on a ".end" (0 otherwise). Never dropped; lifecycle cadence only (a few per attach)
+                                     // trail): `text` = the step name ("d3d11.device.begin", "setsource.end", "first.frame",
+                                     // "program.bind", "program.switch silent=1", "program.first.frame", ..., optionally a space and
+                                     // detail), a = the QPC it was stamped at, b = the step's duration in QPC ticks on a ".end" or on
+                                     // "program.bind" (0 otherwise). Never dropped; lifecycle cadence only (a few per attach)
+    FgPrEvent_ProgramSwitch = 56,    // with the attach's first frame: a = FgPrProgram (how the video got onto the engine), b = ms from
+                                     // FgPrSessionAttach to that first frame
+};
+
+/// FgPrEvent_ProgramSwitch.a: how an attach put its session on the engine.
+enum FgPrProgram
+{
+    FgPrProgram_Open = 0,        // the runtime's first protected open: a new source and SetSource
+    FgPrProgram_Silent = 1,      // a program switch whose formats all cross silently: no SetSource, the decoder keeps its pool
+    FgPrProgram_Announced = 2,   // a program switch with a real format difference at the same frame size (frame rate, aspect, SPS):
+                                 // no SetSource; MEStreamFormatChanged rebuilds the decoder's pool
+    FgPrProgram_Rebuild = 3,     // the fallback: the source could not take the program (broke, never loaded, another stream set,
+                                 // protection or video frame size, a failed bind, or a switch that failed before its first frame) -
+                                 // a new SetSource
 };
 
 /// FgPrSnapshot.state — the lifecycle the managed ProtectedVideoState maps one-to-one.
@@ -216,7 +237,7 @@ typedef struct FgPrSnapshot
     int64_t durationMs;
     int64_t bufferedAheadMs;
     int64_t retainedBehindMs;
-    int64_t firstFrameQpc;          // QPC of FIRSTFRAMEREADY for this source, 0 until it lands
+    int64_t firstFrameQpc;          // QPC of this attach's first frame (FgPrEvent_FirstFrame), 0 until it lands
     uint64_t bytesDownloaded;
     uint64_t downloadElapsedMs;
     uint64_t storeBytes;            // what the SegmentStore currently holds (the counted half of the memory budget)
@@ -228,7 +249,8 @@ typedef struct FgPrSnapshot
                                     // snapshots over the time between their samples, not between its own reads
     int32_t feedComplete;           // 1 once every track's feed reached the end of the track (nothing more will be fetched, so no
                                     // buffer event will come); 0 again after a seek re-opens the feed
-    int32_t reserved0;
+    int32_t handleGeneration;       // bumped by the runtime whenever `handle` names a NEW swap chain (or RESOURCELOST asks for the same
+                                    // one to be wrapped again): the only reason for a consumer to re-bind a handle VALUE it already bound
 } FgPrSnapshot;
 
 /// What FgPrProbeFile answers about a local fragmented MP4 — the demuxer gate's read-out (tests only; no CDM, no GPU).
@@ -310,8 +332,8 @@ __declspec(dllexport) void __stdcall FgPrLicenseRelease(FgPrRuntime rt, FgPrLice
 
 // ── sessions ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/// Create a session: the SegmentStore, the CencMediaSource and the feeder. NO engine call — the engine still plays
-/// whatever is attached. The store is empty until FgPrSessionPrefetch or FgPrSessionAttach.
+/// Create a session: the SegmentStore and the feeder (its tracks are built when the init segments land). NO engine call —
+/// the engine still plays whatever is attached. The store is empty until FgPrSessionPrefetch or FgPrSessionAttach.
 __declspec(dllexport) int32_t __stdcall FgPrSessionCreate(FgPrRuntime rt, const FgPrOpenDesc* desc, FgPrSession* out);
 
 /// Fetch the init segments and `segments` media segments around `aroundMs` — video and audio IN PARALLEL, on the
@@ -320,14 +342,17 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionCreate(FgPrRuntime rt, const 
 __declspec(dllexport) int32_t __stdcall FgPrSessionPrefetch(FgPrRuntime rt, FgPrSession s, int64_t aroundMs,
                                                             int32_t segments);
 
-/// THE SWITCH. Bind `lic` to the session and SetSource its CencMediaSource on the warm engine, detaching whatever was
-/// attached first. The source starts at the keyframe ≤ the descriptor's startPositionMs. A license that is still
-/// PENDING is attached anyway — the engine's own NeedKey path waits for the key rather than the open waiting for the
-/// license. Non-blocking: FgPrEvent_Metadata → CanPlay → FirstFrame → Handle follow.
+/// THE SWITCH. Bind `lic` to the session and put it on the warm engine, detaching (pausing) whatever was attached first.
+/// The runtime's first open loads ONE source (SetSource); every later attach binds this session's tracks into that same
+/// source as the next PROGRAM - pause, bind, seek, play - unless the source cannot take it (FgPrProgram_Rebuild). The
+/// program starts at the keyframe ≤ the descriptor's startPositionMs. A license that is still PENDING is attached anyway —
+/// the source's key gate holds the encrypted samples until the key is usable. Non-blocking: FgPrEvent_Metadata → CanPlay →
+/// Handle → FirstFrame → ProgramSwitch follow.
 __declspec(dllexport) int32_t __stdcall FgPrSessionAttach(FgPrRuntime rt, FgPrSession s, FgPrLicense lic);
 
-/// SetSource(null) + Pause. The session, its store and its keyframe table SURVIVE — a "back to the song and out
-/// again" toggle is a re-attach, not a re-open.
+/// Pause, and nothing else: the source, its topology, the decoder, the renderer and the swap chain stay for the next program,
+/// and the session, its store and its keyframe table SURVIVE — a "back to the song and out again" toggle is a re-attach
+/// (a seek back into the program), not a re-open. The pipeline is torn down only with the runtime.
 __declspec(dllexport) int32_t __stdcall FgPrSessionDetach(FgPrRuntime rt, FgPrSession s);
 
 /// Free the session and its store (detaching first when attached). Idempotent.

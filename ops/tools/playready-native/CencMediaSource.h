@@ -1,6 +1,7 @@
 // CencMediaSource.h — the LAST MILE for native PlayReady video: a custom fragmented-MP4 / CENC demuxer + a custom
 // IMFMediaSource/IMFMediaStream that emits ENCRYPTED IMFSamples (carrying the CENC per-sample attributes) to the
-// media engine's protected pipeline + CDM, exactly like Microsoft's MediaEngineEMEUWPSample `CdmMediaSource`.
+// media engine's protected pipeline + CDM, exactly like Microsoft's MediaEngineEMEUWPSample `CdmMediaSource`. ONE source for
+// the runtime's life: each video's tracks are a program bound into it ("THE source", below).
 //
 // Why this exists: the built-in IMFMediaSourceExtension (MSE) rejects protected byte streams
 // (MF_E_UNSUPPORTED_BYTESTREAM_TYPE / MF_E_DRM_UNSUPPORTED — see the README/design-doc findings), and a URL/byte-stream
@@ -648,13 +649,17 @@ struct Sample
     // The video FORMAT GENERATION this sample belongs to (fgpr::RepBook): stamped by the stream that stores it, never by
     // the demuxer. Delivery announces a format change when the next sample's generation differs from the one Media
     // Foundation's current type describes, so the change lands where the new representation's first sample does, not
-    // where it was spliced in. Travels with the sample through trims, splices and a re-attach's TakeSamples.
+    // where it was spliced in. Travels with the sample through trims and splices.
     uint16_t repGen = 0;
     // A NON-REFERENCE picture: every slice NAL (types 1 and 5) has nal_ref_idc == 0 and every NAL header was readable in the clear.
     // No other picture predicts from it (H.264 8.2.4: only reference pictures enter the reference lists), so a picture that is never
     // DISPLAYED - one that ends before an exact seek's target - can be withheld from the decoder without changing a single decoded
     // pixel of any picture that is displayed. Set by ConvertAvccToAnnexBInPlace, the one pass that already walks the NALs.
     bool nonRef = false;
+    // The sample's key ID (16 big-endian bytes; the init's tenc default_KID). Carried PER SAMPLE because one trusted input
+    // decrypts consecutive programs and representations under different keys: MakeSample and the key gate read it here, never
+    // from the track's current init.
+    uint8_t kid[16] = {};
 };
 
 // Media Foundation's H.264 decoder consumes Annex-B access units (start-code-prefixed NALs), while ISO BMFF stores
@@ -934,6 +939,7 @@ static int ParseMoof(const uint8_t* file, size_t fileLen, const Box& moof, const
             // reposition target and — worse — make the first delivered sample look like a non-clean point).
             s.keyframe = info.kind == TrackKind::Audio || (flags & 0x00010000) == 0;
             s.encrypted = info.encrypted;
+            memcpy(s.kid, info.kid, sizeof(s.kid));
 
             // IV: per-sample from the aux info, else the constant IV (cbcs). Preserve the declared byte length exactly:
             // MFSampleExtension_Encryption_SampleID expects m_bIVSize bytes; padding an 8-byte CENC IV to 16 changes the
@@ -1203,26 +1209,151 @@ static HRESULT BuildH264ClearType(const cenc::InitInfo& info, IMFMediaType** out
     return S_OK;
 }
 
-struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
+/// The AAC media type for the protected pipeline (non-throwing: an announced sample-rate change builds it on a Media
+/// Foundation callback thread). Two things here are easy to get silently wrong:
+///  • MF wants the AAC configuration as MF_MT_USER_DATA in the HEAACWAVEINFO layout — the 12 bytes that FOLLOW the
+///    WAVEFORMATEX part (payload type, profile-level, struct type, two reserved fields) and THEN the raw
+///    AudioSpecificConfig. Handing it the bare ASC produces a type MF accepts and then fails to decode.
+///  • payload type 0 means "raw AAC access units" (what fMP4 stores). Anything else describes ADTS/ADIF framing that
+///    our samples do not have.
+static HRESULT BuildAacMediaType(const cenc::InitInfo& a, IMFMediaType** out)
 {
-    winrt::com_ptr<IMFMediaEventQueue> m_queue;
-    winrt::com_ptr<IMFStreamDescriptor> m_sd;
-    IMFMediaSource* m_source = nullptr;   // weak (the source owns this stream)
+    winrt::com_ptr<IMFMediaType> mt;
+    HRESULT hr = MFCreateMediaType(mt.put());
+    if (FAILED(hr)) return hr;
+    mt->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    mt->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC);
+    mt->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, a.sampleRate ? a.sampleRate : 44100);
+    mt->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, a.channels ? a.channels : 2);
+    mt->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+    mt->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, 1);
+    mt->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
+    if (a.avgBitrate) mt->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, a.avgBitrate / 8);
+    // AAC-LC unless the AudioSpecificConfig says otherwise; 0x29 is the AAC-LC profile-level indication MF expects.
+    const uint16_t profileLevel = 0x29;
+    mt->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0);
+    mt->SetUINT32(MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, profileLevel);
+
+    std::vector<uint8_t> userData(12, 0);
+    userData[0] = 0; userData[1] = 0;                                   // wPayloadType = 0 (raw AAC)
+    userData[2] = (uint8_t)(profileLevel & 0xFF); userData[3] = (uint8_t)(profileLevel >> 8);
+    userData[4] = 0; userData[5] = 0;                                   // wStructType = 0 (AudioSpecificConfig follows)
+    userData.insert(userData.end(), a.asc.begin(), a.asc.end());
+    mt->SetBlob(MF_MT_USER_DATA, userData.data(), (UINT32)userData.size());
+    *out = mt.detach();
+    return S_OK;
+}
+
+/// The type a stream face advertises for one track's init: the clear H.264 / AAC type, WRAPPED into an MFMediaType_Protected
+/// envelope when the track is encrypted (the Firefox desktop-MFCDM way, gecko MFMediaEngineVideoStream::CreateMediaType +
+/// MFMediaEngineStream::GenerateStreamDescriptor). The wrap - with MF_SD_PROTECTED=1 on the descriptor - is what tells the media
+/// engine's EME pipeline to insert the CDM's decryptor before the decoder; without it the engine wires the encrypted samples
+/// STRAIGHT into the decoder, which rejects the first ciphertext-bearing one (decode error 3). This is NOT the failed experiment
+/// of stamping the raw MF_MT_PROTECTED attribute on an UNWRAPPED type (the legacy ITA/OTA topology, trust verification
+/// 0xC00D715B): the pipeline unwraps the type after the decryptor, so the decoder sees the real one. A wrap that fails leaves the
+/// clear type (logged by the caller through `wrapHr`). Non-throwing: a format change is built on a Media Foundation thread.
+static HRESULT BuildStreamType(const cenc::InitInfo& info, IMFMediaType** out, HRESULT* wrapHr = nullptr)
+{
+    winrt::com_ptr<IMFMediaType> clear;
+    const bool video = info.kind == cenc::TrackKind::Video;
+    HRESULT hr = video ? BuildH264ClearType(info, clear.put()) : BuildAacMediaType(info, clear.put());
+    if (FAILED(hr)) return hr;
+    if (wrapHr) *wrapHr = S_OK;
+    if (info.encrypted)
+    {
+        winrt::com_ptr<IMFMediaType> wrapped;
+        const HRESULT hw = MFWrapMediaType(clear.get(), MFMediaType_Protected, video ? MFVideoFormat_H264 : MFAudioFormat_AAC, wrapped.put());
+        if (wrapHr) *wrapHr = hw;
+        if (SUCCEEDED(hw)) clear = std::move(wrapped);
+    }
+    *out = clear.detach();
+    return S_OK;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//  The silent crossing rule.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// Every MEStreamFormatChanged - even one to an identical size - makes the protected decoder free its ~135 MiB pool of hardware-
+// protected frame buffers and allocate a new one, and every protected allocation and free stalls the GPU for the whole desktop
+// (146-297 ms measured on an Adreno X1-85, fable-next p3run). A crossing whose new format would leave the decoder's
+// configuration as it is therefore goes SILENT: no new media type, no event; the samples' in-band SPS/PPS (ParseMoof prepends
+// them to every keyframe) and their own key ID are all the pipeline sees change. Verified on that machine with Microsoft's public
+// PlayReady SL3000 vectors: flat GPU memory, no decoder create/destroy, frames advancing. Only a real difference announces.
+
+/// Video: silent when the coded size, the codec, the visible aperture, the pixel aspect ratio, the frame rate and the protection
+/// are all the same as what Media Foundation's current type describes.
+static bool VideoCrossingIsSilent(const cenc::InitInfo& from, const cenc::InitInfo& to)
+{
+    const uint32_t fromCodec = from.codec4cc ? from.codec4cc : cenc::fourcc("avc1");
+    const uint32_t toCodec = to.codec4cc ? to.codec4cc : cenc::fourcc("avc1");
+    if (fromCodec != toCodec || from.encrypted != to.encrypted) return false;
+    if (from.width != to.width || from.height != to.height) return false;
+    if (from.sps.valid != to.sps.valid) return false;
+    if (from.sps.valid && (from.sps.codedWidth != to.sps.codedWidth || from.sps.codedHeight != to.sps.codedHeight)) return false;
+    const H264TypeAttrs a = ComputeH264TypeAttrs(from), b = ComputeH264TypeAttrs(to);
+    if (a.hasAperture != b.hasAperture) return false;
+    if ((uint64_t)a.parNum * b.parDen != (uint64_t)b.parNum * a.parDen) return false;
+    if (a.hasFrameRate != b.hasFrameRate) return false;
+    if (a.hasFrameRate && (uint64_t)a.frameRateNum * b.frameRateDen != (uint64_t)b.frameRateNum * a.frameRateDen) return false;
+    return true;
+}
+
+/// Audio: silent when the sample rate, the channel count, the AudioSpecificConfig and the protection are the same. A sample-rate
+/// change announces on the AUDIO stream only; the video keeps its decoder.
+static bool AudioCrossingIsSilent(const cenc::InitInfo& from, const cenc::InitInfo& to)
+{
+    return from.encrypted == to.encrypted && from.codec4cc == to.codec4cc && from.sampleRate == to.sampleRate &&
+           from.channels == to.channels && from.asc == to.asc;
+}
+
+/// What a crossing did: nothing at all (the very configuration the type was built from), silently kept the decoder, or announced.
+enum class Crossing { Identical, Silent, Announced };
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//  A session's track — the demuxed encrypted samples of one stream and the delivery cursor over them.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+struct CencStreamFace;   // fwd: the persistent IMFMediaStream a track is delivered through
+struct CencMediaSource;  // fwd
+
+/// ONE TRACK OF ONE SESSION: the video, or the soundtrack, of one music video. It is not a Media Foundation object. Media
+/// Foundation holds the runtime's ONE persistent source (CencMediaSource) and its stream faces (CencStreamFace) for the
+/// runtime's life; the tracks of the session the engine plays are BOUND to those faces (CencMediaSource::BindProgram), and
+/// each face hands every sample request to its track. The track keeps the buffer, the cursor, the format generations and the
+/// requests it parked; the face keeps the event queue, the stream descriptor and the format Media Foundation's current type
+/// describes. A track that is not bound still takes appends, splices, trims and flushes (the session's buffer outlives every
+/// binding), so a session is prepared, bound and re-bound with its buffer intact.
+///
+/// Every sample this track delivers is stamped `m_base100ns` later than its own presentation time: the PROGRAM BASE, which
+/// places this video on the source's one monotonically growing timeline (each program after the first starts past everything
+/// the source ever delivered). Everything inside the track - the samples, the cursor, a seek target - stays program-relative.
+///
+/// Lock order: face m_mx -> track m_mx -> (face m_fmtMx | source m_mx | the licence table's leaf lock | the feeder signal).
+struct CencMediaStream
+{
     std::vector<cenc::Sample> m_samples;
     cenc::InitInfo m_info;
     size_t m_next = 0;
-    DWORD m_streamId = 1;                 // 1 = video, 2 = audio (matches the stream descriptors in BuildCencSource)
+    DWORD m_streamId = 1;                 // 1 = video, 2 = audio (the face it binds to has the same id)
     const char* m_label = "video";        // log prefix only
-    bool m_started = false, m_paused = false, m_eos = false, m_discontinuity = true, m_shutdown = false;
+    // MF-facing state, mirrored from the face while bound (m_started is false whenever the track is not bound). `m_eos` is
+    // the drain report: the track ran out of samples with its feed complete and told its face once (never MEEndOfStream).
+    bool m_started = false, m_paused = false, m_eos = false, m_discontinuity = true;
     // Incremental feeding: the fetcher appends segments while playback runs, so the first frame does not wait for the
     // whole track to download. Until m_complete is set, running out of samples is STARVATION (park the request and
-    // satisfy it when more arrive), not end-of-stream — reporting EOS there would truncate the track to its prefix.
+    // satisfy it when more arrive), not the end of the track.
     bool m_complete = false;
     std::vector<winrt::com_ptr<::IUnknown>> m_pausedRequests;
     std::vector<winrt::com_ptr<::IUnknown>> m_starvedRequests;
     std::mutex m_mx;
 
-    // ── the session this stream serves (PrSession.cpp) ──────────────────────────────────────────────────────────────
+    // ── the binding (CencStreamFace::Bind / Unbind, under the face's lock and this one) ─────────────────────────────────
+    CencStreamFace* m_face = nullptr;     // m_mx: the face delivering this track to Media Foundation, null = not on the engine
+    LONGLONG m_base100ns = 0;             // m_mx: the program base added to every delivered sample time
+    // m_mx: set by a bind - the next delivered sample checks its format against what the face's current type describes (a
+    // program switch is a crossing like a representation switch: silent when compatible, announced otherwise).
+    bool m_crossPending = false;
+
+    // ── the session this track serves (PrSession.cpp) ───────────────────────────────────────────────────────────────
     uint64_t m_session = 0;                          // stamps every diagnostic line with its FgPrSession handle
     std::shared_ptr<fgpr::SegmentStore> m_store;     // the time window, the byte budget, the keyframe table
     uint64_t m_bytes = 0;                            // what m_samples costs the budget (m_mx); mirrored into the store
@@ -1236,13 +1367,11 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     std::atomic<int64_t> m_demandBelowMs{ 0 };
 
     // Bumped whenever a mutation CUTS already-buffered coverage out from under a reader — a truncating splice
-    // (SwitchVideoRepresentation), TakeSamples (the whole buffer is relocated for a re-attach), or a TrimBehindLocked
-    // that had to fall back on the byte budget (not the ordinary time window — see TrimBehindLocked). The feeder's
-    // progress guard (PrSession.cpp, thread-local) samples this WITHOUT the stream lock to tell "buffer shrank" apart
-    // from "buffer just isn't growing yet": a plain size/byte reading can't make that distinction, and reading it as
-    // "no growth" is what live-locked the feeder (see this file's task background). CutGen() below is the lock-free
-    // read; every writer goes through m_mx already, so a relaxed increment + acquire read is enough — there is no
-    // other data this counter needs to be ordered against.
+    // (SwitchVideoRepresentation), a flush, or a TrimBehindLocked that had to fall back on the byte budget (not the ordinary
+    // time window — see TrimBehindLocked). The feeder's progress guard (PrSession.cpp, thread-local) samples this WITHOUT the
+    // track lock to tell "buffer shrank" apart from "buffer just isn't growing yet": a plain size/byte reading can't make that
+    // distinction, and reading it as "no growth" is what live-locked the feeder. CutGen() below is the lock-free read; every
+    // writer goes through m_mx already, so a relaxed increment + acquire read is enough.
     std::atomic<uint32_t> m_cutGen{ 0 };
 
     // Counts every mutation of m_samples' CONTENT (a splice, a trim that dropped something, an emptied buffer); the cursor
@@ -1257,7 +1386,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     // within a GOP — comparing this sample against the PREVIOUS array element (what a naive check would do) would
     // flag every reordered B-frame as a hole. Instead this tracks the running MAX presentation end actually
     // delivered so far, mirroring SegmentStore.h ComputeBufferedPairs' `reach`, and compares the next sample's start
-    // against THAT. Reset on Start(reposition), Stop() and a representation switch, each of which can make the next
+    // against THAT. Reset on Start(reposition), Stop(), a bind and a format crossing, each of which can make the next
     // delivered sample legitimately jump.
     uint64_t m_deliveredReachTicks = 0;
     bool m_haveDeliveredReach = false;          // false until the first sample is ever delivered
@@ -1270,23 +1399,19 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     uint32_t m_skippedNonRef = 0;
     uint64_t m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();   // rate-limit: once per hole start
 
-    // An unbuffered seek (FlushForSeek) emptied this stream and the target segment has not been repositioned to yet:
-    // until Start(reposition) runs, nothing may be delivered - the segment that lands for the new position would
-    // otherwise be handed to Media Foundation on the OLD clock, ahead of the reposition that rewinds it. Set only by
-    // FlushForSeek; cleared by Start(reposition), ReleaseReposition (the engine refused the seek, or completed it without a Start), TakeSamples and
-    // Shutdown - every path that ends a seek, or a missed one freezes playback. Guarded by m_mx.
+    // Nothing may be delivered until the next Start(reposition): set by an unbuffered seek's flush (FlushForSeek - the segment
+    // that lands for the new position would otherwise be handed to Media Foundation on the OLD clock, ahead of the reposition
+    // that rewinds it) and by a bind (the program's first sample goes out at the program's own first Start, never on the
+    // previous program's clock). Cleared by Start(reposition), ReleaseReposition (the engine refused the seek, or completed it
+    // without a Start) and Unbind - every path that ends the wait, or a missed one freezes playback. Guarded by m_mx.
     bool m_holdForReposition = false;
     // The playhead (ms) as the feeder last saw it, -1 = unknown. The trim measures the retention window and the keyframe
     // its GOP starts at from here instead of the delivery cursor, which runs ahead of the clock by MF's queue.
     std::atomic<int64_t> m_playheadHintMs{ -1 };
 
     // ── video format generations (fgpr::RepBook) ─────────────────────────────────────────────────────────────────────
-    // Which representations this VIDEO stream holds samples of, and which one Media Foundation's current media type
-    // describes. Guarded by m_mx.
+    // Which representations this VIDEO track holds samples of, and which one delivery last crossed into. Guarded by m_mx.
     fgpr::RepBook m_rep;
-    // The stream descriptor's type is a MFMediaType_Protected wrapper (BuildCencSource): a format change wraps its new
-    // type the same way.
-    bool m_wrapProtected = false;
     // Told, under m_mx, the manifest index of the representation whose first sample was just delivered (the picture on
     // screen changes with it). Installed by the session next to m_demand; it may only touch leaf state and raise an event
     // (a push into the native event ring, never a call into managed code, so it is safe under m_mx).
@@ -1298,54 +1423,30 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     // the attach SetSources and Plays first and posts the licence after, so on a cold runtime the source's first Start can
     // beat license.delivered (2026-11-07, sid=996ef8e4: Start 11 ms ahead of the 151 ms licence POST, five ERRORs, the
     // video row faulted; every open whose key was usable before its Start played). So delivery asks first: while
-    // `m_keyPending(kid)` says the KID's licence is still PENDING, a request for an encrypted sample is parked here, as a
-    // paused one is, and ReleaseKeyParked hands the parked requests to delivery once the licence leaves Pending (usable;
-    // or failed / expired, so the pipeline's own error surfaces instead of a silent wait). Null = no gate. Installed by the
-    // session next to m_demand (PrSession.cpp InstallDemandHooks); it runs under m_mx and may take only the licence
-    // table's leaf lock. Guarded by m_mx: the parked tokens, the wait's start and the KID last seen settled.
+    // `m_keyPending(kid)` says the SAMPLE's KID licence is still PENDING, a request for it is parked here, as a paused one is,
+    // and ReleaseKeyParked hands the parked requests to delivery once the licence leaves Pending (usable; or failed /
+    // expired, so the pipeline's own error surfaces instead of a silent wait). The KID is the sample's own (cenc::Sample::kid):
+    // one trusted input decrypts consecutive keys, so the next program's samples carry the next key with no rebuild. Null =
+    // no gate. Installed by the session next to m_demand (PrSession.cpp InstallDemandHooks); it runs under m_mx and may take
+    // only the licence table's leaf lock. Guarded by m_mx: the parked tokens, the wait's start and the KID last seen settled.
     std::function<bool(const uint8_t* kid)> m_keyPending;
     std::vector<winrt::com_ptr<::IUnknown>> m_keyParkedRequests;
     uint64_t m_keyParkedSinceMs = 0;       // GetTickCount64() at the first park of the current wait, 0 = not waiting
     uint8_t m_keySettledKid[16] = {};      // the KID last seen settled: a settled key is never asked about again
     bool m_keySettled = false;
 
-    CencMediaStream() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
-
-    /// Every diagnostic line from this stream carries its session handle (shadows the runtime-level ::LogLine). Safe under
+    /// Every diagnostic line from this track carries its session handle (shadows the runtime-level ::LogLine). Safe under
     /// m_mx and on an MF thread (RequestSample): RaiseLog only copies the line into the native event ring and returns;
-    /// it never enters managed code, so a managed GC or the app's log sink cannot hold the stream lock (F192).
+    /// it never enters managed code, so a managed GC or the app's log sink cannot hold the track lock (F192).
     void LogLine(const std::string& s) const { fgpr::RaiseLog(m_session, s); }
 
-    // IMFMediaEventGenerator (delegate to the queue).
-    IFACEMETHODIMP BeginGetEvent(IMFAsyncCallback* c, ::IUnknown* s) noexcept override { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return MF_E_SHUTDOWN; return m_queue->BeginGetEvent(c, s); }
-    IFACEMETHODIMP EndGetEvent(IMFAsyncResult* r, IMFMediaEvent** e) noexcept override { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return MF_E_SHUTDOWN; return m_queue->EndGetEvent(r, e); }
-    IFACEMETHODIMP GetEvent(DWORD f, IMFMediaEvent** e) noexcept override { winrt::com_ptr<IMFMediaEventQueue> q; { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return MF_E_SHUTDOWN; q = m_queue; } return q->GetEvent(f, e); }
-    IFACEMETHODIMP QueueEvent(MediaEventType t, REFGUID g, HRESULT s, const PROPVARIANT* v) noexcept override { std::lock_guard<std::mutex> gd(m_mx); if (m_shutdown) return MF_E_SHUTDOWN; return m_queue->QueueEventParamVar(t, g, s, v); }
-
-    // IMFMediaStream
-    IFACEMETHODIMP GetMediaSource(IMFMediaSource** ppSource) noexcept override
+    /// A request Media Foundation made of the face this track is bound to (the face holds its own lock around the call).
+    HRESULT RequestSample(::IUnknown* pToken)
     {
         std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown) return MF_E_SHUTDOWN;
-        if (!ppSource) return E_POINTER;
-        if (!m_source) return MF_E_NOT_INITIALIZED;
-        m_source->AddRef(); *ppSource = m_source; return S_OK;
-    }
-    IFACEMETHODIMP GetStreamDescriptor(IMFStreamDescriptor** ppSD) noexcept override
-    {
-        std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown) return MF_E_SHUTDOWN;
-        if (!ppSD) return E_POINTER;
-        m_sd.copy_to(ppSD); return S_OK;
-    }
-    IFACEMETHODIMP RequestSample(::IUnknown* pToken) noexcept override
-    {
-        std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown) return MF_E_SHUTDOWN;
-        if (!m_started) return MF_E_MEDIA_SOURCE_WRONGSTATE;
         // A paused source must ACCEPT sample requests but deliver nothing until the next Start (IMFMediaSource::Pause
         // contract). Retain the token so resume can satisfy the exact request instead of depending on a re-request.
-        if (m_paused)
+        if (m_paused || !m_started)
         {
             winrt::com_ptr<::IUnknown> token;
             if (pToken) token.copy_from(pToken);
@@ -1355,60 +1456,21 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         return DeliverSampleLocked(pToken);
     }
 
-    /// Delivery is about to hand over a sample of generation `gen`. When that is not the generation Media Foundation's
-    /// current type describes, announce the new format NOW, ahead of the sample: a FRESH media type (MFWrapMediaType
-    /// of a newly built clear type - the live wrapped type is never mutated, because the wrapper stores the inner type
-    /// as a serialized blob and changing the outer attributes leaves the unwrapped type the decoder sees untouched),
-    /// set as the descriptor's current type and queued as MEStreamFormatChanged. The first sample of a new
-    /// representation also carries its SPS/PPS in-band, which stays the decoder-authoritative configuration. Crossing
-    /// BACK (a seek into samples of an older generation) re-announces the older format the same way.
-    void AnnounceFormatIfCrossingLocked(uint16_t gen)
-    {
-        if (gen == m_rep.deliveredGen) return;
-        m_rep.deliveredGen = gen;
-        const fgpr::RepFormat* fmt = m_rep.Find(gen);
-        if (!fmt) return;   // a generation the book no longer holds (never expected): nothing known to announce
-
-        m_info = fmt->info;
-        // A new generation's timeline restarts at its first sample; a reach computed over the previous generation's
-        // samples must not be compared across it (see m_deliveredReachTicks' declaration).
-        m_haveDeliveredReach = false;
-        m_deliveredReachTicks = 0;
-        m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
-
-        winrt::com_ptr<IMFMediaType> type;
-        HRESULT hrType = BuildH264ClearType(fmt->info, type.put());
-        HRESULT hrSet = E_FAIL;
-        if (SUCCEEDED(hrType))
-        {
-            if (m_wrapProtected)
-            {
-                winrt::com_ptr<IMFMediaType> wrapped;
-                if (SUCCEEDED(MFWrapMediaType(type.get(), MFMediaType_Protected, MFVideoFormat_H264, wrapped.put())))
-                    type = std::move(wrapped);
-            }
-            winrt::com_ptr<IMFMediaTypeHandler> handler;
-            if (m_sd && SUCCEEDED(m_sd->GetMediaTypeHandler(handler.put())) && handler)
-                hrSet = handler->SetCurrentMediaType(type.get());
-            m_queue->QueueEventParamUnk(MEStreamFormatChanged, GUID_NULL, S_OK, type.get());
-        }
-        auto hx = [](HRESULT h) { std::stringstream ss; ss << "0x" << std::hex << (uint32_t)h; return ss.str(); };
-        LogLine("[cenc-src] video format change delivered: " + std::to_string(fmt->info.width) + "x" +
-                std::to_string(fmt->info.height) + " (gen " + std::to_string(gen) + ", representation " +
-                std::to_string(fmt->index) + ") at sample " + std::to_string(m_next) + " typeHr=" + hx(hrType) +
-                " setHr=" + hx(hrSet));
-        // The opening representation's index is -1 (native never learns it): crossing BACK into it (a seek behind the splice)
-        // publishes -1 as the on-screen index too, which the managed side maps to the rung the session opened on.
-        if (m_store) m_store->displayedRepresentation.store(fmt->index, std::memory_order_release);
-        if (m_onRepDelivered) m_onRepDelivered(fmt->index);
-    }
+    /// Delivery is about to hand over a sample whose format differs from the one delivery last crossed into (another
+    /// representation's generation, crossed forwards over a splice or backwards by a seek), or the first sample after a bind.
+    /// The face decides against the format Media Foundation's current type describes: SILENT when the decoder's configuration
+    /// would not change (VideoCrossingIsSilent / AudioCrossingIsSilent), else ANNOUNCED - a FRESH type (the live wrapped type is
+    /// never mutated: the wrapper stores the inner type as a serialized blob) set as the descriptor's current type and queued
+    /// as MEStreamFormatChanged ahead of the sample. Either way the sample's in-band SPS/PPS stays the decoder-authoritative
+    /// configuration.
+    void CrossFormatLocked(const cenc::InitInfo& next, int32_t repIndex, bool newGeneration);
 
     HRESULT DeliverSampleLocked(::IUnknown* pToken)
     {
-        if (m_holdForReposition)
+        if (m_holdForReposition || !m_face)
         {
-            // Flushed for an unbuffered seek, not yet repositioned: park (Start(reposition) releases it). Not a
-            // starvation, so no demand kick - the feeder is already fetching the seek target.
+            // Flushed for an unbuffered seek or just bound, not yet repositioned: park (Start(reposition) releases it). Not
+            // a starvation, so no demand kick - the feeder is already fetching the target.
             winrt::com_ptr<::IUnknown> token;
             if (pToken) token.copy_from(pToken);
             m_starvedRequests.push_back(std::move(token));
@@ -1434,29 +1496,36 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         }
         if (m_next >= m_samples.size())
         {
+            winrt::com_ptr<::IUnknown> token;
+            if (pToken) token.copy_from(pToken);
+            m_starvedRequests.push_back(std::move(token));
             if (!m_complete)
             {
                 // Starved, not finished: park the request. AppendSamples releases it the moment the next segment lands.
-                winrt::com_ptr<::IUnknown> token;
-                if (pToken) token.copy_from(pToken);
-                m_starvedRequests.push_back(std::move(token));
                 if (m_starvedRequests.size() == 1)
                     LogLine(std::string("[cenc-src] ") + m_label + " starved at sample " + std::to_string(m_next) +
-                            " — awaiting fetch (not EOS)");
-                // KICK THE FEEDER. A starved stream is the one caller that most needs a fetch, yet this branch never
+                            " — awaiting fetch");
+                // KICK THE FEEDER. A starved track is the one caller that most needs a fetch, yet this branch never
                 // asked for one: the demand hook below only fires on a DELIVERED sample. With the buffer target
                 // already satisfied the feeder had gone Idle (cv.wait, no timer), so a track whose audio ran dry
                 // after the video ended sat here for 108 s (2026-09-22, "not auto advancing") until the next
                 // session tore it down. One kick per starvation (the size()==1 gate above): the feeder re-plans,
-                // finds the buffer at the duration, and marks the stream complete — which is the EOS this
-                // request is waiting for.
+                // finds the buffer at the duration, and marks the track complete — which is the end this request
+                // is waiting for.
                 if (m_starvedRequests.size() == 1 && m_demand && m_store) m_demand();
                 return S_OK;
             }
-            if (!m_eos) { m_eos = true; m_queue->QueueEventParamVar(MEEndOfStream, GUID_NULL, S_OK, nullptr); NotifySourceEnded(); }
+            // THE TRACK'S END. Never an MEEndOfStream: the source outlives this program (an ended stream could not carry the
+            // next one), so the request waits here - a seek back serves it, the next bind hands it on - and the face reports
+            // the drain once, which is how the runtime raises Ended (PrSession.cpp SessionProgramDrained).
+            if (!m_eos)
+            {
+                m_eos = true;
+                NotifyDrainedLocked();
+            }
             return S_OK;
         }
-        if (m_samples[m_next].encrypted && KeyPendingLocked())
+        if (m_samples[m_next].encrypted && KeyPendingLocked(m_samples[m_next].kid))
         {
             // The key gate: park until the KID's licence settles (ReleaseKeyParked). Not a starvation: the feeder keeps
             // filling to its forward target meanwhile, so the first sample after the key lands is already buffered.
@@ -1480,19 +1549,28 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
                 clearTotal += part.clearBytes;
                 encryptedTotal += part.encBytes;
             }
-            LogLine("[cenc-src] sample#0 bytes=" + std::to_string(first.data.size()) +
+            LogLine("[cenc-src] " + std::string(m_label) + " sample#0 bytes=" + std::to_string(first.data.size()) +
                     " kf=" + std::to_string(first.keyframe ? 1 : 0) +
                     " iv=" + std::to_string(first.iv.size()) + "B subs=" +
                     std::to_string(first.subsamples.size()) + " clear=" +
-                    std::to_string(clearTotal) + " encrypted=" + std::to_string(encryptedTotal) +
-                    (first.data.size() >= 8
-                        ? " head=" + std::to_string(first.data[0]) + "," + std::to_string(first.data[1]) +
-                          "," + std::to_string(first.data[2]) + "," + std::to_string(first.data[3]) +
-                          "," + std::to_string(first.data[4]) + "," + std::to_string(first.data[5]) +
-                          "," + std::to_string(first.data[6]) + "," + std::to_string(first.data[7])
-                        : " head=<short>"));
+                    std::to_string(clearTotal) + " encrypted=" + std::to_string(encryptedTotal));
         }
-        if (m_streamId == 1) AnnounceFormatIfCrossingLocked(m_samples[m_next].repGen);
+        if (m_streamId == 1)
+        {
+            const uint16_t gen = m_samples[m_next].repGen;
+            if (gen != m_rep.deliveredGen || m_crossPending)
+            {
+                const bool newGeneration = gen != m_rep.deliveredGen;
+                m_rep.deliveredGen = gen;
+                if (const fgpr::RepFormat* fmt = m_rep.Find(gen)) CrossFormatLocked(fmt->info, fmt->index, newGeneration);
+                m_crossPending = false;
+            }
+        }
+        else if (m_crossPending)
+        {
+            CrossFormatLocked(m_info, -1, false);
+            m_crossPending = false;
+        }
         winrt::com_ptr<IMFSample> sample;
         HRESULT hr = MakeSample(m_samples[m_next], sample.put());
         if (FAILED(hr)) return hr;
@@ -1523,6 +1601,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
             const uint64_t curEnd = cur.timeTicks + cur.durTicks;
             if (!m_haveDeliveredReach || curEnd > m_deliveredReachTicks) m_deliveredReachTicks = curEnd;
             m_haveDeliveredReach = true;
+            NoteDeliveredEndLocked(curEnd);
         }
 
         if (m_discontinuity)
@@ -1530,9 +1609,9 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
             sample->SetUINT32(MFSampleExtension_Discontinuity, TRUE);
             m_discontinuity = false;
         }
-        if (m_next == 0 || (m_next % 100) == 0) LogLine("[cenc-src] RequestSample #" + std::to_string(m_next) + " (encrypted sample delivered)");
+        if (m_next == 0 || (m_next % 100) == 0) LogLine("[cenc-src] " + std::string(m_label) + " RequestSample #" + std::to_string(m_next) + " delivered");
         m_next++;
-        hr = m_queue->QueueEventParamUnk(MEMediaSample, GUID_NULL, S_OK, sample.get());
+        hr = QueueSampleLocked(sample.get());
         // Demand-driven feeding: the playhead consuming the forward window is what wakes the feeder — only while more
         // can still arrive (a complete track has nothing left to fetch) and only once below the forward target.
         if (m_demand && !m_complete && m_store)
@@ -1540,23 +1619,23 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
             const int64_t below = m_demandBelowMs.load(std::memory_order_relaxed);
             // CONTIGUOUS ahead, not AheadDurationMsLocked()'s last.end - next.start: that span crosses a hole for
             // free, so a forward seek (or a switch) that left one behind fresh segments made the hook believe the
-            // window was already full and it never asked the feeder for more — see this file's task background (3).
+            // window was already full and it never asked the feeder for more.
             if (ContiguousAheadMsLocked() < (below > 0 ? below : m_store->bufferAheadMs)) m_demand();
         }
         return hr;
     }
 
-    // Complete one Start operation on the stream. An explicit position repositions to the nearest keyframe at or
-    // before the requested presentation time; Media Foundation discards the decoded preroll before the exact target.
-    // A resume passes VT_EMPTY and deliberately preserves m_next/decoder history.
-    void Start(const PROPVARIANT* startPos, bool seeking, bool reposition)
+    /// The face's Start (its lock held, its stream event already queued). `startPos` is on the SOURCE's timeline; this track
+    /// subtracts its program base. An explicit position repositions to the nearest keyframe at or before the requested
+    /// presentation time; Media Foundation discards the decoded preroll before the exact target. A resume passes VT_EMPTY and
+    /// deliberately preserves m_next/decoder history.
+    void Start(const PROPVARIANT* startPos, bool reposition)
     {
         std::lock_guard<std::mutex> g(m_mx);
         if (reposition)
         {
-            LONGLONG requested100ns = startPos && startPos->vt == VT_I8
-                ? std::max<LONGLONG>(0, startPos->hVal.QuadPart)
-                : 0;
+            const LONGLONG absolute100ns = startPos && startPos->vt == VT_I8 ? startPos->hVal.QuadPart : m_base100ns;
+            const LONGLONG requested100ns = std::max<LONGLONG>(0, absolute100ns - m_base100ns);
             uint64_t targetTicks = 0;
             if (m_info.timescale > 0)
             {
@@ -1581,7 +1660,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
                 // A guard, not a path: the unbuffered-seek flush (FlushForSeek) leaves the target segment's own keyframe
                 // here, and the keyframe-aligned trim never strands a head without one. What is buffered cannot serve
                 // this target, so drop it (the cut generation resets the feeder's guard) and ask the feeder to refill
-                // from the playhead: the stream starves instead of delivering from the wrong place.
+                // from the playhead: the track starves instead of delivering from the wrong place.
                 if (!m_samples.empty())
                 {
                     int64_t bufStartMs = 0, bufEndMs = 0;
@@ -1601,6 +1680,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
                 m_next = 0;
             }
             m_discontinuity = true;
+            m_eos = false;   // a reposition un-ends the track
             if (m_skippedNonRef) LogLine(std::string("[cenc-src] ") + m_label + " seek catch-up withheld " + std::to_string(m_skippedNonRef) + " non-reference picture(s)");
             m_skippedNonRef = 0;
             m_skipNonRef = m_streamId == 1 && found && bestTime < targetTicks;
@@ -1610,27 +1690,26 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
             m_haveDeliveredReach = false;
             m_deliveredReachTicks = 0;
             m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
-            LogLine("[cenc-src] seek target100ns=" + std::to_string((long long)requested100ns) +
-                    " -> sample=" + std::to_string(m_next) +
+            LogLine("[cenc-src] " + std::string(m_label) + " seek target100ns=" + std::to_string((long long)requested100ns) +
+                    " (base " + std::to_string((long long)(m_base100ns / 10000)) + "ms) -> sample=" + std::to_string(m_next) +
                     " keyframe100ns=" + std::to_string(m_info.timescale > 0
                         ? (long long)((bestTime * 10000000ULL) / m_info.timescale) : 0));
         }
-        m_started = true; m_paused = false; m_eos = false;
-        m_queue->QueueEventParamVar(seeking ? MEStreamSeeked : MEStreamStarted, GUID_NULL, S_OK, startPos);
-        // Requests accepted during Pause are released only AFTER MEStreamStarted, which is the exact boundary after
-        // which the stream may resume data delivery. Deliver under the same stream lock to preserve request order: the
-        // key gate's are the oldest (parked before the pause, or before this reposition), then the paused ones.
+        m_started = true; m_paused = false;
+        // Requests accepted during Pause are released only AFTER MEStreamStarted (queued by the face before this call), which is
+        // the exact boundary after which the stream may resume data delivery. Deliver under the same lock to preserve request
+        // order: the key gate's are the oldest (parked before the pause, or before this reposition), then the paused ones.
         ReleaseKeyParkedLocked();
-        for (auto const& token : m_pausedRequests) DeliverSampleLocked(token.get());
+        auto paused = std::move(m_pausedRequests);
         m_pausedRequests.clear();
-        ReleaseStarvedLocked();   // a request parked while stopped/paused becomes deliverable again here
+        for (auto const& token : paused) DeliverSampleLocked(token.get());
+        ReleaseStarvedLocked();   // a request parked while stopped/paused/held becomes deliverable again here
     }
     void Pause()
     {
         std::lock_guard<std::mutex> g(m_mx);
         if (!m_started || m_paused) return;
         m_paused = true;
-        m_queue->QueueEventParamVar(MEStreamPaused, GUID_NULL, S_OK, nullptr);
     }
     void Stop()
     {
@@ -1645,7 +1724,60 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         m_starvedRequests.clear();
         m_keyParkedRequests.clear();   // a stop discards every outstanding request, the key gate's too
         m_keyParkedSinceMs = 0;
-        m_queue->QueueEventParamVar(MEStreamStopped, GUID_NULL, S_OK, nullptr);
+    }
+
+    /// Put this track on `face` as the program's (the face's lock held). `outstanding` are the requests Media Foundation has open
+    /// on the face - the previous program's, or the ones the face held while it had none: they wait here, held, until the
+    /// program's own first Start(reposition) (the switch's seek), so not one sample of this program goes out on the previous
+    /// program's clock. `started` / `paused` are the face's state, which the track mirrors from now on.
+    void Bind(CencStreamFace* face, LONGLONG base100ns, bool started, bool paused, std::vector<winrt::com_ptr<::IUnknown>>&& outstanding)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        m_face = face;
+        m_base100ns = base100ns;
+        m_started = started;
+        m_paused = paused;
+        m_eos = false;
+        m_discontinuity = true;
+        m_holdForReposition = true;
+        m_crossPending = true;
+        m_skipNonRef = false;
+        m_haveDeliveredReach = false;
+        m_deliveredReachTicks = 0;
+        m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
+        for (auto& token : outstanding) m_starvedRequests.push_back(std::move(token));
+    }
+
+    /// Take this track off its face (the face's lock held): every request it parked - the key gate's, the paused ones, the
+    /// starved and held ones, oldest first - goes back to the face, which hands them to the next program or holds them.
+    std::vector<winrt::com_ptr<::IUnknown>> Unbind()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        std::vector<winrt::com_ptr<::IUnknown>> out;
+        out.reserve(m_keyParkedRequests.size() + m_pausedRequests.size() + m_starvedRequests.size());
+        for (auto& t : m_keyParkedRequests) out.push_back(std::move(t));
+        for (auto& t : m_pausedRequests) out.push_back(std::move(t));
+        for (auto& t : m_starvedRequests) out.push_back(std::move(t));
+        m_keyParkedRequests.clear();
+        m_pausedRequests.clear();
+        m_starvedRequests.clear();
+        m_keyParkedSinceMs = 0;
+        m_face = nullptr;
+        m_started = false;
+        m_paused = false;
+        m_holdForReposition = false;
+        m_crossPending = false;
+        return out;
+    }
+
+    /// Where a bind should start this program (F046): `startMs` unchanged when the buffer has a keyframe at or before it, or
+    /// does not hold it at all (the reposition parks and the feeder fetches it); the first buffered keyframe after it when it is
+    /// inside a buffered range whose keyframe the byte cap trimmed away (at most one GOP later, instead of a P/B frame with no
+    /// reference). Video tracks only.
+    int64_t ResumeStartMs(int64_t startMs)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        return fgpr::ResumeStartMs(m_samples, m_info.timescale, startMs);
     }
 
     /// How much already-delivered history stays resident behind the playhead used to be `kRetainBehind = 300` SAMPLES
@@ -1724,9 +1856,8 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     }
 
     /// Append freshly demuxed samples (the background fetcher) and release any request that was parked on starvation.
-    /// Called from the fetch thread; the stream lock serialises it against RequestSample. A stream Media Foundation has
-    /// already shut down (its source was replaced by a detach) still ACCEPTS samples: the session's buffer outlives the
-    /// MF object, and the re-attach moves it into a fresh source (TakeSamples).
+    /// Called from the fetch thread; the track lock serialises it against RequestSample. A track that is not bound still
+    /// ACCEPTS samples: the session's buffer outlives every binding.
     void AppendSamples(std::vector<cenc::Sample>&& more)
     {
         std::lock_guard<std::mutex> g(m_mx);
@@ -1735,7 +1866,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
             for (auto& smp : more) smp.repGen = m_rep.appendGen;   // the newest representation: what the feeder fetches now
         SpliceLocked(std::move(more));
         TrimBehindLocked();
-        if (!m_shutdown) ReleaseStarvedLocked();
+        ReleaseStarvedLocked();
     }
 
     /// Trim history now (the feeder, before it weighs the byte budget): appends are not the only moment the playhead has
@@ -1750,44 +1881,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
 
     void SetDemandBelowMs(int64_t ms) { m_demandBelowMs.store(ms > 0 ? ms : 0, std::memory_order_relaxed); }
 
-    /// Move the whole buffer out, with its byte cost, for the fresh source a re-attach builds. This IS a cut from the
-    /// point of view of anything still watching this stream object (a re-attach hands the samples to a DIFFERENT
-    /// CencMediaStream, so this one goes from "has coverage" to "has nothing" no matter how much was buffered) —
-    /// unconditionally bump the generation, and reset the hole-detection reach along with it.
-    std::vector<cenc::Sample> TakeSamples(uint64_t& bytes)
-    {
-        std::lock_guard<std::mutex> g(m_mx);
-        std::vector<cenc::Sample> out = std::move(m_samples);
-        m_samples.clear();
-        bytes = m_bytes;
-        ResetBufferLocked();
-        m_holdForReposition = false;   // the fresh stream the buffer moves into starts unheld
-        return out;
-    }
-
-    /// Move the format generations out with the samples a re-attach relocates (TakeSamples), so the fresh stream can still
-    /// announce the right format for every sample it inherits.
-    fgpr::RepBook TakeRepBook()
-    {
-        std::lock_guard<std::mutex> g(m_mx);
-        fgpr::RepBook out = std::move(m_rep);
-        m_rep = fgpr::RepBook{};
-        return out;
-    }
-
-    /// Take over a retired stream's generations. The fresh stream's media type was built from the newest representation's
-    /// init, so that is the generation Media Foundation starts out holding; a first delivered sample of an OLDER generation
-    /// (the playhead is still behind the splice) then announces the older format. An empty book (nothing to adopt) keeps
-    /// the generation BuildCencSource registered.
-    void AdoptRepBook(fgpr::RepBook&& book)
-    {
-        std::lock_guard<std::mutex> g(m_mx);
-        if (book.formats.empty()) return;
-        m_rep = std::move(book);
-        m_rep.deliveredGen = m_rep.appendGen;
-    }
-
-    /// The buffer is empty now (the caller moved or cleared m_samples): reset the cursor and the byte ledger, bump the cut
+    /// The buffer is empty now (the caller cleared m_samples): reset the cursor and the byte ledger, bump the cut
     /// generation so the feeder's guard resets structurally, and forget the hole-detection reach.
     void ResetBufferLocked()
     {
@@ -1800,11 +1894,11 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
     }
 
-    /// A seek to a position this stream does not hold: empty it NOW (ExoPlayer / Shaka reset the track's queue the same
+    /// A seek to a position this track does not hold: empty it NOW (ExoPlayer / Shaka reset the track's queue the same
     /// way) so the target segment lands in an empty buffer. Kept, the old samples made the landed run - inserted behind the
     /// cursor, in front of it in the vector - the very thing the time trim erased in the same call, and Start() then fell
     /// back to the oldest sample. Holds delivery until Start(reposition) (m_holdForReposition) and reopens the track
-    /// (the target may not be the last segment). Call under the session's feedMx, never from inside another stream's m_mx.
+    /// (the target may not be the last segment). Call under the session's feedMx, never from inside another track's m_mx.
     void FlushForSeek()
     {
         std::lock_guard<std::mutex> g(m_mx);
@@ -1816,28 +1910,28 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         LogLine(std::string("[cenc-src] ") + m_label + " flushed for an unbuffered seek, holding delivery until the reposition");
     }
 
-    /// The engine refused the reposition a FlushForSeek was waiting for, or completed the seek without restarting the source (it
+    /// The engine refused the reposition a hold was waiting for, or completed the seek without restarting the source (it
     /// already stood at the target - PrSession.cpp SessionSeekLanded): nothing will ever call Start(reposition), so lift
-    /// the hold and let what is parked resume (the stream is empty or holds the landed target; either way not frozen).
+    /// the hold and let what is parked resume (the track is empty or holds the landed target; either way not frozen).
     void ReleaseReposition()
     {
         std::lock_guard<std::mutex> g(m_mx);
         if (!m_holdForReposition) return;
         m_holdForReposition = false;
         LogLine(std::string("[cenc-src] ") + m_label + " reposition hold released (no Start(reposition) follows)");
-        if (!m_shutdown) ReleaseStarvedLocked();
+        ReleaseStarvedLocked();
     }
 
     /// The playhead the feeder last saw (ms), -1 = unknown: the trim's anchor (see m_playheadHintMs).
     void SetPlayheadHintMs(int64_t ms) { m_playheadHintMs.store(ms >= 0 ? ms : -1, std::memory_order_relaxed); }
 
     /// Lock-free progress signal for the feeder's thread-local guard (PrSession.cpp): "did coverage just get cut out
-    /// from under you", distinct from "the buffer simply hasn't grown yet". Every writer (SpliceLocked, TakeSamples,
+    /// from under you", distinct from "the buffer simply hasn't grown yet". Every writer (SpliceLocked, ResetBufferLocked,
     /// TrimBehindLocked) already holds m_mx and bumps with release; a relaxed-or-acquire read here is enough — the
     /// guard only ever compares two snapshots of this counter for inequality, it never reads anything else through it.
     uint32_t CutGen() const { return m_cutGen.load(std::memory_order_acquire); }
 
-    /// FgPrSessionGetBuffered for this stream: ascending (startMs, endMs) pairs, a hole starts a new pair.
+    /// FgPrSessionGetBuffered for this track: ascending (startMs, endMs) pairs, a hole starts a new pair.
     int BufferedPairs(int64_t* out, int capPairs)
     {
         std::lock_guard<std::mutex> g(m_mx);
@@ -1845,7 +1939,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     }
 
     /// A seek into a range the feeder has not fetched re-opens a track that had been marked complete — otherwise the
-    /// stream would report end-of-stream the moment it drained the target segment while the next one is still on the wire.
+    /// track would report its end the moment it drained the target segment while the next one is still on the wire.
     void MarkIncomplete()
     {
         std::lock_guard<std::mutex> g(m_mx);
@@ -1865,23 +1959,23 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     /// sample under the playhead and refilled from the feeder's stale cursor, which is what punched a multi-second hole in
     /// the video while audio kept running: the frozen frame.) Already delivered samples remain owned by Media Foundation.
     ///
-    /// The new run is stamped with a fresh format generation and the new format is NOT announced here: delivery announces
-    /// it when the cursor reaches the run's first sample (AnnounceFormatIfCrossingLocked), which may be a minute away.
-    /// `repIndex` is the manifest index the run belongs to; it is published as the DOWNLOADING representation now and as
-    /// the displayed one at the crossing.
+    /// The new run is stamped with a fresh format generation and the new format is NOT decided here: delivery crosses into
+    /// it when the cursor reaches the run's first sample (CrossFormatLocked: silent when the decoder's configuration stays,
+    /// announced otherwise), which may be a minute away. `repIndex` is the manifest index the run belongs to; it is published
+    /// as the DOWNLOADING representation now and as the displayed one at the crossing.
     ///
-    /// Returns `Rejected` for the pre-existing early-outs (shutdown, wrong kind, an empty replacement - none of these
-    /// are the feeder's fault, so there is nothing for it to retry against). Returns `StaleBoundary`, with NOTHING
-    /// changed (the generations, m_discontinuity and m_complete are all untouched) when the boundary
-    /// the feeder computed has since fallen behind the delivery cursor - the case proven live: a boundary computed at
-    /// segment 0 before a 200 ms GET, with the cursor at sample 15 by the time the response lands. Splicing the whole
-    /// replacement in at index 15 there would re-deliver 15 already-shown frames; refusing instead tells the feeder to
-    /// recompute a fresh boundary against where the cursor actually is now. Otherwise splices and returns `Spliced`.
+    /// Returns `Rejected` for the early-outs (wrong kind, an empty replacement - none of these are the feeder's fault, so
+    /// there is nothing for it to retry against). Returns `StaleBoundary`, with NOTHING changed (the generations,
+    /// m_discontinuity and m_complete are all untouched) when the boundary the feeder computed has since fallen behind the
+    /// delivery cursor - the case proven live: a boundary computed at segment 0 before a 200 ms GET, with the cursor at sample
+    /// 15 by the time the response lands. Splicing the whole replacement in at index 15 there would re-deliver 15
+    /// already-shown frames; refusing instead tells the feeder to recompute a fresh boundary against where the cursor actually
+    /// is now. Otherwise splices and returns `Spliced`.
     SwitchResult SwitchVideoRepresentation(const cenc::InitInfo& nextInfo, std::vector<cenc::Sample>&& replacement,
                                            int32_t repIndex)
     {
         std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown || nextInfo.kind != cenc::TrackKind::Video || replacement.empty()) return SwitchResult::Rejected;
+        if (nextInfo.kind != cenc::TrackKind::Video || replacement.empty()) return SwitchResult::Rejected;
 
         const uint64_t spliceTicks = replacement.front().timeTicks;   // captured before the move below
         // The generation is stamped on before the splice but only COMMITTED to the book once the splice is accepted: a
@@ -1927,7 +2021,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     void RetargetAppend(const cenc::InitInfo& nextInfo, int32_t repIndex)
     {
         std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown || nextInfo.kind != cenc::TrackKind::Video) return;
+        if (nextInfo.kind != cenc::TrackKind::Video) return;
         const uint16_t gen = m_rep.NextFreeGen();
         m_rep.Register(gen, repIndex, nextInfo);
         m_rep.Prune(m_samples);
@@ -1936,7 +2030,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
                 " (gen " + std::to_string(gen) + ") with nothing left to splice: the buffer already reaches the end");
     }
 
-    /// No more samples are coming (the fetcher finished, or gave up). After this, running dry is a real end of stream —
+    /// No more samples are coming (the fetcher finished, or gave up). After this, running dry is the track's real end —
     /// including for requests parked while starved, which must not hang forever if the fetch failed.
     void MarkComplete()
     {
@@ -1995,8 +2089,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     /// instant reposition instead of three serial TLS-handshaking GETs. Video needs a KEYFRAME at or before the target
     /// (that is what Start() repositions to); audio only needs coverage. Both need CONTIGUOUS coverage past the target
     /// — a buffer with a hole in it (left by an earlier forward seek) must not report the far side as seekable.
-    /// The algorithm moved verbatim to SegmentStore.h (fgpr::CanSeekToIn). The m_shutdown refusal is gone: the samples
-    /// are the SESSION's buffer and stay valid after Media Foundation shuts a detached source down.
+    /// The algorithm lives in SegmentStore.h (fgpr::CanSeekToIn).
     bool CanSeekTo(int64_t targetMs, bool requireKeyframe)
     {
         std::lock_guard<std::mutex> g(m_mx);
@@ -2014,32 +2107,37 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         endMs = (int64_t)(((last.timeTicks + last.durTicks) * 1000ULL) / m_info.timescale);
     }
 
-    bool IsShutdown() { std::lock_guard<std::mutex> g(m_mx); return m_shutdown; }
+    /// The program-relative end (ms) of everything this track has delivered since its last reposition: where its program ends
+    /// once it has drained.
+    int64_t DeliveredEndMs()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        return m_haveDeliveredReach && m_info.timescale > 0 ? (int64_t)((m_deliveredReachTicks * 1000ULL) / m_info.timescale) : 0;
+    }
 
-    /// The key gate's question for the KID this stream's samples carry (m_info.kid), cached once it settled.
-    bool KeyPendingLocked()
+    /// The key gate's question for one sample's KID, cached once it settled.
+    bool KeyPendingLocked(const uint8_t* kid)
     {
         if (!m_keyPending) return false;
-        if (m_keySettled && memcmp(m_keySettledKid, m_info.kid, sizeof(m_keySettledKid)) == 0) return false;
-        if (m_keyPending(m_info.kid)) return true;
-        memcpy(m_keySettledKid, m_info.kid, sizeof(m_keySettledKid));
+        if (m_keySettled && memcmp(m_keySettledKid, kid, sizeof(m_keySettledKid)) == 0) return false;
+        if (m_keyPending(kid)) return true;
+        memcpy(m_keySettledKid, kid, sizeof(m_keySettledKid));
         m_keySettled = true;
         return false;
     }
 
-    /// A licence of the runtime left Pending (PrSession.cpp SessionsKeySettled): if this stream's key is no longer pending,
-    /// hand what the key gate parked to delivery. While stopped or paused nothing is delivered - Start releases them; a
-    /// stream whose own KID is still pending (another licence settled) keeps them parked.
+    /// A licence of the runtime left Pending (PrSession.cpp SessionsKeySettled): if the next sample's key is no longer pending,
+    /// hand what the key gate parked to delivery. While stopped, paused or unbound nothing is delivered - Start releases
+    /// them; a track whose next sample's KID is still pending (another licence settled) keeps them parked.
     void ReleaseKeyParked()
     {
         std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown) return;
         ReleaseKeyParkedLocked();
     }
     void ReleaseKeyParkedLocked()
     {
         if (m_keyParkedRequests.empty() || !m_started || m_paused) return;
-        if (m_next < m_samples.size() && m_samples[m_next].encrypted && KeyPendingLocked()) return;
+        if (m_next < m_samples.size() && m_samples[m_next].encrypted && KeyPendingLocked(m_samples[m_next].kid)) return;
         auto parked = std::move(m_keyParkedRequests);
         m_keyParkedRequests.clear();
         const uint64_t heldMs = m_keyParkedSinceMs ? GetTickCount64() - m_keyParkedSinceMs : 0;
@@ -2057,11 +2155,13 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         m_starvedRequests.clear();
         for (auto const& token : parked) DeliverSampleLocked(token.get());
     }
-    void Shutdown() { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return; m_shutdown = true; m_holdForReposition = false; m_keyParkedRequests.clear(); m_keyParkedSinceMs = 0; if (m_queue) m_queue->Shutdown(); }
 
-    void NotifySourceEnded();   // defined after CencMediaSource
+    // Defined after CencStreamFace: the face's queue, its drain report and its timeline reach.
+    HRESULT QueueSampleLocked(IMFSample* sample);
+    void NotifyDrainedLocked();
+    void NoteDeliveredEndLocked(uint64_t endTicks);
 
-    // Build one encrypted IMFSample with its CENC attributes.
+    // Build one encrypted IMFSample with its CENC attributes, on the source's timeline (the program base added).
     HRESULT MakeSample(const cenc::Sample& s, IMFSample** ppSample)
     {
         winrt::com_ptr<IMFSample> sample;
@@ -2079,7 +2179,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         sample->AddBuffer(buf.get());
 
         auto toMf = [&](uint64_t ticks) -> LONGLONG { return (LONGLONG)((ticks * 10000000ULL) / m_info.timescale); };
-        sample->SetSampleTime(toMf(s.timeTicks));
+        sample->SetSampleTime(m_base100ns + toMf(s.timeTicks));
         sample->SetSampleDuration(toMf(s.durTicks));
         // No MFSampleExtension_DecodeTimestamp (F265): the demuxer's decode time is the UN-shifted tfdt timeline while the
         // sample time above is edit-list-shifted, so a DTS written from it sat AFTER the PTS of every reordered frame.
@@ -2094,12 +2194,13 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
                                                  : MF_SAMPLE_ENCRYPTION_PROTECTION_SCHEME_AES_CTR);
             // ISO BMFF tenc stores default_KID as a 16-byte big-endian UUID. MFSampleExtension_Content_KeyID is a
             // Windows GUID, whose Data1/Data2/Data3 fields have little-endian in-memory representation. A raw memcpy
-            // asks the CDM for a different key even though the proactively licensed key reports USABLE.
+            // asks the CDM for a different key even though the proactively licensed key reports USABLE. The KID is the
+            // SAMPLE's own: consecutive programs on one trusted input carry their own keys.
             GUID kid{};
-            kid.Data1 = cenc::rd32(m_info.kid);
-            kid.Data2 = cenc::rd16(m_info.kid + 4);
-            kid.Data3 = cenc::rd16(m_info.kid + 6);
-            memcpy(kid.Data4, m_info.kid + 8, 8);
+            kid.Data1 = cenc::rd32(s.kid);
+            kid.Data2 = cenc::rd16(s.kid + 4);
+            kid.Data3 = cenc::rd16(s.kid + 6);
+            memcpy(kid.Data4, s.kid + 8, 8);
             sample->SetGUID(MFSampleExtension_Content_KeyID, kid);
             sample->SetBlob(MFSampleExtension_Encryption_SampleID, s.iv.data(), (UINT32)s.iv.size());
             if (!s.subsamples.empty())
@@ -2124,8 +2225,217 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
 };
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-//  Custom IMFMediaSource — one video stream of demuxed encrypted samples.
+//  A stream face — the IMFMediaStream Media Foundation holds for the runtime's life.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+/// One per stream id (1 = video, 2 = the video's soundtrack). It owns what must survive a change of program: the event queue
+/// (a shut-down IMFMediaEventQueue cannot be revived - which is why every video used to need a fresh source, a fresh SetSource
+/// and with it a full teardown and rebuild of the protected decoder and renderer), the stream descriptor, and the format its
+/// current media type describes. Every sample request goes to the track bound to it; with none bound (between a destroyed
+/// program and the next) the requests wait here and go to the next track bound.
+struct CencStreamFace : winrt::implements<CencStreamFace, IMFMediaStream>
+{
+    winrt::com_ptr<IMFMediaEventQueue> m_queue;
+    winrt::com_ptr<IMFStreamDescriptor> m_sd;
+    IMFMediaSource* m_source = nullptr;   // weak: the source owns its faces
+    DWORD m_id = 1;
+    std::mutex m_mx;                      // the MF-facing state and the binding (see CencMediaStream's lock order)
+    bool m_started = false, m_paused = false, m_shutdown = false;
+    std::shared_ptr<CencMediaStream> m_track;          // m_mx: the bound program's track, null = none
+    std::vector<winrt::com_ptr<::IUnknown>> m_held;    // m_mx: requests made while no track was bound
+    std::mutex m_fmtMx;                                // a LEAF lock: the format below
+    cenc::InitInfo m_format;                           // m_fmtMx: what the descriptor's current type describes
+    std::atomic<LONGLONG> m_deliveredEnd100ns{ 0 };    // the latest sample end this face ever delivered (source timeline)
+
+    CencStreamFace() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
+    ~CencStreamFace() { if (m_track) m_track->Unbind(); }
+
+    // IMFMediaEventGenerator (delegate to the queue).
+    IFACEMETHODIMP BeginGetEvent(IMFAsyncCallback* c, ::IUnknown* s) noexcept override { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return MF_E_SHUTDOWN; return m_queue->BeginGetEvent(c, s); }
+    IFACEMETHODIMP EndGetEvent(IMFAsyncResult* r, IMFMediaEvent** e) noexcept override { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return MF_E_SHUTDOWN; return m_queue->EndGetEvent(r, e); }
+    IFACEMETHODIMP GetEvent(DWORD f, IMFMediaEvent** e) noexcept override { winrt::com_ptr<IMFMediaEventQueue> q; { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return MF_E_SHUTDOWN; q = m_queue; } return q->GetEvent(f, e); }
+    IFACEMETHODIMP QueueEvent(MediaEventType t, REFGUID g, HRESULT s, const PROPVARIANT* v) noexcept override { std::lock_guard<std::mutex> gd(m_mx); if (m_shutdown) return MF_E_SHUTDOWN; return m_queue->QueueEventParamVar(t, g, s, v); }
+
+    // IMFMediaStream
+    IFACEMETHODIMP GetMediaSource(IMFMediaSource** ppSource) noexcept override
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown) return MF_E_SHUTDOWN;
+        if (!ppSource) return E_POINTER;
+        if (!m_source) return MF_E_NOT_INITIALIZED;
+        m_source->AddRef(); *ppSource = m_source; return S_OK;
+    }
+    IFACEMETHODIMP GetStreamDescriptor(IMFStreamDescriptor** ppSD) noexcept override
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown) return MF_E_SHUTDOWN;
+        if (!ppSD) return E_POINTER;
+        m_sd.copy_to(ppSD); return S_OK;
+    }
+    IFACEMETHODIMP RequestSample(::IUnknown* pToken) noexcept override
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown) return MF_E_SHUTDOWN;
+        if (!m_started) return MF_E_MEDIA_SOURCE_WRONGSTATE;
+        if (m_track) return m_track->RequestSample(pToken);
+        winrt::com_ptr<::IUnknown> token;
+        if (pToken) token.copy_from(pToken);
+        m_held.push_back(std::move(token));
+        return S_OK;
+    }
+
+    /// The source's Start for this stream: the stream event first (MEStreamSeeked on a seek, else MEStreamStarted), then the
+    /// track's reposition and release, under this lock so no delivery can precede the event.
+    void Start(const PROPVARIANT* startPos, bool seeking, bool reposition)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown) return;
+        m_started = true;
+        m_paused = false;
+        m_queue->QueueEventParamVar(seeking ? MEStreamSeeked : MEStreamStarted, GUID_NULL, S_OK, startPos);
+        if (m_track) m_track->Start(startPos, reposition);
+    }
+    void Pause()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown || !m_started || m_paused) return;
+        m_paused = true;
+        m_queue->QueueEventParamVar(MEStreamPaused, GUID_NULL, S_OK, nullptr);
+        if (m_track) m_track->Pause();
+    }
+    void Stop()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown) return;
+        m_started = false;
+        m_paused = false;
+        m_held.clear();   // a stop discards every outstanding request
+        m_queue->QueueEventParamVar(MEStreamStopped, GUID_NULL, S_OK, nullptr);
+        if (m_track) m_track->Stop();
+    }
+    void Shutdown()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown) return;
+        m_shutdown = true;
+        m_held.clear();
+        if (m_track) { m_track->Unbind(); m_track = nullptr; }
+        if (m_queue) m_queue->Shutdown();
+    }
+
+    /// Make `track` this face's program track (null = none), its samples `base100ns` later on the source's timeline. The
+    /// requests the previous track (or this face) held move to the new one, which holds them until its first reposition.
+    void Bind(std::shared_ptr<CencMediaStream> track, LONGLONG base100ns)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown) return;
+        std::vector<winrt::com_ptr<::IUnknown>> outstanding = m_track ? m_track->Unbind() : std::move(m_held);
+        m_held.clear();
+        if (track) track->Bind(this, base100ns, m_started, m_paused, std::move(outstanding));
+        else m_held = std::move(outstanding);
+        m_track = std::move(track);
+    }
+
+    /// The crossing decision (CencMediaStream::CrossFormatLocked, under the track's lock). Announced: the new type is set and
+    /// MEStreamFormatChanged queued, and `typeHr` / `setHr` say how that went.
+    Crossing CrossFormat(const cenc::InitInfo& next, HRESULT& typeHr, HRESULT& setHr)
+    {
+        std::lock_guard<std::mutex> g(m_fmtMx);
+        typeHr = S_OK;
+        setHr = S_OK;
+        const bool identical = m_id == 1 ? m_format.spspps == next.spspps && VideoCrossingIsSilent(m_format, next)
+                                         : AudioCrossingIsSilent(m_format, next);
+        if (identical) return Crossing::Identical;
+        if (m_id == 1 && VideoCrossingIsSilent(m_format, next)) return Crossing::Silent;
+        winrt::com_ptr<IMFMediaType> type;
+        typeHr = BuildStreamType(next, type.put());
+        if (FAILED(typeHr)) return Crossing::Announced;
+        winrt::com_ptr<IMFMediaTypeHandler> handler;
+        setHr = m_sd && SUCCEEDED(m_sd->GetMediaTypeHandler(handler.put())) && handler ? handler->SetCurrentMediaType(type.get()) : E_FAIL;
+        m_queue->QueueEventParamUnk(MEStreamFormatChanged, GUID_NULL, S_OK, type.get());
+        m_format = next;
+        return Crossing::Announced;
+    }
+
+    /// Would binding a track of `info` keep this face's decoder as it is? (The switch's `silent` stamp; the crossing itself is
+    /// decided at delivery.)
+    bool WouldCrossSilently(const cenc::InitInfo& info)
+    {
+        std::lock_guard<std::mutex> g(m_fmtMx);
+        return m_id == 1 ? VideoCrossingIsSilent(m_format, info) : AudioCrossingIsSilent(m_format, info);
+    }
+
+    bool Protected()
+    {
+        std::lock_guard<std::mutex> g(m_fmtMx);
+        return m_format.encrypted;
+    }
+
+    /// Does `info` have the frame size (the container's and the SPS's coded one) the face's type describes?
+    bool SameFrameSize(const cenc::InitInfo& info)
+    {
+        std::lock_guard<std::mutex> g(m_fmtMx);
+        return m_format.width == info.width && m_format.height == info.height && m_format.sps.valid == info.sps.valid &&
+               (!info.sps.valid || (m_format.sps.codedWidth == info.sps.codedWidth && m_format.sps.codedHeight == info.sps.codedHeight));
+    }
+};
+
+inline HRESULT CencMediaStream::QueueSampleLocked(IMFSample* sample)
+{
+    return m_face ? m_face->m_queue->QueueEventParamUnk(MEMediaSample, GUID_NULL, S_OK, sample) : MF_E_NOT_INITIALIZED;
+}
+
+inline void CencMediaStream::NoteDeliveredEndLocked(uint64_t endTicks)
+{
+    if (!m_face || m_info.timescale == 0) return;
+    const LONGLONG end = m_base100ns + (LONGLONG)((endTicks * 10000000ULL) / m_info.timescale);
+    LONGLONG seen = m_face->m_deliveredEnd100ns.load(std::memory_order_relaxed);
+    while (end > seen && !m_face->m_deliveredEnd100ns.compare_exchange_weak(seen, end, std::memory_order_relaxed)) {}
+}
+
+inline void CencMediaStream::CrossFormatLocked(const cenc::InitInfo& next, int32_t repIndex, bool newGeneration)
+{
+    if (!m_face) return;
+    m_info = next;
+    // The timeline restarts at the crossing: a reach computed over the previous format's samples must not be compared across it.
+    m_haveDeliveredReach = false;
+    m_deliveredReachTicks = 0;
+    m_lastLoggedHoleStartTicks = (std::numeric_limits<uint64_t>::max)();
+    HRESULT typeHr = S_OK, setHr = S_OK;
+    const Crossing crossing = m_face->CrossFormat(next, typeHr, setHr);
+    auto hx = [](HRESULT h) { std::stringstream ss; ss << "0x" << std::hex << (uint32_t)h; return ss.str(); };
+    const std::string what = m_streamId == 1
+        ? std::to_string(next.width) + "x" + std::to_string(next.height) + " (representation " + std::to_string(repIndex) + ")"
+        : std::to_string(next.channels) + "ch/" + std::to_string(next.sampleRate) + "Hz";
+    if (crossing == Crossing::Silent)
+        LogLine(std::string("[cenc-src] ") + m_label + " SILENT crossing (no MEStreamFormatChanged): " + what + " at sample " +
+                std::to_string(m_next));
+    else if (crossing == Crossing::Announced)
+        LogLine(std::string("[cenc-src] ") + m_label + " format change ANNOUNCED: " + what + " at sample " + std::to_string(m_next) +
+                " typeHr=" + hx(typeHr) + " setHr=" + hx(setHr));
+    if (m_streamId != 1 || !newGeneration) return;
+    // The opening representation's index is -1 (native never learns it): crossing BACK into it (a seek behind the splice)
+    // publishes -1 as the on-screen index too, which the managed side maps to the rung the session opened on.
+    if (m_store) m_store->displayedRepresentation.store(repIndex, std::memory_order_release);
+    if (m_onRepDelivered) m_onRepDelivered(repIndex);
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//  THE source — one IMFMediaSource for the runtime's life, re-programmed per video.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// WHY ONE. A SetSource per video made the engine shut the old pipeline down synchronously (CloseMedia) and build a new one,
+// and the protected decoder (msmpeg2vdec) and renderer (mfsvr) created and destroyed their hardware-protected allocations
+// (D3DKMTCreateAllocation, DestroyAllocation2, DestroyContext, D3DKMTPresent) on the way - each one a GPU stall for the whole
+// desktop, ~130 ms at every video switch on an Adreno X1-85 (fable-next run3). So the source, its topology, the decoder, the
+// renderer and the swap chain now live as long as the runtime, and each next video is a PROGRAM: its tracks are bound to the
+// stream faces (BindProgram) at a base past everything delivered so far, and the engine seeks there. A seek is free; a silent
+// crossing keeps the decoder; one trusted input decrypts consecutive keys (verified, fable-next p3run).
+//
+// THE TIMELINE. Program n's samples are stamped `base_n` later than their own times (CencMediaStream::m_base100ns); base_0 = 0
+// and every later base is past the latest sample end the source ever delivered. The presentation's duration is a constant
+// far beyond any session (kTimelineDuration100ns), never a program's: the engine's clock must never clamp a seek to the next
+// program or reach an end, and no stream ever sends MEEndOfStream. A program's end is the drain of all its selected tracks
+// (NotifyStreamDrained), which the runtime turns into FgPrEvent_Ended itself.
+//
 // RATE CONTROL (IMFGetService + IMFRateSupport + IMFRateControl). Without them the Media Session reports that the minimum
 // AND maximum playback rate is 1.0, regardless of what other components are in the pipeline ("Implementing Rate Control",
 // Media Sources), so IMFMediaEngine::SetPlaybackRate(1.5) returned S_OK and the protected video kept playing at 1.0: the
@@ -2135,13 +2445,16 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
 struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFTrustedInput, IMFGetService, IMFRateSupport, IMFRateControl>
 {
     static constexpr float FastestRate = 8.0f;
+    /// The presentation's duration: a year. Far past every base the runtime will ever choose, so the engine never clamps a
+    /// program's seek and never ends; finite, because the engine's seek needs a duration to seek within.
+    static constexpr uint64_t kTimelineDuration100ns = 10000000ULL * 60ULL * 60ULL * 24ULL * 365ULL;
     float m_rate = 1.0f;                              // m_mx — the rate the session last set (GetRate answers it)
     winrt::com_ptr<IMFMediaEventQueue> m_queue;
     winrt::com_ptr<IMFPresentationDescriptor> m_pd;
-    // Every stream this source can serve: video (id 1) and, for a music video, its own soundtrack (id 2). A vector
-    // rather than a single member because the topology loader selects and starts them independently.
-    std::vector<winrt::com_ptr<CencMediaStream>> m_streams;
-    winrt::com_ptr<IMFTrustedInput> m_trustedInput;
+    // The stream faces: video (id 1) and, for a music video, its soundtrack (id 2). Fixed at build (BuildCencFace); the
+    // topology loader selects and starts them independently.
+    std::vector<winrt::com_ptr<CencStreamFace>> m_faces;
+    winrt::com_ptr<IMFTrustedInput> m_trustedInput;   // ONE for the source's life: it decrypts every program's keys
     // One STABLE Input Trust Authority per stream id. Re-creating an authority for a stream the loader already asked
     // about resets PlayReady's policy/decrypter state and is rejected as DRM_E_LOGICERR — and with two streams the
     // loader alternates between them, so a single-slot cache would thrash on every other query. The cached value is the
@@ -2149,25 +2462,74 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
     // proxy/vtable mismatch across the PMP boundary (mirrors Firefox's MFCDMProxy cache).
     std::map<DWORD, winrt::com_ptr<::IUnknown>> m_itaByStream;
     std::set<DWORD> m_announcedStreams;   // MENewStream is sent once per stream; later Starts send MEUpdatedStream
-    std::set<DWORD> m_endedStreams;       // MEEndOfPresentation waits for ALL streams (see NotifyStreamEnded)
+    std::set<DWORD> m_drainedStreams;     // the program ends when ALL selected streams drained (see NotifyStreamDrained)
     bool m_started = false, m_paused = false, m_shutdown = false;
     std::mutex m_mx;
 
-    uint64_t m_session = 0;                           // the FgPrSession this source was built for
-    std::shared_ptr<fgpr::SegmentStore> m_store;      // shared with the session: MF may hold this source past its session
+    uint64_t m_program = 0;                           // m_mx: the session whose tracks are bound (0 = none)
+    // m_mx: bumped by every bind and every reposition, so a drain reported for a program position that a seek or a switch has
+    // since left behind is dropped by the runtime (SessionProgramDrained compares it).
+    uint64_t m_programGen = 0;
+    std::atomic<uint64_t> m_logSession{ 0 };          // the bound program's session handle: every source line carries it
     LONGLONG m_startPosition100ns = 0;                // m_mx — where the FIRST Start lands (consumed once; see Start)
-    std::atomic<bool> m_handedToEngine{ false };      // an attach SetSource'd this object; a re-attach needs a fresh one
+    // Told (session, programGen) when every selected stream of the bound program drained. Set before the source is handed to
+    // the engine, never changed; it only posts to the runtime's queue (a leaf lock), so it runs under a track's lock.
+    std::function<void(uint64_t, uint64_t)> m_onProgramDrained;
 
     CencMediaSource() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
 
-    /// Every diagnostic line from this source carries its session handle (shadows the runtime-level ::LogLine). Like the
-    /// stream's, it only queues into the native event ring: no managed call on an MF thread or under a lock.
-    void LogLine(const std::string& s) const { fgpr::RaiseLog(m_session, s); }
+    void LogLine(const std::string& s) const { fgpr::RaiseLog(m_logSession.load(std::memory_order_relaxed), s); }
 
     void SetStartPosition100ns(LONGLONG position100ns)
     {
         std::lock_guard<std::mutex> g(m_mx);
         m_startPosition100ns = position100ns > 0 ? position100ns : 0;
+    }
+
+    winrt::com_ptr<CencStreamFace> Face(DWORD id) const
+    {
+        for (auto const& f : m_faces) if (f && f->m_id == id) return f;
+        return nullptr;
+    }
+
+    /// Bind a session's tracks as the program (a null audio track on a source with a soundtrack face leaves that face holding).
+    /// `base100ns` is where the program's own time 0 lands on the source's timeline; the first sample each track delivers is
+    /// checked against the format the face's type describes.
+    void BindProgram(uint64_t session, const std::shared_ptr<CencMediaStream>& video, const std::shared_ptr<CencMediaStream>& audio,
+                     LONGLONG base100ns)
+    {
+        {
+            std::lock_guard<std::mutex> g(m_mx);
+            if (m_shutdown) return;
+            m_program = session;
+            ++m_programGen;
+            m_drainedStreams.clear();
+        }
+        m_logSession.store(session, std::memory_order_relaxed);
+        for (auto const& f : m_faces) f->Bind(f->m_id == 1 ? video : audio, base100ns);
+    }
+
+    /// No program any more (its session is being destroyed): the faces hold what Media Foundation asks until the next bind.
+    void UnbindProgram()
+    {
+        {
+            std::lock_guard<std::mutex> g(m_mx);
+            m_program = 0;
+            ++m_programGen;
+            m_drainedStreams.clear();
+        }
+        for (auto const& f : m_faces) f->Bind(nullptr, 0);
+    }
+
+    uint64_t Program() { std::lock_guard<std::mutex> g(m_mx); return m_program; }
+    uint64_t ProgramGen() { std::lock_guard<std::mutex> g(m_mx); return m_programGen; }
+
+    /// The latest sample end any face ever delivered, on the source's timeline: a new program's base must lie past it.
+    LONGLONG DeliveredEnd100ns() const
+    {
+        LONGLONG end = 0;
+        for (auto const& f : m_faces) end = std::max<LONGLONG>(end, f->m_deliveredEnd100ns.load(std::memory_order_relaxed));
+        return end;
     }
 
     // IMFMediaEventGenerator
@@ -2196,7 +2558,7 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
     IFACEMETHODIMP Start(IMFPresentationDescriptor* pd, const GUID* timeFormat, const PROPVARIANT* startPos) noexcept override
     {
         PROPVARIANT startVar; PropVariantInit(&startVar);
-        std::vector<winrt::com_ptr<CencMediaStream>> starting;
+        std::vector<winrt::com_ptr<CencStreamFace>> starting;
         bool wasActive = false, seeking = false, explicitPosition = false;
         {
             std::lock_guard<std::mutex> g(m_mx);
@@ -2209,10 +2571,10 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
             // THE CARRIED START POSITION (plan bug S1). The media engine opens a source from the beginning — VT_EMPTY or
             // an explicit 0 — so a switch to a video at 1:23 used to present 0:00 first and then jump. The session hands
             // the source its start position; the first Start that asks for "the beginning" is rewritten to it, the
-            // streams reposition to the keyframe at or before it, and MESourceStarted carries the ACTUAL start time so the
+            // tracks reposition to the keyframe at or before it, and MESourceStarted carries the ACTUAL start time so the
             // presentation clock begins there too. Consumed once: a later Start(0) is a real seek to 0.
             // Normally the session has already put the start position on the ENGINE's timeline (SetCurrentTime between
-            // SetSource and Play, PrSession.cpp CompleteAttach), so the engine's first Start is explicit and this rewrite
+            // SetSource and Play, PrSession.cpp PipelineBuild), so the engine's first Start is explicit and this rewrite
             // does not fire. It remains the fallback for an engine that asks for "the beginning" anyway: the samples then
             // still begin at the start position and the CANPLAY correction brings the clock to them.
             if (!wasActive && m_startPosition100ns > 0 &&
@@ -2244,15 +2606,15 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
                 if (FAILED(pd->GetStreamDescriptorByIndex(i, &selected, sd.put())) || !sd) continue;
                 DWORD id = 0;
                 if (FAILED(sd->GetStreamIdentifier(&id))) continue;
-                auto stream = FindStreamLocked(id);
-                if (!stream) continue;
-                sel += (sel.empty() ? "" : ",") + std::string(stream->m_label) + (selected ? ":on" : ":off");
+                auto face = Face(id);
+                if (!face) continue;
+                sel += (sel.empty() ? "" : ",") + std::string(id == 1 ? "video" : "audio") + (selected ? ":on" : ":off");
                 if (!selected) continue;
 
                 bool isNew = m_announcedStreams.insert(id).second;
                 m_queue->QueueEventParamUnk(isNew ? MENewStream : MEUpdatedStream, GUID_NULL, S_OK,
-                                            (::IUnknown*)(IMFMediaStream*)stream.get());
-                starting.push_back(stream);
+                                            (::IUnknown*)(IMFMediaStream*)face.get());
+                starting.push_back(face);
             }
             if (starting.empty())
             {
@@ -2267,69 +2629,61 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
 
             m_started = true;
             m_paused = false;
-            if (explicitPosition || !wasActive) m_endedStreams.clear();   // a reposition un-ends the presentation
+            if (explicitPosition || !wasActive)
+            {
+                m_drainedStreams.clear();   // a reposition un-ends the program
+                ++m_programGen;
+            }
             // The source event precedes the corresponding stream events (the documented custom-source sequence).
             m_queue->QueueEventParamVar(seeking ? MESourceSeeked : MESourceStarted, GUID_NULL, S_OK, &startVar);
         }
 
         // A non-empty position also repositions a previously stopped source, but that operation is still a Start
         // (MESourceStarted/MEStreamStarted), not a seek. VT_EMPTY is pause-resume and preserves the sample cursor.
-        for (auto const& stream : starting)
-            stream->Start(&startVar, seeking, explicitPosition || !wasActive);
+        for (auto const& face : starting)
+            face->Start(&startVar, seeking, explicitPosition || !wasActive);
         PropVariantClear(&startVar);
         return S_OK;
     }
-
-    winrt::com_ptr<CencMediaStream> FindStreamLocked(DWORD id)
-    {
-        for (auto const& s : m_streams) if (s && s->m_streamId == id) return s;
-        return nullptr;
-    }
     IFACEMETHODIMP Stop() noexcept override
     {
-        std::vector<winrt::com_ptr<CencMediaStream>> streams;
         HRESULT hr;
         {
             std::lock_guard<std::mutex> g(m_mx);
             if (m_shutdown) return MF_E_SHUTDOWN;
             m_started = false; m_paused = false;
-            m_endedStreams.clear();
-            streams = m_streams;
+            m_drainedStreams.clear();
             hr = m_queue->QueueEventParamVar(MESourceStopped, GUID_NULL, S_OK, nullptr);
         }
-        for (auto const& s : streams) if (s) s->Stop();
+        for (auto const& f : m_faces) f->Stop();
         return hr;
     }
     IFACEMETHODIMP Pause() noexcept override
     {
-        std::vector<winrt::com_ptr<CencMediaStream>> streams;
         HRESULT hr;
         {
             std::lock_guard<std::mutex> g(m_mx);
             if (m_shutdown) return MF_E_SHUTDOWN;
             if (!m_started || m_paused) return MF_E_INVALID_STATE_TRANSITION;
             m_paused = true;
-            streams = m_streams;
             LogLine("[cenc-src] Pause -> MESourcePaused + MEStreamPaused");
             hr = m_queue->QueueEventParamVar(MESourcePaused, GUID_NULL, S_OK, nullptr);
         }
-        for (auto const& s : streams) if (s) s->Pause();
+        for (auto const& f : m_faces) f->Pause();
         return hr;
     }
     IFACEMETHODIMP Shutdown() noexcept override
     {
-        // Shut the streams down OUTSIDE this lock. A stream that is mid-delivery holds its own lock and then reaches for
-        // the source lock (end-of-stream notification); taking them in the opposite order here — source first, then
-        // stream — is a textbook lock inversion, and with two streams delivering concurrently it is reachable.
-        // Setting m_shutdown first makes the notification a no-op, so nothing is lost by releasing the lock.
-        std::vector<winrt::com_ptr<CencMediaStream>> streams;
+        // Shut the faces down OUTSIDE this lock. A track that is mid-delivery holds its own lock and then reaches for the
+        // source lock (the drain report); taking them in the opposite order here — source first, then face and track — is a
+        // textbook lock inversion. Setting m_shutdown first makes the report a no-op, so nothing is lost by releasing the lock.
         {
             std::lock_guard<std::mutex> g(m_mx);
             if (m_shutdown) return MF_E_SHUTDOWN;
             m_shutdown = true;
-            streams = m_streams;
+            m_program = 0;
         }
-        for (auto const& s : streams) if (s) s->Shutdown();
+        for (auto const& f : m_faces) f->Shutdown();
         std::lock_guard<std::mutex> g(m_mx);
         if (m_queue) m_queue->Shutdown();
         return S_OK;
@@ -2451,214 +2805,106 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
         return hr;
     }
 
-    /// One stream drained. The PRESENTATION only ends when EVERY selected stream has: video and audio never hold the
-    /// same number of samples, so a first-stream-wins MEEndOfPresentation truncates playback at whichever track runs out
-    /// first — the shorter one, always, and usually well before the end of the song.
-    void NotifyStreamEnded(DWORD streamId)
+    /// One track of the bound program drained (under that track's lock). The PROGRAM ends only when EVERY selected stream
+    /// has: video and audio never hold the same number of samples, so a first-stream-wins end truncates playback at whichever
+    /// track runs out first — the shorter one, always, and usually well before the end of the song. The denominator is the
+    /// streams the topology actually SELECTED: if MF declined the audio branch, that stream is never started and can never
+    /// drain.
+    void NotifyStreamDrained(DWORD streamId)
     {
-        std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown) return;
-        m_endedStreams.insert(streamId);
-        // The denominator is the streams the topology actually SELECTED, not every stream we offered. If MF declined the
-        // audio branch, that stream is never started and can never end — waiting for it would hold the presentation open
-        // forever and the track would never advance.
-        size_t total = m_announcedStreams.empty() ? m_streams.size() : m_announcedStreams.size();
-        if (m_endedStreams.size() < total)
+        uint64_t session = 0, gen = 0;
         {
-            LogLine("[cenc-src] stream " + std::to_string(streamId) + " ended (" +
-                    std::to_string(m_endedStreams.size()) + "/" + std::to_string(total) +
-                    ") — holding MEEndOfPresentation");
-            return;
+            std::lock_guard<std::mutex> g(m_mx);
+            if (m_shutdown || m_program == 0) return;
+            m_drainedStreams.insert(streamId);
+            const size_t total = m_announcedStreams.empty() ? m_faces.size() : m_announcedStreams.size();
+            if (m_drainedStreams.size() < total)
+            {
+                LogLine("[cenc-src] stream " + std::to_string(streamId) + " drained (" + std::to_string(m_drainedStreams.size()) +
+                        "/" + std::to_string(total) + ") — the program goes on");
+                return;
+            }
+            LogLine("[cenc-src] all " + std::to_string(total) + " stream(s) drained -> the program's end");
+            session = m_program;
+            gen = m_programGen;
         }
-        LogLine("[cenc-src] all " + std::to_string(total) + " stream(s) ended -> MEEndOfPresentation");
-        m_queue->QueueEventParamVar(MEEndOfPresentation, GUID_NULL, S_OK, nullptr);
+        if (m_onProgramDrained) m_onProgramDrained(session, gen);
     }
 };
 
-inline void CencMediaStream::NotifySourceEnded()
+inline void CencMediaStream::NotifyDrainedLocked()
 {
-    if (m_source) static_cast<CencMediaSource*>(m_source)->NotifyStreamEnded(m_streamId);
+    if (m_face && m_face->m_source) static_cast<CencMediaSource*>(m_face->m_source)->NotifyStreamDrained(m_streamId);
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-//  Factory: build the media type / stream descriptor / presentation descriptor and wire the demuxed samples.
+//  Factories.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-/// The video's own soundtrack, handed to <see cref="BuildCencSource"/> alongside the video. Absent (null) ⇒ video only.
-struct CencAudioFeed
-{
-    cenc::InitInfo info;
-    std::vector<cenc::Sample> samples;
-};
 
-/// Build the AAC media type for the protected pipeline. Two things here are easy to get silently wrong:
-///  • MF wants the AAC configuration as MF_MT_USER_DATA in the HEAACWAVEINFO layout — the 12 bytes that FOLLOW the
-///    WAVEFORMATEX part (payload type, profile-level, struct type, two reserved fields) and THEN the raw
-///    AudioSpecificConfig. Handing it the bare ASC produces a type MF accepts and then fails to decode.
-///  • payload type 0 means "raw AAC access units" (what fMP4 stores). Anything else describes ADTS/ADIF framing that
-///    our samples do not have.
-static winrt::com_ptr<IMFMediaType> BuildAacMediaType(const cenc::InitInfo& a)
+/// One session's track of `info` (video or audio), empty: the feeder's appends fill it, and a stream that runs dry before
+/// its track is complete parks the request as STARVED (not its end). No Media Foundation object, so it is built the
+/// moment the init segment is parsed, whatever state the runtime is in.
+static std::shared_ptr<CencMediaStream> BuildTrack(const cenc::InitInfo& info, uint64_t sessionHandle,
+                                                   std::shared_ptr<fgpr::SegmentStore> store)
 {
-    winrt::com_ptr<IMFMediaType> mt;
-    winrt::check_hresult(MFCreateMediaType(mt.put()));
-    mt->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
-    mt->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC);
-    mt->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, a.sampleRate ? a.sampleRate : 44100);
-    mt->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, a.channels ? a.channels : 2);
-    mt->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
-    mt->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, 1);
-    mt->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
-    if (a.avgBitrate) mt->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, a.avgBitrate / 8);
-    // AAC-LC unless the AudioSpecificConfig says otherwise; 0x29 is the AAC-LC profile-level indication MF expects.
-    const uint16_t profileLevel = 0x29;
-    mt->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0);
-    mt->SetUINT32(MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, profileLevel);
-
-    std::vector<uint8_t> userData(12, 0);
-    userData[0] = 0; userData[1] = 0;                                   // wPayloadType = 0 (raw AAC)
-    userData[2] = (uint8_t)(profileLevel & 0xFF); userData[3] = (uint8_t)(profileLevel >> 8);
-    userData[4] = 0; userData[5] = 0;                                   // wStructType = 0 (AudioSpecificConfig follows)
-    userData.insert(userData.end(), a.asc.begin(), a.asc.end());
-    mt->SetBlob(MF_MT_USER_DATA, userData.data(), (UINT32)userData.size());
-    return mt;
+    auto track = std::make_shared<CencMediaStream>();
+    track->m_session = sessionHandle;
+    track->m_store = std::move(store);
+    track->m_info = info;
+    const bool video = info.kind == cenc::TrackKind::Video;
+    track->m_streamId = video ? 1 : 2;
+    track->m_label = video ? "video" : "audio";
+    if (video) track->m_rep.Register(0, -1, info);   // generation 0: the opening representation (its manifest index is the session's)
+    return track;
 }
 
-/// <param name="totalDuration100ns">The WHOLE track's duration when only a prefix has been demuxed so far. Required for a
-/// streaming build: deriving the presentation duration from the samples in hand would declare the track to be as long as
-/// the initial burst (~8s), and the media engine then treats every later position as past the end — the seek bar pins,
-/// the clock overshoots ("0:36 / 0:08"), and Play() after a Pause does nothing because the presentation already ended.</param>
-/// <param name="sessionHandle">The FgPrSession the source serves — every diagnostic line it writes carries it.</param>
-/// <param name="store">The session's SegmentStore: the streams trim against its time window and byte budget.</param>
-/// <param name="startPosition100ns">Where the source's FIRST Start lands (plan bug S1); 0 = the beginning.</param>
-static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& info, std::vector<cenc::Sample>&& samples,
-                                                       CencAudioFeed* audio, bool streaming,
-                                                       uint64_t totalDuration100ns, uint64_t sessionHandle,
-                                                       std::shared_ptr<fgpr::SegmentStore> store,
-                                                       LONGLONG startPosition100ns)
+/// The runtime's source, built for the program it is first loaded with (`video` / `audio` describe its streams; `audio` null =
+/// a video-only source). The descriptor advertises each stream's type (BuildStreamType: wrapped when encrypted, with
+/// MF_SD_PROTECTED); later programs whose streams match it (the same stream set and protection) are bound into it, the rest
+/// get a new source. `logSession` stamps the build lines. Throws winrt::hresult_error.
+static winrt::com_ptr<CencMediaSource> BuildCencFace(const cenc::InitInfo& video, const cenc::InitInfo* audio, uint64_t logSession)
 {
     auto hx = [](HRESULT h) { std::stringstream ss; ss << "0x" << std::hex << (uint32_t)h; return ss.str(); };
+    auto source = winrt::make_self<CencMediaSource>();
+    source->m_logSession.store(logSession, std::memory_order_relaxed);
 
-    winrt::com_ptr<IMFMediaType> mt;
-    winrt::check_hresult(BuildH264ClearType(info, mt.put()));
-    // Protected-stream advertisement, the Firefox desktop-MFCDM way (gecko MFMediaEngineVideoStream::CreateMediaType +
-    // MFMediaEngineStream::GenerateStreamDescriptor): WRAP the fully-populated clear H.264 type into a
-    // MFMediaType_Protected envelope with MFWrapMediaType and set MF_SD_PROTECTED=1 on the stream descriptor. That is
-    // what tells the media engine's modern EME pipeline "insert the CDM's decryptor before the decoder for this
-    // stream"; without it the engine wires our encrypted samples STRAIGHT into the H.264 decoder, which rejects the
-    // first ciphertext-bearing sample as MF_E_INVALIDREQUEST (decode error 3). NOTE this is NOT the earlier failed
-    // experiment: stamping the raw MF_MT_PROTECTED *attribute* on an UNWRAPPED clear type (the retired
-    // FG_CENC_MARK_SD_PROTECTED diagnostics) selects the legacy ITA/OTA topology whose trust verification fails
-    // 0xC00D715B. The wrapped type is unwrapped by the pipeline (MFUnwrapMediaType) after the decryptor, so the decoder
-    // still sees the real H.264 type. The wrap is now the ONLY wiring: the environment A/B arms (the raw attribute, and
-    // FG_CENC_NO_PROTECTED_WRAP's clear-typed stream) were deleted with every other env switch in this directory.
-    winrt::com_ptr<IMFMediaType> streamType = mt;
-    const bool wrapProtected = info.encrypted;
-    if (wrapProtected)
-    {
-        winrt::com_ptr<IMFMediaType> wrapped;
-        HRESULT hrWrap = MFWrapMediaType(mt.get(), MFMediaType_Protected, MFVideoFormat_H264, wrapped.put());
-        LogLine("[cenc-src] MFWrapMediaType(Protected) hr=" + hx(hrWrap));
-        if (SUCCEEDED(hrWrap)) streamType = wrapped;
-    }
-
-    winrt::com_ptr<IMFStreamDescriptor> sd;
-    IMFMediaType* mts[1] = { streamType.get() };
-    winrt::check_hresult(MFCreateStreamDescriptor(1 /*streamId*/, 1, mts, sd.put()));
-    if (wrapProtected) sd->SetUINT32(MF_SD_PROTECTED, 1);
-    {
-        winrt::com_ptr<IMFMediaTypeHandler> mth;
-        winrt::check_hresult(sd->GetMediaTypeHandler(mth.put()));
-        winrt::check_hresult(mth->SetCurrentMediaType(streamType.get()));
-    }
-
-    // ── the audio stream (the video's own soundtrack), same protected envelope as the video ─────────────────────────
-    winrt::com_ptr<IMFStreamDescriptor> audioSd;
-    if (audio)
-    {
-        auto audioMt = BuildAacMediaType(audio->info);
-        winrt::com_ptr<IMFMediaType> audioStreamType = audioMt;
-        const bool wrapAudio = audio->info.encrypted;
-        if (wrapAudio)
-        {
-            winrt::com_ptr<IMFMediaType> wrapped;
-            HRESULT hrWrap = MFWrapMediaType(audioMt.get(), MFMediaType_Protected, MFAudioFormat_AAC, wrapped.put());
-            LogLine("[cenc-src] MFWrapMediaType(Protected, AAC) hr=" + hx(hrWrap));
-            if (SUCCEEDED(hrWrap)) audioStreamType = wrapped;
-        }
-        IMFMediaType* amts[1] = { audioStreamType.get() };
-        winrt::check_hresult(MFCreateStreamDescriptor(2 /*streamId*/, 1, amts, audioSd.put()));
-        if (wrapAudio) audioSd->SetUINT32(MF_SD_PROTECTED, 1);
-        winrt::com_ptr<IMFMediaTypeHandler> amth;
-        winrt::check_hresult(audioSd->GetMediaTypeHandler(amth.put()));
-        winrt::check_hresult(amth->SetCurrentMediaType(audioStreamType.get()));
-    }
+    std::vector<winrt::com_ptr<IMFStreamDescriptor>> sds;
+    auto addFace = [&](const cenc::InitInfo& info, DWORD id) {
+        winrt::com_ptr<IMFMediaType> type;
+        HRESULT wrapHr = S_OK;
+        winrt::check_hresult(BuildStreamType(info, type.put(), &wrapHr));
+        if (info.encrypted) source->LogLine(std::string("[cenc-src] MFWrapMediaType(Protected, ") + (id == 1 ? "H.264" : "AAC") + ") hr=" + hx(wrapHr));
+        winrt::com_ptr<IMFStreamDescriptor> sd;
+        IMFMediaType* types[1] = { type.get() };
+        winrt::check_hresult(MFCreateStreamDescriptor(id, 1, types, sd.put()));
+        if (info.encrypted && SUCCEEDED(wrapHr)) sd->SetUINT32(MF_SD_PROTECTED, 1);
+        winrt::com_ptr<IMFMediaTypeHandler> handler;
+        winrt::check_hresult(sd->GetMediaTypeHandler(handler.put()));
+        winrt::check_hresult(handler->SetCurrentMediaType(type.get()));
+        auto face = winrt::make_self<CencStreamFace>();
+        face->m_sd = sd;
+        face->m_id = id;
+        face->m_source = (IMFMediaSource*)source.get();   // weak — the source holds the strong ref
+        face->m_format = info;
+        source->m_faces.push_back(face);
+        sds.push_back(sd);
+    };
+    addFace(video, 1);
+    if (audio) addFace(*audio, 2);
 
     winrt::com_ptr<IMFPresentationDescriptor> pd;
-    IMFStreamDescriptor* sds[2] = { sd.get(), audioSd.get() };
-    winrt::check_hresult(MFCreatePresentationDescriptor(audioSd ? 2 : 1, sds, pd.put()));
-    pd->SelectStream(0);
-    if (audioSd) pd->SelectStream(1);
-
-    // Presentation duration = the longer of the two tracks. Reporting only the video's would cut the last audio samples
-    // off (they routinely extend past the final frame), and reporting a partial prefix would make the seek bar lie while
-    // the rest of the track is still being fetched — so a STREAMING build reports the caller-supplied total instead.
-    auto endOf = [](const std::vector<cenc::Sample>& v, uint64_t timescale) -> uint64_t {
-        uint64_t endTicks = 0;
-        for (auto const& s : v) { uint64_t e = s.timeTicks + s.durTicks; if (e > endTicks) endTicks = e; }
-        return timescale ? (endTicks * 10000000ULL) / timescale : 0;
-    };
-    uint64_t dur100ns = endOf(samples, info.timescale);
-    if (audio) dur100ns = std::max<uint64_t>(dur100ns, endOf(audio->samples, audio->info.timescale));
-    if (totalDuration100ns > dur100ns) dur100ns = totalDuration100ns;   // streaming: the WHOLE track, not the prefix
-    if (dur100ns) pd->SetUINT64(MF_PD_DURATION, (UINT64)dur100ns);
-
-    auto source = winrt::make_self<CencMediaSource>();
-    source->m_session = sessionHandle;
-    source->m_store = store;
-    source->m_startPosition100ns = startPosition100ns > 0 ? startPosition100ns : 0;
-    auto stream = winrt::make_self<CencMediaStream>();
-    stream->m_session = sessionHandle;
-    stream->m_store = store;
-    stream->m_sd = sd;
-    stream->m_source = (IMFMediaSource*)source.get();   // weak — source holds the strong ref
-    stream->m_info = info;
-    stream->m_wrapProtected = wrapProtected;
-    stream->m_rep.Register(0, -1, info);   // generation 0: the opening representation (its manifest index is the session's)
-    stream->m_samples = std::move(samples);
-    stream->m_streamId = 1;
-    stream->m_label = "video";
-    stream->m_complete = !streaming;
-    stream->m_bytes = fgpr::SampleFootprint(stream->m_samples);
-    stream->PublishBytesLocked();   // not yet visible to any other thread
+    IMFStreamDescriptor* raw[2] = { sds[0].get(), sds.size() > 1 ? sds[1].get() : nullptr };
+    winrt::check_hresult(MFCreatePresentationDescriptor((DWORD)sds.size(), raw, pd.put()));
+    for (DWORD i = 0; i < (DWORD)sds.size(); i++) pd->SelectStream(i);
+    pd->SetUINT64(MF_PD_DURATION, (UINT64)CencMediaSource::kTimelineDuration100ns);
     source->m_pd = pd;
-    source->m_streams.push_back(stream);
 
-    if (audio)
-    {
-        auto astream = winrt::make_self<CencMediaStream>();
-        astream->m_session = sessionHandle;
-        astream->m_store = store;
-        astream->m_sd = audioSd;
-        astream->m_source = (IMFMediaSource*)source.get();
-        astream->m_info = audio->info;
-        astream->m_samples = std::move(audio->samples);
-        astream->m_streamId = 2;
-        astream->m_label = "audio";
-        astream->m_complete = !streaming;
-        astream->m_bytes = fgpr::SampleFootprint(astream->m_samples);
-        astream->PublishBytesLocked();
-        source->m_streams.push_back(astream);
-    }
-
-    LogLine("[cenc-src] built source: " + std::to_string(info.width) + "x" + std::to_string(info.height) +
-            " scheme=" + std::string(info.scheme == 1 ? "cbcs" : "cenc") +
-            " ivSize=" + std::to_string((int)info.perSampleIvSize) +
-            " spspps=" + std::to_string(info.spspps.size()) + "B samples=" + std::to_string(source->m_streams[0]->m_samples.size()) +
-            (audio ? (" + AUDIO " + std::to_string(source->m_streams[1]->m_info.channels) + "ch/" +
-                      std::to_string(source->m_streams[1]->m_info.sampleRate) + "Hz asc=" +
-                      std::to_string(source->m_streams[1]->m_info.asc.size()) + "B samples=" +
-                      std::to_string(source->m_streams[1]->m_samples.size()))
-                    : std::string(" (no audio track)")) +
-            (streaming ? "  [streaming: more segments arriving]" : ""));
+    source->LogLine("[cenc-src] built the source: " + std::to_string(video.width) + "x" + std::to_string(video.height) +
+                    " scheme=" + std::string(video.scheme == 1 ? "cbcs" : "cenc") +
+                    " ivSize=" + std::to_string((int)video.perSampleIvSize) + " spspps=" + std::to_string(video.spspps.size()) + "B" +
+                    (audio ? (" + AUDIO " + std::to_string(audio->channels) + "ch/" + std::to_string(audio->sampleRate) + "Hz asc=" +
+                              std::to_string(audio->asc.size()) + "B")
+                           : std::string(" (no audio track)")));
     return source;
 }
 

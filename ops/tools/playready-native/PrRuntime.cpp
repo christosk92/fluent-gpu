@@ -479,13 +479,16 @@ struct MediaEngineNotify : public IMFMediaEngineNotify
     }
 };
 
-// MF_MEDIA_ENGINE_EXTENSION: the `cenc://` scheme handler. It was already parametrised by the URL the engine passes
-// in; the runtime now has many sources, so the URL names one: `cenc://fluentgpu/<sessionId>` → THAT session's current
-// CencMediaSource (PrSession.cpp SessionSourceForUrl). An unknown or destroyed session is MF_E_UNSUPPORTED_BYTESTREAM_TYPE,
-// which the engine reports as a source error on the attach that asked for it — never a different session's source.
+// MF_MEDIA_ENGINE_EXTENSION: the `cenc://` scheme handler. The URL names the source a SetSource loads:
+// `cenc://fluentgpu/<serial>` → the runtime's source of that serial (PrSession.cpp SourceForUrl). A superseded serial is
+// MF_E_UNSUPPORTED_BYTESTREAM_TYPE, which the engine reports as a source error on the load that asked for it — never another
+// source.
 struct CencEngineExtension : public IMFMediaEngineExtension
 {
     std::atomic<long> rc{1};
+    uint64_t m_runtime = 0;
+
+    explicit CencEngineExtension(uint64_t runtime) : m_runtime(runtime) {}
     HRESULT __stdcall QueryInterface(REFIID riid, void** ppv) override
     {
         if (!ppv) return E_POINTER;
@@ -501,9 +504,10 @@ struct CencEngineExtension : public IMFMediaEngineExtension
     {
         if (cancelCookie) *cancelCookie = nullptr;
         if (type != MF_OBJECT_MEDIASOURCE) return MF_E_UNSUPPORTED_BYTESTREAM_TYPE;
-        winrt::com_ptr<::IUnknown> source = fgpr::SessionSourceForUrl(url);
+        std::shared_ptr<fgpr::Runtime> rt = fgpr::RuntimeFor(m_runtime);
+        winrt::com_ptr<::IUnknown> source = rt ? fgpr::SourceForUrl(*rt, url) : nullptr;
         LogLine("[cenc-ext] BeginCreateObject url=" + fgpr::Narrow(url ? std::wstring(url) : std::wstring()) +
-                (source ? " -> session source" : " -> NO SUCH SESSION"));
+                (source ? " -> the runtime's source" : " -> NO SUCH SOURCE"));
         if (!source) return MF_E_UNSUPPORTED_BYTESTREAM_TYPE;
         IMFAsyncResult* result = nullptr;
         HRESULT hr = MFCreateAsyncResult(source.get(), callback, state, &result);
@@ -555,15 +559,6 @@ static bool ItaPreflightRequested()
 {
     wchar_t value[4] = {};
     const DWORD n = GetEnvironmentVariableW(L"FG_PLAYREADY_ITA_PREFLIGHT", value, (DWORD)(sizeof(value) / sizeof(value[0])));
-    return n == 1 && value[0] == L'1';
-}
-
-/// FG_PLAYREADY_TRUSTED_INPUT_REUSE=1 keeps ONE IMFTrustedInput for the CDM's lifetime instead of creating one per attach
-/// (fgpr::Runtime::trustedInput). Off by default until validated on a box with two KIDs and a re-attach.
-static bool TrustedInputReuseRequested()
-{
-    wchar_t value[4] = {};
-    const DWORD n = GetEnvironmentVariableW(L"FG_PLAYREADY_TRUSTED_INPUT_REUSE", value, (DWORD)(sizeof(value) / sizeof(value[0])));
     return n == 1 && value[0] == L'1';
 }
 
@@ -629,7 +624,6 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     hr = MFStartup(MF_VERSION, MFSTARTUP_FULL);
     if (FAILED(hr)) { LogLine("[runtime] MFStartup hr=" + hx(hr)); return hr; }
     rt.mfStarted = true;
-    rt.mfReady.store(true, std::memory_order_release);   // the feeder may now build its Media Foundation source
     // The default render endpoint's warm-up runs on its own thread, alongside the rest of the bring-up (AudioWarm.h).
     rt.audioWarm.Start(&RuntimeLog, &RuntimePhase);
     // The in-process guard for mfcore's audio OTA race (MfAudioGuard.h) arms on a helper thread too: its scan pages in ~7 MB of
@@ -728,7 +722,7 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     if (FAILED(hr = CoCreateInstance(CLSID_MFMediaEngineClassFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.put()))))
     { LogLine("[cenc] CoCreate factory hr=" + hx(hr)); return hr; }
 
-    rt.extension.attach(new CencEngineExtension());
+    rt.extension.attach(new CencEngineExtension(rt.handle));
     rt.notify.attach(new MediaEngineNotify(rt.handle));
     rt.needKey.attach(new EmeNeedKeyNotify());
 
@@ -788,8 +782,6 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     // The ITA preflight is a diagnostic: opt-in, and here (once per runtime lifetime, before any session exists) rather
     // than in front of the first protected SetSource, where its PMP round trips sat on the open's critical path.
     if (ItaPreflightRequested()) fgpr::RuntimeItaPreflight(rt);
-    rt.trustedInputReuse = TrustedInputReuseRequested();
-    LogLine(std::string("[runtime] trusted input: ") + (rt.trustedInputReuse ? "one per CDM (reused across attaches)" : "one per attach"));
     return S_OK;
 }
 
@@ -797,7 +789,6 @@ static void TearDown(fgpr::Runtime& rt)
 {
     fgpr::SessionsShutdown(rt);
     fgpr::LicensesShutdown(rt);
-    rt.trustedInput = nullptr;   // before the CDM that created it
     if (rt.engine)
     {
         const int64_t t0 = fgpr::PhaseBegin(0, L"engine.shutdown.begin");   // the freeze trail
@@ -809,6 +800,11 @@ static void TearDown(fgpr::Runtime& rt)
     rt.protectedContent = nullptr;
     rt.engineEx = nullptr;
     rt.engine = nullptr;
+    rt.source = nullptr;   // the engine shut it down (and with it its trusted input, before the CDM that created it)
+    {
+        std::lock_guard<std::mutex> g(rt.sourceUrlMx);
+        rt.sourceForUrl = nullptr;
+    }
     rt.opm.Stop();   // the engine that was given the window is gone
     rt.needKey = nullptr;
     rt.notify = nullptr;
@@ -817,7 +813,6 @@ static void TearDown(fgpr::Runtime& rt)
     rt.cdm = nullptr;
     rt.dxgiManager = nullptr;
     rt.d3d = nullptr;
-    rt.mfReady.store(false, std::memory_order_release);
     if (rt.mfStarted) { MFShutdown(); rt.mfStarted = false; }
     fgpr::PhaseEnd(0, L"runtime.release.end", releaseT0);
     // After MFShutdown: no Media Foundation work item of this runtime can still reach the guarded instruction.
@@ -848,9 +843,11 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
     {
         case MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA:
         {
+            // A new source loaded its first program: from now on the engine runs a seek on it, so the next video can be a program
+            // switch. The duration is the PROGRAM's (FgPrSessionCreate / the measured grid), never the engine's: the source's
+            // presentation is far longer than any video on it.
             s.metadataSeen = true;
-            const double dur = rt.engine->GetDuration();
-            if (std::isfinite(dur) && dur > 0.0) s.durationMs.store((int64_t)(dur * 1000.0), std::memory_order_release);
+            rt.sourceLoaded = true;
             DWORD w = 0, hgt = 0;
             rt.engine->GetNativeVideoSize(&w, &hgt);
             if (w && hgt)
@@ -901,6 +898,8 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
             // b = the QPC FIRSTFRAMEREADY was stamped at (the same value as FgPrSnapshot.firstFrameQpc), so the managed side times the
             // first frame from the native clock rather than from whenever the event was dequeued.
             Raise(h, FgPrEvent_FirstFrame, s.positionMs.load(std::memory_order_acquire), s.firstFrameQpc.load(std::memory_order_acquire));
+            if (expected == 0)
+                Raise(h, FgPrEvent_ProgramSwitch, s.program.mode, s.attachPostedQpc ? fgpr::QpcToMs(qpc - s.attachPostedQpc) : 0);
             fgpr::SessionPublishHandle(rt, s, false);
             break;
         }
@@ -913,12 +912,17 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
         case MF_MEDIA_ENGINE_EVENT_SEEKED:
             fgpr::SessionSamplePosition(rt, s, false);
             if (s.waitGate.Clear()) Raise(h, FgPrEvent_Resumed, s.positionMs.load(std::memory_order_acquire));
+            // A seek after the program ended plays again (the engine itself never ended: the source carries every program).
+            if (s.state.load(std::memory_order_acquire) == FgPrState_Ended)
+                s.state.store(rt.engine->IsPaused() ? FgPrState_Paused : FgPrState_Playing, std::memory_order_release);
             {
                 // The carried start applied to the engine timeline at attach (and the CANPLAY fallback correction) is the
                 // native side's own seek: nobody on the managed side is waiting for it, and a Seeked with no Seeking would
                 // confuse the seek planner. It is tagged with the user seekSeq, so it clears the `seeking` flag it raised
                 // and can never swallow a user seek's SEEKED (see plan::InternalSeek).
                 const fgpr::plan::InternalSeek::Verdict v = s.internalSeek.OnSeeked(s.seekSeq.load(std::memory_order_acquire));
+                // A program switch's seek landed: the rendered-frame counter now counts the program's frames (its first frame).
+                if (v.internal && s.program.firstFramePending) fgpr::SessionProgramSeeked(rt, sp);
                 // One engine seek at a time (PrSession.cpp FgPrSessionSeek): this SEEKED ends the one in flight. A user seek
                 // that waited behind it runs now, `seeking` stays raised, and ITS SEEKED is the one reported.
                 if (fgpr::SessionSeekLanded(rt, s)) break;
@@ -943,6 +947,8 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
             break;
         case MF_MEDIA_ENGINE_EVENT_PAUSE:
             if (!s.metadataSeen) break;   // a predecessor's late PAUSE: this source has not even loaded yet
+            // The pause a program switch makes (or its predecessor's detach) while play is wanted: the switch's own Play follows.
+            if (s.program.firstFramePending && s.wantPlay) break;
             s.state.store(FgPrState_Paused, std::memory_order_release);
             fgpr::SessionSamplePosition(rt, s, false);
             Raise(h, FgPrEvent_Paused);
@@ -970,6 +976,8 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
             // IMFMediaEngineEx::FrameStep completes asynchronously and leaves the engine paused: a Play made while the step was in
             // flight was undone by it. Play is re-applied whatever IsPaused reads (the engine may enter the paused state just after this).
             s.frameStepInFlight = false;
+            // A paused program switch's frame step (issued after its seek): the program's first frame is out.
+            if (s.program.firstFramePending) fgpr::SessionProgramFirstFrame(rt, s, qpc, "framestep");
             const bool ended = rt.engine->IsEnded();
             fgpr::RaiseLog(h, std::string("[transport] frame step completed paused=") + (rt.engine->IsPaused() ? "1" : "0") +
                               " wantPlay=" + (s.wantPlay ? "1" : "0") + " ended=" + (ended ? "1" : "0"));
@@ -993,7 +1001,7 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
         case MF_MEDIA_ENGINE_EVENT_ERROR:
         {
             // The engine's CURRENT error object is the authority. Loading a new source clears it, so an error notification
-            // that outlived the source it was raised for (a detach's own empty SetSource, a replaced source's late failure)
+            // that outlived the source it was raised for (a replaced source's late failure)
             // finds no error here and is not this session's to report.
             winrt::com_ptr<IMFMediaError> err;
             if (FAILED(rt.engine->GetError(err.put())) || !err)
@@ -1014,6 +1022,9 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
                 hr = fgpr::mfguard::kStandInHr;
             }
             fgpr::RaiseLog(h, "[cenc] media ERROR code=" + std::to_string((long long)code) + " hr=" + fgpr::Hex(hr));
+            // The source is broken for every later program; a program switch that failed before its first frame is rebuilt here,
+            // once, instead of failing the video.
+            if (fgpr::SessionPipelineFailed(rt, sp, code, hr)) break;
             s.errorHr.store((int32_t)hr, std::memory_order_release);
             s.state.store(FgPrState_Error, std::memory_order_release);
             Raise(h, FgPrEvent_Error, code, (int64_t)(int32_t)hr);
@@ -1030,6 +1041,8 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
         case MF_MEDIA_ENGINE_EVENT_WAITING:
         case MF_MEDIA_ENGINE_EVENT_STALLED:
         case MF_MEDIA_ENGINE_EVENT_BUFFERINGSTARTED:
+            // A drained program waits for samples that are not coming: that is its end, never a stall.
+            if (s.programDrained) { fgpr::SessionCheckProgramEnd(rt, s, true); break; }
             // Only a source that is PLAYING with a frame up and no seek in flight can stall mid-play: the engine also says
             // WAITING while it opens and while a seek loads, and both already read as buffering (Loading / Seeking).
             if (s.state.load(std::memory_order_acquire) != FgPrState_Playing || s.firstFrameQpc.load(std::memory_order_acquire) == 0 ||
@@ -1066,7 +1079,9 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
             break;
         case MF_MEDIA_ENGINE_EVENT_RESOURCELOST:
             // The device was lost, so the swap chain may have been re-created: re-query the handle and RE-RAISE it even
-            // when the value is unchanged, so the presenter re-binds.
+            // when it is the same one, so the presenter re-binds. The source carries no further program: the next video
+            // rebuilds the pipeline.
+            rt.sourceBroken = "RESOURCELOST";
             fgpr::SessionPublishHandle(rt, s, true);
             break;
         case MF_MEDIA_ENGINE_EVENT_OPMINFO:

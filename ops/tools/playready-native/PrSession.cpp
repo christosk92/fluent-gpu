@@ -5,7 +5,7 @@
 // WHAT MOVED HERE AND WHAT CHANGED (wavee-0.3-video-engine-implementation.md §1.3, §3.1.1, §3.2.1, §3.3). The one-shot
 // RunCustomSourceAttempt fetched the video init, the audio init and FOUR video + FOUR audio segments strictly in
 // series, then built the source, spawned a feeder that slept 50 ms at a time against a sample-count ceiling, and ran a
-// transport "reconcile" every 80 ms. This file keeps its pieces — BuildCencSource, the feeder's switch boundary rule,
+// transport "reconcile" every 80 ms. This file keeps its pieces — the source build, the feeder's switch boundary rule,
 // the seek gate, the paused-seek FrameStep — and replaces the SHAPE:
 //   * S1 the carried start position: `startPositionMs` picks the first segment fetched AND the source's first Start;
 //   * S2/S9 transport verbs are posted work items applied at once; there is no keep-alive tick and no applied-seq;
@@ -111,15 +111,9 @@ static Coverage CoverageAt(CencMediaStream* stream, int64_t refMs)
     return c;
 }
 
-static winrt::com_ptr<CencMediaStream> VideoStreamLocked(Session& s)
-{
-    return (s.source && !s.source->m_streams.empty()) ? s.source->m_streams[0] : nullptr;
-}
+static std::shared_ptr<CencMediaStream> VideoStreamLocked(Session& s) { return s.videoTrack; }
 
-static winrt::com_ptr<CencMediaStream> AudioStreamLocked(Session& s)
-{
-    return (s.source && s.source->m_streams.size() > 1) ? s.source->m_streams[1] : nullptr;
-}
+static std::shared_ptr<CencMediaStream> AudioStreamLocked(Session& s) { return s.audioTrack; }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  The feeder thread.
@@ -132,7 +126,7 @@ struct FeederState
     fgpr::plan::Guard guard[2];            // the progress guard (see PlanTrack / FeedPlan.h)
     // STRUCTURAL reset identity, per track. `streamId` catches a re-attach rebuilding the source (a new
     // CencMediaStream object under the same track slot); `cutGen` mirrors CencMediaStream::CutGen(), which the
-    // stream bumps on every code path that can SHRINK its buffered coverage (a truncating splice, TakeSamples, a
+    // stream bumps on every code path that can SHRINK its buffered coverage (a truncating splice, a flush, a
     // trim that reaches the delivery cursor). Those paths all live inside CencMediaSource.h and cannot reach feeder-
     // thread state directly — the feeder observes the generation instead of trying to enumerate the paths itself.
     const void* streamId[2] = { nullptr, nullptr };
@@ -340,7 +334,7 @@ static void PostToRuntime(Session& s, std::function<void(Runtime&)> fn)
 static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp);
 static void ApplyPendingSeek(Runtime& rt, const std::shared_ptr<Session>& sp, uint64_t seq);
 static void RunSeek(Runtime& rt, Session& s, int64_t targetMs, int32_t mode, int64_t keyframeMs, int64_t postedQpc);
-static void DetachInternal(Runtime& rt, Session& s, bool releaseSource = true);
+static void DetachInternal(Runtime& rt, Session& s);
 
 /// Fail the session from the feeder: the state, the error, and one Error event.
 static void FailSession(const std::shared_ptr<Session>& sp, HRESULT hr, int32_t mediaErr, const std::string& why)
@@ -358,27 +352,27 @@ static void FailSession(const std::shared_ptr<Session>& sp, HRESULT hr, int32_t 
     });
 }
 
-/// Wire the feeder's wake-up and the key gate into a freshly built source's streams.
-static void InstallDemandHooks(Session& s, CencMediaSource* source)
+/// Wire the feeder's wake-up and the key gate into a session's freshly built tracks (before anything else can see them).
+static void InstallDemandHooks(Session& s, CencMediaStream* video, CencMediaStream* audio)
 {
     std::shared_ptr<fgpr::FeederSignal> signal = s.signal;
     const uint64_t runtime = s.runtime;
-    for (auto const& stream : source->m_streams)
+    for (CencMediaStream* track : { video, audio })
     {
-        if (!stream) continue;
-        stream->m_demand = [signal] { signal->Kick(); };
-        // The key gate asks the licence table by the stream's own KID (the init's tenc default_KID), not by the licence
+        if (!track) continue;
+        track->m_demand = [signal] { signal->Kick(); };
+        // The key gate asks the licence table by the SAMPLE's own KID (the init's tenc default_KID), not by the licence
         // this session was attached with: the handle may be 0 (a key usable through another session's licence) or a
-        // stale pending licence a fresh acquisition replaced. Runs under the stream's lock; the table's lock is a leaf.
-        stream->m_keyPending = [runtime](const uint8_t* kid) { return fgpr::LicensePendingForKid(runtime, kid); };
+        // stale pending licence a fresh acquisition replaced. Runs under the track's lock; the table's lock is a leaf.
+        track->m_keyPending = [runtime](const uint8_t* kid) { return fgpr::LicensePendingForKid(runtime, kid); };
     }
-    // The video stream announces a representation when DELIVERY reaches its first sample (the picture changes then, not
+    // The video track announces a representation when DELIVERY reaches its first sample (the picture changes then, not
     // when the splice was queued). It publishes the index itself (SegmentStore); this only raises the event. The hook
-    // runs under the stream's lock and holds nothing but the session handle.
-    if (!source->m_streams.empty() && source->m_streams[0])
+    // runs under the track's lock and holds nothing but the session handle.
+    if (video)
     {
         const uint64_t handle = s.handle;
-        source->m_streams[0]->m_onRepDelivered = [handle](int32_t index) { Raise(handle, FgPrEvent_Representation, index); };
+        video->m_onRepDelivered = [handle](int32_t index) { Raise(handle, FgPrEvent_Representation, index); };
     }
 }
 
@@ -460,24 +454,6 @@ static void PumpInitPrefetch(Session& s, FeederState& st)
 }
 
 // ── init segments ─────────────────────────────────────────────────────────────────────────────────────────────────
-/// Block the feeder until the runtime thread has run MFStartup. The init GETs need nothing of the runtime (plain WinRT
-/// HTTP), so an Attach kicks the feeder at once - before the runtime's CDM/PMP/engine bring-up has finished, and
-/// possibly before it has even started MF - but the source the inits are turned into (MFCreateEventQueue ...) is a Media
-/// Foundation object. Only MFStartup, early in the bring-up, is waited for, never the whole of it. False when the runtime
-/// is gone or failed (or the session is stopping): there is nothing to build a source for.
-static bool WaitForMediaFoundation(Session& s)
-{
-    for (;;)
-    {
-        if (s.feedStop.load(std::memory_order_acquire)) return false;
-        std::shared_ptr<Runtime> rt = fgpr::RuntimeFor(s.runtime);
-        if (!rt || rt->shuttingDown.load(std::memory_order_acquire)) return false;
-        if (rt->mfReady.load(std::memory_order_acquire)) return true;
-        if (FAILED((HRESULT)rt->bringUp.load(std::memory_order_acquire))) return false;   // MFStartup itself failed
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    }
-}
-
 // Both init GETs are begun together (they used to be two serial round trips before the first media byte).
 static JobResult FetchInits(const std::shared_ptr<Session>& sp, FeederState& st)
 {
@@ -551,28 +527,15 @@ static JobResult FetchInits(const std::shared_ptr<Session>& sp, FeederState& st)
         af->ReleaseBody();
     }
 
-    if (!WaitForMediaFoundation(s)) return JobResult::Idle;
-
-    // The source is built as soon as the inits are known, with EMPTY sample lists: a stream that runs dry before its
-    // track is complete parks the request as STARVED (not end-of-stream) and the feeder's appends release it. The
-    // presentation duration is the WHOLE track's — deriving it from the samples in hand would declare the track to be
-    // as long as what has been fetched (the "0:36 / 0:08" clock).
+    // The tracks are built as soon as the inits are known, EMPTY: a track that runs dry before it is complete parks the
+    // request as STARVED (not its end) and the feeder's appends release it. They are no Media Foundation objects, so nothing
+    // here waits for the runtime: the engine takes them when the session is attached (CompleteAttach binds them into its
+    // source as the program). The program's duration is the WHOLE track's - never what has been fetched so far (the
+    // "0:36 / 0:08" clock).
     const int64_t totalMs = EffectiveDurationMs(s);
-    winrt::com_ptr<CencMediaSource> source;
-    try
-    {
-        CencAudioFeed feed;
-        if (haveAudio) feed.info = audioInfo;
-        source = BuildCencSource(info, std::vector<cenc::Sample>(), haveAudio ? &feed : nullptr, true,
-                                 totalMs > 0 ? (uint64_t)totalMs * 10000ULL : 0ULL, s.handle, s.store,
-                                 (LONGLONG)s.startPositionMs.load(std::memory_order_acquire) * 10000LL);
-    }
-    catch (winrt::hresult_error const& e)
-    {
-        FailSession(sp, e.code().value, 4 /*MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED*/, "[cenc] BuildCencSource failed");
-        return JobResult::Idle;
-    }
-    InstallDemandHooks(s, source.get());
+    std::shared_ptr<CencMediaStream> videoTrack = BuildTrack(info, s.handle, s.store);
+    std::shared_ptr<CencMediaStream> audioTrack = haveAudio ? BuildTrack(audioInfo, s.handle, s.store) : nullptr;
+    InstallDemandHooks(s, videoTrack.get(), audioTrack.get());
     st.initCache.insert_or_assign(videoUrl, info);   // F036: switching back to the opening rung needs no init GET either
     {
         std::lock_guard<std::mutex> g(s.feedMx);
@@ -584,7 +547,8 @@ static JobResult FetchInits(const std::shared_ptr<Session>& sp, FeederState& st)
         s.videoInfo = std::move(info);
         s.audioInfo = std::move(audioInfo);
         s.haveAudio = haveAudio;
-        s.source = source;
+        s.videoTrack = std::move(videoTrack);
+        s.audioTrack = std::move(audioTrack);
     }
     if (s.durationMs.load(std::memory_order_acquire) <= 0 && totalMs > 0) s.durationMs.store(totalMs, std::memory_order_release);
     s.initsLoaded.store(true, std::memory_order_release);
@@ -659,7 +623,7 @@ static JobResult RunRepresentationSwitch(const std::shared_ptr<Session>& sp, Fee
     }
 
     cenc::InitInfo currentInfo;
-    winrt::com_ptr<CencMediaStream> video;
+    std::shared_ptr<CencMediaStream> video;
     int64_t refMs = 0, wantEndMs = 0;
     bool seekPlan = false;
     {
@@ -668,12 +632,12 @@ static JobResult RunRepresentationSwitch(const std::shared_ptr<Session>& sp, Fee
         video = VideoStreamLocked(s);
         ReferenceLocked(s, refMs, wantEndMs, seekPlan);
     }
-    const bool compatible = initParsed &&
-                            nextInfo.timescale == currentInfo.timescale &&
-                            memcmp(nextInfo.kid, currentInfo.kid, sizeof(currentInfo.kid)) == 0;
+    // No same-key check: every sample carries its own KID (cenc::Sample::kid) and one trusted input decrypts consecutive keys,
+    // so a rung under another key splices like any other; its licence comes through the key gate like a program's.
+    const bool compatible = initParsed && nextInfo.timescale == currentInfo.timescale;
     if (!compatible || !video)
     {
-        fgpr::RaiseLog(s.handle, "[cenc-feed] quality switch rejected: init/KID/timescale incompatible (HTTP " +
+        fgpr::RaiseLog(s.handle, "[cenc-feed] quality switch rejected: init/timescale incompatible (HTTP " +
                                  std::to_string(initStatus) + ")");
         clearIfCurrent();
         return JobResult::Progress;
@@ -879,7 +843,7 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
     bool seekPlan = false;
     TrackPlan vp, ap;
     int32_t vp2 = -1, ap2 = -1;   // F041: the pipelined second segment per track, -1 = none
-    winrt::com_ptr<CencMediaStream> video, audio;
+    std::shared_ptr<CencMediaStream> video, audio;
     std::wstring vBase, vPrefix, vSuffix;
     uint64_t seekSeq = 0;
     cenc::InitInfo videoInfo, audioInfo;
@@ -895,7 +859,7 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
         // state directly — so instead of trying to catch each one here, the feeder just compares against the
         // stream's own generation counter. A seek (seq), a re-attach (the stream OBJECT changed under the same
         // track slot — MF shuts a replaced source down and CompleteAttach rebuilds a fresh one), or a CutGen() bump
-        // (a truncating splice / TakeSamples / a coverage-cutting trim) all reset the same way.
+        // (a truncating splice / a flush / a coverage-cutting trim) all reset the same way.
         CencMediaStream* trackStream[2] = { video.get(), audio.get() };
         for (int t = 0; t < 2; t++)
         {
@@ -1103,7 +1067,7 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
     bool grew = false;   // any track whose coverage actually extended — the SPIN BRAKE below reads this
     int nextBackoff = 0;
     auto handleTrack = [&](int t, const std::shared_ptr<fgpr::HttpFetch>& f, int32_t idx, const cenc::InitInfo& info,
-                           const winrt::com_ptr<CencMediaStream>& stream) -> bool {
+                           const std::shared_ptr<CencMediaStream>& stream) -> bool {
         if (!f) return false;
         if (f->cancelled) { f->ReleaseBody(); return false; }   // a newer seek (or teardown): the plan is rebuilt
         if (!f->Ok())
@@ -1274,7 +1238,7 @@ static JobResult RunOneJob(const std::shared_ptr<Session>& sp, FeederState& st, 
 
     if (landed)
     {
-        winrt::com_ptr<CencMediaStream> current;
+        std::shared_ptr<CencMediaStream> current;
         {
             std::lock_guard<std::mutex> g(s.feedMx);
             current = VideoStreamLocked(s);
@@ -1370,6 +1334,16 @@ static bool EngineRunsSeek(Runtime& rt)
     return rt.engine && rt.engine->GetReadyState() != MF_MEDIA_ENGINE_READY_HAVE_NOTHING;
 }
 
+/// A program-relative position of the session on the ENGINE's timeline (its program base added), in seconds.
+static double EngineSeconds(const Session& s, int64_t ms) { return (double)(s.programBaseMs + ms) / 1000.0; }
+
+/// The program-relative position of an engine clock reading (seconds): the program base subtracted, never negative.
+static int64_t ProgramMs(const Session& s, double engineSeconds)
+{
+    const int64_t engineMs = std::isfinite(engineSeconds) && engineSeconds > 0.0 ? (int64_t)(engineSeconds * 1000.0) : 0;
+    return std::max<int64_t>(0, engineMs - s.programBaseMs);
+}
+
 static void ApplySeekToEngine(Runtime& rt, Session& s)
 {
     int64_t target = 0, keyframe = -1;
@@ -1391,8 +1365,8 @@ static void ApplySeekToEngine(Runtime& rt, Session& s)
     s.internalSeek.Cancel();
     const bool runsSeek = EngineRunsSeek(rt);
     HRESULT hr = approximate
-        ? rt.engineEx->SetCurrentTimeEx((double)landMs / 1000.0, MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE)
-        : rt.engine->SetCurrentTime((double)landMs / 1000.0);
+        ? rt.engineEx->SetCurrentTimeEx(EngineSeconds(s, landMs), MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE)
+        : rt.engine->SetCurrentTime(EngineSeconds(s, landMs));
     fgpr::RaiseLog(s.handle, "[transport] SEEK ms=" + std::to_string((long long)landMs) +
                              (approximate ? " mode=approximate" : " mode=exact") + " hr=" + fgpr::Hex(hr));
     if (SUCCEEDED(hr))
@@ -1415,7 +1389,7 @@ static void ApplySeekToEngine(Runtime& rt, Session& s)
         // The engine refused the reposition: resolve the managed waiter with where playback actually is. An unbuffered
         // seek's flush is holding delivery for a Start(reposition) that will now never come.
         {
-            winrt::com_ptr<CencMediaStream> video, audio;
+            std::shared_ptr<CencMediaStream> video, audio;
             {
                 std::lock_guard<std::mutex> g(s.feedMx);
                 video = VideoStreamLocked(s);
@@ -1438,45 +1412,12 @@ static void ApplyPendingSeek(Runtime& rt, const std::shared_ptr<Session>& sp, ui
     ApplySeekToEngine(rt, s);
 }
 
-/// Unload whatever source the engine holds (an empty SetSource). Normally called when no successor's SetSource is about
-/// to replace it: two loads back to back would let the empty load's asynchronous error land after the real one. The one
-/// exception is FgPrSessionAttach re-attaching the same session inside the release grace: the fresh source uses the same
-/// cenc:// URL, so the old source must be shut down before its samples are taken over, and a late ERROR from the empty
-/// load is filtered by the GetError()==null check in PrRuntime.cpp's media-event handler.
-static void ReleaseEngineSource(Runtime& rt, uint64_t logHandle)
-{
-    if (!rt.engine || rt.engineSource == 0) return;
-    BSTR empty = SysAllocString(L"");
-    const int64_t relT0 = fgpr::PhaseBegin(logHandle, L"source.release.begin");   // the freeze trail: the protected source leaves
-    HRESULT hs = rt.engineEx->SetSource(empty);
-    fgpr::PhaseEnd(logHandle, L"source.release.end", relT0);
-    SysFreeString(empty);
-    rt.engineSource = 0;
-    fgpr::RaiseLog(logHandle, "[cenc] engine source released: SetSource(empty) hr=" + fgpr::Hex(hs));
-}
-
-/// Arm the unload of the source the engine still holds, a grace from now. A detach only PAUSES: the switch to another
-/// video is a Detach, a Destroy and - at least two UI frames later - the successor's Attach, and an unload here would be
-/// followed by that attach's real load a moment later (two loads back to back, the first one's asynchronous notifications
-/// landing after the second). An attach inside the grace cancels the gate (FgPrSessionAttach) and its own SetSource is the
-/// only load; with no successor the item fires and the engine is unloaded as before, just a quarter second later. The gate
-/// token makes a fired item a no-op after a cancel or a later re-arm. Runtime thread only.
-static void ScheduleEngineRelease(Runtime& rt)
-{
-    if (!rt.engine || rt.engineSource == 0) return;
-    const uint64_t token = rt.releaseGate.Arm();
-    Runtime* raw = &rt;   // the runtime thread runs the item and owns a strong ref for as long as it does
-    rt.queue.PostAfter(fgpr::handover::kReleaseGraceMs, [raw, token] {
-        if (!raw->releaseGate.Fire(token) || raw->attached.load(std::memory_order_acquire) != 0) return;
-        ReleaseEngineSource(*raw, raw->engineSource);
-    });
-}
-
 // ── F198: swap-chain handle ownership ────────────────────────────────────────────────────────────────────────────────
 // IMFMediaEngineEx::GetVideoSwapchainHandle hands out a FRESH NT handle per call that the caller closes. The managed presenter's
-// CreateSurfaceFromHandle takes its own reference and never owns the value, so the runtime owns every handle it publishes: it
-// stays open while it is the session's published FgPrSnapshot.handle (a device recovery binds it again), and one that is replaced
-// or whose session detaches is retired and closed health::kHandleGraceMs later, once the render thread has bound its successor.
+// CreateSurfaceFromHandle takes its own reference and never owns the value, so the RUNTIME owns the one handle it publishes
+// (Runtime::swapchainHandle), for as long as it names the swap chain the engine presents into: every program of the source
+// publishes that same value. A handle to a NEW swap chain replaces it, and the replaced one is retired and closed
+// health::kHandleGraceMs later, once the render thread has bound its successor.
 
 static int64_t TickMs() { return (int64_t)GetTickCount64(); }
 
@@ -1485,7 +1426,7 @@ static void CloseSwapchainHandle(uint64_t handle)
     if (handle != 0) CloseHandle((HANDLE)(uintptr_t)handle);
 }
 
-/// `handle` is no longer any session's published handle: keep it open for the grace, then close it. Runtime thread.
+/// `handle` is no longer the runtime's published handle: keep it open for the grace, then close it. Runtime thread.
 static void RetireSwapchainHandle(Runtime& rt, uint64_t handle)
 {
     if (handle == 0) return;
@@ -1494,15 +1435,50 @@ static void RetireSwapchainHandle(Runtime& rt, uint64_t handle)
     rt.queue.PostAfter((int32_t)(fgpr::health::kHandleGraceMs + 50), [raw] { raw->retiredHandles.Sweep(TickMs(), CloseSwapchainHandle); });
 }
 
-/// Publish a freshly queried handle as the session's current one, retiring the handle it replaces. An identical value is the
-/// same handle (MF did not duplicate it), which is not a second reference to close. Returns the replaced value.
-static uint64_t AdoptSwapchainHandle(Runtime& rt, Session& s, uint64_t value)
+/// Do two NT handles name the same kernel object? CompareObjectHandles (kernelbase, Windows 10), resolved once: two handles
+/// GetVideoSwapchainHandle returned are different VALUES for the same swap chain unless the engine really made a new one.
+static bool SameObject(uint64_t a, uint64_t b)
 {
-    const uint64_t prev = s.swapchainHandle.exchange(value, std::memory_order_acq_rel);
-    if (prev == value) return prev;
-    rt.retiredHandles.Reinstate(value);   // it was waiting out its grace: current again, never closed
-    RetireSwapchainHandle(rt, prev);
-    return prev;
+    using CompareFn = BOOL(WINAPI*)(HANDLE, HANDLE);
+    static const CompareFn compare = [] {
+        HMODULE kb = GetModuleHandleW(L"kernelbase.dll");
+        return kb ? reinterpret_cast<CompareFn>(GetProcAddress(kb, "CompareObjectHandles")) : nullptr;
+    }();
+    return a != 0 && b != 0 && compare && compare((HANDLE)(uintptr_t)a, (HANDLE)(uintptr_t)b);
+}
+
+enum class HandleAdoption { Same, Regenerated, NewSwapchain };
+
+/// Take a handle GetVideoSwapchainHandle just returned. A handle to the swap chain the runtime already publishes is closed at once
+/// and the published value stays - unless `forceNewGeneration` (RESOURCELOST: the presenter must wrap it again), which bumps the
+/// generation. A handle to a new swap chain becomes the published one with a new generation; the old one is retired.
+static HandleAdoption AdoptSwapchainHandle(Runtime& rt, uint64_t value, bool forceNewGeneration)
+{
+    const uint64_t current = rt.swapchainHandle.load(std::memory_order_acquire);
+    if (value == current || SameObject(current, value))
+    {
+        if (value != current) CloseSwapchainHandle(value);
+        if (!forceNewGeneration) return HandleAdoption::Same;
+        rt.swapchainGen.fetch_add(1, std::memory_order_acq_rel);
+        return HandleAdoption::Regenerated;
+    }
+    rt.retiredHandles.Reinstate(value);   // a value the kernel reused while an old handle of it waited out its grace
+    rt.swapchainHandle.store(value, std::memory_order_release);
+    rt.swapchainGen.fetch_add(1, std::memory_order_acq_rel);
+    RetireSwapchainHandle(rt, current);
+    return HandleAdoption::NewSwapchain;
+}
+
+/// Hand the runtime's handle to the attached session's snapshot, raising FgPrEvent_Handle when it is news to the session.
+static void PublishSwapchainToSession(Runtime& rt, Session& s)
+{
+    const uint64_t handle = rt.swapchainHandle.load(std::memory_order_acquire);
+    const int32_t gen = rt.swapchainGen.load(std::memory_order_acquire);
+    const uint64_t prev = s.swapchainHandle.exchange(handle, std::memory_order_acq_rel);
+    const int32_t prevGen = s.handleGeneration.exchange(gen, std::memory_order_acq_rel);
+    s.appliedStreamW.store(rt.streamW, std::memory_order_release);
+    s.appliedStreamH.store(rt.streamH, std::memory_order_release);
+    if (handle != 0 && (handle != prev || gen != prevGen)) Raise(s.handle, FgPrEvent_Handle, (int64_t)handle);
 }
 
 // ── F066: rendered / dropped frames and the rendered-frame hang check ────────────────────────────────────────────────────
@@ -1527,8 +1503,8 @@ static bool ReadEngineFrameStats(Runtime& rt, uint32_t& rendered, uint32_t& drop
            ReadEngineStat(rt, MF_MEDIA_ENGINE_STATISTIC_FRAMES_DROPPED, dropped);
 }
 
-/// A new source starts counting from whatever the (shared, warm) engine reads now: MF resets the counters itself once the new
-/// source flushes in, which FrameCounters::Observe folds in as a decrease.
+/// An attach starts counting from whatever the (shared, warm) engine reads now: MF resets the counters itself when a new source
+/// flushes in, which FrameCounters::Observe folds in as a decrease.
 static void RebaseFrameStats(Runtime& rt, Session& s)
 {
     uint32_t rendered = 0, dropped = 0;
@@ -1539,14 +1515,14 @@ static void RebaseFrameStats(Runtime& rt, Session& s)
 /// read at most every health::kStatsPollMs and only while the source plays video: not paused, seeking, waiting or starved, and
 /// only once a stream rect was applied (a swap chain with nothing sized into it has nothing to render). The same turn judges
 /// Chromium's rendered-frame detection: playing with NO frame rendered within health::kNoFrameTimeoutMs of PLAYING (or of the last
-/// UpdateVideoStream) is a hang - a dead swap-chain handle, a stuck topology, a lost device that never raised an error - and is
-/// reported as a typed decode error the managed side turns into a Retryable failure on a rebuilt runtime.
+/// UpdateVideoStream, or of a program switch) is a hang - a dead swap-chain handle, a stuck topology, a lost device that never
+/// raised an error - and is reported as a typed decode error the managed side turns into a Retryable failure on a rebuilt runtime.
 static void PollFrameHealth(Runtime& rt, Session& s)
 {
     if (!rt.engineEx) return;
     const int64_t nowMs = TickMs();
     const bool playing = !s.attachPending && s.metadataSeen && s.state.load(std::memory_order_acquire) == FgPrState_Playing &&
-                         s.seeking.load(std::memory_order_acquire) == 0 && !s.waitGate.waiting &&
+                         s.seeking.load(std::memory_order_acquire) == 0 && !s.waitGate.waiting && !s.programDrained &&
                          s.readyState.load(std::memory_order_acquire) >= 3 &&
                          s.appliedStreamW.load(std::memory_order_acquire) > 0 && s.appliedStreamH.load(std::memory_order_acquire) > 0;
     if (playing && nowMs >= s.nextFrameStatsMs)
@@ -1576,21 +1552,22 @@ static void PollFrameHealth(Runtime& rt, Session& s)
     }
 }
 
-/// `releaseSource` = false when the engine's source stays loaded after this detach: an attach of ANOTHER session replaces
-/// it (that session's own SetSource unloads it, so nothing loads twice in a row), or the caller arms the grace unload
-/// (DetachDeferRelease). True unloads it now - the session failed, there is nothing to hand over.
-static void DetachInternal(Runtime& rt, Session& s, bool releaseSource)
+/// Take the session off the engine: PAUSE, and nothing else. The source, its topology, the decoder, the renderer and the swap
+/// chain stay as they are, and the session's tracks stay bound until another program is bound or the session is destroyed, so a
+/// successor's attach is a program switch and this session's own re-attach resumes in place. There is no unload any more - no
+/// empty SetSource, no release grace: the managed runtime's idle teardown ends the whole pipeline once nothing has played for its
+/// warm window.
+static void DetachInternal(Runtime& rt, Session& s)
 {
-    const bool wasSetSource = !s.attachPending;
+    const bool wasOnEngine = !s.attachPending;
     rt.attached.store(0, std::memory_order_release);   // first: the detach's own PAUSE / source events are dropped
-    if (wasSetSource && rt.engine)
+    if (wasOnEngine && rt.engine)
     {
         if (s.firstFrameQpc.load(std::memory_order_acquire) != 0)
             s.startPositionMs.store(s.positionMs.load(std::memory_order_acquire), std::memory_order_release);   // a re-attach resumes here
         HRESULT hp = rt.engine->Pause();
         fgpr::RaisePhase(s.handle, L"detach.pause");   // the freeze trail: the protected video stops presenting
-        fgpr::RaiseLog(s.handle, "[cenc] detach: Pause hr=" + fgpr::Hex(hp) + (releaseSource ? "" : " (source kept for a successor's SetSource, or released after the grace)"));
-        if (releaseSource && rt.engineSource == s.handle) ReleaseEngineSource(rt, s.handle);
+        fgpr::RaiseLog(s.handle, "[cenc] detach: Pause hr=" + fgpr::Hex(hp) + " (the pipeline stays for the next program)");
     }
     s.attachPending = false;
     s.metadataSeen = false;
@@ -1600,11 +1577,14 @@ static void DetachInternal(Runtime& rt, Session& s, bool releaseSource)
         s.streaming = false;
     }
     if (s.license) { fgpr::LicenseBind(s.license, -1); s.license = 0; }
-    RetireSwapchainHandle(rt, s.swapchainHandle.exchange(0, std::memory_order_acq_rel));   // F198: closed after the grace, not leaked
+    s.swapchainHandle.store(0, std::memory_order_release);   // the runtime's handle: the session only stops publishing it
     s.appliedStreamW.store(0, std::memory_order_release);
     s.appliedStreamH.store(0, std::memory_order_release);
     s.streamProbe = Session::StreamProbe{};   // a stream-size probe in flight dies with the attach (its poll sees the new gen)
     ++s.streamProbeGen;
+    s.program.firstFramePending = false;      // ... and so does a switch's first-frame poll
+    ++s.programProbeGen;
+    s.programDrained = false;
     s.seeking.store(0, std::memory_order_release);
     s.engineSeekInFlight = false;   // the engine's seek dies with the detach: no SEEKED of it will ever reach this session
     if (s.deferredSeek.valid)
@@ -1617,138 +1597,148 @@ static void DetachInternal(Runtime& rt, Session& s, bool releaseSource)
     s.firstFrameQpc.store(0, std::memory_order_release);
     if (s.state.load(std::memory_order_acquire) != FgPrState_Error) s.state.store(FgPrState_Stopped, std::memory_order_release);
     Raise(s.handle, FgPrEvent_Detached);
-    // A predecessor's paused source this session's attach never got to replace (the attach failed, or was released before
-    // its inits landed) is nobody's now: unload it after the grace like any other detached source.
-    if (releaseSource && rt.engineSource != 0 && rt.engineSource != s.handle) ScheduleEngineRelease(rt);
 }
 
-/// A detach with no successor named yet (FgPrSessionDetach, the destroy of the attached session): pause now and leave the
-/// unload to the grace, so the Attach that follows a switch finds the engine to hand over instead of an empty one.
-static void DetachDeferRelease(Runtime& rt, Session& s)
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//  The pipeline: one source for the runtime's life, each video a program in it.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// A SetSource per video shut the old pipeline down synchronously (the engine's CloseMedia), and the protected decoder and
+// renderer destroyed and re-created their hardware-protected allocations on the way: ~130 ms of system-wide freeze at every
+// video switch on the owner's Adreno X1-85 (fable-next run3). So an attach is now one of three things:
+//   * THE FIRST OPEN (PipelineBuild, FgPrProgram_Open): no source yet. Build one (CencMediaSource.h BuildCencFace) for this
+//     session's streams, bind its tracks at base 0, SetSource, carried start, Play - the old attach, once per runtime.
+//   * A PROGRAM SWITCH (ProgramSwitch, FgPrProgram_Silent / _Announced): Pause, bind this session's tracks into the SAME source
+//     at a base past everything it ever delivered, SetCurrentTime(base + start), Play. The decoder keeps its pool when every
+//     format crosses silently (CencMediaSource.h's crossing rule); only a real format difference announces and rebuilds the
+//     decoder's pool, still with no SetSource. FIRSTFRAMEREADY fires once per load, so a switch's first frame is the SEEKED of
+//     its seek plus the rendered-frame counter moving (SessionProgramSeeked / PollProgramFirstFrame).
+//   * THE FALLBACK (PipelineBuild, FgPrProgram_Rebuild): a source that broke (an engine ERROR, RESOURCELOST), one that never
+//     loaded, a program whose stream set, protection or video frame size it cannot carry (ProgramSwitchBlocked), a failed bind,
+//     or a switch that failed before its first frame (SessionPipelineFailed) gets today's full rebuild - a new source and
+//     SetSource - for that video, with one log line.
+// Detach only pauses (DetachInternal); the session's own re-attach is a switch to the program the source already holds.
+
+/// Why the source the engine holds cannot take `s` as its next program, or null when it can.
+static const char* ProgramSwitchBlocked(Runtime& rt, Session& s, const std::shared_ptr<CencMediaStream>& audio)
 {
-    DetachInternal(rt, s, /*releaseSource*/ false);
-    ScheduleEngineRelease(rt);
+    if (rt.sourceBroken) return rt.sourceBroken;
+    if (!rt.sourceLoaded) return "the source never loaded its first program";
+    winrt::com_ptr<IMFMediaError> err;
+    if (SUCCEEDED(rt.engine->GetError(err.put())) && err) return "the engine holds an error";
+    winrt::com_ptr<CencStreamFace> videoFace = rt.source->Face(1), audioFace = rt.source->Face(2);
+    if (!videoFace) return "the source has no video stream";
+    if ((audioFace != nullptr) != (audio != nullptr)) return audio ? "the source has no audio stream" : "the source has an audio stream this video lacks";
+    std::lock_guard<std::mutex> g(s.feedMx);
+    if (videoFace->Protected() != s.videoInfo.encrypted) return "the video protection differs";
+    if (audioFace && audioFace->Protected() != s.audioInfo.encrypted) return "the audio protection differs";
+    // A program whose first frame would ANNOUNCE a new frame size: on the owner's Adreno X1-85 that in-source format change
+    // (1080p -> 288p, pipe-probe pipe2 step 5) rebuilt the decoder's pool and then rendered nothing, the clock stood still. A
+    // same-size announce (another frame rate, aspect or SPS) plays on (fable-next p3run step 8), so only a size change rebuilds.
+    if (!videoFace->SameFrameSize(s.videoInfo)) return "the video frame size differs (an in-source size change stalls the decoder)";
+    return nullptr;
 }
 
-static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
+/// The base for the next program: past the latest sample end the source ever delivered and past the clock, with a second of
+/// margin, on a whole second - so the timeline only ever grows and no sample of the new program can land on an old one's time.
+static int64_t NextProgramBaseMs(Runtime& rt)
+{
+    const int64_t delivered = rt.source->DeliveredEnd100ns() / 10000;
+    const double t = rt.engine->GetCurrentTime();
+    const int64_t clock = std::isfinite(t) && t > 0.0 ? (int64_t)(t * 1000.0) : 0;
+    const int64_t floorMs = std::max(delivered, clock) + 1000;
+    return (floorMs + 999) / 1000 * 1000;
+}
+
+/// The attach bookkeeping both ways onto the engine share once the source holds the session (frame counters, the swap-chain
+/// build count, the transport's per-attach flags, the stream-size probe) and the FgPrEvent_Attached it ends with.
+static void BeginAttachOnEngine(Runtime& rt, Session& s)
+{
+    s.attachPending = false;
+    RebaseFrameStats(rt, s);   // F066
+    s.swapchainBuilds = 0;     // the "[cenc] swapchain build=" count is per attach
+    s.lastSwapchainBuildQpc = 0;
+    s.frameStepInFlight = false;   // a step of an earlier attach completes for nobody
+    s.intentReasserts = 0;
+    s.streamProbe = Session::StreamProbe{};
+    ++s.streamProbeGen;
+    Raise(s.handle, FgPrEvent_Attached, fgpr::MsSinceQpc(s.attachPostedQpc));
+    const double volume = (double)s.volumeMicro.load(std::memory_order_acquire) / 1000000.0;
+    HRESULT hv = rt.engine->SetVolume(volume);
+    if (FAILED(hv)) fgpr::RaiseLog(s.handle, "[transport] VOLUME hr=" + fgpr::Hex(hv));
+    const double rate = (double)s.rateMicro.load(std::memory_order_acquire) / 1000000.0;
+    HRESULT hrt = rt.engine->SetPlaybackRate(rate);
+    if (FAILED(hrt)) fgpr::RaiseLog(s.handle, "[transport] RATE hr=" + fgpr::Hex(hrt));
+}
+
+/// Post the source's "every selected track of the program drained" report to the runtime thread (any thread, under a track's
+/// lock: the queue's lock is a leaf).
+static void OnProgramDrained(uint64_t runtime, uint64_t session, uint64_t gen);
+
+/// A new source and a SetSource: the first open, and the fallback rebuild (`why` says why the source could not take the program).
+static void PipelineBuild(Runtime& rt, const std::shared_ptr<Session>& sp, const std::shared_ptr<CencMediaStream>& video,
+                          const std::shared_ptr<CencMediaStream>& audio, int32_t mode, const char* why)
 {
     Session& s = *sp;
-    if (rt.attached.load(std::memory_order_acquire) != s.handle || !s.attachPending) return;
-    if (!s.initsLoaded.load(std::memory_order_acquire)) return;   // the feeder posts this again when they land
-    if (FAILED((HRESULT)s.initHr.load(std::memory_order_acquire)))
-    {
-        DetachInternal(rt, s);
-        return;
-    }
+    if (mode == FgPrProgram_Rebuild)
+        fgpr::RaiseLog(s.handle, std::string("[cenc] pipeline REBUILD (fallback): ") + why + " - a new source and SetSource for this video");
+    // The source being replaced lets go of its program first: MF shuts it down inside the SetSource below, and its tracks may be
+    // this very session's (a rebuild after a failed switch).
+    if (rt.source) rt.source->UnbindProgram();
 
     winrt::com_ptr<CencMediaSource> source;
     bool encrypted = false;
     try
     {
         std::lock_guard<std::mutex> g(s.feedMx);
-        if (s.source && s.source->m_handedToEngine.load(std::memory_order_acquire))
-        {
-            // A RE-attach. Media Foundation shuts a source down when the engine's source is replaced, and a shut-down
-            // IMFMediaEventQueue cannot be revived — so the session builds a fresh CencMediaSource over the SAME
-            // buffered samples (the store and the keyframe table are the session's, not the MF object's).
-            uint64_t videoBytes = 0, audioBytes = 0;
-            auto oldVideo = VideoStreamLocked(s);
-            auto oldAudio = AudioStreamLocked(s);
-            std::vector<cenc::Sample> videoSamples = oldVideo ? oldVideo->TakeSamples(videoBytes) : std::vector<cenc::Sample>();
-            fgpr::RepBook videoBook = oldVideo ? oldVideo->TakeRepBook() : fgpr::RepBook{};
-            CencAudioFeed feed;
-            if (s.haveAudio)
-            {
-                feed.info = s.audioInfo;
-                if (oldAudio) feed.samples = oldAudio->TakeSamples(audioBytes);
-            }
-            // The resume point is the playhead, a little behind the delivery cursor; if the byte cap evicted the keyframe
-            // its GOP started at, the fresh source's first Start would have nothing to begin from. Resume at the first
-            // keyframe of the buffered range instead (at most one GOP later); a position the buffer does not hold stays
-            // put - Start finds no keyframe there and the feeder fetches it.
-            {
-                const int64_t resumeMs = s.startPositionMs.load(std::memory_order_acquire);
-                const int64_t keyMs = fgpr::ResumeStartMs(videoSamples, s.videoInfo.timescale, resumeMs);
-                if (keyMs != resumeMs)
-                {
-                    s.startPositionMs.store(keyMs, std::memory_order_release);
-                    fgpr::RaiseLog(s.handle, "[cenc] re-attach: no keyframe at or before " + std::to_string((long long)resumeMs) +
-                                             "ms was retained - resuming at the first buffered keyframe " + std::to_string((long long)keyMs) + "ms");
-                }
-            }
-            const int64_t totalMs = EffectiveDurationMs(s);
-            auto fresh = BuildCencSource(s.videoInfo, std::move(videoSamples), s.haveAudio ? &feed : nullptr, true,
-                                         totalMs > 0 ? (uint64_t)totalMs * 10000ULL : 0ULL, s.handle, s.store, 0);
-            if (!fresh->m_streams.empty() && fresh->m_streams[0]) fresh->m_streams[0]->AdoptRepBook(std::move(videoBook));
-            InstallDemandHooks(s, fresh.get());
-            s.source = fresh;
-            fgpr::RaiseLog(s.handle, "[cenc] re-attach: fresh source over the retained buffer (" +
-                                     std::to_string(videoBytes + audioBytes) + " bytes)");
-        }
-        source = s.source;
-        if (source)
-        {
-            source->m_handedToEngine.store(true, std::memory_order_release);
-            source->SetStartPosition100ns((LONGLONG)s.startPositionMs.load(std::memory_order_acquire) * 10000LL);
-        }
+        source = BuildCencFace(s.videoInfo, s.haveAudio ? &s.audioInfo : nullptr, s.handle);
         encrypted = s.videoInfo.encrypted || (s.haveAudio && s.audioInfo.encrypted);
     }
     catch (winrt::hresult_error const& e)
     {
-        fgpr::RaiseLog(s.handle, "[cenc] re-attach BuildCencSource failed hr=" + fgpr::Hex(e.code().value));
+        fgpr::RaiseLog(s.handle, "[cenc] BuildCencFace failed hr=" + fgpr::Hex(e.code().value));
         s.errorHr.store(e.code().value, std::memory_order_release);
         s.state.store(FgPrState_Error, std::memory_order_release);
         Raise(s.handle, FgPrEvent_Error, 4 /*MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED*/, (int64_t)(int32_t)e.code().value);
+        s.attachPending = true;   // DetachInternal must not Pause an engine that never took this session
         DetachInternal(rt, s);
         return;
     }
-    if (!source) { DetachInternal(rt, s); return; }
 
     if (encrypted)
     {
-        // Desktop PMP bridge: the protected source exposes the CDM's trusted input so Media Foundation can obtain
-        // the per-stream ITA/decrypter inside Windows' protected process.
-        // The proactive EME session already supplied the PSSH. Match Firefox's working desktop MFCDM path and let
-        // the CDM associate that session with the trusted input; passing the same PSSH again creates a second content
-        // binding whose ITA proxy is rejected during protected-topology negotiation on some PlayReady implementations.
-        //
-        // With FG_PLAYREADY_TRUSTED_INPUT_REUSE=1 the trusted input is held at runtime (CDM) scope: the first protected
-        // attach creates it and every later source shares it, so a switch skips the CreateTrustedInput round trip into
-        // mfpmp.exe. The source's own ITA cache is still per source (BuildCencSource), so a new source asks the shared
-        // trusted input for fresh ITAs. Off by default (Runtime::trustedInputReuse); the log line says which path ran.
-        const bool reuse = rt.trustedInputReuse && rt.trustedInput;
-        if (reuse)
+        // Desktop PMP bridge: the protected source exposes the CDM's trusted input so Media Foundation can obtain the per-stream
+        // ITA/decrypter inside Windows' protected process. ONE per source, for its life: it decrypts every program's keys (the
+        // next key's licence lives in its own CDM key session). The proactive EME session already supplied the PSSH. Match
+        // Firefox's working desktop MFCDM path and let the CDM associate that session with the trusted input; passing the same
+        // PSSH again creates a second content binding whose ITA proxy is rejected during protected-topology negotiation on some
+        // PlayReady implementations.
+        IMFTrustedInput* trustedInput = nullptr;
+        const int64_t tiT0 = fgpr::PhaseBegin(s.handle, L"trusted.input.begin");   // the freeze trail
+        HRESULT hr = rt.cdm->CreateTrustedInput(nullptr, 0, &trustedInput);
+        fgpr::PhaseEnd(s.handle, L"trusted.input.end", tiT0);
+        fgpr::RaiseLog(s.handle, "[cenc] CreateTrustedInput hr=" + fgpr::Hex(hr) + " (one for the source's life)");
+        if (FAILED(hr) || !trustedInput)
         {
-            source->m_trustedInput = rt.trustedInput;
-            fgpr::RaiseLog(s.handle, "[cenc] trusted input REUSED (CDM scope)");
+            s.errorHr.store(FAILED(hr) ? hr : E_NOINTERFACE, std::memory_order_release);
+            s.state.store(FgPrState_Error, std::memory_order_release);
+            Raise(s.handle, FgPrEvent_Error, 4 /*MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED*/, (int64_t)(int32_t)(FAILED(hr) ? hr : E_NOINTERFACE));
+            s.attachPending = true;
+            DetachInternal(rt, s);
+            return;
         }
-        else
-        {
-            IMFTrustedInput* trustedInput = nullptr;
-            const int64_t tiT0 = fgpr::PhaseBegin(s.handle, L"trusted.input.begin");   // the freeze trail
-            HRESULT hr = rt.cdm->CreateTrustedInput(nullptr, 0, &trustedInput);
-            fgpr::PhaseEnd(s.handle, L"trusted.input.end", tiT0);
-            fgpr::RaiseLog(s.handle, std::string("[cenc] CreateTrustedInput hr=") + fgpr::Hex(hr) +
-                                     (rt.trustedInputReuse ? " (created once for the CDM)" : " (per attach)"));
-            if (FAILED(hr) || !trustedInput)
-            {
-                s.errorHr.store(FAILED(hr) ? hr : E_NOINTERFACE, std::memory_order_release);
-                s.state.store(FgPrState_Error, std::memory_order_release);
-                Raise(s.handle, FgPrEvent_Error, 4 /*MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED*/, (int64_t)(int32_t)(FAILED(hr) ? hr : E_NOINTERFACE));
-                DetachInternal(rt, s);
-                return;
-            }
-            source->m_trustedInput.attach(trustedInput);
-            if (rt.trustedInputReuse) rt.trustedInput = source->m_trustedInput;
-        }
+        source->m_trustedInput.attach(trustedInput);
     }
+    const uint64_t runtimeHandle = rt.handle;
+    source->m_onProgramDrained = [runtimeHandle](uint64_t session, uint64_t gen) { OnProgramDrained(runtimeHandle, session, gen); };
+    s.programBaseMs = 0;
+    source->SetStartPosition100ns((LONGLONG)s.startPositionMs.load(std::memory_order_acquire) * 10000LL);
+    source->BindProgram(s.handle, video, audio, 0);
 
     // The engine is shared by every session, so the DEFAULT rate is set explicitly for every source, 1.0 included, before
     // SetSource: with HTML5 load semantics a new source starts at defaultPlaybackRate, and skipping the 1.0 case let a
     // 1.5x session's default leak into the next video. The rate itself follows the SetSource below.
-    const double rate = (double)s.rateMicro.load(std::memory_order_acquire) / 1000000.0;
     {
-        const HRESULT hd = rt.engine->SetDefaultPlaybackRate(rate);
+        const HRESULT hd = rt.engine->SetDefaultPlaybackRate((double)s.rateMicro.load(std::memory_order_acquire) / 1000000.0);
         if (FAILED(hd)) fgpr::RaiseLog(s.handle, "[transport] DEFAULT RATE hr=" + fgpr::Hex(hd));
     }
 
@@ -1763,41 +1753,40 @@ static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
                                      "ms for the default render endpoint's warm-up");
     }
 
-    const std::wstring url = L"cenc://fluentgpu/" + std::to_wstring(s.handle);
+    rt.source = source;
+    rt.sourceSerial++;
+    rt.sourceLoaded = false;
+    rt.sourceBroken = nullptr;
+    rt.streamW = rt.streamH = rt.streamNativeW = rt.streamNativeH = 0;   // the new load sizes its stream at LOADEDMETADATA
+    rt.streamSkipLogged = false;
+    {
+        std::lock_guard<std::mutex> g(rt.sourceUrlMx);
+        rt.sourceForUrl = source;
+        rt.sourceForUrlSerial = rt.sourceSerial;
+    }
+    s.program.mode = mode;
+    s.metadataSeen = false;   // a load reports it again (a rebuild may follow a switch that already claimed it)
+    const std::wstring url = L"cenc://fluentgpu/" + std::to_wstring(rt.sourceSerial);
     BSTR burl = SysAllocString(url.c_str());
     const int64_t ssT0 = fgpr::PhaseBegin(s.handle, L"setsource.begin");   // the freeze trail
     HRESULT hr = rt.engineEx->SetSource(burl);
     fgpr::PhaseEnd(s.handle, L"setsource.end", ssT0);
     SysFreeString(burl);
-    s.attachPending = false;
-    const int64_t attachMs = fgpr::MsSinceQpc(s.attachPostedQpc);
     fgpr::RaiseLog(s.handle, "[cenc] SetSource(" + fgpr::Narrow(url) + ") hr=" + fgpr::Hex(hr) + " attachMs=" +
-                             std::to_string((long long)attachMs) + " start=" +
-                             std::to_string((long long)s.startPositionMs.load(std::memory_order_acquire)) + "ms");
+                             std::to_string((long long)fgpr::MsSinceQpc(s.attachPostedQpc)) + " start=" +
+                             std::to_string((long long)s.startPositionMs.load(std::memory_order_acquire)) + "ms" +
+                             (mode == FgPrProgram_Rebuild ? " (rebuild)" : " (first open)"));
     if (FAILED(hr))
     {
+        rt.sourceBroken = "its SetSource failed";
         s.errorHr.store(hr, std::memory_order_release);
         s.state.store(FgPrState_Error, std::memory_order_release);
         Raise(s.handle, FgPrEvent_Error, 4 /*MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED*/, (int64_t)(int32_t)hr);
-        s.attachPending = true;   // DetachInternal must not Pause/SetSource an engine that never took this source
+        s.attachPending = true;   // DetachInternal must not Pause an engine that never took this source
         DetachInternal(rt, s);
         return;
     }
-    rt.engineSource = s.handle;
-    RebaseFrameStats(rt, s);   // F066
-    s.swapchainBuilds = 0;     // the "[cenc] swapchain build=" count is per attach
-    s.lastSwapchainBuildQpc = 0;
-    s.frameStepInFlight = false;   // a step of an earlier attach completes for nobody
-    s.intentReasserts = 0;
-    s.streamProbe = Session::StreamProbe{};
-    ++s.streamProbeGen;
-    Raise(s.handle, FgPrEvent_Attached, attachMs);
-
-    const double volume = (double)s.volumeMicro.load(std::memory_order_acquire) / 1000000.0;
-    HRESULT hv = rt.engine->SetVolume(volume);
-    if (FAILED(hv)) fgpr::RaiseLog(s.handle, "[transport] VOLUME hr=" + fgpr::Hex(hv));
-    HRESULT hrt = rt.engine->SetPlaybackRate(rate);
-    if (FAILED(hrt)) fgpr::RaiseLog(s.handle, "[transport] RATE hr=" + fgpr::Hex(hrt));
+    BeginAttachOnEngine(rt, s);
     // THE CARRIED START POSITION goes onto the ENGINE's timeline now, after SetSource and before Play (the engine accepts
     // a seek before the source has loaded and applies it once it has - Chromium's StartPlayingFrom does the same), so its
     // first Start of the source already asks for the start position and the clock agrees with the samples from the first
@@ -1809,7 +1798,7 @@ static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
     {
         s.internalSeek.Issue(s.seekSeq.load(std::memory_order_acquire));
         const bool runsSeek = EngineRunsSeek(rt);   // false right after SetSource: it only becomes the default start position
-        const HRESULT hst = rt.engine->SetCurrentTime((double)carriedStartMs / 1000.0);
+        const HRESULT hst = rt.engine->SetCurrentTime(EngineSeconds(s, carriedStartMs));
         fgpr::RaiseLog(s.handle, "[cenc] carried start " + std::to_string((long long)carriedStartMs) +
                                  "ms -> engine timeline SetCurrentTime hr=" + fgpr::Hex(hst));
         if (FAILED(hst)) s.internalSeek.Cancel();
@@ -1822,20 +1811,144 @@ static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
     }
 }
 
-/// The part of a session's destroy that waits for its feeder to be gone (the reaper runs it after the join): release the
-/// source and the download buffers the feeder was filling.
-static void FinishDestroy(Session& s)
+/// THE SWITCH: put `s` on the source the engine already holds - pause, bind, seek, play. False when the engine refused a step;
+/// the caller then rebuilds (its tracks are unbound there). The session's own re-attach (the source still holds its tracks)
+/// skips the bind and only seeks back to where it detached.
+static bool ProgramSwitch(Runtime& rt, const std::shared_ptr<Session>& sp, const std::shared_ptr<CencMediaStream>& video,
+                          const std::shared_ptr<CencMediaStream>& audio)
 {
-    winrt::com_ptr<CencMediaSource> source;
+    Session& s = *sp;
+    const int64_t bindQpc = fgpr::QpcNow();
+    const HRESULT hp = rt.engine->Pause();
+    if (FAILED(hp)) { fgpr::RaiseLog(s.handle, "[cenc] program switch: Pause hr=" + fgpr::Hex(hp)); return false; }
+
+    // Where the program starts: the carried start, moved to the first buffered keyframe when the byte cap trimmed the one the
+    // start's GOP began at (F046).
+    int64_t startMs = s.startPositionMs.load(std::memory_order_acquire);
+    if (video)
+    {
+        const int64_t keyMs = video->ResumeStartMs(startMs);
+        if (keyMs != startMs)
+        {
+            fgpr::RaiseLog(s.handle, "[cenc] program start: no keyframe at or before " + std::to_string((long long)startMs) +
+                                     "ms was retained - starting at the first buffered keyframe " + std::to_string((long long)keyMs) + "ms");
+            startMs = keyMs;
+            s.startPositionMs.store(startMs, std::memory_order_release);
+        }
+    }
+
+    const uint64_t previous = rt.source->Program();
+    const bool resume = previous == s.handle;
+    bool silent = true;
+    if (!resume)
+    {
+        {
+            std::lock_guard<std::mutex> g(s.feedMx);
+            silent = rt.source->Face(1)->WouldCrossSilently(s.videoInfo);
+            if (audio) if (auto audioFace = rt.source->Face(2)) silent = audioFace->WouldCrossSilently(s.audioInfo) && silent;
+        }
+        s.programBaseMs = NextProgramBaseMs(rt);
+        rt.source->BindProgram(s.handle, video, audio, (LONGLONG)s.programBaseMs * 10000LL);
+    }
+    s.program.mode = silent ? FgPrProgram_Silent : FgPrProgram_Announced;
+    fgpr::RaisePhase(s.handle, L"program.bind", fgpr::QpcNow(), fgpr::QpcNow() - bindQpc);   // the freeze trail
+
+    // What a load would have reported: the engine is loaded, so transport verbs and seeks apply at once.
+    s.metadataSeen = true;
     {
         std::lock_guard<std::mutex> g(s.feedMx);
-        source = std::move(s.source);
+        if (s.videoInfo.width && s.videoInfo.height)
+        {
+            s.width.store((int32_t)s.videoInfo.width, std::memory_order_release);
+            s.height.store((int32_t)s.videoInfo.height, std::memory_order_release);
+        }
     }
-    // Every stream still told: a stream left incomplete would park requests forever instead of reporting end-of-stream
-    // (Media Foundation may still hold this source for a moment).
-    if (source)
-        for (auto const& stream : source->m_streams)
-            if (stream) stream->MarkComplete();
+    const int64_t durMs = EffectiveDurationMs(s);
+    if (durMs > 0) s.durationMs.store(durMs, std::memory_order_release);
+    s.readyState.store((int32_t)rt.engine->GetReadyState(), std::memory_order_release);
+    s.frameWatch.Restart(TickMs());   // F066: the switch gets a fresh no-frame window
+    BeginAttachOnEngine(rt, s);
+    PublishSwapchainToSession(rt, s);
+    Raise(s.handle, FgPrEvent_Metadata, s.durationMs.load(std::memory_order_acquire),
+          ((int64_t)s.width.load(std::memory_order_acquire) << 32) | (int64_t)(uint32_t)s.height.load(std::memory_order_acquire));
+    Raise(s.handle, FgPrEvent_CanPlay, 0);
+
+    // The seek onto the program: a native seek (plan::InternalSeek), so its SEEKED is never raised to the managed side; that
+    // SEEKED arms the program's first-frame probe.
+    s.internalSeek.Issue(s.seekSeq.load(std::memory_order_acquire));
+    const HRESULT hs = rt.engine->SetCurrentTime(EngineSeconds(s, startMs));
+    if (FAILED(hs))
+    {
+        s.internalSeek.Cancel();
+        fgpr::RaiseLog(s.handle, "[cenc] program switch: SetCurrentTime(" + std::to_string((long long)(s.programBaseMs + startMs)) +
+                                 "ms) hr=" + fgpr::Hex(hs));
+        s.attachPending = true;   // the rebuild that follows is this attach's load
+        return false;
+    }
+    s.engineSeekInFlight = true;
+    s.program.firstFramePending = true;
+    s.program.seeked = false;
+    ++s.programProbeGen;
+    fgpr::RaisePhase(s.handle, silent ? L"program.switch silent=1" : L"program.switch silent=0");
+    fgpr::RaiseLog(s.handle, std::string("[cenc] program ") + (resume ? "resume" : "switch") + " silent=" + (silent ? "1" : "0") +
+                             " from s=" + std::to_string((unsigned long long)(previous & 0xFFFFFFFFull)) + " base=" +
+                             std::to_string((long long)s.programBaseMs) + "ms start=" + std::to_string((long long)startMs) +
+                             "ms bindMs=" + std::to_string((long long)fgpr::QpcToMs(fgpr::QpcNow() - bindQpc)) + " (no SetSource)");
+    if (s.wantPlay)
+    {
+        HRESULT hplay = rt.engine->Play();
+        fgpr::RaiseLog(s.handle, "[transport] PLAY hr=" + fgpr::Hex(hplay) + " (program switch)");
+    }
+    else
+    {
+        // At rate 0 the renderer does not pre-roll: one frame step forces the program's first frame out (as for a paused seek).
+        HRESULT hstep = rt.engineEx->FrameStep(TRUE);
+        if (SUCCEEDED(hstep)) s.frameStepInFlight = true;
+        fgpr::RaiseLog(s.handle, "[transport] paused program switch -> FrameStep hr=" + fgpr::Hex(hstep));
+    }
+    return true;
+}
+
+static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
+{
+    Session& s = *sp;
+    if (rt.attached.load(std::memory_order_acquire) != s.handle || !s.attachPending) return;
+    if (!s.initsLoaded.load(std::memory_order_acquire)) return;   // the feeder posts this again when they land
+    if (FAILED((HRESULT)s.initHr.load(std::memory_order_acquire)))
+    {
+        DetachInternal(rt, s);
+        return;
+    }
+    std::shared_ptr<CencMediaStream> video, audio;
+    {
+        std::lock_guard<std::mutex> g(s.feedMx);
+        video = s.videoTrack;
+        audio = s.haveAudio ? s.audioTrack : nullptr;
+    }
+    if (!video) { DetachInternal(rt, s); return; }
+    s.program = Session::ProgramStart{};
+    s.program.switchQpc = fgpr::QpcNow();
+    s.programDrained = false;
+    if (!rt.source)
+    {
+        PipelineBuild(rt, sp, video, audio, FgPrProgram_Open, nullptr);
+        return;
+    }
+    const char* blocked = ProgramSwitchBlocked(rt, s, audio);
+    if (!blocked && ProgramSwitch(rt, sp, video, audio)) return;
+    PipelineBuild(rt, sp, video, audio, FgPrProgram_Rebuild, blocked ? blocked : "a step of the program switch failed");
+}
+
+/// The part of a session's destroy that waits for its feeder to be gone (the reaper runs it after the join): release the
+/// tracks and the download buffers the feeder was filling.
+static void FinishDestroy(Session& s)
+{
+    std::shared_ptr<CencMediaStream> video, audio;
+    {
+        std::lock_guard<std::mutex> g(s.feedMx);
+        video = std::move(s.videoTrack);
+        audio = std::move(s.audioTrack);
+    }
     s.store->pool.Clear();
     fgpr::RaiseLog(s.handle, "[cenc] session destroyed (store held " + std::to_string(s.store->Bytes()) + " bytes)");
 }
@@ -1844,10 +1957,10 @@ static void DestroyInternal(Runtime& rt, const std::shared_ptr<Session>& sp)
 {
     Session& s = *sp;
     fgpr::RaisePhase(s.handle, L"session.teardown");   // the freeze trail: the runtime thread takes the destroy
-    // The attached session's source stays loaded (paused) through the grace, so an attach that follows replaces it with
-    // no empty load in between. A session that is not attached already detached: its source - or the one a successor is
-    // waiting to replace - is on the grace timer or gone, and the destroy has nothing of the engine's to release.
-    if (rt.attached.load(std::memory_order_acquire) == s.handle) DetachDeferRelease(rt, s);
+    if (rt.attached.load(std::memory_order_acquire) == s.handle) DetachInternal(rt, s);
+    // The source lets go of the program: the faces hold Media Foundation's open requests for the next one, and the tracks (with
+    // their buffers) go with the session. The source itself stays - paused - for the next video.
+    if (rt.source && rt.source->Program() == s.handle) rt.source->UnbindProgram();
 
     // Stop the feeder: flag, cancel whatever is on the wire (the token completes the wait at once), wake. Never JOIN it
     // here: this is the runtime thread, and a feeder in the middle of a GET or a parse would hold every engine event and
@@ -1873,18 +1986,19 @@ static void DestroyInternal(Runtime& rt, const std::shared_ptr<Session>& sp)
 //  Cross-TU entry points.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-winrt::com_ptr<::IUnknown> fgpr::SessionSourceForUrl(const wchar_t* url)
+/// The scheme handler's resolver: `cenc://fluentgpu/<serial>` -> the source PipelineBuild handed the engine under that serial (an
+/// MF thread, after SetSource returned). A superseded serial resolves to nothing, never to another source.
+winrt::com_ptr<::IUnknown> fgpr::SourceForUrl(Runtime& rt, const wchar_t* url)
 {
     if (!url) return nullptr;
     const std::wstring u(url);
     const size_t slash = u.find_last_of(L'/');
     if (slash == std::wstring::npos || slash + 1 >= u.size()) return nullptr;
-    const uint64_t handle = _wcstoui64(u.c_str() + slash + 1, nullptr, 10);
-    std::shared_ptr<Session> sp = SessionByHandle(handle);
-    if (!sp) return nullptr;
+    const uint64_t serial = _wcstoui64(u.c_str() + slash + 1, nullptr, 10);
     winrt::com_ptr<::IUnknown> unknown;
-    std::lock_guard<std::mutex> g(sp->feedMx);
-    if (sp->source) sp->source->QueryInterface(__uuidof(::IUnknown), unknown.put_void());
+    std::lock_guard<std::mutex> g(rt.sourceUrlMx);
+    if (rt.sourceForUrl && rt.sourceForUrlSerial == serial)
+        rt.sourceForUrl->QueryInterface(__uuidof(::IUnknown), unknown.put_void());
     return unknown;
 }
 
@@ -2005,6 +2119,9 @@ static void ArmStreamProbe(Runtime& rt, const std::shared_ptr<Session>& sp, int3
     ScheduleStreamProbe(rt, sp, kStreamProbeFastMs);
 }
 
+/// The swap chain of the source's load, published to the attached session: at LOADEDMETADATA / CANPLAY / FIRSTFRAMEREADY of a
+/// new source (and on TIMEUPDATE while it is not ready yet), and RE-RAISED on RESOURCELOST. A program switch publishes the
+/// runtime's handle directly (PublishSwapchainToSession) and never comes here unless the source had none yet.
 void fgpr::SessionPublishHandle(Runtime& rt, Session& s, bool reRaise)
 {
     if (!IsLive(rt, s) || !s.metadataSeen) return;
@@ -2022,28 +2139,38 @@ void fgpr::SessionPublishHandle(Runtime& rt, Session& s, bool reRaise)
     }
     RECT dst = { 0, 0, (LONG)nvw, (LONG)nvh };
     if (s.streamWidth > 0 && s.streamHeight > 0) dst = { 0, 0, (LONG)s.streamWidth, (LONG)s.streamHeight };
-    MFARGB border = { 0, 0, 0, 255 };
-    // MF only creates the windowless swap chain once UpdateVideoStream has given it a NON-ZERO destination
-    // rectangle, so the rect is logged with the first handle query: a {0,0,0,0} or 1x1 dst here is the bug, not
-    // the handle. An invalid handle on a SUCCEEDED (typically S_FALSE) hr means "not ready yet", never "done".
-    const int64_t updateQpc = fgpr::QpcNow();
-    HRESULT hu = rt.engineEx->UpdateVideoStream(nullptr, &dst, &border);
-    const int64_t updateTicks = fgpr::QpcNow() - updateQpc;
-    if (SUCCEEDED(hu))
+    // MF only creates the windowless swap chain once UpdateVideoStream has given it a NON-ZERO destination rectangle, so the
+    // rect is logged with the first handle query: a {0,0,0,0} or 1x1 dst here is the bug, not the handle. A stream the engine
+    // already holds at this size (the runtime's state: an earlier program sized it) is not resized again - every
+    // UpdateVideoStream(dst) rebuilds MF's protected buffer pool - except on RESOURCELOST, whose swap chain is new.
+    const bool sized = rt.streamW == (int32_t)dst.right && rt.streamH == (int32_t)dst.bottom &&
+                       rt.streamNativeW == engineNativeW && rt.streamNativeH == engineNativeH;
+    HRESULT hu = S_FALSE;
+    int64_t updateTicks = 0;
+    if (!sized || reRaise)
     {
-        const bool sizeChanged = s.appliedStreamW.load(std::memory_order_relaxed) != (int32_t)dst.right ||
-                                 s.appliedStreamH.load(std::memory_order_relaxed) != (int32_t)dst.bottom;
-        s.appliedStreamW.store((int32_t)dst.right, std::memory_order_release);
-        s.appliedStreamH.store((int32_t)dst.bottom, std::memory_order_release);
-        s.appliedNativeW = engineNativeW;
-        s.appliedNativeH = engineNativeH;
-        // F066: a re-sized (re-created) stream gets a fresh no-frame window. Only a CHANGED size: this runs on every call while no
-        // handle has been obtained yet, and restarting each time would keep a source that never gets a swap chain from ever timing out.
-        if (sizeChanged) s.frameWatch.Restart(TickMs());
-        // A re-created swap chain of a source that is not playing holds no frame at this size and nothing presents one by
-        // itself: ask for the current frame to be rendered into it (a playing source presents its own next frame).
-        if (reRaise && s.state.load(std::memory_order_acquire) != FgPrState_Playing)
-            rt.engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);
+        MFARGB border = { 0, 0, 0, 255 };
+        const int64_t updateQpc = fgpr::QpcNow();
+        hu = rt.engineEx->UpdateVideoStream(nullptr, &dst, &border);
+        updateTicks = fgpr::QpcNow() - updateQpc;
+        if (SUCCEEDED(hu))
+        {
+            const bool sizeChanged = rt.streamW != (int32_t)dst.right || rt.streamH != (int32_t)dst.bottom;
+            rt.streamW = (int32_t)dst.right;
+            rt.streamH = (int32_t)dst.bottom;
+            rt.streamNativeW = engineNativeW;
+            rt.streamNativeH = engineNativeH;
+            s.appliedStreamW.store(rt.streamW, std::memory_order_release);
+            s.appliedStreamH.store(rt.streamH, std::memory_order_release);
+            // F066: a re-sized (re-created) stream gets a fresh no-frame window. Only a CHANGED size: this runs on every call while
+            // no handle has been obtained yet, and restarting each time would keep a source that never gets a swap chain from
+            // ever timing out.
+            if (sizeChanged) s.frameWatch.Restart(TickMs());
+            // A re-created swap chain of a source that is not playing holds no frame at this size and nothing presents one by
+            // itself: ask for the current frame to be rendered into it (a playing source presents its own next frame).
+            if (reRaise && s.state.load(std::memory_order_acquire) != FgPrState_Playing)
+                rt.engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);
+        }
     }
     HANDLE handle = nullptr;
     const int64_t handleQpc = fgpr::QpcNow();
@@ -2058,24 +2185,26 @@ void fgpr::SessionPublishHandle(Runtime& rt, Session& s, bool reRaise)
                                      std::to_string(nvw) + "x" + std::to_string(nvh) + " update hr=" + fgpr::Hex(hu));
         return;
     }
-    const uint64_t value = (uint64_t)(uintptr_t)handle;
-    const uint64_t prev = AdoptSwapchainHandle(rt, s, value);   // F198: the runtime owns it; the one it replaces is retired
-    if (prev != value) NoteSwapchainBuild(s, reRaise ? "reraise" : "metadata", dst.right, dst.bottom, updateTicks, handleTicks);
-    if (prev != value || reRaise)
-    {
-        fgpr::RaiseLog(s.handle, "[cenc] " + std::to_string(nvw) + "x" + std::to_string(nvh) +
-                                 " swap-chain handle=" + std::to_string(value) + " after " +
-                                 std::to_string(s.handleTries) + " not-ready quer" + (s.handleTries == 1 ? "y" : "ies"));
-        Raise(s.handle, FgPrEvent_Handle, (int64_t)value);
-    }
+    // F198: the runtime owns the handle. One to the swap chain it already publishes (the engine kept its swap chain across the
+    // SetSource) is closed at once, so the presenter's value gate never re-wraps the surface.
+    const HandleAdoption adoption = AdoptSwapchainHandle(rt, (uint64_t)(uintptr_t)handle, reRaise);
+    if (adoption == HandleAdoption::NewSwapchain)
+        NoteSwapchainBuild(s, reRaise ? "reraise" : "metadata", dst.right, dst.bottom, updateTicks, handleTicks);
+    fgpr::RaiseLog(s.handle, "[cenc] " + std::to_string(nvw) + "x" + std::to_string(nvh) + " swap-chain handle=" +
+                             std::to_string(rt.swapchainHandle.load(std::memory_order_acquire)) +
+                             (adoption == HandleAdoption::NewSwapchain ? " (a new swap chain)" :
+                              adoption == HandleAdoption::Regenerated ? " (the same swap chain, re-raised)" : " (the same swap chain)") +
+                             " after " + std::to_string(s.handleTries) + " not-ready quer" + (s.handleTries == 1 ? "y" : "ies"));
+    PublishSwapchainToSession(rt, s);
 }
 
-// MF_MEDIA_ENGINE_EVENT_FORMATCHANGE (runtime thread): a representation switch changed the decoded frame size. It is a SIZE
-// REPORT, as in Firefox (NotifyVideoResizing) and Chromium (OnVideoNaturalSizeChange): the new natural size goes into the
-// snapshot and FgPrEvent_SizeChanged asks the managed pump for a look, and that is all. UpdateVideoStream is NOT called
-// (the destination is the managed stream size, which the pump re-derives from the new natural size, so a repeat here is a
-// redundant cross-process call that can only race the compositor's scale) and the handle is not re-raised: RESOURCELOST
-// keeps SessionPublishHandle(reRaise). The handle is asked for once, to catch a swap chain that really was re-created.
+// MF_MEDIA_ENGINE_EVENT_FORMATCHANGE (runtime thread): an announced crossing (a representation switch, or a program switch whose
+// format differs) changed the decoded frame. It is a SIZE REPORT, as in Firefox (NotifyVideoResizing) and Chromium
+// (OnVideoNaturalSizeChange): the new natural size goes into the snapshot and FgPrEvent_SizeChanged asks the managed pump for a
+// look, and that is all. UpdateVideoStream is NOT called (the destination is the managed stream size, which the pump re-derives
+// from the new natural size, so a repeat here is a redundant cross-process call that can only race the compositor's scale) and
+// the handle is not re-raised: RESOURCELOST keeps SessionPublishHandle(reRaise). The handle is asked for once, to catch a swap
+// chain that really was re-created - compared by OBJECT, since every query returns a new handle value for the same one.
 void fgpr::SessionOnFormatChange(Runtime& rt, Session& s)
 {
     if (!IsLive(rt, s) || !s.metadataSeen) return;
@@ -2094,26 +2223,29 @@ void fgpr::SessionOnFormatChange(Runtime& rt, Session& s)
     HANDLE handle = nullptr;
     const HRESULT hr = rt.engineEx->GetVideoSwapchainHandle(&handle);
     if (FAILED(hr) || handle == nullptr || handle == INVALID_HANDLE_VALUE) return;
-    const uint64_t value = (uint64_t)(uintptr_t)handle;
-    if (AdoptSwapchainHandle(rt, s, value) == value) return;   // F198
+    if (AdoptSwapchainHandle(rt, (uint64_t)(uintptr_t)handle, false) != HandleAdoption::NewSwapchain) return;   // F198
     NoteSwapchainBuild(s, "formatchange", (LONG)nvw, (LONG)nvh, 0, 0);
-    fgpr::RaiseLog(s.handle, "[cenc] format change: swap-chain handle=" + std::to_string(value) + " (re-created)");
-    Raise(s.handle, FgPrEvent_Handle, (int64_t)value);
+    fgpr::RaiseLog(s.handle, "[cenc] format change: swap-chain handle=" +
+                             std::to_string(rt.swapchainHandle.load(std::memory_order_acquire)) + " (re-created)");
+    PublishSwapchainToSession(rt, s);
 }
 
+/// The clock sample: the engine's position on the source's timeline, made program-relative (the program base subtracted) and
+/// held at the program's duration. The duration is the program's own (the descriptor's, else the measured segment grid), never
+/// the engine's: the source's presentation is far longer than any video on it.
 void fgpr::SessionSamplePosition(Runtime& rt, Session& s, bool raiseNow)
 {
     if (!IsLive(rt, s)) return;
     const double t = rt.engine->GetCurrentTime();
     const int64_t qpc = QpcNow();
-    const int64_t ms = std::isfinite(t) && t > 0.0 ? (int64_t)(t * 1000.0) : 0;
+    const int64_t durMs = s.durationMs.load(std::memory_order_acquire);
+    int64_t ms = ProgramMs(s, t);
+    if (durMs > 0 && ms > durMs) ms = durMs;
     s.positionMs.store(ms, std::memory_order_release);
     s.positionQpc.store(qpc, std::memory_order_release);
     s.readyState.store((int32_t)rt.engine->GetReadyState(), std::memory_order_release);
-    const double dur = rt.engine->GetDuration();
-    if (std::isfinite(dur) && dur > 0.0) s.durationMs.store((int64_t)(dur * 1000.0), std::memory_order_release);
 
-    winrt::com_ptr<CencMediaStream> video;
+    std::shared_ptr<CencMediaStream> video;
     {
         std::lock_guard<std::mutex> g(s.feedMx);
         video = VideoStreamLocked(s);
@@ -2133,6 +2265,7 @@ void fgpr::SessionSamplePosition(Runtime& rt, Session& s, bool raiseNow)
     }
 
     PollFrameHealth(rt, s);   // F066: after the Position raise, so a hang's Error is the newest event
+    if (s.programDrained) SessionCheckProgramEnd(rt, s, false);
 }
 
 void fgpr::SessionOnCanPlay(Runtime& rt, Session& s)
@@ -2147,13 +2280,12 @@ void fgpr::SessionOnCanPlay(Runtime& rt, Session& s)
     // so its SEEKED is not reported as FgPrEvent_Seeked (nobody on the managed side issued it) and never swallows a user
     // seek's.
     const int64_t start = s.startPositionMs.load(std::memory_order_acquire);
-    const double now = rt.engine->GetCurrentTime();
-    const int64_t nowMs = std::isfinite(now) ? (int64_t)(now * 1000.0) : 0;
+    const int64_t nowMs = ProgramMs(s, rt.engine->GetCurrentTime());
     if (start > 0 && nowMs + s.SegLenMs() < start)
     {
         s.internalSeek.Issue(s.seekSeq.load(std::memory_order_acquire));
         const bool runsSeek = EngineRunsSeek(rt);
-        HRESULT hr = rt.engine->SetCurrentTime((double)start / 1000.0);
+        HRESULT hr = rt.engine->SetCurrentTime(EngineSeconds(s, start));
         fgpr::RaiseLog(s.handle, "[cenc] start position correction (fallback): engine at " + std::to_string((long long)nowMs) +
                                  "ms, carried start " + std::to_string((long long)start) + "ms -> SetCurrentTime hr=" + fgpr::Hex(hr));
         if (FAILED(hr)) s.internalSeek.Cancel();
@@ -2181,18 +2313,19 @@ void fgpr::SessionsShutdown(Runtime& rt)
         }
     }
     for (auto const& sp : mine) DestroyInternal(rt, sp);
-    // F198: whatever the grace timers had not closed yet (their items are dropped once the queue stops) goes with the runtime.
+    // F198: the published handle and whatever the grace timers had not closed yet (their items are dropped once the queue stops)
+    // go with the runtime.
+    CloseSwapchainHandle(rt.swapchainHandle.exchange(0, std::memory_order_acq_rel));
     rt.retiredHandles.CloseAll(CloseSwapchainHandle);
-    // The join point for the feeders just stopped: nothing may still be building a Media Foundation source when the
-    // runtime shuts Media Foundation down. They are cancelled and kicked above, so this waits out one GET's cancellation.
+    // The join point for the feeders just stopped: none may still be appending into a track the engine is about to shut down.
+    // They are cancelled and kicked above, so this waits out one GET's cancellation.
     rt.reaper.Drain();
 }
 
-/// A licence of this runtime left Pending - usable, failed, killed or expired (PrLicense.cpp PostKeySettled). Every live
-/// source's streams re-ask their key gate: the requests it parked go to delivery when their KID's key settled, and park
-/// again when it was another KID's. The source is copied out under feedMx and the streams are called with no session
-/// lock held (each takes only its own lock, and the gate the licence table's leaf lock). A destroyed session's source
-/// that Media Foundation shut down refuses on its own (ReleaseKeyParked checks m_shutdown).
+/// A licence of this runtime left Pending - usable, failed, killed or expired (PrLicense.cpp PostKeySettled). Every session's
+/// tracks re-ask their key gate: the requests one parked go to delivery when their KID's key settled, and park again when it
+/// was another KID's. The tracks are copied out under feedMx and called with no session lock held (each takes only its own
+/// lock, and the gate the licence table's leaf lock). A track that is not bound holds no requests: nothing happens there.
 void fgpr::SessionsKeySettled(Runtime& rt)
 {
     std::vector<std::shared_ptr<Session>> mine;
@@ -2203,15 +2336,233 @@ void fgpr::SessionsKeySettled(Runtime& rt)
     }
     for (auto const& sp : mine)
     {
-        winrt::com_ptr<CencMediaSource> source;
+        std::shared_ptr<CencMediaStream> video, audio;
         {
             std::lock_guard<std::mutex> g(sp->feedMx);
-            source = sp->source;
+            video = sp->videoTrack;
+            audio = sp->audioTrack;
         }
-        if (!source) continue;
-        for (auto const& stream : source->m_streams)
-            if (stream) stream->ReleaseKeyParked();
+        if (video) video->ReleaseKeyParked();
+        if (audio) audio->ReleaseKeyParked();
     }
+}
+
+// ── a program's first frame, its end, and the fallback ───────────────────────────────────────────────────────────────────
+namespace
+{
+constexpr int32_t kProgramFrameFastMs = 4;          // the first-frame poll's period for the first second after the seek
+constexpr int64_t kProgramFrameFastWindowMs = 1000;
+constexpr int32_t kProgramFrameSlowMs = 50;
+// A switch that has shown no frame this long after its bind is stuck (a decoder that rebuilt its pool and renders nothing, or
+// anything else unforeseen): the video gets the full rebuild instead (ProgramSwitchFallback).
+constexpr int64_t kProgramFrameGiveUpMs = 8000;
+constexpr int64_t kProgramEndToleranceMs = 150;     // the clock within this of the delivered end is the end
+constexpr int64_t kProgramEndStallMs = 1000;        // a playing clock stuck this long short of it is the end too
+constexpr int32_t kProgramEndCheckMs = 100;
+}
+
+/// Raise what the attach's first frame owes: the program.switch event (how the video got onto the engine, and how long it took
+/// from the attach). Every first frame of an attach, a load's (FIRSTFRAMEREADY) or a switch's.
+static void RaiseProgramStarted(Session& s, int64_t qpc)
+{
+    const int64_t ms = s.attachPostedQpc ? fgpr::QpcToMs(qpc - s.attachPostedQpc) : 0;
+    Raise(s.handle, FgPrEvent_ProgramSwitch, s.program.mode, ms);
+}
+
+void fgpr::SessionProgramFirstFrame(Runtime& rt, Session& s, int64_t qpc, const char* via)
+{
+    if (!s.program.firstFramePending || !IsLive(rt, s)) return;
+    s.program.firstFramePending = false;
+    ++s.programProbeGen;
+    int64_t expected = 0;
+    s.firstFrameQpc.compare_exchange_strong(expected, qpc, std::memory_order_acq_rel);
+    fgpr::RaisePhase(s.handle, L"program.first.frame", qpc);   // the freeze trail
+    {
+        int32_t loading = FgPrState_Loading;
+        s.state.compare_exchange_strong(loading, rt.engine->IsPaused() ? FgPrState_Paused : FgPrState_Playing, std::memory_order_acq_rel);
+    }
+    fgpr::SessionSamplePosition(rt, s, false);
+    fgpr::RaiseLog(s.handle, "[cenc] program first frame at " + std::to_string((long long)s.positionMs.load(std::memory_order_acquire)) +
+                             "ms via=" + via + " sinceSwitchMs=" + std::to_string((long long)fgpr::QpcToMs(qpc - s.program.switchQpc)) +
+                             " polls=" + std::to_string(s.program.polls));
+    Raise(s.handle, FgPrEvent_FirstFrame, s.positionMs.load(std::memory_order_acquire), s.firstFrameQpc.load(std::memory_order_acquire));
+    RaiseProgramStarted(s, qpc);
+}
+
+static void PollProgramFirstFrame(Runtime& rt, const std::shared_ptr<Session>& sp, uint64_t gen);
+static bool ProgramSwitchFallback(Runtime& rt, const std::shared_ptr<Session>& sp, const std::string& why);
+
+static void ScheduleProgramFirstFrame(Runtime& rt, const std::shared_ptr<Session>& sp, int32_t delayMs)
+{
+    Runtime* raw = &rt;   // the runtime thread runs the item and owns a strong ref for as long as it does
+    std::weak_ptr<Session> weak = sp;
+    const uint64_t gen = sp->programProbeGen;
+    rt.queue.PostAfter(delayMs, [raw, weak, gen] {
+        if (std::shared_ptr<Session> live = weak.lock()) PollProgramFirstFrame(*raw, live, gen);
+    });
+}
+
+/// FIRSTFRAMEREADY fires once per LOAD, so a switch's first frame is the renderer's FRAMES_RENDERED moving past the value it read
+/// when the switch's seek landed (a flush that resets the counter and renders again counts too).
+static void PollProgramFirstFrame(Runtime& rt, const std::shared_ptr<Session>& sp, uint64_t gen)
+{
+    Session& s = *sp;
+    if (gen != s.programProbeGen || !s.program.firstFramePending || !IsLive(rt, s)) return;
+    s.program.polls++;
+    uint32_t rendered = 0, dropped = 0;
+    if (!ReadEngineFrameStats(rt, rendered, dropped))
+    {
+        fgpr::SessionProgramFirstFrame(rt, s, fgpr::QpcNow(), "seeked (counters unreadable)");
+        return;
+    }
+    if (rendered > s.program.baseRendered || (rendered < s.program.baseRendered && rendered > 0))
+    {
+        fgpr::SessionProgramFirstFrame(rt, s, fgpr::QpcNow(), "frame");
+        return;
+    }
+    if (rendered < s.program.baseRendered) s.program.baseRendered = rendered;   // reset to 0 by the flush: count from there
+    const int64_t sinceMs = fgpr::QpcToMs(fgpr::QpcNow() - s.program.switchQpc);
+    if (sinceMs >= kProgramFrameGiveUpMs)
+    {
+        const std::string why = "no frame rendered " + std::to_string((long long)sinceMs) + "ms after the switch";
+        if (!ProgramSwitchFallback(rt, sp, why)) fgpr::RaiseLog(s.handle, "[cenc] program switch: " + why + " (already rebuilt once)");
+        return;
+    }
+    ScheduleProgramFirstFrame(rt, sp, sinceMs < kProgramFrameFastWindowMs ? kProgramFrameFastMs : kProgramFrameSlowMs);
+}
+
+void fgpr::SessionProgramSeeked(Runtime& rt, const std::shared_ptr<Session>& sp)
+{
+    Session& s = *sp;
+    if (!s.program.firstFramePending || s.program.seeked) return;
+    s.program.seeked = true;
+    // A seek the engine completed without restarting the source would leave the bound tracks held for a reposition that never
+    // comes (a no-op after the normal Start(reposition)).
+    std::shared_ptr<CencMediaStream> video, audio;
+    {
+        std::lock_guard<std::mutex> g(s.feedMx);
+        video = s.videoTrack;
+        audio = s.haveAudio ? s.audioTrack : nullptr;
+    }
+    if (video) video->ReleaseReposition();
+    if (audio) audio->ReleaseReposition();
+    uint32_t rendered = 0, dropped = 0;
+    if (!ReadEngineFrameStats(rt, rendered, dropped))
+    {
+        fgpr::SessionProgramFirstFrame(rt, s, fgpr::QpcNow(), "seeked (counters unreadable)");
+        return;
+    }
+    s.program.baseRendered = rendered;
+    ++s.programProbeGen;
+    ScheduleProgramFirstFrame(rt, sp, kProgramFrameFastMs);
+}
+
+/// The source's report, on the runtime thread: every selected track of `session`'s program drained (programGen = the binding
+/// and position it drained at; a seek or a switch since makes it stale).
+static void SessionProgramDrained(Runtime& rt, uint64_t session, uint64_t gen)
+{
+    if (rt.attached.load(std::memory_order_acquire) != session || !rt.source || rt.source->Program() != session ||
+        rt.source->ProgramGen() != gen)
+        return;
+    std::shared_ptr<Session> sp = fgpr::SessionByHandle(session);
+    if (!sp) return;
+    Session& s = *sp;
+    if (!IsLive(rt, s) || s.programDrained) return;
+    std::shared_ptr<CencMediaStream> video, audio;
+    {
+        std::lock_guard<std::mutex> g(s.feedMx);
+        video = s.videoTrack;
+        audio = s.haveAudio ? s.audioTrack : nullptr;
+    }
+    s.programDrained = true;
+    s.programEndMs = std::max<int64_t>(video ? video->DeliveredEndMs() : 0, audio ? audio->DeliveredEndMs() : 0);
+    s.drainCheckPosMs = -1;
+    fgpr::RaiseLog(s.handle, "[cenc] program drained: delivered to " + std::to_string((long long)s.programEndMs) + "ms, position " +
+                             std::to_string((long long)ProgramMs(s, rt.engine->GetCurrentTime())) + "ms");
+    fgpr::SessionCheckProgramEnd(rt, s, false);
+}
+
+static void OnProgramDrained(uint64_t runtime, uint64_t session, uint64_t gen)
+{
+    std::shared_ptr<Runtime> rt = fgpr::RuntimeFor(runtime);
+    if (!rt) return;
+    Runtime* raw = rt.get();   // the runtime thread runs the item and owns a strong ref for as long as it does
+    rt->queue.Post([raw, session, gen] { if (raw->Ready()) SessionProgramDrained(*raw, session, gen); });
+}
+
+/// THE PROGRAM'S END. No stream ever ends (the source carries the next program), so the runtime raises Ended itself: once the
+/// program drained, when the clock reaches what its tracks delivered, or when a playing clock stops short of it (the engine
+/// waits for samples that are not coming). Checked from the position sample, the engine's WAITING and its own timer.
+void fgpr::SessionCheckProgramEnd(Runtime& rt, Session& s, bool engineWaiting)
+{
+    if (!IsLive(rt, s) || !s.programDrained) return;
+    const int32_t state = s.state.load(std::memory_order_acquire);
+    if (state == FgPrState_Ended || state == FgPrState_Error) return;
+    const int64_t pos = ProgramMs(s, rt.engine->GetCurrentTime());
+    const int64_t now = fgpr::QpcNow();
+    if (pos != s.drainCheckPosMs) { s.drainCheckPosMs = pos; s.drainCheckMovedQpc = now; }
+    const bool reached = pos + kProgramEndToleranceMs >= s.programEndMs;
+    const bool playing = !rt.engine->IsPaused();
+    const bool stalled = playing && (engineWaiting || fgpr::QpcToMs(now - s.drainCheckMovedQpc) >= kProgramEndStallMs);
+    if (reached || stalled)
+    {
+        s.state.store(FgPrState_Ended, std::memory_order_release);
+        fgpr::SessionSamplePosition(rt, s, true);
+        fgpr::RaiseLog(s.handle, "[cenc] program ended at " + std::to_string((long long)pos) + "ms (delivered to " +
+                                 std::to_string((long long)s.programEndMs) + "ms, " + (reached ? "reached" : "the clock stopped short") + ")");
+        Raise(s.handle, FgPrEvent_Ended);
+        return;
+    }
+    if (s.programEndArmed) return;
+    s.programEndArmed = true;
+    Runtime* raw = &rt;
+    std::shared_ptr<Session> sp = fgpr::SessionByHandle(s.handle);
+    if (!sp) return;
+    std::weak_ptr<Session> weak = sp;
+    rt.queue.PostAfter(kProgramEndCheckMs, [raw, weak] {
+        std::shared_ptr<Session> live = weak.lock();
+        if (!live) return;
+        live->programEndArmed = false;
+        fgpr::SessionCheckProgramEnd(*raw, *live, false);
+    });
+}
+
+/// A program switch that failed (an engine error) or got stuck (no frame) before its first frame: today's full rebuild for this
+/// video, once per attach. False when the attach was no switch, already showed its first frame, or was rebuilt already. Events the
+/// broken source still raises belong to an earlier attach generation and are dropped.
+static bool ProgramSwitchFallback(Runtime& rt, const std::shared_ptr<Session>& sp, const std::string& why)
+{
+    Session& s = *sp;
+    const bool switched = s.program.mode == FgPrProgram_Silent || s.program.mode == FgPrProgram_Announced;
+    if (!switched || !s.program.firstFramePending || s.program.rebuildTried || !IsLive(rt, s)) return false;
+    std::shared_ptr<CencMediaStream> video, audio;
+    {
+        std::lock_guard<std::mutex> g(s.feedMx);
+        video = s.videoTrack;
+        audio = s.haveAudio ? s.audioTrack : nullptr;
+    }
+    if (!video) return false;
+    s.program.rebuildTried = true;
+    s.program.firstFramePending = false;
+    ++s.programProbeGen;
+    rt.attachGen.fetch_add(1, std::memory_order_acq_rel);
+    s.internalSeek.Cancel();
+    s.engineSeekInFlight = false;
+    s.seeking.store(0, std::memory_order_release);
+    s.metadataSeen = false;
+    s.swapchainHandle.store(0, std::memory_order_release);
+    s.firstFrameQpc.store(0, std::memory_order_release);
+    s.state.store(FgPrState_Loading, std::memory_order_release);
+    rt.sourceBroken = "a program switch failed";   // the rebuild replaces it at once
+    fgpr::RaiseLog(s.handle, "[cenc] program switch failed before its first frame (" + why + ")");
+    PipelineBuild(rt, sp, video, audio, FgPrProgram_Rebuild, "the program switch failed before its first frame");
+    return true;
+}
+
+bool fgpr::SessionPipelineFailed(Runtime& rt, const std::shared_ptr<Session>& sp, int64_t code, HRESULT hr)
+{
+    rt.sourceBroken = "the engine reported an error";
+    return ProgramSwitchFallback(rt, sp, "code=" + std::to_string((long long)code) + " hr=" + fgpr::Hex(hr));
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -2375,16 +2726,12 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionAttach(FgPrRuntime rtHandle, 
         Session& s = *sp;
         const uint64_t prev = rt.attached.load(std::memory_order_acquire);
         if (prev == s.handle) return;   // already attached (or attaching)
-        // THE HAND-OVER. A detach only paused the engine and armed the unload of its source; this attach's own SetSource
-        // replaces that source, so the unload is cancelled and nothing loads twice in a row. If the engine still holds
-        // THIS session's own previous source (a detach and a re-attach inside the grace), that one is unloaded first: the
-        // fresh source goes in under the same cenc:// URL, and a load of the URL already loaded is not something to lean on.
-        rt.releaseGate.Cancel();
-        if (rt.engineSource == s.handle) ReleaseEngineSource(rt, s.handle);
+        // THE HAND-OVER. The previous video only pauses (DetachInternal); this attach binds its tracks into the same source as
+        // the next program (CompleteAttach -> ProgramSwitch), so nothing is unloaded and nothing loads.
         if (prev)
         {
             std::shared_ptr<Session> old = fgpr::SessionByHandle(prev);
-            if (old) DetachInternal(rt, *old, /*releaseSource*/ false);   // this attach's SetSource replaces it
+            if (old) DetachInternal(rt, *old);
             else rt.attached.store(0, std::memory_order_release);
         }
         // lic == 0 is legal: clear content, or a key already usable through another session's license.
@@ -2408,7 +2755,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionAttach(FgPrRuntime rtHandle, 
         s.internalSeek.Cancel();
         s.engineSeekInFlight = false;
         s.handleTries = 0;
-        RetireSwapchainHandle(rt, s.swapchainHandle.exchange(0, std::memory_order_acq_rel));   // F198
+        s.swapchainHandle.store(0, std::memory_order_release);   // the runtime's handle is published again once on the engine
         s.appliedStreamW.store(0, std::memory_order_release);
         s.appliedStreamH.store(0, std::memory_order_release);
         s.frames.Reset(); s.frameWatch.Reset(); s.nextFrameStatsMs = 0; s.frameStatsReadable = false;   // F066: this attach counts from zero
@@ -2448,7 +2795,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionDetach(FgPrRuntime rtHandle, 
 {
     return PostVerb(rtHandle, sh, [](Runtime& rt, const std::shared_ptr<Session>& sp) {
         if (rt.attached.load(std::memory_order_acquire) != sp->handle) return;
-        DetachDeferRelease(rt, *sp);   // pause now; the engine's source is unloaded after the grace unless an attach takes it over
+        DetachInternal(rt, *sp);   // pause; the pipeline stays for the next program
     });
 }
 
@@ -2506,6 +2853,7 @@ static void RunSeek(Runtime& rt, Session& s, int64_t targetMs, int32_t mode, int
 {
     const uint64_t seq = s.seekSeq.fetch_add(1, std::memory_order_acq_rel) + 1;   // latest-wins
     s.seekPostedQpc = postedQpc;
+    s.programDrained = false;   // a seek un-ends the program (the tracks report a new drain from wherever it lands)
     const int64_t kf = keyframeMs >= 0 && keyframeMs <= targetMs ? keyframeMs : -1;
     {
         std::lock_guard<std::mutex> g(s.feedMx);
@@ -2524,8 +2872,6 @@ static void RunSeek(Runtime& rt, Session& s, int64_t targetMs, int32_t mode, int
         {
             std::lock_guard<std::mutex> g(s.feedMx);
             s.seekNeedsFetch = false;
-            if (s.source && !s.source->m_handedToEngine.load(std::memory_order_acquire))
-                s.source->SetStartPosition100ns((LONGLONG)targetMs * 10000LL);
             s.prefetchAroundMs = targetMs;
             if (s.prefetchSegments <= 0) s.prefetchSegments = 2;
         }
@@ -2539,11 +2885,11 @@ static void RunSeek(Runtime& rt, Session& s, int64_t targetMs, int32_t mode, int
 
     if (!s.metadataSeen)
     {
-        // Attached but not loaded yet: the source's first Start (and the CANPLAY fallback correction) must land on the
-        // NEW target, not on the start position the attach carried.
+        // Attached but its source not loaded yet: the source's first Start (and the CANPLAY fallback correction) must land on
+        // the NEW target, not on the start position the attach carried.
         s.startPositionMs.store(targetMs, std::memory_order_release);
-        std::lock_guard<std::mutex> g(s.feedMx);
-        if (s.source) s.source->SetStartPosition100ns((LONGLONG)targetMs * 10000LL);
+        if (rt.source && rt.source->Program() == s.handle)
+            rt.source->SetStartPosition100ns((LONGLONG)(s.programBaseMs + targetMs) * 10000LL);
     }
 
     // The gate, evaluated against the CURRENT buffer (never a range sampled when the seek was issued). If the target
@@ -2619,7 +2965,7 @@ bool fgpr::SessionSeekLanded(Runtime& rt, Session& s)
         // keyframe it just landed on, a seek while paused at that spot): the unbuffered seek's flush still holds delivery
         // for a Start(reposition) that will never come, and the picture froze there. The stream holds the landed target,
         // so lift the hold. (A Start(reposition) clears it itself, so after a normal seek this does nothing.)
-        winrt::com_ptr<CencMediaStream> video, audio;
+        std::shared_ptr<CencMediaStream> video, audio;
         {
             std::lock_guard<std::mutex> g(s.feedMx);
             if (!s.seekNeedsFetch && s.flushSeq != 0 && s.flushSeq == s.seekSeq.load(std::memory_order_acquire))
@@ -2734,15 +3080,17 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rtH
         RECT dst = { 0, 0, (LONG)(s.streamWidth ? (DWORD)s.streamWidth : nvw), (LONG)(s.streamHeight ? (DWORD)s.streamHeight : nvh) };
         if (dst.right <= 0 || dst.bottom <= 0) return;
         // Every UpdateVideoStream(dst), an unchanged size included, makes MF free its pool of dst-sized frame buffers and build a
-        // new one; with protected content that free or build stalls the whole desktop. The size already applied, while the
-        // engine's native size is the one it was applied at, changes nothing: skip it (Chromium skips unchanged sizes too).
-        if ((int32_t)dst.right == s.appliedStreamW.load(std::memory_order_acquire) &&
-            (int32_t)dst.bottom == s.appliedStreamH.load(std::memory_order_acquire) &&
-            (int32_t)nvw == s.appliedNativeW && (int32_t)nvh == s.appliedNativeH)
+        // new one; with protected content that free or build stalls the whole desktop. The size the ENGINE already holds (an
+        // earlier program of the source may have applied it), while its native size is the one it was applied at, changes
+        // nothing: skip it (Chromium skips unchanged sizes too).
+        if ((int32_t)dst.right == rt.streamW && (int32_t)dst.bottom == rt.streamH &&
+            (int32_t)nvw == rt.streamNativeW && (int32_t)nvh == rt.streamNativeH)
         {
-            if (!s.streamSkipLogged)
+            s.appliedStreamW.store(rt.streamW, std::memory_order_release);
+            s.appliedStreamH.store(rt.streamH, std::memory_order_release);
+            if (!rt.streamSkipLogged)
             {
-                s.streamSkipLogged = true;
+                rt.streamSkipLogged = true;
                 fgpr::RaiseLog(s.handle, "[cenc] stream size skip (unchanged) " + std::to_string(dst.right) + "x" +
                                          std::to_string(dst.bottom) + " native=" + std::to_string(nvw) + "x" + std::to_string(nvh));
             }
@@ -2761,10 +3109,12 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSetStreamSize(FgPrRuntime rtH
             const bool playing = s.state.load(std::memory_order_acquire) == FgPrState_Playing;
             if (!playing) rt.engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);
             ArmStreamProbe(rt, sp, (int32_t)dst.right, (int32_t)dst.bottom, returnedQpc, applyMs, playing);
-            s.appliedStreamW.store((int32_t)dst.right, std::memory_order_release);
-            s.appliedStreamH.store((int32_t)dst.bottom, std::memory_order_release);
-            s.appliedNativeW = (int32_t)nvw;
-            s.appliedNativeH = (int32_t)nvh;
+            rt.streamW = (int32_t)dst.right;
+            rt.streamH = (int32_t)dst.bottom;
+            rt.streamNativeW = (int32_t)nvw;
+            rt.streamNativeH = (int32_t)nvh;
+            s.appliedStreamW.store(rt.streamW, std::memory_order_release);
+            s.appliedStreamH.store(rt.streamH, std::memory_order_release);
             s.frameWatch.Restart(TickMs());   // F066
         }
         // Rate-limited (one line a second; a failure always): the size used to log once per change, and a resize gesture
@@ -2855,7 +3205,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionSnapshot(FgPrRuntime rtHandle
     out->framesDropped = s.framesDropped.load(std::memory_order_acquire);
     out->framesSampledQpc = s.framesSampledQpc.load(std::memory_order_acquire);
     out->feedComplete = s.feedComplete.load(std::memory_order_acquire);
-    out->reserved0 = 0;
+    out->handleGeneration = s.handleGeneration.load(std::memory_order_acquire);
     return S_OK;
 }
 
@@ -2873,7 +3223,7 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionGetBuffered(FgPrRuntime rtHan
     std::shared_ptr<Session> sp = fgpr::SessionFor(rtHandle, sh);
     if (!sp) return E_HANDLE;
     if (capPairs < 0 || (capPairs > 0 && !outPairs)) return E_INVALIDARG;
-    winrt::com_ptr<CencMediaStream> video;
+    std::shared_ptr<CencMediaStream> video;
     {
         std::lock_guard<std::mutex> g(sp->feedMx);
         video = VideoStreamLocked(*sp);

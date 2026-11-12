@@ -405,7 +405,7 @@ inline int64_t ResumeStartMs(const std::vector<cenc::Sample>& samples, uint64_t 
 /// `outByteBudgetCut` (optional): set to true iff the byte cap is what removed more than the (aligned) time window would
 /// have. A pure rule-1 time trim is normal per-segment housekeeping and must be invisible to a caller tracking "did
 /// coverage get cut out from under a reader" — the feeder's progress guard (PrSession.cpp) watches exactly that signal, and it
-/// firing every segment would reset the guard so often it could never notice a REAL cut (TakeSamples, a truncating
+/// firing every segment would reset the guard so often it could never notice a REAL cut (a flush, a truncating
 /// SpliceSamples, or genuinely running out of budget).
 ///
 /// `reserveBytes`: room rule 2 must leave FREE under the budget — the feeder passes the size of the segment it is
