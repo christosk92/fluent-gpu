@@ -690,6 +690,7 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     public void PlaceOutputProtectionWindow(nuint hostWindow, int left, int top, int right, int bottom)
     {
         if (_disposed || _s == 0 || hostWindow == 0 || Volatile.Read(ref _attached) == 0) return;
+        OutputProtection.NoteVideoWindow(hostWindow);   // the window the protected picture is in: where its HDCP is checked
         if (hostWindow == _opmHost && left == _opmLeft && top == _opmTop && right == _opmRight && bottom == _opmBottom) return;
         int hr = _native.SessionPlaceOpmWindow(_rt.Handle, _s, hostWindow, left, top, right, bottom);
         if (hr > 0) return;   // S_FALSE: native is not attached to this session yet (or has no window): asked again at the next pump
@@ -1132,6 +1133,10 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         if (_rt.LicenseHandleFor(_kid) != licenseHandle) return;
         Volatile.Write(ref _licenseRestriction, status);
         LogVideo($"license.restricted key={_logKey} status={status}");
+        // OUTPUT_RESTRICTED: the key decrypts but the licence's output protection is not met on the display (HDCP), so the picture is
+        // withheld. OUTPUT_DOWNSCALED is a constriction the picture survives: not a failure.
+        if (status == OutputProtection.KeyOutputRestricted)
+            OutputProtection.Raise(new OutputProtectionNotice(OutputProtectionCause.KeyOutputRestricted, status, 0));
         RequestPump();
     }
 

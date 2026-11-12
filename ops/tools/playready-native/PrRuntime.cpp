@@ -446,6 +446,10 @@ struct MediaEngineNotify : public IMFMediaEngineNotify
             case MF_MEDIA_ENGINE_EVENT_STALLED:
             case MF_MEDIA_ENGINE_EVENT_BUFFERINGSTARTED:
             case MF_MEDIA_ENGINE_EVENT_BUFFERINGENDED:
+            // Output protection: an OPM (HDCP) failure the trust authority let playback survive, and a component stream that
+            // failed while the others play. Both were dropped here, so a display that could not carry HDCP left no trace.
+            case MF_MEDIA_ENGINE_EVENT_OPMINFO:
+            case MF_MEDIA_ENGINE_EVENT_STREAMRENDERINGERROR:
                 break;
             default:
                 return S_OK;
@@ -991,6 +995,18 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
             // when the value is unchanged, so the presenter re-binds.
             fgpr::SessionPublishHandle(rt, s, true);
             break;
+        case MF_MEDIA_ENGINE_EVENT_OPMINFO:
+            // The output protection the content asked for (HDCP) could not be established on the display the OPM window is on, and
+            // the trust authority allowed a fallback: the picture is constricted or blanked while playback goes on. The managed side
+            // drops the protected picture on that display and says why (FgPrEvent_OutputProtection).
+            fgpr::RaiseLog(h, "[opm] OPMINFO p1=" + std::to_string((unsigned long long)p1) + " p2=" + fgpr::Hex((HRESULT)p2) +
+                              " - output protection was not established on the video's display");
+            Raise(h, FgPrEvent_OutputProtection, (int64_t)p1, (int64_t)(int32_t)p2);
+            break;
+        case MF_MEDIA_ENGINE_EVENT_STREAMRENDERINGERROR:
+            fgpr::RaiseLog(h, "[cenc] STREAMRENDERINGERROR p1=" + std::to_string((unsigned long long)p1) + " p2=" + fgpr::Hex((HRESULT)p2) +
+                              " - a component stream failed while the others play");
+            break;
         default:
             break;
     }
@@ -1199,6 +1215,38 @@ __declspec(dllexport) int32_t __stdcall FgPrRuntimeSetSecurityPolicy(int32_t pol
 {
     fgpr::Reg().securityPolicy.store(policy == FgPrSecurity_Force2000 ? FgPrSecurity_Force2000 : FgPrSecurity_Probe3000, std::memory_order_release);
     return S_OK;
+}
+
+__declspec(dllexport) int32_t __stdcall FgPrRuntimeQueryHdcp(FgPrRuntime rtHandle, int32_t level)
+{
+    if (level < 0 || level > 2) return E_INVALIDARG;
+    std::shared_ptr<fgpr::Runtime> rt = fgpr::RuntimeFor(rtHandle);
+    if (!rt || !rt->Ready()) return E_HANDLE;
+    // The key system the CDM was provisioned under (written by the bring-up before Ready() published): an SL3000 query on a runtime
+    // that fell back to SL2000 would answer "not supported" for the key system, not for the display.
+    const wchar_t* keySystem = rt->securityLevel >= 3000 ? L"com.microsoft.playready.recommendation.3000" : L"com.microsoft.playready.recommendation";
+    wchar_t type[96];
+    swprintf_s(type, L"video/mp4;codecs=\"avc1,mp4a\";features=\"hdcp=%d\"", (int)level);
+    const HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);   // S_FALSE / RPC_E_CHANGED_MODE: the thread already has COM
+    int32_t result = E_FAIL;
+    {
+        winrt::com_ptr<IMFMediaEngineClassFactory> factory;
+        HRESULT hr = CoCreateInstance(CLSID_MFMediaEngineClassFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.put()));
+        winrt::com_ptr<IMFExtendedDRMTypeSupport> drm;
+        if (SUCCEEDED(hr)) hr = factory->QueryInterface(IID_PPV_ARGS(drm.put()));
+        if (SUCCEEDED(hr))
+        {
+            BSTR bType = SysAllocString(type), bKey = SysAllocString(keySystem);
+            MF_MEDIA_ENGINE_CANPLAY answer = MF_MEDIA_ENGINE_CANPLAY_NOT_SUPPORTED;
+            hr = (bType && bKey) ? drm->IsTypeSupportedEx(bType, bKey, &answer) : E_OUTOFMEMORY;
+            SysFreeString(bType);
+            SysFreeString(bKey);
+            result = SUCCEEDED(hr) ? (int32_t)answer : (int32_t)hr;
+        }
+        else result = (int32_t)hr;
+    }
+    if (SUCCEEDED(co)) CoUninitialize();
+    return result;
 }
 
 __declspec(dllexport) int32_t __stdcall FgPrSessionPlaceOpmWindow(FgPrRuntime rtHandle, FgPrSession sh, uint64_t hostWindow,

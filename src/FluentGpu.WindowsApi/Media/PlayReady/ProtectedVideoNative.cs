@@ -70,6 +70,9 @@ internal static unsafe partial class PrNative
     /// <summary>A USABLE license's key went INTERNAL_ERROR / RELEASED / OUTPUT_NOT_ALLOWED and will never decrypt again:
     /// <c>a</c> = the failing HRESULT (0x8004800N, N = the status), <c>b</c> = the MF_MEDIAKEY_STATUS. Native has evicted it.</summary>
     internal const int EvLicenseRevoked = 53;
+    /// <summary>MF_MEDIA_ENGINE_EVENT_OPMINFO: the output protection (HDCP) the content asked for could not be established on the video's
+    /// display and the trust authority let playback fall back (a constricted or blanked picture). <c>a</c>/<c>b</c> = the engine's params.</summary>
+    internal const int EvOutputProtection = 54;
 
     // ── state (FgPrState) ──────────────────────────────────────────────────────────────────────────────────────────
 
@@ -199,6 +202,12 @@ internal static unsafe partial class PrNative
     /// <see cref="FgPrRuntimeCreateOnAdapter"/>.</summary>
     [LibraryImport(LibraryName)]
     internal static partial int FgPrRuntimeSetSecurityPolicy(int policy);
+
+    /// <summary>Media Foundation's HDCP feature query (<c>features="hdcp=level"</c>) under the runtime's negotiated key system: 0 not
+    /// supported, 1 maybe (still probing), 2 probably, a negative HRESULT on failure. Runs the HDCP handshake to answer: ask only once
+    /// protected video is engaged (<see cref="OutputProtection.QueryHdcp"/>). Synchronous; never on a UI thread.</summary>
+    [LibraryImport(LibraryName)]
+    internal static partial int FgPrRuntimeQueryHdcp(ulong rt, int level);
 
     // ── license ────────────────────────────────────────────────────────────────────────────────────────────────────
 

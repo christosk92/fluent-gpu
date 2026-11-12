@@ -120,6 +120,9 @@ enum FgPrEvent
     FgPrEvent_LicenseRevoked = 53,   // a USABLE license's key went INTERNAL_ERROR / RELEASED / OUTPUT_NOT_ALLOWED and will never
                                      // decrypt again: a = hr (0x8004800N, N = the status), b = the MF_MEDIAKEY_STATUS. It is evicted
                                      // (an attached session keeps the object until it detaches); the next acquire re-issues it
+    FgPrEvent_OutputProtection = 54, // MF_MEDIA_ENGINE_EVENT_OPMINFO: the output protection (HDCP) the content asked for could NOT be
+                                     // established on the video's display and the trust authority let playback fall back (a
+                                     // constricted or blanked picture). a = param1, b = param2 as the engine raised them
 };
 
 /// FgPrSnapshot.state — the lifecycle the managed ProtectedVideoState maps one-to-one.
@@ -270,6 +273,16 @@ __declspec(dllexport) int64_t __stdcall FgPrRuntimeUptimeMs(FgPrRuntime rt);
 /// skips the probe. A separate export, not a new parameter of FgPrRuntimeCreateOnAdapter, so a DLL of the older ABI is reported as a stale
 /// build (RequiredExports). Always returns S_OK.
 __declspec(dllexport) int32_t __stdcall FgPrRuntimeSetSecurityPolicy(int32_t policy);
+
+/// HDCP: can every display the process's video intersects carry output protection at `level` (1 = HDCP on, 2 = HDCP 2.2 Type 1)?
+/// Media Foundation's own feature query (`IMFExtendedDRMTypeSupport::IsTypeSupportedEx` with `features="hdcp=<level>"`, the same
+/// query `ProtectionCapabilities.IsTypeSupported` and Chromium's MediaFoundation CDM run), asked under the key system the runtime
+/// negotiated (`.3000` for SL3000, the software one otherwise). Returns the MF_MEDIA_ENGINE_CANPLAY answer - 0 not supported, 1 maybe
+/// (the probe is still running: ask again, no more often than every 500 ms, for up to ~10 s), 2 probably - or a negative HRESULT
+/// (E_HANDLE: no ready runtime). NOT A PASSIVE QUERY: per its documentation the OS turns HDCP on at that level to answer, so a caller
+/// asks only once protected video is already engaged on that display (it is then the state of the engagement, not a new handshake).
+/// Synchronous on the caller's thread (initialises COM there as MTA when the thread has none); never on the runtime thread.
+__declspec(dllexport) int32_t __stdcall FgPrRuntimeQueryHdcp(FgPrRuntime rt, int32_t level);
 
 // ── license cache (KID-keyed; the runtime owns the CDM; key sessions stay open until Expired or Release) ─────────────
 

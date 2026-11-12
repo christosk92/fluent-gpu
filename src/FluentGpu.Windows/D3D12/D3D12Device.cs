@@ -4078,6 +4078,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     t.CachedRefreshPeriodQpc = mode.RefreshPeriodQpc;
                     t.TopologyMonitor = mon;
+                    FluentGpu.Pal.Windows.DisplayInfo.RaiseWindowMonitorChanged((nint)t.Hwnd, mode.DeviceName, ReferenceEquals(t, _primarySwapchain));
                 }
             }
         }
@@ -4108,6 +4109,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         var mode = FluentGpu.Pal.Windows.DisplayInfo.ForWindow((nint)target.Hwnd);
         var primaryMode = FluentGpu.Pal.Windows.DisplayInfo.ForPrimary();
         if (mode.Valid) target.CachedRefreshPeriodQpc = mode.RefreshPeriodQpc;
+        // The app's per-monitor checks (protected video's HDCP) ride this same edge; a subscriber posts and returns.
+        // (At the first swapchain's InitSwapChain the primary is not assigned yet: that first target IS the main window.)
+        if (mode.Valid)
+            FluentGpu.Pal.Windows.DisplayInfo.RaiseWindowMonitorChanged((nint)target.Hwnd, mode.DeviceName,
+                _primarySwapchain is null || ReferenceEquals(target, _primarySwapchain));
 
         LUID luid = _device->GetAdapterLuid();
         IDXGIAdapter1* adapter = null;

@@ -1040,8 +1040,16 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                 // session: replace the runtime (Chromium restarts its pipeline on the same HRESULTs).
                 if (ProtectedRuntimeFaults.IsRuntimeReset(unchecked((int)b)))
                     PoisonRuntime(unchecked((int)b), "session error", bringUpFailure: false);
+                // MF_E_POLICY_UNSUPPORTED: the licence's output protection (HDCP) cannot be met on the video's display.
+                if (unchecked((int)b) == OutputProtection.PolicyUnsupported)
+                    OutputProtection.Raise(new OutputProtectionNotice(OutputProtectionCause.PolicyUnsupported, a, b));
                 return;
             }
+
+            case PrNative.EvOutputProtection:
+                Log($"s={session} output.protection cause=opminfo p1={a} p2=0x{unchecked((uint)b):X8}");
+                OutputProtection.Raise(new OutputProtectionNotice(OutputProtectionCause.OpmInfo, a, b));
+                return;
 
             case PrNative.EvLog:
                 if (text is not null) Log($"s={session} {text}");
@@ -1549,7 +1557,7 @@ internal sealed unsafe class PrRuntimeNative : IPrRuntimeNative
     /// protected open, so it is reported as unavailable up front instead.</summary>
     internal static readonly string[] RequiredExports =
     [
-        "FgPrRuntimeCreateOnAdapter", "FgPrRuntimeDestroy", "FgPrRuntimeUptimeMs", "FgPrRuntimeSetSecurityPolicy",
+        "FgPrRuntimeCreateOnAdapter", "FgPrRuntimeDestroy", "FgPrRuntimeUptimeMs", "FgPrRuntimeSetSecurityPolicy", "FgPrRuntimeQueryHdcp",
         "FgPrLicenseAcquire", "FgPrLicenseState", "FgPrLicenseRelease",
         "FgPrSessionCreate", "FgPrSessionPrefetch", "FgPrSessionAttach", "FgPrSessionDetach", "FgPrSessionDestroy",
         "FgPrSessionPlay", "FgPrSessionPause", "FgPrSessionSeek", "FgPrSessionSetVolume", "FgPrSessionSetRate",
