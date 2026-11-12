@@ -996,13 +996,24 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
             fgpr::SessionPublishHandle(rt, s, true);
             break;
         case MF_MEDIA_ENGINE_EVENT_OPMINFO:
-            // The output protection the content asked for (HDCP) could not be established on the display the OPM window is on, and
-            // the trust authority allowed a fallback: the picture is constricted or blanked while playback goes on. The managed side
-            // drops the protected picture on that display and says why (FgPrEvent_OutputProtection).
-            fgpr::RaiseLog(h, "[opm] OPMINFO p1=" + std::to_string((unsigned long long)p1) + " p2=" + fgpr::Hex((HRESULT)p2) +
-                              " - output protection was not established on the video's display");
-            Raise(h, FgPrEvent_OutputProtection, (int64_t)p1, (int64_t)(int32_t)p2);
+        {
+            // OPMINFO says only that the engine's output protection status CHANGED (a window crossing monitors raises it too);
+            // the status itself is read from IMFMediaEngineOPMInfo. Only the FAILED_* values (2..5) mean HDCP could not be
+            // established on the video's display; NOT_REQUESTED (0) and ESTABLISHED (1) are not failures. A constricted output
+            // (picture down-scaled, protection otherwise in place) is logged, not treated as a failure. The managed side drops
+            // the protected picture on that display and says why only on a failure (FgPrEvent_OutputProtection).
+            MF_MEDIA_ENGINE_OPM_STATUS status = MF_MEDIA_ENGINE_OPM_NOT_REQUESTED;
+            BOOL constricted = FALSE;
+            HRESULT opmHr = E_NOINTERFACE;
+            if (rt.engine)
+                if (auto opm = rt.engine.try_as<IMFMediaEngineOPMInfo>()) opmHr = opm->GetOPMInfo(&status, &constricted);
+            const bool failed = SUCCEEDED(opmHr) && status >= MF_MEDIA_ENGINE_OPM_FAILED_VM;
+            fgpr::RaiseLog(h, "[opm] OPMINFO status=" + std::to_string((int)status) + " constricted=" + std::to_string((int)constricted) +
+                              " hr=" + fgpr::Hex(opmHr) + " p1=" + std::to_string((unsigned long long)p1) + " p2=" + fgpr::Hex((HRESULT)p2) +
+                              (failed ? " - output protection could not be established on the video's display" : " - not a failure"));
+            if (failed) Raise(h, FgPrEvent_OutputProtection, (int64_t)status, (int64_t)opmHr);
             break;
+        }
         case MF_MEDIA_ENGINE_EVENT_STREAMRENDERINGERROR:
             fgpr::RaiseLog(h, "[cenc] STREAMRENDERINGERROR p1=" + std::to_string((unsigned long long)p1) + " p2=" + fgpr::Hex((HRESULT)p2) +
                               " - a component stream failed while the others play");

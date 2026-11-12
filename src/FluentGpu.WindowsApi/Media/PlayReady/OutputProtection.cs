@@ -20,7 +20,9 @@ public enum HdcpAnswer : byte
 /// <summary>Which signal said the output protection did not take.</summary>
 public enum OutputProtectionCause : byte
 {
-    /// <summary>MF_MEDIA_ENGINE_EVENT_OPMINFO: the OPM (HDCP) failed and the trust authority let playback fall back.</summary>
+    /// <summary>MF_MEDIA_ENGINE_EVENT_OPMINFO whose IMFMediaEngineOPMInfo status is one of the FAILED_* values: the OPM (HDCP) failed
+    /// and the trust authority let playback fall back. A = the MF_MEDIA_ENGINE_OPM_STATUS (2..5), B = GetOPMInfo's HRESULT. The event
+    /// alone is no failure (a window crossing monitors raises it with status NOT_REQUESTED); the native side raises this only on a FAILED_* status.</summary>
     OpmInfo,
     /// <summary>The licence's key went OUTPUT_RESTRICTED: it decrypts, but the picture is withheld from this output.</summary>
     KeyOutputRestricted,
