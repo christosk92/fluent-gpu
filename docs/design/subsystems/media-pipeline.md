@@ -981,21 +981,34 @@ above it. It is now a runtime with handles, spine unchanged:
   `Start` begins on the keyframe at or before the target - never on the oldest retained sample; once the target has
   landed the feeder keeps buffering from the target until the engine confirms the seek. A re-attach whose
   playhead keyframe was trimmed away resumes at the first buffered keyframe (at most one GOP later).
-  The switch is `FgPrSessionAttach` = one `SetSource` on the warm engine, and the old source is never unloaded in front of
-  it: `FgPrSessionDetach` (and the destroy of the attached session) only PAUSES and arms the unload of the engine's source a
-  250 ms grace out (`Runtime::releaseGate`, the work queue's `PostAfter`; `HandoverPolicy.h`). The successor's Attach arrives
-  inside the grace on a switch (Detach, Destroy, then the Attach at least two UI frames later), cancels the unload and
-  replaces the paused source with its own `SetSource` - the only load - while a Stop with no successor, or a successor that
-  fails before its `SetSource`, still ends in the empty `SetSource` once the grace runs out (and runtime teardown shuts the
-  engine down regardless). A re-attach of the session that owns the loaded source unloads it first, since the fresh source goes
-  in under the same `cenc://` URL. The runtime work queue has two lanes (`WorkQueue.h`): engine/transport items run ahead of
+  **The persistent pipeline.** A `SetSource` per video made the engine shut the old pipeline down synchronously, and the
+  protected decoder and renderer destroyed and re-created their hardware-protected allocations on the way: ~130 ms of
+  system-wide freeze at every switch on an Adreno X1-85. So the runtime keeps ONE source (`CencMediaSource`, built by
+  `BuildCencFace`), topology, decoder, renderer and swap chain for its life, and each video is a PROGRAM in it. The source's
+  stream faces (`CencStreamFace`, the `IMFMediaStream`s MF holds) own the event queues, the stream descriptors and the format
+  their types describe; a session's tracks (`CencMediaStream`, no longer MF objects) are bound to them while it is the
+  program, every sample stamped with the program's base - a monotonically growing offset past everything the source ever
+  delivered - and carrying its own key ID (one trusted input decrypts consecutive keys). The first attach builds and loads the
+  source (`FgPrProgram_Open`); every later one is pause, bind, `SetCurrentTime(base + start)`, play (`ProgramSwitch`): silent
+  when the coded size, codec, aperture, pixel aspect and frame rate all match (no new type, no `MEStreamFormatChanged`, the
+  decoder keeps its pool), announced at the same frame size otherwise. A program the source cannot carry (another stream set,
+  protection or frame size - an in-source size change stalled the decoder on the Adreno - a broken or never-loaded source, a
+  failed bind, a switch that errored or showed no frame within 8 s) gets the full rebuild, a new `SetSource`
+  (`FgPrProgram_Rebuild`, one `[cenc] pipeline REBUILD` line). The presentation's duration is a year; no stream ever sends
+  `MEEndOfStream` - the face reports the drain of every selected track and the runtime raises `FgPrEvent_Ended` when the clock
+  reaches what was delivered. Positions, buffered ranges, keyframes, seeks and the duration are program-relative (the base
+  subtracted). FIRSTFRAMEREADY fires once per load, so a switch's first frame is its seek's SEEKED plus the rendered-frame
+  counter moving. The swap-chain handle is the runtime's (`Runtime::swapchainHandle`), one value per swap chain compared by
+  object (`CompareObjectHandles`), with `FgPrSnapshot.handleGeneration` bumped only for a new swap chain or RESOURCELOST, so
+  the presenter never re-wraps it at a switch. `FgPrSessionDetach` (and the destroy of the attached session) only PAUSES: there
+  is no unload, no empty `SetSource` and no release grace; the managed runtime's idle teardown ends the pipeline. Every attach's
+  first frame raises `FgPrEvent_ProgramSwitch`, the always-on `[video] program.switch from= to= silent= ms= mode=` line.
+  The runtime work queue has two lanes (`WorkQueue.h`): engine/transport items run ahead of
   licence items (`StartAcquisition`, `ApplyLicense`, `CloseLicense` - PMP round trips), so a warm-keeper licence step queued
   just before a switch never delays the switch's attach or its engine events (the attaching session's own licence is exempt: the
   attach verb starts it before `CreateTrustedInput`, and its relay result runs on the engine lane while the KID is bound); a waiting licence item still runs after at most
-  16 engine items, and teardown drains the licence lane first. The protected source's `IMFTrustedInput` is created per attach
-  by default; `FG_PLAYREADY_TRUSTED_INPUT_REUSE=1` holds one per CDM (`Runtime::trustedInput`, released at teardown) - off until
-  validated on a box with two KIDs and a re-attach, and the `[cenc] CreateTrustedInput` / `trusted input REUSED` log lines say
-  which path ran. Engine events carry the attach generation (`Runtime::attachGen`, bumped before `attached`
+  16 engine items, and teardown drains the licence lane first. The source's `IMFTrustedInput` is created once per source and
+  decrypts every program's keys. Engine events carry the attach generation (`Runtime::attachGen`, bumped before `attached`
   names the session) and an event queued for an earlier attach is dropped, so a late ERROR / PAUSE of the previous load
   cannot land on the next one even when the same session is attached again. **The feeder is never joined on the runtime
   thread**: a session's destroy sets `feedStop`, cancels the GETs on the wire and kicks, then hands the thread to a reaper
