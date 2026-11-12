@@ -264,6 +264,11 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         session._s = handle;
         runtime.RegisterSession(handle, session);
         session._censusToken = MediaCensus.Register(MediaCensusKind.ProtectedSession, session.DescribeCensus);
+        // The freeze trail: a live protected session arms the DWM probe until it is disposed (plus the linger). Paired with the
+        // census token, so the ExitSession in Dispose runs exactly once per EnterSession here.
+        DwmStallProbe.EnsureStarted();
+        ProtectedVideoTrace.EnterSession();
+        ProtectedVideoTrace.Stamp("session.create", handle);
         runtime.Log($"session.create s={handle} key={session._logKey} startMs={session._nativeStartMs} " +
                     $"kid={session._kid ?? "(from init)"} license={runtime.LicenseStateFor(session._kid)}");
         return session;
@@ -719,7 +724,13 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         if (_disposed) return;
         _disposed = true;
         PumpRequested = null;
+        bool traced = _censusToken != 0;
         if (_censusToken != 0) { MediaCensus.Unregister(_censusToken); _censusToken = 0; }
+        if (traced)
+        {
+            ProtectedVideoTrace.Stamp("session.destroy", _s);
+            ProtectedVideoTrace.ExitSession();
+        }
         if (_s != 0)
         {
             ulong s = _s;

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using FluentGpu.Foundation;
+using FluentGpu.Media;
 using FluentGpu.Rhi.D3D12;
 using TerraFX.Interop.Windows;
 using TerraFX.Interop.WinRT;
@@ -302,6 +303,8 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     {
         _device.AssertRenderThread();
         ref Slot s = ref Get(id);
+        // The freeze trail (ProtectedVideoTrace): only while a protected session is around, the bind is a timed step.
+        long traceT0 = ProtectedVideoTrace.Active ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         // The single DRM attach point. True only when the handle is the brush's surface; false drops the previous content (a stale
         // frame of the last source must never stay up under a new one) and the registry retries on a later drain.
         ICompositionSurface* surface;
@@ -319,7 +322,13 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         if (s.Surface != null) s.Surface->Release();
         s.Surface = surface;
         _graphDirty = true;
+        long traceDur = traceT0 != 0 ? System.Diagnostics.Stopwatch.GetTimestamp() - traceT0 : 0;
         Diag.Line($"[video.surface] [video.wuc] bound handle 0x{dcompSurfaceHandle:X} id={id.Value} hwnd=0x{(nint)_target.Hwnd:X}");
+        if (traceT0 != 0)
+        {
+            ProtectedVideoTrace.Stamp($"wuc.bind.end handle=0x{dcompSurfaceHandle:X} id={id.Value}", 0, traceT0 + traceDur, traceDur);
+            ProtectedVideoTrace.RequestCommitStamp();
+        }
         return true;
     }
 
@@ -848,11 +857,20 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
                 s.Dirty = false;
                 if (ApplyPlacement(i)) wrote = wroteGeometry = true;
             }
-            if (s.InTree && (!s.Visible || s.Restack)) { Detach(ref s); wrote = true; }
+            if (s.InTree && (!s.Visible || s.Restack))
+            {
+                Detach(ref s);
+                wrote = true;
+                if (ProtectedVideoTrace.Active) { ProtectedVideoTrace.Stamp("wuc.detach slot=" + i); ProtectedVideoTrace.RequestCommitStamp(); }
+            }
             s.Restack = false;
             if (!s.InTree && s.Visible)
             {
-                if (canAttach && Attach(i)) wrote = true;
+                if (canAttach && Attach(i))
+                {
+                    wrote = true;
+                    if (ProtectedVideoTrace.Active) { ProtectedVideoTrace.Stamp("wuc.attach slot=" + i); ProtectedVideoTrace.RequestCommitStamp(); }
+                }
                 else _attachPending = true;
             }
         }

@@ -99,7 +99,14 @@ public sealed unsafe partial class D3D12Device
         if (!_wucCommitDue) return;
         _wucCommitDue = false;
         if (_wucController == null) return;
+        // The freeze trail: the Commit that publishes a protected surface's bind / attach / detach to DWM is a timed step.
+        long traceT0 = FluentGpu.Media.ProtectedVideoTrace.TakeCommitStamp() ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         HRESULT hr = _wucController->Commit();
+        if (traceT0 != 0)
+        {
+            long end = System.Diagnostics.Stopwatch.GetTimestamp();
+            FluentGpu.Media.ProtectedVideoTrace.Stamp($"wuc.commit.end hr=0x{(uint)hr:X8}", 0, end, end - traceT0);
+        }
         if ((int)hr < 0 && _wucCommitFailedHr != (uint)hr)
         {
             _wucCommitFailedHr = (uint)hr;

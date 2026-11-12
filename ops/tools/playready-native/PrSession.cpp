@@ -1447,7 +1447,9 @@ static void ReleaseEngineSource(Runtime& rt, uint64_t logHandle)
 {
     if (!rt.engine || rt.engineSource == 0) return;
     BSTR empty = SysAllocString(L"");
+    const int64_t relT0 = fgpr::PhaseBegin(logHandle, L"source.release.begin");   // the freeze trail: the protected source leaves
     HRESULT hs = rt.engineEx->SetSource(empty);
+    fgpr::PhaseEnd(logHandle, L"source.release.end", relT0);
     SysFreeString(empty);
     rt.engineSource = 0;
     fgpr::RaiseLog(logHandle, "[cenc] engine source released: SetSource(empty) hr=" + fgpr::Hex(hs));
@@ -1586,6 +1588,7 @@ static void DetachInternal(Runtime& rt, Session& s, bool releaseSource)
         if (s.firstFrameQpc.load(std::memory_order_acquire) != 0)
             s.startPositionMs.store(s.positionMs.load(std::memory_order_acquire), std::memory_order_release);   // a re-attach resumes here
         HRESULT hp = rt.engine->Pause();
+        fgpr::RaisePhase(s.handle, L"detach.pause");   // the freeze trail: the protected video stops presenting
         fgpr::RaiseLog(s.handle, "[cenc] detach: Pause hr=" + fgpr::Hex(hp) + (releaseSource ? "" : " (source kept for a successor's SetSource, or released after the grace)"));
         if (releaseSource && rt.engineSource == s.handle) ReleaseEngineSource(rt, s.handle);
     }
@@ -1722,7 +1725,9 @@ static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
         else
         {
             IMFTrustedInput* trustedInput = nullptr;
+            const int64_t tiT0 = fgpr::PhaseBegin(s.handle, L"trusted.input.begin");   // the freeze trail
             HRESULT hr = rt.cdm->CreateTrustedInput(nullptr, 0, &trustedInput);
+            fgpr::PhaseEnd(s.handle, L"trusted.input.end", tiT0);
             fgpr::RaiseLog(s.handle, std::string("[cenc] CreateTrustedInput hr=") + fgpr::Hex(hr) +
                                      (rt.trustedInputReuse ? " (created once for the CDM)" : " (per attach)"));
             if (FAILED(hr) || !trustedInput)
@@ -1749,7 +1754,9 @@ static void CompleteAttach(Runtime& rt, const std::shared_ptr<Session>& sp)
 
     const std::wstring url = L"cenc://fluentgpu/" + std::to_wstring(s.handle);
     BSTR burl = SysAllocString(url.c_str());
+    const int64_t ssT0 = fgpr::PhaseBegin(s.handle, L"setsource.begin");   // the freeze trail
     HRESULT hr = rt.engineEx->SetSource(burl);
+    fgpr::PhaseEnd(s.handle, L"setsource.end", ssT0);
     SysFreeString(burl);
     s.attachPending = false;
     const int64_t attachMs = fgpr::MsSinceQpc(s.attachPostedQpc);
@@ -1825,6 +1832,7 @@ static void FinishDestroy(Session& s)
 static void DestroyInternal(Runtime& rt, const std::shared_ptr<Session>& sp)
 {
     Session& s = *sp;
+    fgpr::RaisePhase(s.handle, L"session.teardown");   // the freeze trail: the runtime thread takes the destroy
     // The attached session's source stays loaded (paused) through the grace, so an attach that follows replaces it with
     // no empty load in between. A session that is not attached already detached: its source - or the one a successor is
     // waiting to replace - is on the grace timer or gone, and the destroy has nothing of the engine's to release.
@@ -1877,6 +1885,13 @@ static void NoteSwapchainBuild(Session& s, const char* reason, LONG w, LONG h, i
 {
     const int64_t now = fgpr::QpcNow();
     ++s.swapchainBuilds;
+    // The freeze trail: every swap chain MF hands this attach (the first is the protected surface's arrival), its duration the
+    // UpdateVideoStream + handle query that produced it.
+    {
+        wchar_t phase[48];
+        swprintf_s(phase, L"swapchain.build n=%d", (int)s.swapchainBuilds);
+        fgpr::RaisePhase(s.handle, phase, now, updateTicks + handleTicks);
+    }
     const int64_t sincePrevMs = s.lastSwapchainBuildQpc ? fgpr::QpcToMs(now - s.lastSwapchainBuildQpc) : -1;
     s.lastSwapchainBuildQpc = now;
     const double f = 1000.0 / (double)fgpr::QpcFrequency();

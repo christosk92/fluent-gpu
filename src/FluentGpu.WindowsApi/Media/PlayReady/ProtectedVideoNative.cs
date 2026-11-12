@@ -73,6 +73,10 @@ internal static unsafe partial class PrNative
     /// <summary>MF_MEDIA_ENGINE_EVENT_OPMINFO: the output protection (HDCP) the content asked for could not be established on the video's
     /// display and the trust authority let playback fall back (a constricted or blanked picture). <c>a</c>/<c>b</c> = the engine's params.</summary>
     internal const int EvOutputProtection = 54;
+    /// <summary>One step of a protected start or end that could block the GPU or the compositor (the freeze trail,
+    /// <see cref="FluentGpu.Media.ProtectedVideoTrace"/>): <c>text</c> = the step name (optionally a space and detail),
+    /// <c>a</c> = the QPC it was stamped at, <c>b</c> = its duration in QPC ticks on a <c>.end</c> (0 otherwise).</summary>
+    internal const int EvPhase = 55;
 
     // ── state (FgPrState) ──────────────────────────────────────────────────────────────────────────────────────────
 

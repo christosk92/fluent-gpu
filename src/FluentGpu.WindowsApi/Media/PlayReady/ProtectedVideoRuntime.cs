@@ -366,6 +366,9 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                 // FgPrRuntimeCreateOnAdapter is non-blocking by contract (it returns once the runtime thread is up; bring-up completion
                 // is an event), so creating under the gate cannot stall a caller for the CDM's bring-up time.
                 long t0 = Stopwatch.GetTimestamp();
+                // The bring-up (D3D11 video device, the hardware CDM, the media engine) is a freeze-trail step: arm the DWM probe.
+                DwmStallProbe.EnsureStarted();
+                ProtectedVideoTrace.Stamp("runtime.create");
                 int hr;
                 ulong rt;
                 try
@@ -504,9 +507,11 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
     private void DestroyNativeTimed(ulong rt, ulong[] licenses)
     {
         long t0 = Stopwatch.GetTimestamp();
+        ProtectedVideoTrace.Stamp("runtime.destroy.begin");
         Volatile.Write(ref _destroying, 1);
         try { DestroyNative(rt, licenses); }
         finally { Volatile.Write(ref _destroying, 0); }
+        ProtectedVideoTrace.Stamp("runtime.destroy.end", 0, 0, Stopwatch.GetTimestamp() - t0);
         Log($"runtime.destroy done ms={Stopwatch.GetElapsedTime(t0).TotalMilliseconds:F0} " +
             $"racingAcquires={Interlocked.Exchange(ref _racingAcquires, 0)}");
     }
@@ -977,6 +982,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
             // Only the license and log events need the text as a string; every other event passes the pointer through.
             string? line = text != null && ev is PrNative.EvLicenseUsable or PrNative.EvLicenseFailed
                                                   or PrNative.EvLicenseExpired or PrNative.EvLicenseRevoked or PrNative.EvLog
+                                                  or PrNative.EvPhase
                 ? new string(text) : null;
             self.OnNativeEvent(session, ev, a, b, line);
         }
@@ -1053,6 +1059,11 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
 
             case PrNative.EvLog:
                 if (text is not null) Log($"s={session} {text}");
+                return;
+
+            case PrNative.EvPhase:
+                // The freeze trail: stamped at native's own QPC (a), whenever the ring delivered it.
+                if (text is not null) ProtectedVideoTrace.Stamp(text, session, a, b);
                 return;
         }
 

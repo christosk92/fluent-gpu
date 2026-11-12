@@ -123,6 +123,10 @@ enum FgPrEvent
     FgPrEvent_OutputProtection = 54, // MF_MEDIA_ENGINE_EVENT_OPMINFO: the output protection (HDCP) the content asked for could NOT be
                                      // established on the video's display and the trust authority let playback fall back (a
                                      // constricted or blanked picture). a = param1, b = param2 as the engine raised them
+    FgPrEvent_Phase = 55,            // one step of a protected start or end that could block the GPU or the compositor (the freeze
+                                     // trail): `text` = the step name ("d3d11.device.begin", "setsource.end", "first.frame", ...,
+                                     // optionally a space and detail), a = the QPC it was stamped at, b = the step's duration in QPC
+                                     // ticks on a ".end" (0 otherwise). Never dropped; lifecycle cadence only (a few per attach)
 };
 
 /// FgPrSnapshot.state — the lifecycle the managed ProtectedVideoState maps one-to-one.

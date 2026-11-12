@@ -3989,6 +3989,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         long idlePeriod = primary ? f.LastPresentStats.RefreshPeriodQpc : ResolveTargetRefreshPeriod(f, now);
         uint idle = FluentGpu.Hosting.Threading.PresentStatisticsLedger.IdleRefreshes(f.LastSubmitQpc, now, vblankAnchor, idlePeriod);
         f.LastSubmitQpc = now;
+        FluentGpu.Media.ProtectedVideoTrace.NotePresent(now);   // the DWM probe's "we asked for a composition" (two loads when not armed)
         f.PresentLedger.Observe(fsOk && presentId != 0, fs.PresentCount, fs.PresentRefreshCount, presentId, idle);
         if (!primary) return;
 

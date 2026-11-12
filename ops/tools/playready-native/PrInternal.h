@@ -260,6 +260,30 @@ inline void RaiseLog(uint64_t handle, const std::string& line)
     Sink().ring.Push(handle, FgPrEvent_Log, 0, 0, w.c_str(), /*droppable*/ true);
 }
 
+/// The freeze trail (FgPrEvent_Phase): one step of a protected start or end that could block the GPU or the compositor, stamped
+/// with the QPC it happened at (not when the ring delivers it). A blocking step is PhaseBegin + PhaseEnd; PhaseEnd carries the
+/// duration. Never dropped; a few per attach.
+inline void RaisePhase(uint64_t handle, const wchar_t* name, int64_t qpc = 0, int64_t durTicks = 0)
+{
+    if (!Sink().Get()) return;
+    Sink().ring.Push(handle, FgPrEvent_Phase, qpc ? qpc : QpcNow(), durTicks > 0 ? durTicks : 0, name, /*droppable*/ false);
+}
+
+/// Stamp `<step>.begin` now and return the QPC, for the matching PhaseEnd.
+inline int64_t PhaseBegin(uint64_t handle, const wchar_t* beginName)
+{
+    const int64_t t0 = QpcNow();
+    RaisePhase(handle, beginName, t0);
+    return t0;
+}
+
+/// Stamp `<step>.end` now with its duration since `t0` (PhaseBegin's return).
+inline void PhaseEnd(uint64_t handle, const wchar_t* endName, int64_t t0)
+{
+    const int64_t now = QpcNow();
+    RaisePhase(handle, endName, now, t0 ? now - t0 : 0);
+}
+
 }   // namespace fgpr
 
 /// The historical diagnostic entry point, kept so the demuxer's and the source's lines read exactly as before.
@@ -626,6 +650,8 @@ struct Runtime
     /// is created and stopped by TearDown AFTER it is shut down (both on the runtime thread); FgPrSessionPlaceOpmWindow moves it
     /// from the UI thread (OpmWindow is internally synchronized). A runtime whose window could not be created simply has none.
     OpmWindow opm;
+    /// The session whose first placement of `opm` the freeze trail last stamped ("opm.place"): one stamp per attached session.
+    std::atomic<uint64_t> opmPhaseSession{ 0 };
 
     /// The CDM-scope IMFTrustedInput (PrSession.cpp CompleteAttach), held only when `trustedInputReuse` is on: created by
     /// the first protected attach, handed to every later source, released with the CDM (PrRuntime.cpp TearDown; a CDM

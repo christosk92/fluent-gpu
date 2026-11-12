@@ -590,6 +590,7 @@ static HRESULT BringUp(fgpr::Runtime& rt)
 
     // ── D3D11 + MF DXGI manager (shared, multithread-protected). ─────────────────────────────────────────────────────
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+    const int64_t d3dT0 = fgpr::PhaseBegin(0, L"d3d11.device.begin");   // the freeze trail: device + DXGI manager
     {
         // Land the device on the SAME adapter the renderer chose (the managed side passes its LUID), exactly as the clear
         // path's engine does: on a hybrid machine the default adapter can be the OTHER GPU. LUID 0, an adapter that is gone,
@@ -636,9 +637,11 @@ static HRESULT BringUp(fgpr::Runtime& rt)
         { auto setProt = (int (STDMETHODCALLTYPE*)(void*, int))(*(void***)mt)[5]; setProt(mt, 1); ((::IUnknown*)mt)->Release(); } }
     if (FAILED(hr = MFCreateDXGIDeviceManager(&rt.resetToken, rt.dxgiManager.put()))) { LogLine("[cenc] MFCreateDXGIDeviceManager hr=" + hx(hr)); return hr; }
     if (FAILED(hr = rt.dxgiManager->ResetDevice(rt.d3d.get(), rt.resetToken))) { LogLine("[cenc] ResetDevice hr=" + hx(hr)); return hr; }
+    fgpr::PhaseEnd(0, L"d3d11.device.end", d3dT0);
 
     // ── CDM (proven S_FALSE SetPMPHostApp) + protection manager. ────────────────────────────────────────────────────
     CreateDirectoryW(rt.storePath.c_str(), nullptr);
+    const int64_t cdmT0 = fgpr::PhaseBegin(0, L"cdm.create.begin");   // the freeze trail: the (hardware) CDM + its PMP host
     HRESULT cdmHr = E_FAIL;
     IMFContentDecryptionModule* cdm = nullptr;
     // F022: the SL3000 probe. Default on (FgPrSecurity_Probe3000): the `.3000` key system with a "3000" video capability is asked for
@@ -658,6 +661,7 @@ static HRESULT BringUp(fgpr::Runtime& rt)
         rt.securityLevel = 2000;
     }
     if (!cdm) { LogLine("[cenc] CDM creation failed hr=" + hx(cdmHr)); return cdmHr; }
+    fgpr::PhaseEnd(0, rt.securityLevel >= 3000 ? L"cdm.create.end sl=3000" : L"cdm.create.end sl=2000", cdmT0);
     LogLine("[eme-cdm] negotiated security level: SL" + std::to_string(rt.securityLevel) +
             (rt.securityLevel >= 3000 ? " (hardware key system)" : " (software key system)"));
     rt.cdm.attach(cdm);
@@ -706,7 +710,9 @@ static HRESULT BringUp(fgpr::Runtime& rt)
     // colour space and chooses YUV vs RGB from its own MPO feedback (measured on the clear engine, same mfsvr.dll; Chromium's
     // MediaFoundationRenderer and the Microsoft MediaEngine samples set nothing either). The forced BGRA (and F249's NV12 arm) were a no-op.
     if (HWND opmHwnd = rt.opm.Handle()) attrs->SetUINT64(MF_MEDIA_ENGINE_OPM_HWND, (UINT64)(uintptr_t)opmHwnd);
+    const int64_t engineT0 = fgpr::PhaseBegin(0, L"engine.create.begin");
     hr = factory->CreateInstance(0, attrs.get(), rt.engine.put());
+    fgpr::PhaseEnd(0, L"engine.create.end", engineT0);
     LogLine("[cenc] CreateInstance(engine) hr=" + hx(hr));
     if (FAILED(hr) || !rt.engine) return FAILED(hr) ? hr : E_NOINTERFACE;
 
@@ -744,9 +750,12 @@ static void TearDown(fgpr::Runtime& rt)
     rt.trustedInput = nullptr;   // before the CDM that created it
     if (rt.engine)
     {
+        const int64_t t0 = fgpr::PhaseBegin(0, L"engine.shutdown.begin");   // the freeze trail
         HRESULT hr = rt.engine->Shutdown();
+        fgpr::PhaseEnd(0, L"engine.shutdown.end", t0);
         LogLine("[runtime] engine Shutdown hr=" + fgpr::Hex(hr));
     }
+    const int64_t releaseT0 = fgpr::PhaseBegin(0, L"runtime.release.begin");   // engine, CDM, D3D11 video device, MF
     rt.protectedContent = nullptr;
     rt.engineEx = nullptr;
     rt.engine = nullptr;
@@ -760,6 +769,7 @@ static void TearDown(fgpr::Runtime& rt)
     rt.d3d = nullptr;
     rt.mfReady.store(false, std::memory_order_release);
     if (rt.mfStarted) { MFShutdown(); rt.mfStarted = false; }
+    fgpr::PhaseEnd(0, L"runtime.release.end", releaseT0);
     if (rt.comInitialized) { CoUninitialize(); rt.comInitialized = false; }
 }
 
@@ -814,6 +824,9 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, uint64_t at
         {
             int64_t expected = 0;
             s.firstFrameQpc.compare_exchange_strong(expected, qpc, std::memory_order_acq_rel);
+            // The freeze trail: the first frame the renderer presented into this attach's protected swap chain, at the QPC the
+            // engine raised it (the notify sink's stamp, not this item's run).
+            if (expected == 0) fgpr::RaisePhase(h, L"first.frame", qpc);
             // An open PAUSED (startPaused) never plays, so no PLAYING or PAUSE event ever moves it out of Loading: the
             // first frame being up IS the moment it is paused-and-ready. A playing source reports PLAYING itself.
             {
@@ -1238,6 +1251,7 @@ __declspec(dllexport) int32_t __stdcall FgPrRuntimeQueryHdcp(FgPrRuntime rtHandl
     const wchar_t* keySystem = rt->securityLevel >= 3000 ? L"com.microsoft.playready.recommendation.3000" : L"com.microsoft.playready.recommendation";
     wchar_t type[96];
     swprintf_s(type, L"video/mp4;codecs=\"avc1,mp4a\";features=\"hdcp=%d\"", (int)level);
+    const int64_t phaseT0 = fgpr::PhaseBegin(0, L"hdcp.query.begin");   // the freeze trail: the query runs the HDCP handshake
     const HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);   // S_FALSE / RPC_E_CHANGED_MODE: the thread already has COM
     int32_t result = E_FAIL;
     {
@@ -1257,6 +1271,7 @@ __declspec(dllexport) int32_t __stdcall FgPrRuntimeQueryHdcp(FgPrRuntime rtHandl
         else result = (int32_t)hr;
     }
     if (SUCCEEDED(co)) CoUninitialize();
+    fgpr::PhaseEnd(0, L"hdcp.query.end", phaseT0);
     return result;
 }
 
@@ -1271,7 +1286,15 @@ __declspec(dllexport) int32_t __stdcall FgPrSessionPlaceOpmWindow(FgPrRuntime rt
     // prepared session's placement would drag it away from the picture that is on screen.
     if (!rt->Ready() || rt->attached.load(std::memory_order_acquire) != sh) return S_FALSE;
     RECT placed{};
+    const int64_t placeT0 = fgpr::QpcNow();
     const HRESULT hr = rt->opm.Place((HWND)(uintptr_t)hostWindow, left, top, right, bottom, &placed);
+    // The freeze trail: the first placement of the virtual window for each attached session (the window moves over the video's
+    // screen; the output protection the engine engages follows that screen).
+    if (hr == S_OK && rt->opmPhaseSession.exchange(sh, std::memory_order_acq_rel) != sh)
+    {
+        const int64_t now = fgpr::QpcNow();
+        fgpr::RaisePhase(sh, L"opm.place", now, now - placeT0);
+    }
     if (hr == S_OK && rt->opm.FirstPlacement())
         fgpr::RaiseLog(sh, "[opm] virtual window over the video at screen (" + std::to_string(placed.left) + "," + std::to_string(placed.top) +
                            ") " + std::to_string(placed.right - placed.left) + "x" + std::to_string(placed.bottom - placed.top));
