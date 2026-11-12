@@ -32,8 +32,19 @@ public sealed unsafe partial class Win32App : IPlatformApp
 
     public Win32App()
     {
-        SetProcessDpiAwarenessContext(unchecked((nint)(-4)));
+        EnsureDpiAwareness();
         ReadSystemParams();
+    }
+
+    private static int s_dpiAwarenessSet;
+
+    /// <summary>Make the process per-monitor-v2 DPI aware (once; later calls are no-ops). The <see cref="Win32App"/> ctor does
+    /// it; code that must read monitors in physical px BEFORE the platform exists (a restored placement resolved for the
+    /// first frame, <see cref="Win32Placement.Resolve"/>) calls it first so it reads the units the window will have.</summary>
+    public static void EnsureDpiAwareness()
+    {
+        if (Interlocked.Exchange(ref s_dpiAwarenessSet, 1) == 0)
+            SetProcessDpiAwarenessContext(unchecked((nint)(-4)));
     }
 
     /// <summary>One-time OS user-preference reads into <see cref="SystemParams"/> — the same sources WinUI consults:
@@ -345,7 +356,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                        // stay live even while the mouse is held still mid-drag. Safe only because keep-alive paints no longer
                        // block on vblank (IGpuDevice.SuppressLatencyWaitOnce); a blocking paint here would stall each step.
                        WM_MOVE = 0x0003, WM_ENTERSIZEMOVE = 0x0231, WM_EXITSIZEMOVE = 0x0232, WM_TIMER = 0x0113,
-                       WM_DROPFILES = 0x0233;   // OS file/folder drop (DragAcceptFiles); wParam = HDROP
+                       WM_DROPFILES = 0x0233,   // OS file/folder drop (DragAcceptFiles); wParam = HDROP
+                       WM_WINDOWPOSCHANGED = 0x0047;   // the placement edge outside the modal loop (PlacementChanged)
 
     private const nuint MoveLoopTimerId = 1;   // SetTimer id for the modal move/size loop keep-alive pump
     private const nuint LiftTimerId = 2;       // SetTimer id for the touchpad wheel-fallback silence-lift check (fires even when no frames pump)
@@ -445,6 +457,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
+    private const uint WsMaximize = 0x01000000;
     private const uint WsMaximizeBox = 0x00010000, WsSysMenu = 0x00080000, WsExTopmost = 0x00000008, WsExToolWindow = 0x00000080;
     private const int GWL_STYLE = -16;
     private const int GWL_EXSTYLE = -20;
@@ -465,6 +478,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private const int GWLP_USERDATA = -21;
     private const int IDC_ARROW = 32512;
     private const uint SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+    private const uint SWP_SHOWWINDOW = 0x0040, SWP_HIDEWINDOW = 0x0080;
     private const uint WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
 
     // OS file/folder drop is handled by Win32DropTarget (a hand-rolled OLE IDropTarget registered via RegisterDragDrop);
@@ -790,10 +804,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _composited = desc.Composited;     // gates the WM_MOVE per-step repaint: DWM relocates the DComp surface on a pure move
         _minClientDip = desc.MinClientSizeDip; // WM_GETMINMAXINFO may run inside CreateWindowExW
         _resizable = desc.Resizable;       // WM_NCHITTEST may run inside CreateWindowExW
-        _style = desc.Resizable ? WS_OVERLAPPEDWINDOW : WS_OVERLAPPEDWINDOW & ~WsMaximizeBox;
         // A custom-frame TOOL window keeps no system menu: DWM otherwise draws its small caption close button over the
         // reclaimed caption strip (the client's top-right corner) — the engine draws all the chrome there is.
-        if (desc.ToolWindow && desc.CustomFrame) _style &= ~WsSysMenu;
+        _style = StyleFor(desc.Resizable, desc.ToolWindow, desc.CustomFrame);
         _exStyle = (desc.Composited ? (uint)WS_EX_NOREDIRECTIONBITMAP : 0u)
             | (desc.Topmost ? WsExTopmost : 0u) | (desc.ToolWindow ? WsExToolWindow : 0u);
         _self = GCHandle.Alloc(this);
@@ -833,14 +846,30 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
         RECT rc = new() { left = 0, top = 0, right = _w, bottom = _h };
         AdjustForFrame(&rc);
+        int createX = CW_USEDEFAULT, createY = CW_USEDEFAULT, createW = rc.right - rc.left, createH = rc.bottom - rc.top;
+        uint createStyle = _style;
+
+        // A RESTORED placement (WindowDesc.InitialBoundsPx): the window is created AT the resolved normal rect, on the monitor
+        // it lies on (so it is born at that monitor's DPI), and maximized there through WS_MAXIMIZE with that rect as its
+        // restore rect. CreateWindowEx applies the maximize while the window is still hidden, so the host's first layout, its
+        // swapchain and the first frame are already at the final size: nothing moves or resizes once it is shown.
+        bool restore = desc.InitialBoundsPx.W > 1f && desc.InitialBoundsPx.H > 1f;
+        WindowRestorePlan plan = default;
+        if (restore)
+        {
+            plan = Win32Placement.Resolve(desc.InitialBoundsPx, desc.InitialMaximized && desc.Resizable, desc.CustomFrame, desc.Resizable, desc.ToolWindow);
+            createX = (int)plan.BoundsPx.X; createY = (int)plan.BoundsPx.Y;
+            createW = (int)plan.BoundsPx.W; createH = (int)plan.BoundsPx.H;
+            if (plan.Maximized) createStyle |= WsMaximize;
+        }
 
         s_constructing = this;
         fixed (char* cn = ClassName)
         fixed (char* title = desc.Title)
         {
             _hwnd = CreateWindowExW(
-                _exStyle, cn, title, _style,
-                CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
+                _exStyle, cn, title, createStyle,
+                createX, createY, createW, createH,
                 HWND.NULL, HMENU.NULL, hinst, (void*)GCHandle.ToIntPtr(_self));
         }
         s_constructing = null;
@@ -864,8 +893,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         {
             SetWindowPos(_hwnd, HWND.NULL, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-            _wasZoomed = IsZoomed(_hwnd);
         }
+        _wasZoomed = IsZoomed(_hwnd);
 
         uint dpi = GetDpiForWindow(_hwnd);
         _rawDpiScale = dpi == 0 ? 1f : dpi / 96f;
@@ -874,9 +903,18 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         // The physical window size is seeded from the RAW DPI scale only — deliberately NOT the effective scale: a
         // persisted zoom must not grow (or shrink) the physical window at startup. Browser behavior: the window stays
         // put and the DIP viewport shrinks/grows instead (ClientSizePx / _scale — the host's EnsureSize re-lays-out).
-        ResizeClientPhysical((int)MathF.Round(requestedW * _rawDpiScale), (int)MathF.Round(requestedH * _rawDpiScale));
+        // A restored placement is already the outer rect the user left: it is not resized to SizePx.
+        if (!restore)
+            ResizeClientPhysical((int)MathF.Round(requestedW * _rawDpiScale), (int)MathF.Round(requestedH * _rawDpiScale));
 
         RefreshClientSize();
+        if (restore)
+        {
+            var outer = OuterBoundsPx;
+            Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"[window.placement] created rect={outer.X:0},{outer.Y:0},{outer.W:0},{outer.H:0} normal={plan.BoundsPx.X:0},{plan.BoundsPx.Y:0},{plan.BoundsPx.W:0},{plan.BoundsPx.H:0} " +
+                $"max={(IsZoomed(_hwnd) ? 1 : 0)} client={_w}x{_h} predicted={plan.ClientSizeDip.Width * plan.DpiScale:0}x{plan.ClientSizeDip.Height * plan.DpiScale:0} dpi={dpi} clamped={(plan.Clamped ? 1 : 0)}"));
+        }
         // Seed the true per-monitor refresh so a caller reading DisplayRefreshPeriodQpc before the first
         // WM_DISPLAYCHANGE/WM_EXITSIZEMOVE still gets a real value instead of the "unknown" 0. _compositorClock is
         // still null here, so OnDisplayChanged's Reprobe call is a harmless no-op at this point.
@@ -1422,6 +1460,66 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private volatile bool _hasLiveVideo;
 
     public void SetHasLiveVideo(bool hasLiveVideo) => _hasLiveVideo = hasLiveVideo;
+
+    // The window style a WindowDesc creates (the ctor's own rule), so a placement resolved before the window exists
+    // (Win32Placement.Resolve) frames it exactly as the ctor will.
+    private static uint StyleFor(bool resizable, bool toolWindow, bool customFrame)
+    {
+        uint style = resizable ? WS_OVERLAPPEDWINDOW : WS_OVERLAPPEDWINDOW & ~WsMaximizeBox;
+        if (toolWindow && customFrame) style &= ~WsSysMenu;
+        return style;
+    }
+
+    /// <summary>The frame a window of this shape adds around its client at <paramref name="dpi"/> (physical px per edge):
+    /// <c>AdjustWindowRectExForDpi</c> for a standard frame; a custom frame reclaims the caption (top 0), keeping the L/R/B
+    /// thin frame — the same arithmetic as <see cref="ClientToWindowPx"/>. For a window that does not exist yet.</summary>
+    internal static void FrameInsets(bool customFrame, bool resizable, bool toolWindow, uint dpi,
+        out int left, out int top, out int right, out int bottom)
+    {
+        if (dpi == 0) dpi = 96u;
+        if (!customFrame)
+        {
+            RECT rc = default;
+            AdjustWindowRectExForDpi(&rc, StyleFor(resizable, toolWindow, false), false, toolWindow ? WsExToolWindow : 0u, dpi);
+            left = -rc.left; top = -rc.top; right = rc.right; bottom = rc.bottom;
+            return;
+        }
+        int padded = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+        left = right = padded + GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi);
+        bottom = padded + GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi);
+        top = 0;
+    }
+
+    /// <summary>Raised on the window's thread when its placement may have changed: the end of an OS move/size loop, and a
+    /// move, resize, maximize, minimize, restore, show or hide that happened outside one (a keyboard snap, code, a DPI hop,
+    /// full screen). Never inside the loop, so a drag is one call. Keep it cheap: it runs inside the window procedure.</summary>
+    public Action? PlacementChanged { get; set; }
+
+    /// <summary>The window's normal (restore) placement as it is now — see <see cref="WindowPlacement"/>. While full screen it
+    /// is the placement full screen returns to. Window thread only.</summary>
+    public WindowPlacement Placement
+    {
+        get
+        {
+            if (_closed) return default;
+            bool visible = IsWindowVisible(_hwnd) != 0;
+            bool iconic = IsIconic(_hwnd);
+            bool tool = (_exStyle & WsExToolWindow) != 0;
+            if (_fullscreen)
+            {
+                if (_windowedWasZoomed)
+                    return new WindowPlacement(Win32Placement.NormalRectScreenPx(_hwnd, tool, out _), true, iconic, visible, true);
+                RECT r = _windowedRect;
+                return new WindowPlacement(new RectF(r.left, r.top, r.right - r.left, r.bottom - r.top), false, iconic, visible, true);
+            }
+            if (IsZoomed(_hwnd) || iconic)
+            {
+                var normal = Win32Placement.NormalRectScreenPx(_hwnd, tool, out bool toMax);
+                return new WindowPlacement(normal, !iconic || toMax, iconic, visible, false);
+            }
+            return new WindowPlacement(OuterBoundsPx, false, false, visible, false);
+        }
+    }
 
     // client (physical px) → window (outer) size, adding the current frame for this window's style/exstyle/DPI. Standard
     // frame ⇒ AdjustWindowRectExForDpi; a custom frame reclaims the caption as client (WM_NCCALCSIZE keeps the top inset
@@ -2428,6 +2526,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // so this settle point is the one reliable place a cross-monitor drag ends. Re-derive here too.
                 OnDisplayChanged();
                 PaintRequested?.Invoke();   // one settle frame at the final position
+                PlacementChanged?.Invoke(); // the gesture's one placement edge (the loop's own moves were held back below)
                 return true;
             case WM_TIMER:
                 if ((nuint)wParam == PresenceTimerId) { CheckPointerPresence("watch"); return true; }
@@ -2483,6 +2582,18 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 if (MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST) != _monitor) OnDisplayChanged();
                 if (!_composited) PaintRequested?.Invoke();
                 return true;
+            case WM_WINDOWPOSCHANGED:
+                // PlacementChanged outside the modal loop: a keyboard / Snap-layout snap, maximize, minimize, restore, show,
+                // hide, full screen, a DPI hop or code moved the window. Inside the loop every step is held back for the one
+                // WM_EXITSIZEMOVE edge. Not consumed: DefWindowProc still turns it into WM_SIZE / WM_MOVE.
+                if (!_inMoveSizeLoop && PlacementChanged is { } placementChanged)
+                {
+                    uint posFlags = ((WINDOWPOS*)(nint)lParam)->flags;
+                    if ((posFlags & (SWP_NOMOVE | SWP_NOSIZE)) != (SWP_NOMOVE | SWP_NOSIZE)
+                        || (posFlags & (SWP_SHOWWINDOW | SWP_HIDEWINDOW)) != 0)
+                        placementChanged();
+                }
+                return false;
             // ── pointer input (mouse-in-pointer: PT_MOUSE/PT_TOUCH/PT_PEN all arrive here) ──────────────────────────────
             // The client moved means we are no longer in the NC area: if a caption press was held and dragged into the
             // client (the NC path holds no capture), cancel it exactly like the NC-leave path, then let real pointer

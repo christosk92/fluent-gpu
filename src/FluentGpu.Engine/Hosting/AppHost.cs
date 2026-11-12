@@ -3559,20 +3559,9 @@ public sealed partial class AppHost : IDisposable
         // (headless / query failure → RectF.Infinite).
         var restored = request.InitialBoundsPx;
         bool haveRestored = restored.W > 1f && restored.H > 1f;
-        var work = _app.GetWorkArea(haveRestored
-            ? new Point2(restored.X + restored.W * 0.5f, restored.Y + restored.H * 0.5f)
-            : OwnerMonitorAnchorPx());
-        if (haveRestored)
-        {
-            if (!work.IsInfinite)
-            {
-                float w = MathF.Min(restored.W, work.W), h = MathF.Min(restored.H, work.H);
-                float x = MathF.Min(MathF.Max(restored.X, work.X), work.X + work.W - w);
-                float y = MathF.Min(MathF.Max(restored.Y, work.Y), work.Y + work.H - h);
-                win.SetBoundsPx(new RectF(x, y, w, h));
-            }
-            else win.SetBoundsPx(restored);
-        }
+        // The clamp is WindowPlacementRules', shared with the main window's restore (AppOptions.InitialBoundsPx).
+        var work = _app.GetWorkArea(haveRestored ? WindowPlacementRules.Anchor(restored) : OwnerMonitorAnchorPx());
+        if (haveRestored) win.SetBoundsPx(WindowPlacementRules.ClampIntoWorkArea(restored, work));
         else if (!work.IsInfinite)
         {
             float wPx = request.InitialSizeDip.Width * scale;
@@ -3770,17 +3759,7 @@ public sealed partial class AppHost : IDisposable
         var w = child._window;
         var restored = request.InitialBoundsPx;
         if (restored.W > 1f && restored.H > 1f)
-        {
-            var work = _app.GetWorkArea(new Point2(restored.X + restored.W * 0.5f, restored.Y + restored.H * 0.5f));
-            if (!work.IsInfinite)
-            {
-                float rw = MathF.Min(restored.W, work.W), rh = MathF.Min(restored.H, work.H);
-                float rx = MathF.Min(MathF.Max(restored.X, work.X), work.X + work.W - rw);
-                float ry = MathF.Min(MathF.Max(restored.Y, work.Y), work.Y + work.H - rh);
-                w.SetBoundsPx(new RectF(rx, ry, rw, rh));
-            }
-            else w.SetBoundsPx(restored);
-        }
+            w.SetBoundsPx(WindowPlacementRules.ClampIntoWorkArea(restored, _app.GetWorkArea(WindowPlacementRules.Anchor(restored))));
         w.SetTitle(child._strings.Intern(request.Title));
         // The reveal re-applies _revealTopmost (TryRevealDetached): it must be THIS open's value, or a window parked while
         // always-on-top came back topmost after the preference was turned off.

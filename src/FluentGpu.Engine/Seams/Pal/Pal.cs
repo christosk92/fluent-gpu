@@ -516,7 +516,11 @@ public interface IPlatformPopupWindow : IDisposable
 /// The overlay shape (a desktop widget): <paramref name="Topmost"/> = created above every non-topmost window (re-settable through
 /// <see cref="IPlatformWindow.SetTopmost"/>); <paramref name="ToolWindow"/> = no taskbar button and no Alt+Tab entry;
 /// <paramref name="Resizable"/> false = the user cannot drag the frame or maximize (code still sizes it), while the frame, the
-/// shadow and the rounded corners stay. The defaults keep the ordinary app window.</summary>
+/// shadow and the rounded corners stay. The defaults keep the ordinary app window.
+/// A restored placement: <paramref name="InitialBoundsPx"/> (the NORMAL outer rect, physical virtual-screen px; empty = none)
+/// creates the window directly at that rect, clamped by <see cref="WindowPlacementRules.ClampIntoWorkArea"/> into the work area
+/// of the monitor nearest it, and <see cref="SizePx"/> is then ignored; <paramref name="InitialMaximized"/> creates it maximized
+/// on that monitor with that rect as its restore rect. Nothing moves or resizes after creation.</summary>
 public readonly record struct WindowDesc(
     string Title,
     Size2 SizePx,
@@ -528,7 +532,9 @@ public readonly record struct WindowDesc(
     bool SkipDropAndTouchpad = false,
     bool Topmost = false,
     bool ToolWindow = false,
-    bool Resizable = true);
+    bool Resizable = true,
+    RectF InitialBoundsPx = default,
+    bool InitialMaximized = false);
 
 /// <summary>How native input should affect a bounded platform wait.</summary>
 public enum PlatformInputWakePolicy : byte
