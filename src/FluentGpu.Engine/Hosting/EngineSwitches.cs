@@ -56,6 +56,9 @@ public enum ImageAtlasExperiment : byte
 /// <item><c>playready-sl2000</c> — the protected runtime never probes hardware PlayReady SL3000 (the <c>.3000</c> key system with a
 /// "3000" video capability) and asks for the software SL2000 CDM it always did. Without it the runtime probes SL3000 and falls back to
 /// SL2000 when the machine cannot grant it, and logs the negotiated level (F022; default off = probe on).</item>
+/// <item><c>protected-keeper=off|launch|runtime|auto</c> — the protected composition keeper's A/B arm
+/// (<see cref="FluentGpu.Media.ProtectedKeeperPolicy"/>): never, armed with the main window's first present, armed at this run's first
+/// SL3000 negotiation, or the default lifetime (launch on an adapter a previous run negotiated SL3000 on, else at the negotiation).</item>
 /// <item><c>ledger</c> or <c>ledger=PATH</c> — the per-frame <see cref="FrameLedger"/> on from the first frame (CPU, memory and GPU
 /// for every frame); with a PATH, FluentApp writes the binary dump there and one CSV per stream beside it when the window closes.</item>
 /// <item><c>group-repair-validate</c> — every unblurred group surface the composite repairs in place (only the rects that
@@ -320,6 +323,15 @@ public static class EngineSwitches
             case "present-nowait": NonBlockingSecondaryPresent = true; return true;
             case "gpu-timing": GpuPassTiming = true; return true;
             case "playready-sl2000": ForcePlayReadySl2000 = true; return true;
+            case "protected-keeper":
+                switch (value)
+                {
+                    case "off": FluentGpu.Media.ProtectedKeeperPolicy.Switch = FluentGpu.Media.ProtectedKeeperSwitch.Off; return true;
+                    case "launch": FluentGpu.Media.ProtectedKeeperPolicy.Switch = FluentGpu.Media.ProtectedKeeperSwitch.Launch; return true;
+                    case "runtime": FluentGpu.Media.ProtectedKeeperPolicy.Switch = FluentGpu.Media.ProtectedKeeperSwitch.Runtime; return true;
+                    case "auto": FluentGpu.Media.ProtectedKeeperPolicy.Switch = FluentGpu.Media.ProtectedKeeperSwitch.Auto; return true;
+                    default: return false;
+                }
             case "frame-trace":
                 // `--fg frame-trace[=PATH]`: the frame/animation/input timeline (FrameTrace.cs); started by the platform once the host exists.
                 FrameTrace.RequestedPath = value ?? "";

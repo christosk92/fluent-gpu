@@ -62,6 +62,17 @@ public static class ProtectedVideoTrace
     /// <summary>Presents submitted while armed (monotonic): the probe differences it across a stall.</summary>
     public static long Presents => Volatile.Read(ref s_presents);
 
+    /// <summary>Starts the DWM stall probe's thread (FluentGpu.WindowsApi's <c>DwmStallProbe</c>, installed by the host): what a step
+    /// outside the protected runtime calls before it stamps, so its stamps are measured too (the protected composition keeper). Null =
+    /// no probe; a stamp then only logs.</summary>
+    public static Action? ProbeStarter;
+
+    /// <summary>Start the probe thread if a host installed <see cref="ProbeStarter"/> (idempotent: the probe starts once per process).</summary>
+    public static void EnsureProbe()
+    {
+        try { ProbeStarter?.Invoke(); } catch { /* the probe is a diagnostic: never a reason to fail the step it measures */ }
+    }
+
     /// <summary>A protected session came alive: arm the probe until <see cref="ExitSession"/> (plus the linger).</summary>
     public static void EnterSession()
     {

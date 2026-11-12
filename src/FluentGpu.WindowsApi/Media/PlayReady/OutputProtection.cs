@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.Versioning;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace FluentGpu.WindowsApi.Media.PlayReady;
 
@@ -38,8 +39,9 @@ public readonly record struct OutputProtectionNotice(OutputProtectionCause Cause
 /// the window the picture is in, Media Foundation's HDCP query, and the engine's own "it did not take" reports.
 /// <para><b>Nothing here is a passive pre-check.</b> No Windows API reports whether a SINK (a monitor behind a dock, an adapter) can
 /// carry HDCP without running the handshake: the GPU only knows its own connector until HDCP is turned on. <see cref="QueryHdcp"/>
-/// turns HDCP on to answer (its documentation says so), so it is asked only once protected video is already engaged on that display,
-/// where it reports the engagement instead of starting a new one.</para>
+/// turns HDCP on to answer (its documentation says so), so it is asked only while a protected video is opening or up on that display:
+/// right after the CDM is up for that open (Firefox's moment), so its handshake runs before the picture attaches rather than on top
+/// of the attach, and never for a display no protected video is headed for.</para>
 /// </summary>
 [SupportedOSPlatform("windows10.0.17763.0")]
 public static class OutputProtection
@@ -63,7 +65,7 @@ public static class OutputProtection
     /// <summary>Media Foundation's HDCP feature query at <paramref name="level"/> (1 = HDCP, 2 = HDCP 2.2 Type 1) for the displays the
     /// process's video intersects, under the key system the runtime negotiated. Synchronous and possibly slow on its first call after a
     /// display change (the OS caches the answer until the topology changes): call it on a worker thread, at most every 500 ms. It RUNS
-    /// the HDCP handshake to answer, so call it only while protected video is engaged on that display. <paramref name="hr"/> is the
+    /// the HDCP handshake to answer, so call it only while protected video is opening or up on that display. <paramref name="hr"/> is the
     /// native result (the CANPLAY value, or the failing HRESULT).</summary>
     public static HdcpAnswer QueryHdcp(int level, out int hr)
     {
@@ -81,6 +83,21 @@ public static class OutputProtection
             _ => HdcpAnswer.Unknown,
         };
     }
+
+    /// <summary>The <paramref name="hr"/> of a <see cref="QueryHdcp"/> that had no runtime to ask: none is up, or its bring-up (the
+    /// CDM) has not finished. Ask again once it has (<see cref="WaitRuntimeReadyAsync"/>).</summary>
+    public static bool IsRuntimeNotReady(int hr) => hr == PrNative.EHandle;
+
+    private static TaskCompletionSource s_ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Completes when the process runtime next reports its bring-up done (the CDM and the media engine are up, so
+    /// <see cref="QueryHdcp"/> can answer), or after <paramref name="timeoutMs"/>, whichever is first. Never faults.</summary>
+    public static Task WaitRuntimeReadyAsync(int timeoutMs)
+        => Task.WhenAny(Volatile.Read(ref s_ready).Task, Task.Delay(Math.Max(1, timeoutMs)));
+
+    /// <summary>The process runtime's bring-up finished (native notifier thread).</summary>
+    internal static void RaiseRuntimeReady()
+        => Interlocked.Exchange(ref s_ready, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).TrySetResult();
 
     /// <summary>The session placed the OPM window over its picture in <paramref name="hostWindow"/> (every pump: one volatile write).</summary>
     internal static void NoteVideoWindow(nuint hostWindow)

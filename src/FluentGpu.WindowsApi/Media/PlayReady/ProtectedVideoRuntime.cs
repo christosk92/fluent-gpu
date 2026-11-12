@@ -267,6 +267,10 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
         PlayReadyCdmPrewarm.Start(softwareOnly: FluentGpu.Hosting.EngineSwitches.ForcePlayReadySl2000);
     }
 
+    /// <summary>Start the DWM freeze probe's thread (<c>DwmStallProbe</c>; idempotent). The host installs it as
+    /// <see cref="ProtectedVideoTrace.ProbeStarter"/>, so a protected step outside this runtime (the composition keeper) is measured.</summary>
+    public static void StartFreezeProbe() => DwmStallProbe.EnsureStarted();
+
     /// <summary>The native runtime handle, 0 when bring-up has not run or failed.</summary>
     internal ulong Handle => Volatile.Read(ref _rt);
 
@@ -1014,6 +1018,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
             case PrNative.EvRuntimeReady:
                 Volatile.Write(ref _readyTimestamp, Stopwatch.GetTimestamp());
                 Log($"runtime.ready ms={a}");
+                if (ReferenceEquals(s_shared, this)) OutputProtection.RaiseRuntimeReady();
                 return;
 
             case PrNative.EvRuntimeFailed:
@@ -1063,7 +1068,12 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
 
             case PrNative.EvPhase:
                 // The freeze trail: stamped at native's own QPC (a), whenever the ring delivered it.
-                if (text is not null) ProtectedVideoTrace.Stamp(text, session, a, b);
+                if (text is not null)
+                {
+                    ProtectedVideoTrace.Stamp(text, session, a, b);
+                    // Hardware DRM on this adapter: arm the protected composition keeper now, before the first protected frame.
+                    if (text.StartsWith("cdm.create.end sl=3000", StringComparison.Ordinal)) ProtectedKeeperPolicy.NoteHardwareDrm();
+                }
                 return;
         }
 

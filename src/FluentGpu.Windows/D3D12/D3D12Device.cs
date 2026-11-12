@@ -4590,6 +4590,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public void CommitVideoComposition()
     {
         AssertSubmitThread();
+        TickProtectedKeeper();   // an attach it makes rides this commit
         CommitVideoCompositor();
     }
 

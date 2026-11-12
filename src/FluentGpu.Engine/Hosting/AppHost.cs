@@ -5851,6 +5851,7 @@ public sealed partial class AppHost : IDisposable
             _renderThread = BuildRenderThread(_asyncActive, _window.CreateRenderDisplayClock());
             _device.MarkRenderConfined();
             _videoSurfaces.StructuralWake = _renderThread.WakeForVideo;   // a handle arriving wakes the loop: no UI publication needed (F208)
+            FluentGpu.Media.ProtectedKeeperPolicy.Wake = _renderThread.WakeForVideo;   // the keeper attaches on this loop's turns (main window)
         }
         else if (_isDetachedChild && parentRenderThread is not null)
             _videoSurfaces.StructuralWake = parentRenderThread.WakeForVideo;   // a pop-out's handle wakes the PARENT's loop, which drains it

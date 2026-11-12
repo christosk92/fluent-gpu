@@ -42,6 +42,10 @@ namespace FluentGpu.Pal.Windows;
 /// black rather than the backdrop, and under a fading picture it must fade with it, or the faded part would read as black, not as the
 /// backdrop. A cleared ramp puts the plain brushes back. The gradient and its stops are built with the slot's first ramp and kept; a
 /// changed ramp rewrites only the points and stops that differ.</para>
+/// <para>The protected composition keeper (<see cref="SetKeeperSurface"/>, the main window's presenter only): one 1x1 sprite at the
+/// bottom of the root collection, outside the slot table, over a tiny hardware-protected swap chain the device keeps for the life of
+/// the process (<see cref="ProtectedCompositionKeeper"/>), so DWM's protected composition is entered once, not at every protected
+/// video's arrival and departure.</para>
 /// <para>Render-thread confined like the rest of the device. Place / SetViewport / SetCornerRadii / SetVisible only record;
 /// <see cref="ApplyPending"/> first lets the device pump the compositor's queue (only on a turn that moves no picture), then writes
 /// only what changed (a pure move writes one Offset) and
@@ -141,6 +145,11 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     private ICompositionBrush* _black;   // the backing sprites' shared opaque black brush
     private bool _rootFailed;      // the window's target could not be built: logged once, not retried
 
+    // The protected composition keeper's sprite (SetKeeperSurface; main window only): outside the slot table, at the bottom of the root.
+    private IVisual* _keeperSprite;
+    private ICompositionSurfaceBrush* _keeperBrush;
+    private ICompositionSurface* _keeperSurface;
+
     // Fault-logging dedup for Ok(): per presenter, keyed on the raw HRESULT.
     private readonly HashSet<uint> _loggedHrs = new();
 
@@ -198,6 +207,71 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     private bool UiBound => _target is { DcompRoot: not null, DcompVisual: not null };
 
     public bool CanAttachSurfaces => UiBound && EnsureRoot();
+
+    /// <summary>How opaque the keeper's sprite is: one 255th, invisible in any case. It is also 1 px in the window's top-left corner
+    /// (inside the rounded window corner DWM cuts away, and under the UI when the window has square corners). DWM's protected
+    /// composition follows the protected surface being in the tree, not its visibility (measured: occluded and opacity 0.004 held).</summary>
+    internal const float KeeperOpacity = 0.004f;
+
+    /// <summary>Show the protected composition keeper's surface (<see cref="ProtectedCompositionKeeper"/>): the first call builds a
+    /// 1x1 sprite at the BOTTOM of this window's root collection, outside the slot table (slots attach above it); a later call
+    /// swaps the brush's surface in the same commit, so a re-created keeper replaces the old one with no moment without a protected
+    /// surface. False when the window's tree or the wrap was refused (logged once per HRESULT). Render thread; cold.</summary>
+    internal bool SetKeeperSurface(nuint handle)
+    {
+        _device.AssertRenderThread();
+        if (!UiBound || !EnsureRoot()) return false;
+        if (_keeperSprite == null)
+        {
+            ICompositionSurfaceBrush* sb;
+            if (!Ok(Comp->CreateSurfaceBrush(&sb), "CreateSurfaceBrush(keeper)")) return false;
+            ICompositionBrush* brush = null;
+            IVisual* sprite = null;
+            bool built = Ok(sb->put_Stretch(CompositionStretch.CompositionStretch_Fill), "keeper brush put_Stretch(Fill)")
+                && Ok(((IUnknown*)sb)->QueryInterface(__uuidof<ICompositionBrush>(), (void**)&brush), "QI ICompositionBrush(keeper)")
+                && Sprite("CreateSpriteVisual(keeper)", brush, out sprite)
+                && Ok(sprite->put_Size(new Vector2(1f, 1f)), "keeper put_Size")
+                && Ok(sprite->put_Opacity(KeeperOpacity), "keeper put_Opacity")
+                && Ok(_rootKids->InsertAtBottom(sprite), "root InsertAtBottom(keeper)");
+            if (brush != null) brush->Release();
+            if (!built)
+            {
+                if (sprite != null) sprite->Release();
+                sb->Release();
+                return false;
+            }
+            _keeperSprite = sprite;
+            _keeperBrush = sb;
+        }
+        ICompositionSurface* surface;
+        if (!Ok(_device.VideoCompositorInterop->CreateCompositionSurfaceForHandle((HANDLE)(nint)handle, &surface), "CreateCompositionSurfaceForHandle(keeper)"))
+            return false;
+        if (!Ok(_keeperBrush->put_Surface(surface), "keeper brush put_Surface"))
+        {
+            surface->Release();
+            return false;
+        }
+        if (_keeperSurface != null) _keeperSurface->Release();   // the replaced keeper's wrap: its swap chain goes after the commit
+        _keeperSurface = surface;
+        _device.NoteVideoCompositorCommitDue();
+        Diag.Line($"[video.surface] [video.wuc] keeper bound handle 0x{handle:X} hwnd=0x{(nint)_target.Hwnd:X} (1 px, opacity 1/255, bottom of the root)");
+        return true;
+    }
+
+    /// <summary>Whether this presenter's tree holds a keeper surface now.</summary>
+    internal bool HoldsKeeper => _keeperSurface != null;
+
+    private void ReleaseKeeper()
+    {
+        if (_keeperSprite != null)
+        {
+            if (_rootKids != null) Ok(_rootKids->Remove(_keeperSprite), "root Remove(keeper)");
+            _keeperSprite->Release();
+            _keeperSprite = null;
+        }
+        if (_keeperBrush != null) { _keeperBrush->Release(); _keeperBrush = null; }
+        if (_keeperSurface != null) { _keeperSurface->Release(); _keeperSurface = null; }
+    }
 
     public VideoSurfaceId CreateSurface()
     {
@@ -1021,6 +1095,7 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         _anyDirty = false;
         _graphDirty = false;
         _attachPending = false;
+        ReleaseKeeper();   // its swap chain is the device's (D3D12Device.VideoCompositor.cs), released after this wrap
         if (_rootKids != null) { _rootKids->Release(); _rootKids = null; }
         if (_root != null) { _root->Release(); _root = null; }
         if (_windowTarget != null)
