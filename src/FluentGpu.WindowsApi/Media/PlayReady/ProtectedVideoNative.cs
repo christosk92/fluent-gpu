@@ -77,6 +77,21 @@ internal static unsafe partial class PrNative
     /// <see cref="FluentGpu.Media.ProtectedVideoTrace"/>): <c>text</c> = the step name (optionally a space and detail),
     /// <c>a</c> = the QPC it was stamped at, <c>b</c> = its duration in QPC ticks on a <c>.end</c> (0 otherwise).</summary>
     internal const int EvPhase = 55;
+    /// <summary>With an attach's first frame: <c>a</c> = how the video got onto the engine (<see cref="ProgramOpen"/> ..
+    /// <see cref="ProgramRebuild"/>), <c>b</c> = ms from the attach to that first frame. The always-on <c>[video] program.switch</c>
+    /// line.</summary>
+    internal const int EvProgramSwitch = 56;
+
+    // ── how an attach put its session on the engine (FgPrProgram) ──────────────────────────────────────────────────
+
+    /// <summary>The runtime's first protected open: a new source and SetSource.</summary>
+    internal const int ProgramOpen = 0;
+    /// <summary>A program switch whose formats all cross silently: no SetSource, the decoder keeps its pool.</summary>
+    internal const int ProgramSilent = 1;
+    /// <summary>A program switch with a real format difference at the same frame size: no SetSource; the decoder rebuilds its pool.</summary>
+    internal const int ProgramAnnounced = 2;
+    /// <summary>The fallback: the source could not take the program, so this video got a new SetSource.</summary>
+    internal const int ProgramRebuild = 3;
 
     // ── state (FgPrState) ──────────────────────────────────────────────────────────────────────────────────────────
 
@@ -169,7 +184,10 @@ internal static unsafe partial class PrNative
         public long FramesDropped;
         public long FramesSampledQpc;
         public int FeedComplete;
-        public int Reserved0;
+        /// <summary>Bumped when <see cref="Handle"/> names a NEW swap chain (or RESOURCELOST asks for the same one to be wrapped
+        /// again): the only reason to re-bind a handle value already bound. Every program of the runtime's source publishes the
+        /// same handle with the same generation.</summary>
+        public int HandleGeneration;
     }
 
     /// <summary>Blittable mirror of <c>FgPrProbeResult</c> — what the demuxer found in a local fragmented MP4.</summary>

@@ -1483,6 +1483,34 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
         }
     }
 
+    // ── the persistent pipeline's surface and programs ─────────────────────────────────────────────────────────────
+
+    // The (handle, generation) each presenting slot - (host ordinal, binding token) - was last handed by a session of this
+    // runtime. Native keeps ONE handle per swap chain for every program of its source, so the next video's session binds the
+    // same value into the same slot: a per-session "first bind" would force a re-wrap (wuc.attach) at every switch. UI thread
+    // (Bind runs in the pump); the lock only guards a runtime two windows' pumps may share.
+    private readonly Dictionary<(int Host, int Token), (nuint Handle, int Generation)> _boundSurfaces = new();
+    private string _lastProgramKey = "none";
+
+    /// <summary>Whether binding <paramref name="handle"/> of native generation <paramref name="generation"/> into the slot must
+    /// be FORCED (re-wrapped although the registry may already hold that value), and records it as the slot's: when the slot
+    /// shows the same value from another generation (a new swap chain the kernel gave a reused value, or RESOURCELOST), or this
+    /// runtime has not bound the slot yet (the value may be a closed handle of an earlier runtime). Alloc-free.</summary>
+    internal bool BindNeedsForce(int host, int token, nuint handle, int generation)
+    {
+        lock (_boundSurfaces)
+        {
+            bool known = _boundSurfaces.TryGetValue((host, token), out var last);
+            if (known && last.Handle == handle && last.Generation == generation) return false;
+            _boundSurfaces[(host, token)] = (handle, generation);
+            return !known || last.Handle == handle;
+        }
+    }
+
+    /// <summary>The key of the video the engine played before <paramref name="next"/>, which becomes the one it plays now: the
+    /// <c>from=</c> of the <c>[video] program.switch</c> line.</summary>
+    internal string SwapLastProgramKey(string next) => Interlocked.Exchange(ref _lastProgramKey, next);
+
     // ── logging ────────────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>One always-on <c>[video.native]</c> line. Lifecycle only; never per frame, never per high-rate event.</summary>
