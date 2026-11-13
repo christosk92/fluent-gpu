@@ -973,6 +973,25 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
 
     sealed class ShelfCardSlot(PagedShelfCore<T> owner, BoundItemScope<T> scope) : Component
     {
+        // The width this slot's bound card is laid out at (PagedShelf.CardWidth): the shelf's live card width while the card stands on or
+        // within a cell of the visible strip, and the width it last had there while it is further off the page. A card nobody can see is not
+        // re-laid out on every frame of a slide; it takes the live width a cell before it can enter the page, so it never arrives at a stale one.
+        float _heldW = float.NaN;
+        Func<float>? _nearWidth;
+
+        float NearWidth()
+        {
+            float cw = owner._cardW.Value;
+            int index = scope.Index.Value;
+            float offset = (float)owner._shelfHandle.Offset.Value;
+            float view = owner._w.Value + 2f * owner._bleed;
+            int span = Math.Max(1, owner._effSpanSig.Value);
+            float step = cw + owner._gap;
+            float x = owner._bleed + (index <= 0 ? 0 : index + span - 1) * step;
+            if (!(_heldW > 0f) || (x < offset + view + step && x + span * step > offset - step)) _heldW = cw;   // never holds a width it never had
+            return _heldW;
+        }
+
         public override Element Render()
         {
             // DATA read (subscribes): the gated snapshot is what re-renders this card. The BUILDERS come off _latest —
@@ -1022,7 +1041,9 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             var root = new BoxEl { Direction = 1, Grow = 1f, Layout = resize, Children = [card] };
             // The provider sits OVER the slot's root, so the card stays a keyed child of an unkeyed box (the E21 lead remount keeps its key).
             if (!owner._cardWidthBound) return root;
-            return Ctx.Provide<IReadSignal<float>?>(PagedShelf.CardWidth, bindsWidth ? owner._cardW : null, root);
+            // A single row's cells stand at known places, so a card off the page holds its width (NearWidth); a multi-row grid's follow the live one.
+            IReadSignal<float> slotW = owner._rows == 1 ? UseComputed(_nearWidth ??= NearWidth) : owner._cardW;
+            return Ctx.Provide<IReadSignal<float>?>(PagedShelf.CardWidth, bindsWidth ? slotW : null, root);
         }
     }
     /// <summary>Does a card animate its own size (a <c>Layout</c> or <c>Animate</c> transition with a Size channel)?</summary>
