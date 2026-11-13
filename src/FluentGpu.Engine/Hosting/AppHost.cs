@@ -7068,12 +7068,13 @@ public sealed partial class AppHost : IDisposable
             bool flowRevealFrame = _anim.HasFlowRevealWork || (capturedProjections && CapturedFlowReveal());
             _layout.DeferOffsetClamp = flowRevealFrame;
             // Runs break at their landing width from the frame after a width reflow's destination was recorded (FlexLayout.BreakTextAtLanding).
-            // Not in the layout of a commit that answered the record: it predates the form the runs now stand in; the commit's probe below
-            // records the new form and turns it on for that re-solve. (A run that leaves as an exit orphan has no record: SceneStore.Orphan.)
-            _layout.BreakTextAtLanding = _scene.HasDestinationWidths && !answered;
+            // (A run that leaves as an exit orphan has no record: SceneStore.Orphan.)
+            _layout.BreakTextAtLanding = _scene.HasDestinationWidths;
             MountProf.Enter(MountProf.Layout);
-            // A width reflow re-aimed by this frame's commit (the panel toggled back mid-slide), or a window resize while one flies: solve the
-            // targets once before the frame's own layout, which then lays the frame out where the slide is.
+            // A width reflow re-aimed by this frame's commit (the panel toggled back mid-slide), a window resize while one flies, or a commit that
+            // answered the record in place (its forms stand in the sizes of the tier they land at, and the record describes the form they left):
+            // solve the targets once before the frame's own layout, which then lays the frame out where the slide is, at the new record.
+            if (answered && _scene.HasDestinationWidths) _anim.DestinationStale = true;
             if (_everLaidOut && !_needFullLayout && !_scene.Root.IsNull
                 && (_anim.DestinationStale || (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)))
                 && SolveReflowTargets(layoutSize, "before layout"))
@@ -7190,14 +7191,12 @@ public sealed partial class AppHost : IDisposable
             if (FrameLedger.Enabled) _ledgerAlloc.Layout = GC.GetAllocatedBytesForCurrentThread();
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
-            // A commit that answered the record in place (a form that keeps its nodes, SceneStore.ConsumeRecordAnswered), or a layout that solved a
-            // structure reader the record does not cover (a page that swaps its form for the width it lands at, a row that mounts mid-slide:
-            // SceneStore.ConsumeUnrecordedReader): the widths recorded before it describe a tree it has left, and a box it built or re-sized is
-            // chosen at the landing width only once it is recorded there. Probe again (in the projection pass before anything is seeded from this
-            // layout, else just below). A commit that only moves bound values, re-pushes equal props or builds what reads no structure (most frames
-            // of a slide) keeps the record: two more solves a frame for nothing.
-            bool unrecordedReader = _scene.ConsumeUnrecordedReader();
-            if ((answered || unrecordedReader) && _scene.HasDestinationWidths) { _anim.DestinationStale = true; _layout.BreakTextAtLanding = true; }
+            // A layout that solved a structure reader the record does not cover (a page that swaps its form for the width it lands at, a row that
+            // mounts mid-slide: SceneStore.ConsumeUnrecordedReader) chose its structure at its live width, and a box it built is chosen at the
+            // landing width only once it is recorded there. Probe again (in the projection pass before anything is seeded from this layout, else
+            // just below). A commit that only moves bound values, re-pushes equal props or builds what reads no structure (most frames of a
+            // slide) keeps the record: two more solves a frame for nothing.
+            if (_scene.ConsumeUnrecordedReader() && _scene.HasDestinationWidths) _anim.DestinationStale = true;
             if (capturedProjections) ApplyProjections(layoutSize, keepAliveSuppressed);   // FLIP "Last+Invert+Play"
             // A width reflow seeded or re-aimed on a frame with no projection pass, or a window resize while one flies: probe its destination here.
             if (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)) _anim.DestinationStale = true;
@@ -8649,9 +8648,9 @@ public sealed partial class AppHost : IDisposable
         _widthSeedsCommit.Clear();
         if (!suppressed)
         {
-            // A commit that answered the record in place or built a structure reader it does not cover (Paint marks it stale) laid itself out
-            // breaking those runs at their live widths: probe before anything is seeded from that layout, so a reflow this commit starts (a
-            // chapter easing to the height of its new form) aims at the structure the slide shows, not at one the probe takes back.
+            // A layout that built a structure reader the record does not cover (Paint marks it stale) broke those runs at their live widths:
+            // probe before anything is seeded from it, so a reflow this commit starts (a chapter easing to the height of its new form) aims at
+            // the structure the slide shows, not at one the probe takes back.
             if (_anim.DestinationStale) ProbeReflowDestinations(layoutSize);
             DiscoverProjectionRoots(PosEps, SizeEps);
             // Again while a pass started any: a reflow below a root that the previous pass's starts took back (the page column beside the
