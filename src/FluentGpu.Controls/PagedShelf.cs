@@ -989,7 +989,8 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             float step = cw + owner._gap;
             float x = owner._bleed + (index <= 0 ? 0 : index + span - 1) * step;
             if (!(_heldW > 0f) || (x < offset + view + step && x + span * step > offset - step)) _heldW = cw;   // never holds a width it never had
-            return _heldW;
+            // A spanning lead's cell is its span of cards and the gaps between them.
+            return index == 0 && span > 1 ? span * _heldW + (span - 1) * owner._gap : _heldW;
         }
 
         public override Element Render()
@@ -1003,10 +1004,12 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             if ((uint)index >= (uint)p.VisibleCount) return new BoxEl();
             int effSpan = index == 0 ? owner._effSpanSig.Value : 1;   // subscribe at index 0 only — a span flip re-renders ONLY this slot
             // A bound card (cardWidthBound) takes the live width from PagedShelf.CardWidth, so this slot neither reads nor subscribes it: a
-            // width change re-lays the card out. A spanning lead's template reads its own width, and before the first fit the width is the
-            // layout's fallback, not the signal's: those slots subscribe and re-render on it, as every slot of an unbound shelf does.
+            // width change re-lays the card out. A single row's spanning lead binds its spanned width the same way (re-rendered at the live
+            // width, its boxes stood at the width of the render before and its caption broke there). A multi-row grid's lead, and before the
+            // first fit every slot (the width is the layout's fallback, not the signal's), subscribe and re-render on it, as every slot of an
+            // unbound shelf does.
             float hint = owner._cardW.Peek();
-            bool bindsWidth = owner._cardWidthBound && !owner._cardWidthAgnostic && effSpan <= 1 && hint > 0f;
+            bool bindsWidth = owner._cardWidthBound && !owner._cardWidthAgnostic && (effSpan <= 1 || owner._rows == 1) && hint > 0f;
             float width = owner._cardWidthAgnostic ? owner._maxCardW : bindsWidth ? hint : owner._cardW.Value;
             if (width <= 0f) width = owner._layout?.CardW ?? owner._maxCardW;
             // E7 — the lead item's width hint widens to its spanned cell (2*cardW+gap for a 2-span lead). Read ONLY at

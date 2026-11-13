@@ -1732,6 +1732,52 @@ public sealed partial class FlexLayout
     /// (<c>OffsetOf(WindowOriginIndex)</c>) as small floats. Fixed-geometry layouts (grids, shelves) place cells by
     /// <see cref="IVirtualLayout.ItemRect"/> on the cross axis and by the extent source on the scroll axis.
     /// </summary>
+    private readonly List<(NodeHandle Node, float Width)> _landedCards = new(32);
+
+    /// <summary>Stand the card in fill-row cell <paramref name="cell"/> at the cell's width <paramref name="width"/> for a target solve: down the
+    /// cell's single-child chain (the card's component anchors and its root), each box whose declared width is the card's (the first definite
+    /// width on the chain) takes the cell's. A box of another width and everything under a box with more than one child keep theirs (a card
+    /// lets its gutter set its width, not its content: Wavee's Surface.Host). Saved for <see cref="RestoreLandedCards"/>.</summary>
+    private void LandCellCard(NodeHandle cell, float width)
+    {
+        float card = float.NaN;
+        NodeHandle n = _scene.FirstChild(cell);
+        for (int depth = 0; depth < 8 && !n.IsNull && _scene.NextSibling(n).IsNull; depth++)
+        {
+            ref LayoutInput li = ref _scene.Layout(n);
+            if (!float.IsNaN(li.Width))
+            {
+                if (float.IsNaN(card)) card = li.Width;
+                if (MathF.Abs(li.Width - card) >= 0.5f) break;
+                if (MathF.Abs(li.Width - width) >= 0.01f)
+                {
+                    _landedCards.Add((n, li.Width));
+                    li.Width = width;
+                    _scene.Mark(n, NodeFlags.LayoutDirty);
+                }
+            }
+            n = _scene.FirstChild(n);
+        }
+    }
+
+    /// <summary>Put back every card width a target solve stood at its cell (<see cref="LandCellCard"/>), exactly, and dirty each card and the
+    /// box that places it so the next solve lays the frame out as if no probe had run. True when there was one.</summary>
+    internal bool RestoreLandedCards()
+    {
+        for (int i = 0; i < _landedCards.Count; i++)
+        {
+            var (n, w) = _landedCards[i];
+            if (!_scene.IsLive(n)) continue;
+            _scene.Layout(n).Width = w;
+            _scene.Mark(n, NodeFlags.LayoutDirty);
+            NodeHandle p = _scene.Parent(n);
+            if (!p.IsNull) _scene.Mark(p, NodeFlags.LayoutDirty);
+        }
+        bool any = _landedCards.Count > 0;
+        _landedCards.Clear();
+        return any;
+    }
+
     private (float w, float h) ArrangeVirtual(NodeHandle node, in ScrollState sc, NodeHandle content,
                                               float innerW, float innerH, float padL, float padT, bool horizontal)
     {
@@ -1763,6 +1809,11 @@ public sealed partial class FlexLayout
         GridVirtualLayout? measuredGrid = layout is GridVirtualLayout { IsMeasured: true } grid ? grid : null;
         measuredGrid?.ResetMeasurePass(sc.ItemCount, cross);
         bool measured = ext is MeasuredExtent || layout is IMeasuredVirtualLayout;
+        // A destination probe's target solve lays a fill-row strip's cells out where they land, but the card in each cell holds the width the
+        // live slide gave it (a bound card width): its runs would record that width as their landing and break there for the rest of the
+        // slide. The target solve stands each card at its cell's width instead (LandCellCard, before its cell is measured); the host puts the
+        // cards back once it has recorded the landing (RestoreLandedCards).
+        bool landCards = SuppressBoundsDelivery && horizontal && !measured && layout is FillRowVirtualLayout;
         var vpId = new ScrollViewportId((int)node.Raw.Index, node.Raw.Gen);
         var slots = _scene.PlanSlots;
 
@@ -1801,6 +1852,7 @@ public sealed partial class FlexLayout
             }
             else slotCross = cross;
             float measureW = horizontal ? float.PositiveInfinity : MathF.Max(0f, slotCross - mL - mR);
+            if (landCards) LandCellCard(rc, MathF.Max(0f, layout!.ItemRect(index, cross).W - mL - mR));   // before its measure lays the card out
             var cs = Measure(rc, measureW);
             if (!measured) continue;
             float main = horizontal ? cs.Width + mL + mR : cs.Height + mT + mB;

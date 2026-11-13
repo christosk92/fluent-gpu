@@ -9027,6 +9027,7 @@ public sealed partial class AppHost : IDisposable
             NodeHandle n = _destProbeSaved[i].Node, p = _scene.Parent(n);
             _scene.RecordDestinationWidths(p.IsNull ? n : p, announce: false);
         }
+        _layout.RestoreLandedCards();   // the fill-row cards the solve stood at their cells' landing widths (FlexLayout.LandCellCard)
         for (int i = 0; i < _destProbeSaved.Count; i++) _anim.RestoreProbedWidth(_destProbeSaved[i].Node, _destProbeSaved[i].Width);
         _destProbeSaved.Clear();
         _destLayoutSize = layoutSize;
