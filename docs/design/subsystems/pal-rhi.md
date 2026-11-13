@@ -254,21 +254,28 @@ The production-pacing policy remains owned by [threading-render-seam.md §11.1](
   `HintSettlePresent`, armed from the published `RenderFrame.SettlePresent` (F101): an inline present runs one `DwmFlush`
   after the frame's video placement commit (`CompleteSettlePresent`); a render-thread present never flushes.
   **Opt-in live resize (`WindowDesc.LiveResize`, `DetachedWindowRequest.LiveResize`)**: a composited window whose layout is a
-  function of its size (the mini player) skips the defer. Each `WM_SIZE` of the loop paints at once, unthrottled; the host
-  resizes the swapchain, lays out at the new size and waits until that frame was presented (`AppHost.WaitLiveResizePresent`:
-  render turns until its publication was presented, at most three refresh periods) before the `WM_SIZE` returns, so the
-  loop's next step always reads the newest size. A pop-out's present waits on its own slot (its previous present must have
-  been composed), so a step costs about one refresh. The loop timer keeps its ≤30 Hz ticks under the move rule. The strip at
-  the growing edge (the new HWND area before the new buffer is composed) and, for a left/top drag, the old buffer pinned at
-  the moved origin for that composition, remain: the flip model cannot commit the HWND geometry and the present together.
+  function of its size (the mini player) skips the defer. Each size step paints at once, unthrottled, AHEAD of the rect: in
+  `WM_WINDOWPOSCHANGING` (after USER32's min/max clamp) the window reports the coming client size (`PaintingAheadOfSize`),
+  the host resizes the swapchain, lays out at that size (layout transitions suppressed, as in the loop) and waits until the
+  frame was presented (`AppHost.WaitLiveResizePresent`: render turns until its publication was presented, at most three
+  refresh periods), its GPU work retired before the flip (the render turn's geometry-motion fence wait); only then does the
+  window take the rect, so the flip and the rect reach the same DWM composition and the `WM_SIZE` that follows paints
+  nothing. This holds for an edge drag and for another program's `SetWindowPos` or Snap; the engine's own sizing calls
+  (`SetBoundsPx`, client resize, full screen, the DPI rect) are laid out by the host's own frame instead. A step that arrives
+  while the previous one is painting (a message pumped inside the paint) is held and applied from a posted message after
+  it, never under it. A pop-out's present waits on its own slot (its previous present must have been composed), so a step
+  costs about one refresh. The loop timer keeps its ≤30 Hz ticks under the move rule. Painting after the rect (at
+  `WM_SIZE`) showed the previous step's frame in the new rect on 44-83 % of a top-left drag's frames (the still edges a
+  step short of the window's); ahead of it, 0-6 % on the fast sweeps (filmed at 120 Hz). The residue is 1-2 px for one
+  composition, with DWM's own window border drawn a pixel off in the same frame (on up to 22 % of a slow 1-4 px/step sweep).
 
   | Window | Move | Edge resize | Mouse-up |
   |---|---|---|---|
   | Composited | ≤30 Hz ambient ticks; no geometry resize | zero geometry paints; DComp pin-top-left | one settle paint |
-  | Composited + `LiveResize` | ≤30 Hz ambient ticks; no geometry resize | every step: resize, relayout, present before `WM_SIZE` returns; ≤30 Hz ticks | one settle paint |
+  | Composited + `LiveResize` | ≤30 Hz ambient ticks; no geometry resize | every step: resize, relayout, present before the window takes the rect; ≤30 Hz ticks | one settle paint |
   | Non-composited | per-step paint (idle-skip when quiet) | ≤30 Hz live relayout | settle paint |
 
-  `IPlatformWindow` exposes `InModalLoop`, `SizedInModalLoop`, `Composited` and `LiveResize` so `AppHost.DeferModalResize`
+  `IPlatformWindow` exposes `InModalLoop`, `SizedInModalLoop`, `Composited`, `LiveResize` and `PaintingAheadOfSize` so `AppHost.DeferModalResize`
   and span-reuse policy can key off the same PAL state Win32 derives from `WM_ENTERSIZEMOVE`/`WM_SIZE`.
   `WindowDesc.MaxClientSizeDip` (`DetachedWindowRequest.MaxClientSizeDip`) sets `ptMaxTrackSize` per requested axis in
   `WM_GETMINMAXINFO` with the minimum's arithmetic (DIP at the live DPI, plus the frame), never below the minimum.

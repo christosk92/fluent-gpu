@@ -357,6 +357,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                        // block on vblank (IGpuDevice.SuppressLatencyWaitOnce); a blocking paint here would stall each step.
                        WM_MOVE = 0x0003, WM_ENTERSIZEMOVE = 0x0231, WM_EXITSIZEMOVE = 0x0232, WM_TIMER = 0x0113,
                        WM_DROPFILES = 0x0233,   // OS file/folder drop (DragAcceptFiles); wParam = HDROP
+                       WM_WINDOWPOSCHANGING = 0x0046,  // a LiveResize window paints the coming size ahead of it (PaintAheadOfSize)
                        WM_WINDOWPOSCHANGED = 0x0047;   // the placement edge outside the modal loop (PlacementChanged)
 
     private const nuint MoveLoopTimerId = 1;   // SetTimer id for the modal move/size loop keep-alive pump
@@ -447,6 +448,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // Private posted message: apply the held full-screen window change (IPlatformWindow.CommitPendingBounds from the render
     // thread). wParam = the pending change's generation; a message for an older one is a no-op.
     private const uint WM_FG_COMMITBOUNDS = 0x8000 + 0x0F52;
+    // Private posted message: apply the size step held while the previous one painted ahead (PaintAheadOfSize). Posted when the step
+    // arrives, so it runs after the previous step's SetWindowPos completed and before any step queued after it.
+    private const uint WM_FG_APPLYHELDSTEP = 0x8000 + 0x0F53;
 
     // `--fg nc` (EngineSwitches.NcDiag): trace custom-frame caption-button non-client input — which WM_NC* messages actually arrive over a
     // button and whether synthesis runs — to stderr. Off by default (zero cost); diagnoses "no hover / clicks don't
@@ -706,9 +710,19 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // redirection bitmap). DWM re-composites that surface at the HWND's new screen position on a pure move, so a composited
     // window needs NO per-step WM_MOVE repaint to track the cursor — the per-step paint is pure overhead/lag there.
     private readonly bool _composited;
-    // WindowDesc.LiveResize: a composited window that paints every WM_SIZE of its modal edge-resize loop at once (no throttle)
-    // and keeps its move-loop keep-alive ticks during the resize, instead of the composited full defer.
+    // WindowDesc.LiveResize: a composited window that paints every size step at once (no throttle), ahead of the size
+    // (PaintAheadOfSize), and keeps its move-loop keep-alive ticks during the resize, instead of the composited full defer.
     private readonly bool _liveResize;
+    // PaintAheadOfSize: inside the WM_WINDOWPOSCHANGING whose size the host is painting (IPlatformWindow.PaintingAheadOfSize), the
+    // client size that frame was presented at (its WM_SIZE needs no second paint), and the size before it (UserResizeEpoch compares
+    // the WM_SIZE with that, not with the size already reported ahead).
+    private bool _paintingAhead;
+    private int _aheadW, _aheadH, _aheadFromW, _aheadFromH;
+    private WINDOWPOS _heldStep;     // a step that arrived inside the previous step's paint (ApplyHeldStep)
+    private bool _heldStepPending;
+    // > 0 while the engine's own SetWindowPos runs (a bounds, client-size, full-screen or DPI change the host asked for): the host is
+    // already laying that size out or will at its next frame, so no frame is painted ahead of it from inside the call.
+    private int _engineWindowPos;
     // WindowDesc.Resizable false: the edge/corner sizing hits answer HTBORDER and the maximize box is dropped. The thick
     // frame itself stays, so the frame metrics (AdjustForFrame), the DWM shadow and the rounded corners are unchanged.
     private readonly bool _resizable;
@@ -1024,6 +1038,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     public bool InModalLoop => _inMoveSizeLoop;   // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE — host suppresses redundant keep-alive paints
     public bool Composited => _composited;
     public bool LiveResize => _liveResize;
+    public bool PaintingAheadOfSize => _paintingAhead;
     public bool SizedInModalLoop => _sizedInMoveSizeLoop;
     public Action? PaintRequested { get; set; }
     /// <summary>Raised on every keep-alive beat of THIS window's modal move/size loop (see <see cref="IPlatformWindow.ModalLoopTick"/>):
@@ -1188,7 +1203,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         RECT rc = new() { left = 0, top = 0, right = w, bottom = h };
         AdjustForFrame(&rc);
         _hostResizing = true;   // the WM_SIZE this raises (synchronously) is the engine's, not the user's — see _fitTargetW
-        try { SetWindowPos(_hwnd, HWND.NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE); }
+        try { SetOwnWindowPos(0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE); }
         finally { _hostResizing = false; }
         RefreshClientSize();
     }
@@ -1322,8 +1337,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     {
         long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         SetWindowLongPtrW(_hwnd, GWL_STYLE, style);
-        SetWindowPos(_hwnd, HWND.NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        SetOwnWindowPos(r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         NoteFullscreenEdge(on, t0, r, sync, heldMs);
         // Entering fullscreen never un-maximized the window (only its STYLE and rect changed), so in the common case
         // it is still WS_MAXIMIZE-flagged and _windowedRect already IS the maximized geometry — the restore above is
@@ -1435,9 +1449,64 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // exact for x ≥ 1, but for 0 < x < 1 the OLD (int) cast still produced 0 after truncation — MoveToPx below never
     // touches size at all, so this fix is scoped to the one call site that can request a degenerate size.
     public void SetBoundsPx(RectF outerBoundsPx)
-        => SetWindowPos(_hwnd, HWND.NULL, (int)MathF.Round(outerBoundsPx.X), (int)MathF.Round(outerBoundsPx.Y),
+        => SetOwnWindowPos((int)MathF.Round(outerBoundsPx.X), (int)MathF.Round(outerBoundsPx.Y),
             (int)MathF.Max(1f, MathF.Round(outerBoundsPx.W)), (int)MathF.Max(1f, MathF.Round(outerBoundsPx.H)),
             SWP_NOZORDER | SWP_NOACTIVATE);
+
+    /// <summary>The engine's own sizing <c>SetWindowPos</c>: the host asked for this size and lays it out on its own frame, so no
+    /// frame is painted ahead of it (<see cref="PaintAheadOfSize"/>) from inside the call.</summary>
+    private void SetOwnWindowPos(int x, int y, int cx, int cy, uint flags)
+    {
+        _engineWindowPos++;
+        try { SetWindowPos(_hwnd, HWND.NULL, x, y, cx, cy, flags); }
+        finally { _engineWindowPos--; }
+    }
+
+    /// <summary>WM_WINDOWPOSCHANGING of a <see cref="LiveResize"/> window (after USER32's min/max clamp): when the window is about
+    /// to take a client size the engine did not ask for (an edge drag of the modal loop, Snap, another program's
+    /// <c>SetWindowPos</c>), report that size now and paint it (<see cref="PaintingAheadOfSize"/>): the host lays it out and presents
+    /// it with its GPU work done, and only then does the window take the rect. A frame painted at the WM_SIZE, after the rect change,
+    /// reached DWM a composition after the rect on most steps (the mini player's filmed drags: 26-69 % of the drag frames showed the
+    /// previous step's frame in the new rect, the still edges a step short of the window's).</summary>
+    private void PaintAheadOfSize(HWND hWnd, WINDOWPOS* wp)
+    {
+        if ((wp->flags & SWP_NOSIZE) != 0 || _engineWindowPos > 0 || _fullscreen || _pinnedSurface || _closed) return;
+        if (_paintingAhead)
+        {
+            // A newer step arrived while the previous one is being painted (a message pumped inside the paint dispatched another
+            // program's queued SetWindowPos). The previous rect is applied when that paint returns and would land OVER this newer one
+            // (the window stepping back a frame later, after a frame of the old content in the newer rect): hold this step instead
+            // and apply it once the previous one completed (WM_FG_APPLYHELDSTEP). A later one held meanwhile replaces it.
+            _heldStep = *wp;
+            if (!_heldStepPending) _heldStepPending = PostMessageW(hWnd, WM_FG_APPLYHELDSTEP, 0, 0);
+            if (_heldStepPending) wp->flags |= SWP_NOSIZE | SWP_NOMOVE;
+            return;
+        }
+        if (IsIconic(hWnd) || IsWindowVisible(hWnd) == 0) return;
+        RECT wr, cr;
+        if (GetWindowRect(hWnd, &wr) == 0 || GetClientRect(hWnd, &cr) == 0) return;
+        // The frame's share of the outer size is the window's current one (a size step keeps the style and DPI; a WM_SIZE at another
+        // client size than this one paints as usual).
+        int nw = wp->cx - (wr.right - wr.left - cr.right), nh = wp->cy - (wr.bottom - wr.top - cr.bottom);
+        if (nw <= 0 || nh <= 0 || (nw == _w && nh == _h)) return;
+        _aheadFromW = _w; _aheadFromH = _h;
+        _w = nw; _h = nh;   // ClientSizePx: the host's EnsureSize sees the coming size
+        _aheadW = nw; _aheadH = nh;
+        if (_inMoveSizeLoop) { _lastModalPaintMs = Environment.TickCount64; _moveLoopPaints++; }
+        _paintingAhead = true;
+        try { PaintRequested?.Invoke(); }
+        finally { _paintingAhead = false; }
+    }
+
+    /// <summary>WM_FG_APPLYHELDSTEP: the step held while the previous one was painting (<see cref="PaintAheadOfSize"/>), applied now,
+    /// through the same paint-ahead path.</summary>
+    private void ApplyHeldStep(HWND hWnd)
+    {
+        if (!_heldStepPending) return;
+        _heldStepPending = false;
+        WINDOWPOS h = _heldStep;
+        SetWindowPos(hWnd, HWND.NULL, h.x, h.y, h.cx, h.cy, (h.flags & SWP_NOMOVE) | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
 
     /// <summary>Pure move (outer origin only, physical virtual-screen px) — <see cref="SetBoundsPx"/>'s sibling that
     /// never touches size: <c>SWP_NOSIZE</c> so a caller restoring a remembered POSITION (the detached mini-player
@@ -2415,12 +2484,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     // …and the window already reported it: an intermediate WM_SIZE in the held period (adopted by the host)
                     // means this one paints as usual.
                     heldSizeArrived = _applyingPending && nw == _pendingClientW && nh == _pendingClientH && _w == nw && _h == nh;
+                    // …or the size PaintAheadOfSize already presented (and nothing re-reported the client size since).
+                    bool aheadArrived = _aheadW > 0 && nw == _aheadW && nh == _aheadH && _w == nw && _h == nh;
+                    int fromW = aheadArrived ? _aheadFromW : _w, fromH = aheadArrived ? _aheadFromH : _h;
+                    _aheadW = _aheadH = 0;
+                    heldSizeArrived |= aheadArrived;
                     nuint kind = (nuint)wParam;
                     // IPlatformWindow.UserResizeEpoch, the no-modal-loop half (see _fitTargetW): a restored→restored size
                     // change the engine did not request, at an unchanged DPI, that is not the last size-to-content target.
                     if (!_inMoveSizeLoop && !_hostResizing && !_fullscreen && _fitTargetW > 0
                         && kind == 0 && _lastSizeKind == 0 && _rawDpiScale == _lastSizeDpi
-                        && (nw != _w || nh != _h) && (nw != _fitTargetW || nh != _fitTargetH))
+                        && (nw != fromW || nh != fromH) && (nw != _fitTargetW || nh != _fitTargetH))
                         _userResizeEpoch++;
                     _lastSizeKind = kind;
                     _lastSizeDpi = _rawDpiScale;
@@ -2445,7 +2519,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     // A LiveResize window paints EVERY step, unthrottled: the host lays out and presents at this size before
                     // returning (the newest size always wins: the loop sends the next WM_SIZE only after this one returned).
                     // The stamp holds the keep-alive timer off while steps arrive (the step's frame already advanced motion).
-                    if (_liveResize) { _lastModalPaintMs = Environment.TickCount64; _moveLoopPaints++; PaintRequested?.Invoke(); }
+                    // A step painted ahead of its size (PaintAheadOfSize) is not painted again.
+                    if (_liveResize) { if (!heldSizeArrived) { _lastModalPaintMs = Environment.TickCount64; _moveLoopPaints++; PaintRequested?.Invoke(); } }
                     else if (!(_composited && !_hasLiveVideo) && !ThrottleModalResizePaint()) PaintRequested?.Invoke();
                     // The peers beat even when this window defers its own paint (F093): the loop's timer can be starved by
                     // the mouse-input peeking, and the other windows must not freeze with it. The host throttles the round.
@@ -2473,7 +2548,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // USER32 dispatches WM_MOVE synchronously (SendMessage, not PostMessage) before SetWindowPos returns
                 // — so the WM_MOVE case's MonitorFromWindow recheck below already runs inline, on this same thread,
                 // before RefreshClientSize/PaintRequested fire.
-                SetWindowPos(_hwnd, HWND.NULL, suggested->left, suggested->top,
+                SetOwnWindowPos(suggested->left, suggested->top,
                     suggested->right - suggested->left, suggested->bottom - suggested->top,
                     SWP_NOZORDER | SWP_NOACTIVATE);
                 RefreshClientSize();
@@ -2611,6 +2686,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // monitor re-probe, applied per-window instead of per-frame.
                 if (MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST) != _monitor) OnDisplayChanged();
                 if (!_composited) PaintRequested?.Invoke();
+                return true;
+            case WM_WINDOWPOSCHANGING when _liveResize:
+                result = DefWindowProcW(hWnd, msg, wParam, lParam);   // USER32's min/max track clamp first: the size the window takes
+                PaintAheadOfSize(hWnd, (WINDOWPOS*)(nint)lParam);
                 return true;
             case WM_WINDOWPOSCHANGED:
                 // PlacementChanged outside the modal loop: a keyboard / Snap-layout snap, maximize, minimize, restore, show,
@@ -2999,6 +3078,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
             case WM_FG_SHOWSYSMENU:   // IPlatformWindow.ShowSystemMenu (posted: runs from the pump, outside the frame)
                 ShowSystemMenuCore(hWnd, (short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
+                result = 0;
+                return true;
+
+            case WM_FG_APPLYHELDSTEP:
+                ApplyHeldStep(hWnd);
                 result = 0;
                 return true;
 

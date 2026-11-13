@@ -737,9 +737,17 @@ public interface IPlatformWindow : IDisposable
     bool Composited => false;
 
     /// <summary>The descriptor's <see cref="WindowDesc.LiveResize"/>: a composited window that does NOT defer during an edge
-    /// drag. Each <c>WM_SIZE</c> of the modal loop paints at once (no throttle): the host resizes the swapchain, lays out at the
-    /// new size and waits for that frame's present before the loop moves on, so the content follows the frame. Default false.</summary>
+    /// drag. Each size step paints at once (no throttle) BEFORE the window takes the new size (<see cref="PaintingAheadOfSize"/>):
+    /// the host resizes the swapchain, lays out at the new size and presents that frame, so the window's new rect and the frame
+    /// drawn for it reach the same DWM composition. Default false.</summary>
     bool LiveResize => false;
+
+    /// <summary>True while a <see cref="LiveResize"/> window paints the frame for a size it is about to take (inside
+    /// <c>WM_WINDOWPOSCHANGING</c>, from an edge drag or another program's <c>SetWindowPos</c>): <see cref="ClientSizePx"/> already
+    /// reports that size, and the host lays it out as a resize step and returns only once the frame was presented with its GPU work
+    /// done. The window applies the rect right after, so the flip and the rect land in the same composition: a frame drawn for the
+    /// old size is never shown in the new rect (its far edges a step short of the window's, the stale-frame wobble). Default false.</summary>
+    bool PaintingAheadOfSize => false;
 
     /// <summary>True once the current modal loop has delivered WM_SIZE (edge resize, not pure titlebar move).</summary>
     bool SizedInModalLoop => false;

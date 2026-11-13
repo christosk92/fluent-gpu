@@ -2728,6 +2728,9 @@ public sealed partial class AppHost : IDisposable
             // its record - and a whole glyph atlas, judged after it).
             bool hold = presented && DecideHold(in rf, gateImageGaps);
             if (presented && !hold) ArmGeometryMotionPresent(in rf);
+            // A live-resize step's frame (a settle present of a LiveResize window: a new size) flips only once its GPU work is done, so the
+            // flip is ready for the composition that takes the window's new rect (see the liveResizeStep wait in Paint).
+            if (presented && !hold && !motionRepresent && rf.SettlePresent && _window.LiveResize) _swapchain.HintGeometryMotionPresent();
             bool landed = !presented || PresentFrame(in rf, composited, hold);
             long splitPresented = Stopwatch.GetTimestamp();
             _ledgerTurnPresented = presented && landed && !hold;
@@ -6729,7 +6732,9 @@ public sealed partial class AppHost : IDisposable
             long shapeCountAtFrameStart = _fonts.ShapeCount;   // P0: FrameStats.TextShapes reads the delta across this Paint
             _reconciler.BeginRenderCensus();
             bool inModalLoop = _window.InModalLoop;
-            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, inModalLoop);
+            // A size step painted ahead of the window's rect (IPlatformWindow.PaintingAheadOfSize: Snap, another program's SetWindowPos)
+            // lands on its laid-out bounds as a modal-loop step does: the frame must match the rect it is presented for.
+            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, inModalLoop || _window.PaintingAheadOfSize);
             if (inModalLoop != _lastInModalLoop)
             {
                 _lastInModalLoop = inModalLoop;
@@ -7684,11 +7689,13 @@ public sealed partial class AppHost : IDisposable
                     suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld,
                     freeze: freezeKind, dissolveT: dissolveT,
                     dissolveMs: freezeKind == Threading.FreezeKind.Dissolve ? _fzDissolveMs : 0f, dissolveId: _fzDissolveId);
-                // A live-resize step (IPlatformWindow.LiveResize: a resized keep-alive frame inside the modal size loop) waits until THIS
-                // frame was presented (WaitLiveResizePresent): the WM_SIZE that asked for it returns only once the buffer at the new size
-                // went to DWM, so the HWND and its content reach the same composition as nearly as the flip model allows, and the loop's
-                // next step reads the newest size (never a queue of stale ones). Every other frame keeps the async fire-and-return.
-                bool liveResizeStep = settlePresent && _window.LiveResize && _window.InModalLoop;
+                // A live-resize step (IPlatformWindow.LiveResize: a resized keep-alive frame painted ahead of the window's new size, or
+                // inside the modal size loop) waits until THIS frame was presented (WaitLiveResizePresent), its GPU work done first (the
+                // render turn's geometry-motion wait): the WM_WINDOWPOSCHANGING that asked for it returns, and the window takes the rect,
+                // only once the buffer at the new size went to DWM, so the rect and the frame drawn for it reach the same composition,
+                // and the loop's next step reads the newest size (never a queue of stale ones). Every other frame keeps the async
+                // fire-and-return.
+                bool liveResizeStep = settlePresent && _window.LiveResize && (_window.InModalLoop || _window.PaintingAheadOfSize);
                 if (liveResizeStep && OwningRenderThread is { } liveRt)
                 {
                     WaitLiveResizePresent(liveRt);
