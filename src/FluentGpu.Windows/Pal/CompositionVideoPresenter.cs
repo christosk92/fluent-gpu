@@ -954,6 +954,22 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
         if (wrote) _device.NoteVideoCompositorCommitDue();   // the host's one CommitVideoComposition per turn flushes it
     }
 
+    /// <summary><see cref="IVideoPresenter.PosePresentation"/>: the window presentation motion's pose on the whole video layer (the root
+    /// container, beneath the UI target). Nothing to do before the layer exists. The device commits it.</summary>
+    public void PosePresentation(float opacity, float scale, Point2 originPx, bool identity)
+    {
+        _device.AssertRenderThread();
+        if (_root == null) return;
+        IVisual* v = null;
+        if (!Ok(((IUnknown*)_root)->QueryInterface(__uuidof<IVisual>(), (void**)&v), "QI IVisual(root, presentation)")) return;
+        if (identity) { opacity = 1f; scale = 1f; }
+        Ok(v->put_CenterPoint(new Vector3(originPx.X, originPx.Y, 0f)), "root put_CenterPoint");
+        Ok(v->put_Opacity(opacity), "root put_Opacity");
+        Ok(v->put_Scale(new Vector3(scale, scale, 1f)), "root put_Scale");
+        v->Release();
+        _device.NoteVideoCompositorCommitDue();
+    }
+
     public void Commit()
     {
         ApplyPending();

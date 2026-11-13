@@ -856,6 +856,12 @@ public interface IPlatformWindow : IDisposable
     /// always-on-top toggle. State-aware callers assert it only while there is video worth watching.</summary>
     void SetTopmost(bool topmost) { }
 
+    /// <summary>Let the system play its own show and hide transitions for this window (true, the default) or not (false: Win32
+    /// <c>DWMWA_TRANSITIONS_FORCEDISABLED</c>). Off while the window's own presentation motion owns its arrival and departure
+    /// (<see cref="WindowPresentationMotion"/>): the system's hide transition draws the window's ground ABOVE the windows around it,
+    /// ignoring the motion that already faded its content. Default: no-op.</summary>
+    void SetSystemTransitions(bool enabled) { }
+
     /// <summary>Programmatically move/resize the window in physical virtual-screen px (restore saved geometry, fit to
     /// content). Win32 <c>SetWindowPos(SWP_NOZORDER|SWP_NOACTIVATE)</c>. The rect is the OUTER window rect.</summary>
     void SetBoundsPx(RectF outerBoundsPx) { }

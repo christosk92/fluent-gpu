@@ -184,6 +184,11 @@ public interface IVideoPresenter
     /// </summary>
     void ApplyPending() => Commit();
 
+    /// <summary>The window presentation motion's pose (<see cref="WindowPresentationMotion"/>) on this presenter's whole video layer, in
+    /// step with the UI target's: the layer's opacity and its scale about <paramref name="originPx"/> (client device px); <paramref name="identity"/>
+    /// clears both. Made visible by the device's composition flush. Default: no-op (no video layer to move).</summary>
+    void PosePresentation(float opacity, float scale, FluentGpu.Foundation.Point2 originPx, bool identity) { }
+
     /// <summary>True when this presenter can attach new surfaces to a live composition root now. A composited swapchain binds
     /// its DirectComposition graph on its first Present, so a surface created before that would sit unattached while the UI
     /// already punched its hole: the early (structural) drain waits for this. Default true.</summary>

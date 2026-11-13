@@ -801,12 +801,12 @@ public sealed partial class AppHost : IDisposable
 
     private bool HasRenderMotion()
     {
-        if (HasOwnRenderMotion() || HoldsVideoPlates) return true;
+        if (HasOwnRenderMotion() || HoldsVideoPlates || _presentationMoving) return true;
         // A child whose present slot was busy this turn left its publication pending (DrainChildRenderSources), and one whose
         // non-blocking present was refused owes that frame: keep the loop ticking so the next turn probes the slot / re-presents
         // instead of sleeping until some unrelated wake.
         foreach (var child in Volatile.Read(ref _childRenderSources))
-            if (child.HasOwnRenderMotion() || child._slotDeferred || child._presentOwed || child.HoldsVideoPlates) return true;
+            if (child.HasOwnRenderMotion() || child._slotDeferred || child._presentOwed || child.HoldsVideoPlates || child._presentationMoving) return true;
         return false;
     }
 
@@ -2184,6 +2184,7 @@ public sealed partial class AppHost : IDisposable
     /// <summary>Render thread: apply every popup swapchain mutation the UI posted since the last turn, in order.</summary>
     private void DrainPopupRenderActions()
     {
+        DrainPresentationMotion();
         bool ownResize;
         Size2 ownSize;
         long ownPostedQpc;
@@ -3609,7 +3610,6 @@ public sealed partial class AppHost : IDisposable
         AdoptDetachedChild(child);
         // AFTER the adoption (it copies the parent's Mica flag): a window with its own material owns its ground.
         if (request.Material is { } material) child.SetDetachedMaterial(material, request.MaterialDark);
-        child.PowerCapFps = Math.Max(0, request.PowerCapFps);
         if (request.DragAnywhere) win.CaptionWhereInert = child.IsInertAt;
         // Register the child as a render source for the parent's render loop (a no-op reader when there is no render thread —
         // the pure single-thread parent leaves the child on the inline present path). A copy-on-write publish: no park, and
@@ -4029,6 +4029,12 @@ public sealed partial class AppHost : IDisposable
         // and never from a child's turn.
         if (!_isDetachedChild && !_renderSeam.HasPendingFrame && !HasOwnRenderMotion() && !_presentOwed) _device.ServicePopupWork();
         var list = Volatile.Read(ref _childRenderSources);
+        // The child's slot probe races its own flip: this turn starts on the compositor tick, the very moment DWM latches the child's
+        // last present, and the child's latency waitable signals just after - a 0 ms probe found the slot busy on about every other
+        // tick and the pop-out presented at half the display rate (the mini window's lyrics and settle at 60 on a 120 Hz panel). When
+        // this host has nothing of its own to present this turn (the main window hidden behind the mini player, or at rest) nothing
+        // waits behind the child, so its probe may wait out that flip (ChildSlotGraceMs); otherwise it stays a 0 ms probe (F090).
+        int childGraceMs = _renderSeam.HasPendingFrame || HasOwnRenderMotion() || _presentOwed ? 0 : ChildSlotGraceMs;
         for (int i = 0; i < list.Length; i++)
         {
             var child = list[i];
@@ -4055,7 +4061,7 @@ public sealed partial class AppHost : IDisposable
             // (a busy slot skips, never waits), so a child needs no SlotCatchUp policy of its own.
             var pace = child._childPace;
             long probeStart = Stopwatch.GetTimestamp();
-            bool slotOpen = _device.TryTakePresentSlot(child._swapchain, 0);
+            bool slotOpen = _device.TryTakePresentSlot(child._swapchain, childGraceMs);
             long slotAt = Stopwatch.GetTimestamp();
             pace?.NoteSlotTake(slotAt - probeStart, slotOpen);
             if (!slotOpen)
@@ -4227,12 +4233,12 @@ public sealed partial class AppHost : IDisposable
         // while it was hidden is not overwritten by the open request's value.
         public void SetTopmost(bool topmost) { _child._revealTopmost = topmost; _window.SetTopmost(topmost); }
         public void SetMaterial(WindowMaterial material, bool dark) { if (!_window.IsClosed) _child.SetDetachedMaterial(material, dark); }
-        public int PowerCapFps { get => _child.PowerCapFps; set => _child.PowerCapFps = Math.Max(0, value); }
         public DetachedOpenTiming OpenTiming => _child.OpenTiming;
         public Action<DetachedOpenTiming>? OnRevealed { get => _child.OnRevealed; set => _child.OnRevealed = value; }
         public double FirstVideoBindMs => _child.FirstVideoBindMs;
         public Action<double>? OnFirstVideoBound { get => _child.OnFirstVideoBound; set => _child.OnFirstVideoBound = value; }
         public void SetBounds(RectF outerBoundsPx) => _window.SetBoundsPx(outerBoundsPx);
+        public void AnimatePresentation(in FluentGpu.Pal.WindowPresentationMotion motion) => _child.AnimatePresentation(in motion);
         // Overrides IDetachedVideoWindow.MoveTo's SetBounds(current-size)-based default: the PAL window has its own
         // pure-move primitive (IPlatformWindow.MoveToPx), so route to it directly and skip the BoundsPx read-back.
         public void MoveTo(Point2 outerOriginPx) => _window.MoveToPx(outerOriginPx);
