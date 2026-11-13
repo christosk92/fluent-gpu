@@ -739,6 +739,7 @@ public sealed partial class SceneStore : ISceneBackend
         _childCount[p]++;
         MarkRecordDirty(c, RecordDirtyLayout);
         PropagateMovedSubtreeBits(p, c);
+        NoteChildrenChanged(p);
     }
 
     /// <summary>A re-attached subtree keeps the record-dirty bits it gathered under its old parent; its NEW ancestors must hold
@@ -766,6 +767,7 @@ public sealed partial class SceneStore : ISceneBackend
         _childCount[p]++;
         MarkRecordDirty(c, RecordDirtyLayout);
         PropagateMovedSubtreeBits(p, c);
+        NoteChildrenChanged(p);
     }
 
     /// <summary>Unlink a child from its parent without freeing it (used by keyed reconcile to reorder).</summary>
@@ -785,6 +787,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_nextSib[c] != 0) _prevSib[_nextSib[c]] = _prevSib[c]; else _lastChild[p] = _prevSib[c];
         _childCount[p]--;
         _parent[c] = _prevSib[c] = _nextSib[c] = 0;
+        NoteChildrenChanged(p);
     }
 
     // ── exit-animation orphans ────────────────────────────────────────────────────────────────────

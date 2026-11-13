@@ -631,6 +631,24 @@ public sealed partial class FlexLayout
         VerifyParity(node, w, ox, oy, w, h, "RunSubtree");
     }
 
+    /// <summary>Lay out the subtree rooted at <paramref name="node"/> at <paramref name="width"/> where it stands: the scoped destination probe's solve
+    /// (<c>AppHost.ProbeRecordScopes</c>) of a box whose width comes from above, at the width it lands at. Its height is its declared one, else
+    /// what its content measures at that width, as the column that places it gives it. The host lays it out where the slide is again after.</summary>
+    internal void RunSubtreeAt(NodeHandle node, float width)
+    {
+        if (node.IsNull) return;
+        if (_fonts.CanPrefetchShapes) PrefetchTexts(node);
+        FluentGpu.Hosting.MountProf.SubtreeSolves++;
+        ref RectF b = ref _scene.Bounds(node);
+        float x = b.X, y = b.Y;
+        BeginMeasurePass();
+        var size = Measure(node, width);
+        float declaredH = _scene.Layout(node).Height;
+        float h = float.IsNaN(declaredH) ? size.Height : declaredH;
+        Arrange(node, x, y, width, h);
+        VerifyParity(node, width, x, y, width, h, "RunSubtreeAt");
+    }
+
     /// <summary>A parent that arranges each child at a slot it computes itself and ignores the child's explicit
     /// Width/Height: a grid (column track × row height) or a virtual list's content node (ItemRect / extent slot).</summary>
     private bool PlacesChildInSlot(NodeHandle parent)
@@ -1737,10 +1755,12 @@ public sealed partial class FlexLayout
     /// <summary>Stand the card in fill-row cell <paramref name="cell"/> at the cell's width <paramref name="width"/> for a target solve: down the
     /// cell's single-child chain (the card's component anchors and its root), each box whose declared width is the card's (the first definite
     /// width on the chain) takes the cell's. A box of another width and everything under a box with more than one child keep theirs (a card
-    /// lets its gutter set its width, not its content: Wavee's Surface.Host). Saved for <see cref="RestoreLandedCards"/>.</summary>
-    private void LandCellCard(NodeHandle cell, float width)
+    /// lets its gutter set its width, not its content: Wavee's Surface.Host). Saved for <see cref="RestoreLandedCards"/>. With
+    /// <paramref name="stand"/> false it only tells whether the card stands away from <paramref name="width"/>. True when a box of it did.</summary>
+    private bool LandCellCard(NodeHandle cell, float width, bool stand = true)
     {
         float card = float.NaN;
+        bool away = false;
         NodeHandle n = _scene.FirstChild(cell);
         for (int depth = 0; depth < 8 && !n.IsNull && _scene.NextSibling(n).IsNull; depth++)
         {
@@ -1751,6 +1771,8 @@ public sealed partial class FlexLayout
                 if (MathF.Abs(li.Width - card) >= 0.5f) break;
                 if (MathF.Abs(li.Width - width) >= 0.01f)
                 {
+                    away = true;
+                    if (!stand) return true;
                     _landedCards.Add((n, li.Width));
                     li.Width = width;
                     _scene.Mark(n, NodeFlags.LayoutDirty);
@@ -1758,6 +1780,25 @@ public sealed partial class FlexLayout
             }
             n = _scene.FirstChild(n);
         }
+        return away;
+    }
+
+    /// <summary>Would a target solve of <paramref name="viewport"/>, a horizontal fill-row strip, stand a card of it at its cell's landing width
+    /// (<see cref="LandCellCard"/>)? Each recorded cell's landing is its recorded width (<see cref="SceneStore.StructureWidth"/>), the slot a
+    /// target solve arranges it in. A strip whose record came from a layout that kept a bound card at its live width (a seed's commit) records
+    /// its runs where that card stood, not where it lands.</summary>
+    internal bool HoldsCardAway(NodeHandle viewport)
+    {
+        if (!_scene.TryGetScroll(viewport, out var sc) || sc.Orientation != 1 || sc.ItemCount == 0 || sc.Extent is null
+            || sc.Extent is MeasuredExtent || sc.Layout is not FillRowVirtualLayout || sc.ContentNode.IsNull) return false;
+        int ord = 0;
+        for (var rc = _scene.FirstChild(sc.ContentNode); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
+        {
+            if ((uint)VirtualIndex(in sc, ord) >= (uint)sc.ItemCount) continue;
+            float land = _scene.StructureWidth(rc, float.NaN);
+            if (!float.IsNaN(land) && LandCellCard(rc, land, stand: false)) return true;
+        }
+        return false;
     }
 
     /// <summary>Put back every card width a target solve stood at its cell (<see cref="LandCellCard"/>), exactly, and dirty each card and the

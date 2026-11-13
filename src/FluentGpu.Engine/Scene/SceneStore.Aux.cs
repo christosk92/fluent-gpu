@@ -97,6 +97,7 @@ public sealed partial class SceneStore
         Mark(h, NodeFlags.LayoutDirty);
         var parent = Parent(h);
         if (!parent.IsNull && IsLive(parent)) Mark(parent, NodeFlags.LayoutDirty);
+        NoteLayoutInputWrite(h);
         return true;
     }
 
@@ -131,6 +132,7 @@ public sealed partial class SceneStore
         Mark(h, NodeFlags.LayoutDirty | NodeFlags.PaintDirty);
         var parent = Parent(h);
         if (!parent.IsNull && IsLive(parent)) Mark(parent, NodeFlags.LayoutDirty);
+        NoteLayoutInputWrite(h);
     }
 
     /// <summary>Equality-gated <see cref="SetCollapsed"/>: no-op (marks nothing, touches no flag) when the node is

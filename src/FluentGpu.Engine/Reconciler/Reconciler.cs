@@ -1621,6 +1621,7 @@ public sealed partial class TreeReconciler
         {
             _scene.Mark(anchor, NodeFlags.LayoutDirty);
             MarkParentLayoutDirty(anchor);
+            _scene.NoteLayoutInputWrite(anchor);
         }
     }
 
@@ -3143,6 +3144,7 @@ public sealed partial class TreeReconciler
         li.Width = next;
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.LayoutDirty);
+        _scene.NoteLayoutInputWrite(node);
         RemirrorAncestors(node);   // a component root's bound size: its anchor reserves the mirrored copy
         MarkParentLayoutDirty(node);   // a resized boundary must not relayout only itself
     }
@@ -3162,6 +3164,7 @@ public sealed partial class TreeReconciler
         li.Height = next;
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.LayoutDirty);
+        _scene.NoteLayoutInputWrite(node);
         RemirrorAncestors(node);
         MarkParentLayoutDirty(node);   // a resized boundary must not relayout only itself
     }
@@ -3177,6 +3180,7 @@ public sealed partial class TreeReconciler
         SetPaintText(ref paint, next);
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.LayoutDirty);
+        _scene.NoteLayoutInputWrite(node);
         NoteTextWrite(node);
     }
 
