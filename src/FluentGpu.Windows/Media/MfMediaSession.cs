@@ -57,6 +57,10 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     // Returns the engine warm to MfMediaPlayer's pool (pause + detach — no teardown) instead of disposing it. Null only
     // in tests that construct a session directly; every production session (MfMediaPlayer.OpenAsync) supplies one.
     private readonly Action<IVideoEngine>? _release;
+    // Told once, the first time this session binds its own swap chain with its first frame (its picture is the slot's now):
+    // MfMediaPlayer then lets go of the engine that held the previous source's last frame for the slot.
+    private readonly Action<IVideoEngine>? _presented;
+    private bool _presentedRaised;
 
     private MediaSignalSink? _sink;
     private bool _disposed;
@@ -144,13 +148,14 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     private const int CueWindowPollMs = 500;   // re-evaluate the window this often as playback advances
 
     internal MfMediaSession(IVideoEngine engine, int sourceEpoch, MediaOpenOptions opts,
-        AdaptiveManifest? manifest = null, Action<IVideoEngine>? release = null)
+        AdaptiveManifest? manifest = null, Action<IVideoEngine>? release = null, Action<IVideoEngine>? presented = null)
     {
         _engine = engine;
         _sourceEpoch = sourceEpoch;
         _opts = opts;
         _manifest = manifest;
         _release = release;
+        _presented = presented;
         _playRequested = !opts.StartPaused;
         if (_playRequested) _everPlayed = true;
         _engine.StateChanged += OnEngineStateChanged;
@@ -694,6 +699,11 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             {
                 binding.Bind(_handle, _forceRebind);
                 _forceRebind = false;
+                if (firstFrame && !_presentedRaised)
+                {
+                    _presentedRaised = true;
+                    _presented?.Invoke(_engine);
+                }
             }
             // Readiness = handle bound AND this source's first frame landed. Binding alone is not it: the swap chain of
             // a warm engine still holds the PREVIOUS video's last frame (or nothing yet) until the new source presents.
