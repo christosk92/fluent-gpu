@@ -8858,11 +8858,10 @@ public sealed partial class AppHost : IDisposable
         RecordSeededDestinations(layoutSize);   // from the commit's layout, or one target solve (the re-solve below then lays out the start)
         if (!started || !_scene.AnyLayoutDirty) return false;
         NoteFlowRevealHeights();
-        // The commit's own pass arranged these subtrees at their targets: the ring's slots for the start (the frame before) would answer without
-        // descending and leave the children at the targets' Bounds (FlexLayout.BypassMeasureRing).
-        _layout.BypassMeasureRing = true;
-        try { _invalidator.RunDirty(layoutSize); }
-        finally { _layout.BypassMeasureRing = false; }
+        // The commit's own pass arranged these subtrees at their targets; the start is the frame before, so a subtree nothing marked since
+        // answers from the measure ring's slot for it (the record above marked every box that reads where the reflows land), and an arrange
+        // whose measure did not descend re-measures its children first (MeasureMemo.KidsGen): none keeps the Bounds its target arrange left.
+        _invalidator.RunDirty(layoutSize);
         _scene.ClearLayoutDirty();
         FollowFlowRevealHeights();
         return true;
@@ -8949,9 +8948,8 @@ public sealed partial class AppHost : IDisposable
     {
         NoteFlowRevealHeights();
         if (!SolveReflowTargets(layoutSize, "after layout")) return false;
-        _layout.BypassMeasureRing = true;
-        try { _invalidator.RunDirty(layoutSize); _scene.ClearLayoutDirty(); }
-        finally { _layout.BypassMeasureRing = false; }
+        _invalidator.RunDirty(layoutSize);
+        _scene.ClearLayoutDirty();
         FollowFlowRevealHeights();
         return true;
     }
@@ -8987,16 +8985,14 @@ public sealed partial class AppHost : IDisposable
         }
         if (_destProbeSaved.Count == 0) { _destProbeNodes.Clear(); return false; }
         if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] target solve ({where}) at {layoutSize.Width:0}x{layoutSize.Height:0}");
-        // The solve re-arranges subtrees the frame's layout already solved at other sizes: the ring would answer from those (BypassMeasureRing).
         // Nothing it arranges is shown: no OnBoundsChanged or measured-bounds hook hears it (FlexLayout.SuppressBoundsDelivery).
-        _layout.BypassMeasureRing = true;
         _layout.SuppressBoundsDelivery = true;
         try
         {
             _invalidator.RunDirty(layoutSize);
             _scene.ClearLayoutDirty();
         }
-        finally { _layout.BypassMeasureRing = false; _layout.SuppressBoundsDelivery = false; }
+        finally { _layout.SuppressBoundsDelivery = false; }
         for (int i = 0; i < _destProbeSaved.Count; i++)
         {
             NodeHandle n = _destProbeSaved[i].Node, p = _scene.Parent(n);

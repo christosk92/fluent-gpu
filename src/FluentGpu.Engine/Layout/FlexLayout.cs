@@ -24,13 +24,6 @@ public sealed partial class FlexLayout
     /// every standalone layout run (unchanged behaviour).</summary>
     public bool DeferOffsetClamp { get; set; }
 
-    /// <summary>Host-set around a re-solve of a layout this same frame already arranged at OTHER sizes (the commit laid out at its targets, then
-    /// again at its reflows' start, <c>AppHost.SeedReflowsFirst</c>): the cross-pass measure ring is not consulted. A ring slot stored at the
-    /// start's width (the frame before) is clean and its version unchanged, but a hit does not descend, so the node's children keep the Bounds
-    /// that pass at the TARGET left them, and the arrange reads those as their base sizes: a command bar laid out at its start width with its
-    /// trailing group at the target's x, a list's rows at the target width, for one frame. False otherwise.</summary>
-    public bool BypassMeasureRing { get; set; }
-
     /// <summary>Set by the host around its destination probe's target solve (<c>AppHost.SolveReflowTargets</c>): a layout of where width reflows
     /// LAND, which the frame never shows. Its arranged rects must not reach Element.OnBoundsChanged or a measured-bounds hook (they would write
     /// the landing width into app state, and re-render what reads it, before the next solve puts the frame back), nor advance the delivered
@@ -40,8 +33,19 @@ public sealed partial class FlexLayout
     /// <summary>Host-set per frame: a run of more than one line breaks at the width it LANDS at while a width reflow resizes it (see the text
     /// measure). True from the frame AFTER the reflow's destination was first recorded: the slide's first frame is the one the tree answers the
     /// landing width on (a page that swaps its form for it re-renders on the next commit), so a run whose tree is about to be replaced never
-    /// rewraps for a landing it will not reach, and a run that stays rewraps once, on the frame its tree has settled its form.</summary>
-    public bool BreakTextAtLanding { get; set; }
+    /// rewraps for a landing it will not reach, and a run that stays rewraps once, on the frame its tree has settled its form. A flip changes
+    /// where every recorded run breaks, so it marks the recorded structure readers (<see cref="SceneStore.MarkRecordedStructureReaders"/>).</summary>
+    public bool BreakTextAtLanding
+    {
+        get => _breakTextAtLanding;
+        set
+        {
+            if (value == _breakTextAtLanding) return;
+            _breakTextAtLanding = value;
+            _scene.MarkRecordedStructureReaders();
+        }
+    }
+    private bool _breakTextAtLanding;
 
     // `--fg layout` (EngineSwitches.LayoutDiag): per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
@@ -264,7 +268,7 @@ public sealed partial class FlexLayout
     private bool TryRingHit(NodeHandle node, float availW, out Size2 size, out float flatLo, out float flatHi)
     {
         size = default; flatLo = flatHi = float.NaN;
-        if (Verifying || BypassMeasureRing) return false;   // --fg layout-verify: the oracle's re-solve descends for real, it never rides the ring
+        if (Verifying) return false;   // --fg layout-verify: the oracle's re-solve descends for real, it never rides the ring
         uint i = node.Raw.Index;
         if (i >= (uint)_memo.Length) return false;
         // Two complementary validators, both required (P4 fix, 2026-09-19):
@@ -480,7 +484,10 @@ public sealed partial class FlexLayout
     /// the width it lands at while a width reflow resizes it (<see cref="SceneStore.StructureWidth"/>), else <paramref name="live"/>. The live
     /// width still sizes and places the cells. Intrinsic probes measure at hypothetical widths and keep them.</summary>
     private float StructureW(NodeHandle node, float live)
-        => _minContentProbe || _naturalProbe ? live : _scene.StructureWidth(node, live);
+    {
+        _scene.NoteStructureReader(node);   // a change of its answer marks this node (SceneStore.StructureWidth.cs)
+        return _minContentProbe || _naturalProbe ? live : _scene.StructureWidth(node, live);
+    }
     // The probe's own per-node text ring (index-keyed; the entry key is the full (text, style, maxW) pure-function input,
     // so a recycled index can only ever hit a correct answer). Grown in MeasureNatural only — cold, never per frame.
     private TextMeasureCache[] _probeText = System.Array.Empty<TextMeasureCache>();
@@ -892,12 +899,18 @@ public sealed partial class FlexLayout
             // its height (and everything under it) moves once instead of stepping through every line count on the way. The live width still
             // sizes and places the box; the recorder draws the lines at the width they were broken at (TextMeasureEntry.Structured). A run
             // that auto-fits (MinSizeDip) or is one line at most keeps the live width: a trim follows the box.
+            // A run that can break at its landing is a structure reader whether or not it does on this pass (a record or a flip of the
+            // landing breaks marks it).
             bool structured = false;
-            if (BreakTextAtLanding && widthConstrained && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && li.TextStyle.MaxLines != 1
-                && li.TextStyle.MinSizeDip <= 0f && !_minContentProbe && !_naturalProbe && _scene.HasDestinationWidths)
+            if (widthConstrained && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && li.TextStyle.MaxLines != 1
+                && li.TextStyle.MinSizeDip <= 0f && !_minContentProbe && !_naturalProbe)
             {
-                float landing = StructureW(node, maxW);
-                if (MathF.Abs(landing - maxW) > 0.5f) { maxW = MathF.Max(0f, landing); structured = true; }
+                if (BreakTextAtLanding && _scene.HasDestinationWidths)
+                {
+                    float landing = StructureW(node, maxW);
+                    if (MathF.Abs(landing - maxW) > 0.5f) { maxW = MathF.Max(0f, landing); structured = true; }
+                }
+                else _scene.NoteStructureReader(node);
             }
             // Measure cache: skip re-shaping when (text, style, availWidth) are unchanged (the §2.3 down-rule win on a
             // scoped relayout). Pure-function key ⇒ self-invalidating; helps the real shaping path, neutral headless.

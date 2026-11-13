@@ -11,6 +11,11 @@ namespace FluentGpu.Scene;
 /// while the reflow flies and the live width otherwise; the live width still sizes and places what was chosen. The record is dropped
 /// when the last width reflow lands, so nothing stays decided for a width the box never reaches. Allocation-free once the columns have
 /// grown to the scene's size.
+/// <para>The structure width is a layout INPUT of the nodes whose solve reads it (<see cref="NoteStructureReader"/>): a grid's column
+/// count, a wrap row's breaks, a virtual fill's columns, a multi-line run's breaks. So every change of what it answers marks those
+/// readers layout-dirty, like any other input write: a record that enters a reader, a clear that drops one, and a flip of the layout's
+/// landing breaks (<see cref="MarkRecordedStructureReaders"/>). Without the mark a measure-ring slot or an arrange early-out stored under
+/// the old answer would keep answering for it (a grid laid out at its slide's start with the column count of the frame before).</para>
 /// </summary>
 public sealed partial class SceneStore
 {
@@ -18,6 +23,32 @@ public sealed partial class SceneStore
     private NodeHandle[] _destNode = [];   // the node each entry was recorded for: a recycled index never reads its predecessor's width
     private int[] _destWrote = [];
     private int _destCount;
+    private NodeHandle[] _structReader = [];   // per index: the node whose last solve read its structure width (a recycled index is no reader)
+
+    /// <summary>Layout calls this for a node whose solve reads its structure width (or, for a multi-line run, may break at it): a change of
+    /// what <see cref="StructureWidth"/> answers for it then marks it (see the type summary). Allocation-free once grown.</summary>
+    internal void NoteStructureReader(NodeHandle node)
+    {
+        int idx = (int)node.Raw.Index;
+        if (_structReader.Length <= idx) Array.Resize(ref _structReader, Math.Max(idx + 1, Math.Max(256, _structReader.Length * 2)));
+        _structReader[idx] = node;
+    }
+
+    private void MarkIfStructureReader(int idx, NodeHandle n)
+    {
+        if (!n.IsNull && idx < _structReader.Length && _structReader[idx] == n && IsLive(n)) Mark(n, NodeFlags.LayoutDirty);
+    }
+
+    /// <summary>Mark every recorded box that is a structure reader: what it answers is about to change for all of them (the layout's
+    /// landing breaks flipped).</summary>
+    internal void MarkRecordedStructureReaders()
+    {
+        for (int i = 0; i < _destCount; i++)
+        {
+            int idx = _destWrote[i];
+            MarkIfStructureReader(idx, _destNode[idx]);
+        }
+    }
 
     /// <summary>True while destination widths are recorded (a width reflow is in flight and the host probed its target).</summary>
     public bool HasDestinationWidths => _destCount > 0;
@@ -66,6 +97,7 @@ public sealed partial class SceneStore
             // handler (a column count, a tier) decides on the slide's first frame instead of on the first frame its box moves.
             if ((GetBoundsChangedHandler(n) is not null || GetBoundsChangedHook(n) is not null) && MathF.Abs(BoundsDeliveredRef(n).W - dest) > 0.5f)
                 Mark(n, NodeFlags.BoundsChangedPending);
+            MarkIfStructureReader(idx, n);   // it answered its live width until now
         }
         for (var c = FirstChild(n); !c.IsNull; c = NextSibling(c)) RecordDestinationSubtree(c);
     }
@@ -74,13 +106,15 @@ public sealed partial class SceneStore
     /// it does not have back to its live width on the next solve: layout-dirty where its laid-out width differs from that width (the box's own
     /// count or wrap re-decides), and its bounds re-delivered where its OnBoundsChanged handler or measured-bounds hook last heard a width it does
     /// not have (<see cref="NodeFlags.BoundsChangedPending"/>: a reader of <see cref="StructureWidth"/> in a handler, a structure-width hook, would
-    /// otherwise keep the recorded width until the box's bounds next move, which after a landing may be never).</summary>
+    /// otherwise keep the recorded width until the box's bounds next move, which after a landing may be never). A structure reader is marked
+    /// either way: it answers its live width from now on.</summary>
     internal void ClearDestinationWidths(bool markChanged)
     {
         for (int i = 0; i < _destCount; i++)
         {
             int idx = _destWrote[i];
             NodeHandle n = _destNode[idx];
+            MarkIfStructureReader(idx, n);
             if (markChanged && !n.IsNull && IsLive(n))
             {
                 float dest = _destW[idx];
