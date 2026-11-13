@@ -90,7 +90,7 @@ public sealed partial class SceneStore
     /// <summary>Once per commit, after its flush: did it ANSWER the record, re-rendering a recorded box in place with new layout inputs on the
     /// commit after the record announced a landing width to its readers? The tree took the form of the width it lands at (a page that keeps
     /// its nodes and takes the next tier's sizes), so every width recorded under it describes the form it left and the host probes the
-    /// destination again. A probe's record announces only to a reader the slide had not recorded, so a slide answers once per new reader; a
+    /// destination again. Only a seed's record announces, and only to a reader the slide had not recorded, so a slide answers once; a
     /// re-render on any other commit (a part that follows the live width) keeps the record: two more solves a frame for nothing.</summary>
     public bool ConsumeRecordAnswered()
     {
@@ -150,12 +150,17 @@ public sealed partial class SceneStore
 
     /// <summary>Record the laid-out width of <paramref name="root"/> and every box under it as its destination width. The caller has
     /// just solved the layout at the reflows' targets. A box already recorded in this probe keeps its first width (a later pass of
-    /// the seed lays some subtrees out at their start).</summary>
-    internal void RecordDestinationWidths(NodeHandle root)
+    /// the seed lays some subtrees out at their start). <paramref name="announce"/>: the record of a slide's seed (the commit's own layout), which
+    /// hands its bounds readers the landing they answer on the next commit (<see cref="ConsumeRecordAnswered"/>); a probe's re-record announces
+    /// nothing, so a slide's forms answer it once.</summary>
+    internal void RecordDestinationWidths(NodeHandle root, bool announce)
     {
         if (root.IsNull || !IsLive(root)) return;
+        _recordAnnouncing = announce;
         RecordDestinationSubtree(root);
+        _recordAnnouncing = false;
     }
+    private bool _recordAnnouncing;
 
     private void RecordDestinationSubtree(NodeHandle n)
     {
@@ -172,10 +177,10 @@ public sealed partial class SceneStore
             // handler (a column count, a tier) decides on the slide's first frame instead of on the first frame its box moves.
             bool reader = GetBoundsChangedHandler(n) is not null || GetBoundsChangedHook(n) is not null;
             if (reader && MathF.Abs(BoundsDeliveredRef(n).W - dest) > 0.5f) Mark(n, NodeFlags.BoundsChangedPending);
-            // A reader this slide had not recorded (every reader of its first record; a box a probe's record finds new): it decides its structure
-            // at its landing, in this layout's delivery or the next arrange's, and its tree answers on the next commit. A reader recorded before
-            // in the slide heard its landing then (a probe that moves it, a card easing to a re-fit, changes no form the tree has not taken).
-            if (reader && !(_destPrevSlide[idx] == _destSlide && _destPrevNode[idx] == n)) _recordAnnounced = true;
+            // A reader a seed record hands a landing this slide had not recorded for it (every reader of the slide's first record; one a later
+            // seed adds): it decides its structure there, in this layout's delivery or the next arrange's, and its tree answers on the next
+            // commit. A reader recorded before in the slide heard its landing then (a card easing to a re-fit changes no form).
+            if (_recordAnnouncing && reader && !(_destPrevSlide[idx] == _destSlide && _destPrevNode[idx] == n)) _recordAnnounced = true;
             MarkIfStructureReader(idx, n);   // it answered its live width until now
         }
         for (var c = FirstChild(n); !c.IsNull; c = NextSibling(c)) RecordDestinationSubtree(c);

@@ -1550,6 +1550,7 @@ public sealed partial class AppHost : IDisposable
     private readonly List<NodeHandle> _widthSeedsCommit = new(8);                   // every width reflow this commit's SeedReflowsFirst passes started (none of them is "away" from this commit)
     private readonly List<NodeHandle> _destProbeNodes = new(8);                     // the live reflows a destination probe presents at their targets
     private readonly List<(NodeHandle Node, float Width)> _destProbeSaved = new(8);  // the width inputs the probe found, put back exactly after its solve
+    private bool _destProbedThisFrame;                                                // a target solve recorded the tree this frame (RecordSeededDestinations)
     private Size2 _destLayoutSize;                                                  // the window size the recorded destination widths were solved at
     private readonly List<(NodeHandle Node, RectF Was)> _wrapMovers = new(16);     // children of wrapping boxes and where they stood before a reflow re-solve
     private readonly List<(NodeHandle Node, float H)> _revealHeights = new(16);    // flow-reveal boxes and their height before a reflow re-solve
@@ -7075,6 +7076,7 @@ public sealed partial class AppHost : IDisposable
             // answered the record in place (its forms stand in the sizes of the tier they land at, and the record describes the form they left):
             // solve the targets once before the frame's own layout, which then lays the frame out where the slide is, at the new record.
             if (answered && _scene.HasDestinationWidths) _anim.DestinationStale = true;
+            _destProbedThisFrame = false;
             if (_everLaidOut && !_needFullLayout && !_scene.Root.IsNull
                 && (_anim.DestinationStale || (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)))
                 && SolveReflowTargets(layoutSize, "before layout"))
@@ -8909,6 +8911,15 @@ public sealed partial class AppHost : IDisposable
     private void RecordSeededDestinations(Size2 layoutSize)
     {
         if (_widthSeeds.Count == 0) return;
+        // A probe this frame recorded the tree as it stands, every width reflow at its target and every box this commit re-sized at its declared
+        // width (the target its new seed aims at): a seed it recorded, under a parent it recorded, lands where the record already says. A form that
+        // answers the record in place re-sizes its parts this way on the slide's first frame (the daylist's columns), so its probe serves its seeds.
+        if (_destProbedThisFrame && SeedsRecorded())
+        {
+            if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] {_widthSeeds.Count} seed(s) recorded by this frame's probe");
+            _widthSeeds.Clear();
+            return;
+        }
         // Only a width reflow that was already flying before this commit can hold a box away from where it lands: this commit's own seeds (every
         // pass's) were laid out at their targets by the commit's pass.
         if (_anim.AnyWidthReflowAwayFromDeclared(_widthSeedsCommit, out NodeHandle away))
@@ -8939,7 +8950,7 @@ public sealed partial class AppHost : IDisposable
                 SolveReflowTargets(layoutSize, "later seed pass");
                 return;
             }
-            _scene.RecordDestinationWidths(root);
+            _scene.RecordDestinationWidths(root, announce: true);
         }
         if (s_motionDiag)
             for (int i = 0; i < _widthSeeds.Count; i++) System.Console.Error.WriteLine($"[dest-width] recorded seed node={_widthSeeds[i].Raw.Index} at={DestDiagPath(_widthSeeds[i])} from the commit's layout");
@@ -8966,6 +8977,17 @@ public sealed partial class AppHost : IDisposable
     /// current sizes (dirtying their parents). The caller's next solve puts the frame back where the slide is: the frame's own layout (the
     /// pre-layout probe), the seed pass's re-solve at the rows' start (<see cref="SeedReflowsFirst"/>), or one restore solve
     /// (<see cref="ProbeReflowDestinations"/>). Allocation-free once the lists have grown. True when a live width reflow was solved.</summary>
+    /// <summary>Are this pass's width seeds, and the parents whose subtrees a seed record covers, all in the record?</summary>
+    private bool SeedsRecorded()
+    {
+        for (int i = 0; i < _widthSeeds.Count; i++)
+        {
+            NodeHandle n = _widthSeeds[i], p = _scene.Parent(n);
+            if (!_scene.HasDestinationWidth(n) || (!p.IsNull && !_scene.HasDestinationWidth(p))) return false;
+        }
+        return true;
+    }
+
     private bool SolveReflowTargets(Size2 layoutSize, string where)
     {
         _anim.DestinationStale = false;
@@ -9003,12 +9025,13 @@ public sealed partial class AppHost : IDisposable
         for (int i = 0; i < _destProbeSaved.Count; i++)
         {
             NodeHandle n = _destProbeSaved[i].Node, p = _scene.Parent(n);
-            _scene.RecordDestinationWidths(p.IsNull ? n : p);
+            _scene.RecordDestinationWidths(p.IsNull ? n : p, announce: false);
         }
         for (int i = 0; i < _destProbeSaved.Count; i++) _anim.RestoreProbedWidth(_destProbeSaved[i].Node, _destProbeSaved[i].Width);
         _destProbeSaved.Clear();
         _destLayoutSize = layoutSize;
         _destProbeNodes.Clear();
+        _destProbedThisFrame = true;
         return true;
     }
 
