@@ -6,8 +6,11 @@ namespace FluentGpu.Media;
 /// <summary>The <c>--fg protected-keeper=</c> arm (<see cref="ProtectedKeeperPolicy.Switch"/>).</summary>
 public enum ProtectedKeeperSwitch : byte
 {
-    /// <summary>The default lifetime: armed at launch on an adapter a previous run negotiated hardware PlayReady (SL3000) on
-    /// (<see cref="ProtectedKeeperPolicy.RememberedAdapter"/>), else armed at the first SL3000 negotiation of this run.</summary>
+    /// <summary>The default: no keeper (as <see cref="Off"/>). Holding DWM in hardware-protected composition for the whole process
+    /// blacked out the entire desktop on the Adreno X1-85 (driver 31.0.148.0, 2026-11-13): at a monitor hot-plug, and at launch
+    /// with an external ultrawide attached; with a protected video playing as well DWM crashed. Protected video does not need the
+    /// keeper (each video's own protected swap chain is protected by DWM as before); it only spared the desktop the switch hitch.
+    /// <see cref="Launch"/> and <see cref="Runtime"/> stay as opt-in arms.</summary>
     Auto,
     /// <summary>No keeper, ever (every protected arrival and departure pays DWM's protected-composition switch, as before).</summary>
     Off,
@@ -101,10 +104,9 @@ public static class ProtectedKeeperPolicy
     /// <summary>Is the keeper wanted now on the adapter <paramref name="adapterKey"/> (0 = not known yet)? Render thread, every turn.</summary>
     public static bool Wanted(ulong adapterKey) => Switch switch
     {
-        ProtectedKeeperSwitch.Off => false,
         ProtectedKeeperSwitch.Launch => true,
         ProtectedKeeperSwitch.Runtime => HardwareDrmSeen,
-        _ => HardwareDrmSeen || (adapterKey != 0 && adapterKey == RememberedAdapter),
+        _ => false,   // Auto (the default) and Off: no keeper (see ProtectedKeeperSwitch.Auto)
     };
 
     /// <summary>Why the keeper is wanted, for its <c>keeper.create</c> stamp.</summary>
@@ -112,6 +114,6 @@ public static class ProtectedKeeperPolicy
     {
         ProtectedKeeperSwitch.Launch => "switch=launch",
         ProtectedKeeperSwitch.Runtime => "switch=runtime sl3000",
-        _ => HardwareDrmSeen ? "sl3000" : "remembered",
+        _ => "off",
     };
 }

@@ -212,9 +212,9 @@ public sealed unsafe partial class D3D12Device
         if (_keeperOff) return;
         FluentGpu.Media.ProtectedKeeperSwitch sw = FluentGpu.Media.ProtectedKeeperPolicy.Switch;
         bool hw = FluentGpu.Media.ProtectedKeeperPolicy.HardwareDrmSeen;
-        if (_keeper == null && _keeperBuild == null && !hw && sw != FluentGpu.Media.ProtectedKeeperSwitch.Launch
-            && !(sw == FluentGpu.Media.ProtectedKeeperSwitch.Auto && FluentGpu.Media.ProtectedKeeperPolicy.RememberedAdapter != 0))
-            return;   // nothing can want it yet: the common case
+        if (_keeper == null && _keeperBuild == null && sw != FluentGpu.Media.ProtectedKeeperSwitch.Launch
+            && !(sw == FluentGpu.Media.ProtectedKeeperSwitch.Runtime && hw))
+            return;   // nothing wants it: the default (ProtectedKeeperSwitch.Auto is off), the common case
         if (!_keeperAdapterRead)
         {
             _keeperAdapterRead = true;   // cold: one adapter lookup per run
