@@ -39,14 +39,15 @@ public sealed partial class SceneStore
         if (!n.IsNull && idx < _structReader.Length && _structReader[idx] == n && IsLive(n)) Mark(n, NodeFlags.LayoutDirty);
     }
 
-    /// <summary>Mark every recorded box that is a structure reader: what it answers is about to change for all of them (the layout's
-    /// landing breaks flipped).</summary>
+    /// <summary>The layout's landing breaks flipped: mark every recorded structure reader whose box stands away from its landing width. One
+    /// that stands at it answers the same either way (a run whose box is its landing width breaks there at any offer; a box's structure
+    /// width is its live width), and a slot stored at another width is only asked again after the record changes, which marks it.</summary>
     internal void MarkRecordedStructureReaders()
     {
         for (int i = 0; i < _destCount; i++)
         {
             int idx = _destWrote[i];
-            MarkIfStructureReader(idx, _destNode[idx]);
+            if (MathF.Abs(_bounds[idx].W - _destW[idx]) > 0.5f) MarkIfStructureReader(idx, _destNode[idx]);
         }
     }
 
