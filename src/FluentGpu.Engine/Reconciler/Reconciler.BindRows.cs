@@ -81,6 +81,24 @@ public sealed partial class TreeReconciler
     private CompEntry?[] _compById = new CompEntry?[256];
     private int[] _compFreeNext = new int[256];
     private int _compHigh = 1, _compFree;
+    // Per scene node index: the id of the component anchored there (0 = none), so a walk up the tree finds the components above a node
+    // without a map lookup per level (AncestorRenderPending).
+    private int[] _compIdAtNode = new int[256];
+
+    /// <summary>Is a component anchored above <paramref name="node"/> queued to render in this flush (RunComponent's ancestors-first rule)?
+    /// One array read per level; a parked or exit-frozen ancestor renders nothing and is not waited for.</summary>
+    private bool AncestorRenderPending(NodeHandle node)
+    {
+        for (NodeHandle p = _scene.Parent(node); !p.IsNull; p = _scene.Parent(p))
+        {
+            int idx = (int)p.Raw.Index;
+            if (idx >= _compIdAtNode.Length) continue;
+            int id = _compIdAtNode[idx];
+            if (id == 0 || _compById[id] is not { } e || e.Node != p || e.Parked || e.ExitFrozen) continue;
+            if (Runtime.Rows.IsPendingRun(e.Row)) return true;
+        }
+        return false;
+    }
 
     private int RegisterComp(CompEntry entry)
     {
@@ -92,6 +110,9 @@ public sealed partial class TreeReconciler
             if (id >= _compById.Length) { Array.Resize(ref _compById, id * 2); Array.Resize(ref _compFreeNext, id * 2); }
         }
         _compById[id] = entry;
+        int idx = (int)entry.Node.Raw.Index;
+        if (idx >= _compIdAtNode.Length) Array.Resize(ref _compIdAtNode, Math.Max(idx + 1, _compIdAtNode.Length * 2));
+        _compIdAtNode[idx] = id;
         return id;
     }
 
@@ -99,6 +120,8 @@ public sealed partial class TreeReconciler
     private void ReleaseComp(CompEntry entry)
     {
         Runtime.Rows.Dispose(entry.Row);
+        int idx = (int)entry.Node.Raw.Index;
+        if (idx < _compIdAtNode.Length && _compIdAtNode[idx] == entry.Id) _compIdAtNode[idx] = 0;
         _compById[entry.Id] = null;
         _compFreeNext[entry.Id] = _compFree;
         _compFree = entry.Id;

@@ -1087,6 +1087,7 @@ public sealed partial class TreeReconciler
     {
         _scene.Mark(node, NodeFlags.LayoutDirty);
         _layoutShapeMutated = true;
+        _scene.NoteRecordedShapeWrite(node);
     }
 
     /// <summary>The node's OWN parent-facing inputs changed (explicit Width/Height, Margin, Min/Max, flex, AlignSelf):
@@ -1461,6 +1462,16 @@ public sealed partial class TreeReconciler
         // write) mid-fade. Parked pages are detached; exit-frozen pages stay attached so the exit track can paint.
         // Remember that a render was owed; un-park / un-freeze replays it once when the subtree comes back.
         if (entry.Parked || entry.ExitFrozen) { entry.DeferredRender = true; return; }
+        // Ancestors render first: a re-render queued in the same flush as a component above it waits for that one. Both often read
+        // one signal (a tier, a form), and which ran first was the order they last subscribed in, which a timer's re-render reshuffles:
+        // a child that ran first took its new form in place, inside a box its parent's render then removed as an exit (a clock column
+        // fading out showing the form of the tier it was leaving for), and the same crossing showed its old form on another run.
+        // The parent's render now decides: it removes the child with the form it stood in, or re-pushes its props first.
+        if (entry.Rendered is not null && Runtime.IsFlushing && AncestorRenderPending(node))
+        {
+            Runtime.Rows.RequeueAfterRun(entry.Row);
+            return;
+        }
         // A real invalidation (a signal write reaching this component) beat the un-park drip to it — running now settles
         // the debt, so cancel the queue slot (the drain skips a cancelled entry without spending its budget).
         entry.QueuedReplay = false;
