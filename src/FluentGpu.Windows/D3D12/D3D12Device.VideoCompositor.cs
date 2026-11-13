@@ -177,14 +177,38 @@ public sealed unsafe partial class D3D12Device
     private ulong _keeperAdapterKey;
     private int _keeperBuilds;
     private long _keeperHealthDueQpc;
+    // A display change (ProtectedKeeperPolicy.NoteDisplayChange) takes the keeper out of DWM's tree on the turn it arrives and keeps it
+    // out until no display change came for this long: a hot-plugged output's link (and its HDCP) comes up in a few seconds, and DWM's
+    // protected composition across it blacked out the whole desktop (2026-11-13). Re-armed by the first commit after the quiet ends.
+    private const int KeeperDisplayQuietMs = 5000;
+    private long _keeperQuietUntilQpc;
+    private System.Collections.Generic.List<ProtectedCompositionKeeper>? _keeperDropped;   // out of the tree: released after that commit
 
     /// <summary>Render thread, at the top of every <see cref="CommitVideoComposition"/> (so an attach it makes rides the commit right
-    /// after). With no keeper wanted: two static reads. Steady state with one: a flag read and, once a second, the device-removed
-    /// reason. No allocation outside a build, an attach or a loss.</summary>
+    /// after). With no keeper wanted: three static reads. Steady state with one: a flag read and, once a second, the device-removed
+    /// reason. No allocation outside a build, an attach, a loss or a display change.</summary>
     private void TickProtectedKeeper()
     {
         // A replaced keeper goes once its successor is in the tree (the commit that swapped them has run: it followed that attach).
         if (_keeperRetired != null && _keeperHost != null) { DestroyKeeper(_keeperRetired, "replaced"); _keeperRetired = null; }
+        // Dropped keepers go once the commit that took them out of the tree has run (the previous tick's).
+        if (_keeperDropped != null)
+        {
+            foreach (var k in _keeperDropped) DestroyKeeper(k, "display-change");
+            _keeperDropped = null;
+        }
+        // Always taken, even with the keeper off: a pending change is the pre-turn's reason to commit.
+        if (FluentGpu.Media.ProtectedKeeperPolicy.TryTakeDisplayChange(out long changedQpc))
+        {
+            DropKeeperForDisplayChange();
+            _keeperQuietUntilQpc = changedQpc + KeeperDisplayQuietMs * System.Diagnostics.Stopwatch.Frequency / 1000;
+        }
+        if (_keeperQuietUntilQpc != 0)
+        {
+            if (System.Diagnostics.Stopwatch.GetTimestamp() < _keeperQuietUntilQpc) return;
+            _keeperQuietUntilQpc = 0;
+            if (!_keeperOff) Diag.Line("[video.surface] [keeper] displays quiet for " + KeeperDisplayQuietMs + " ms: re-armed");
+        }
         if (_keeperOff) return;
         FluentGpu.Media.ProtectedKeeperSwitch sw = FluentGpu.Media.ProtectedKeeperPolicy.Switch;
         bool hw = FluentGpu.Media.ProtectedKeeperPolicy.HardwareDrmSeen;
@@ -332,6 +356,34 @@ public sealed unsafe partial class D3D12Device
         FluentGpu.Media.ProtectedVideoTrace.Stamp("keeper.off");
     }
 
+    // Render thread, a display change: the keeper (and a replaced one, and a build in flight) leaves every tree that shows it on THIS
+    // commit; the swap chains are released on the next tick. Nothing to do when no keeper exists.
+    private void DropKeeperForDisplayChange()
+    {
+        if (_keeper == null && _keeperRetired == null && _keeperBuild == null) return;
+        if (_keeperBuild is { } b)
+        {
+            FluentGpu.Pal.Windows.ProtectedCompositionKeeper? orphan = null;
+            lock (b)
+            {
+                b.Abandoned = true;
+                if (b.Done) { orphan = b.Keeper; b.Keeper = null; }
+            }
+            if (orphan != null) (_keeperDropped ??= new()).Add(orphan);
+            _keeperBuild = null;
+        }
+        _keeperHost?.ClearKeeperSurface();
+        if (_primarySwapchain is { Composited: true } primary
+            && GetVideoPresenter(primary) is FluentGpu.Pal.Windows.CompositionVideoPresenter p && !ReferenceEquals(p, _keeperHost))
+            p.ClearKeeperSurface();
+        _keeperHost = null;
+        if (_keeper != null) { (_keeperDropped ??= new()).Add(_keeper); _keeper = null; }
+        if (_keeperRetired != null) { (_keeperDropped ??= new()).Add(_keeperRetired); _keeperRetired = null; }
+        FluentGpu.Media.ProtectedVideoTrace.EnsureProbe();
+        FluentGpu.Media.ProtectedVideoTrace.Stamp("keeper.drop reason=display-change");
+        Diag.Line("[video.surface] [keeper] a display changed: out of DWM's tree until the displays are quiet for " + KeeperDisplayQuietMs + " ms");
+    }
+
     private static void DestroyKeeper(FluentGpu.Pal.Windows.ProtectedCompositionKeeper k, string why)
     {
         FluentGpu.Media.ProtectedVideoTrace.Stamp("keeper.destroy reason=" + why);
@@ -353,6 +405,7 @@ public sealed unsafe partial class D3D12Device
             _keeperBuild = null;
         }
         if (_keeperRetired != null) { DestroyKeeper(_keeperRetired, "replaced"); _keeperRetired = null; }
+        if (_keeperDropped != null) { foreach (var k in _keeperDropped) DestroyKeeper(k, "display-change"); _keeperDropped = null; }
         if (_keeper != null) { DestroyKeeper(_keeper, "device-dispose"); _keeper = null; }
         _keeperHost = null;
     }

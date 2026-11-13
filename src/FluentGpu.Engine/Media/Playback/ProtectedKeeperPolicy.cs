@@ -64,6 +64,36 @@ public static class ProtectedKeeperPolicy
         try { Wake?.Invoke(); } catch { /* a wake that failed only delays the keeper to the next render turn */ }
     }
 
+    private static int s_displayEpoch;      // bumped by every WM_DISPLAYCHANGE (UI thread of any top-level window)
+    private static int s_displayEpochTaken; // the epoch the render thread last acted on
+    private static long s_displayChangedQpc;
+
+    /// <summary>A display was added, removed or re-configured (<c>WM_DISPLAYCHANGE</c>): the keeper must leave DWM's tree at once and
+    /// stay out until the topology is quiet. A monitor hot-plugged while the keeper was held turned the WHOLE desktop black until the
+    /// process exited (2026-11-13, Adreno X1-85, twice; with a protected video playing as well, DWM crashed): DWM's protected
+    /// composition does not survive the new output's link coming up. Any thread; wakes the render loop so the drop does not wait
+    /// for a UI frame (a blacked-out window is parked and publishes none).</summary>
+    public static void NoteDisplayChange()
+    {
+        Volatile.Write(ref s_displayChangedQpc, System.Diagnostics.Stopwatch.GetTimestamp());
+        Interlocked.Increment(ref s_displayEpoch);
+        try { Wake?.Invoke(); } catch { /* the next render turn takes it */ }
+    }
+
+    /// <summary>A display change the render thread has not acted on yet. Render thread (the pre-turn's "any early work" test).</summary>
+    public static bool DisplayChangePending => Volatile.Read(ref s_displayEpoch) != s_displayEpochTaken;
+
+    /// <summary>Render thread: take the pending display change, if any, with the timestamp (<see cref="System.Diagnostics.Stopwatch"/>)
+    /// of the latest one.</summary>
+    public static bool TryTakeDisplayChange(out long changedQpc)
+    {
+        int e = Volatile.Read(ref s_displayEpoch);
+        changedQpc = Volatile.Read(ref s_displayChangedQpc);
+        if (e == s_displayEpochTaken) return false;
+        s_displayEpochTaken = e;
+        return true;
+    }
+
     /// <summary>The persisted identity of an adapter: PCI vendor id in the high half, device id in the low half (a LUID changes at every
     /// boot; these do not).</summary>
     public static ulong AdapterKey(uint vendorId, uint deviceId) => ((ulong)vendorId << 32) | deviceId;

@@ -3018,6 +3018,8 @@ public sealed partial class AppHost : IDisposable
         var list = Volatile.Read(ref _childRenderSources);
         bool any = HasEarlyVideoWork;
         for (int i = 0; !any && i < list.Length; i++) any = !list[i]._renderFailed && list[i].HasEarlyVideoWork;
+        // A display change drops the protected composition keeper on this turn's commit, even with no UI frame (a parked window).
+        any |= FluentGpu.Media.ProtectedKeeperPolicy.DisplayChangePending;
         if (!any) return;
         // Popup swapchain work first: its visual edits ride the same device commit as the video's (DrainChildRenderSources runs it
         // again later in the turn, a cheap no-op by then).

@@ -261,6 +261,17 @@ public sealed unsafe class CompositionVideoPresenter : IVideoPresenter, IDisposa
     /// <summary>Whether this presenter's tree holds a keeper surface now.</summary>
     internal bool HoldsKeeper => _keeperSurface != null;
 
+    /// <summary>Take the keeper out of this window's tree (a display change, ProtectedKeeperPolicy.NoteDisplayChange): the sprite and
+    /// the surface wrap go now and the device's next commit publishes it; the keeper's swap chain is released after that commit.
+    /// Render thread; cold.</summary>
+    internal void ClearKeeperSurface()
+    {
+        _device.AssertRenderThread();
+        if (_keeperSprite == null && _keeperSurface == null) return;
+        ReleaseKeeper();
+        _device.NoteVideoCompositorCommitDue();
+    }
+
     private void ReleaseKeeper()
     {
         if (_keeperSprite != null)

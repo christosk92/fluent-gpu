@@ -2560,6 +2560,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // TRUE per-monitor refresh this window is now on — the fix for the bug where the pacer's rate came
                 // from DwmGetCompositionTimingInfo(HWND.NULL), primary-monitor-global, and so never noticed the
                 // change. Don't consume: DefWindowProcW still runs (same posture as WM_SETTINGCHANGE above).
+                // The protected composition keeper leaves DWM's tree until the topology is quiet (ProtectedKeeperPolicy).
+                FluentGpu.Media.ProtectedKeeperPolicy.NoteDisplayChange();
                 OnDisplayChanged();
                 return false;
             case WM_PAINT:
