@@ -38,6 +38,10 @@ internal static class LiveResizeProbe
     private const int Steps = 30;
     private const float StepDip = 12f;
     private static readonly Size2 StartDip = new(360f, 240f);
+    // The ceiling and floor the limits phase pushes against. The 30 steps peak at 540 x 420 DIP, under the ceiling; the limits
+    // phase then asks for well past it (and well under the floor) inside the same size loop.
+    private static readonly Size2 CeilingDip = new(600f, 480f);
+    private static readonly Size2 FloorDip = new(232f, 48f);
 
     public static bool TryRun(AppHost host, IPlatformWindow window, IGpuDevice device)
     {
@@ -79,8 +83,8 @@ internal static class LiveResizeProbe
         ProbeChild.LastViewport = default;
         ProbeChild.Renders = 0;
         var child = host.OpenDetachedWindow(new DetachedWindowRequest(title, StartDip, new ProbeChild(), AlwaysOnTop: false,
-            MinClientSizeDip: new Size2(232f, 48f), NoActivate: true, ToolWindow: true,
-            LiveResize: live, MaxClientSizeDip: new Size2(720f, 900f)));
+            MinClientSizeDip: FloorDip, NoActivate: true, ToolWindow: true,
+            LiveResize: live, MaxClientSizeDip: CeilingDip));
         if (child is null) { line = "[live-resize] OpenDetachedWindow returned null"; Console.Error.WriteLine(line); return false; }
         // The step's own frame reached the screen when, at the end of that frame, the newest presented publication was its own.
         bool lastPresentedOwn = false;
@@ -120,6 +124,22 @@ internal static class LiveResizeProbe
             if (laidOut) laidOutAny++;
             if (laidOut && lastPresentedOwn) followed++;
         }
+        // The limits phase (live window only): a client size far past the ceiling, then far under the floor, each asked of
+        // SetWindowPos inside the size loop; the window must take exactly the ceiling, then exactly the floor (within 1 px).
+        string limits = "";
+        bool limitsOk = true;
+        if (live)
+        {
+            int capW = (int)MathF.Ceiling(CeilingDip.Width * scale), capH = (int)MathF.Ceiling(CeilingDip.Height * scale);
+            int floorW = (int)MathF.Ceiling(FloorDip.Width * scale), floorH = (int)MathF.Ceiling(FloorDip.Height * scale);
+            var cap = AskClient(hwnd, capW * 2, capH * 2);
+            var floor = AskClient(hwnd, floorW / 3, floorH / 3);
+            bool capOk = Math.Abs(cap.W - capW) <= 1 && Math.Abs(cap.H - capH) <= 1;
+            bool floorOk = Math.Abs(floor.W - floorW) <= 1 && Math.Abs(floor.H - floorH) <= 1;
+            limitsOk = capOk && floorOk;
+            limits = $" ceiling.asked={capW * 2}x{capH * 2} ceiling.took={cap.W}x{cap.H} ceiling.expected={capW}x{capH} ceiling={(capOk ? "PASS" : "FAIL")}" +
+                $" floor.asked={floorW / 3}x{floorH / 3} floor.took={floor.W}x{floor.H} floor.expected={floorW}x{floorH} floor={(floorOk ? "PASS" : "FAIL")}";
+        }
         SendMessageW(hwnd, WmExitSizeMove, 0, 0);
         for (int i = 0; i < 10; i++) { host.RunFrame(); host.TickDetachedHosts(); }
         GetClientRect(hwnd, out var end);
@@ -128,13 +148,24 @@ internal static class LiveResizeProbe
 
         stepMs.Sort();
         double median = stepMs[stepMs.Count / 2], worst = stepMs[^1];
-        bool ok = live ? followed == Steps && settled : laidOutAny == 0 && settled;
+        bool ok = live ? followed == Steps && settled && limitsOk : laidOutAny == 0 && settled;
         line = $"[live-resize] window={(live ? "live" : "defer")} steps={Steps} laidOutAtSize={laidOutAny} presentedAtSize={followed} " +
-            $"settledAtEnd={(settled ? 1 : 0)} stepMs.median={median:0.00} stepMs.worst={worst:0.00} scale={scale:0.##} verdict={(ok ? "PASS" : "FAIL")}";
+            $"settledAtEnd={(settled ? 1 : 0)} stepMs.median={median:0.00} stepMs.worst={worst:0.00} scale={scale:0.##}{limits} verdict={(ok ? "PASS" : "FAIL")}";
         Console.Error.WriteLine(line);
         child.Close();
         for (int i = 0; i < 60 && child.IsOpen; i++) { host.RunFrame(); host.TickDetachedHosts(); }
         return ok;
+    }
+
+    /// <summary>Ask for a CLIENT size (px) through the outer rect (the frame measured now added) and return what the client took.</summary>
+    private static (int W, int H) AskClient(nint hwnd, int clientW, int clientH)
+    {
+        GetWindowRect(hwnd, out var o);
+        GetClientRect(hwnd, out var c);
+        int fw = (o.Right - o.Left) - c.Right, fh = (o.Bottom - o.Top) - c.Bottom;
+        SetWindowPos(hwnd, 0, o.Left, o.Top, clientW + fw, clientH + fh, SwpNoZOrder | SwpNoActivate);
+        GetClientRect(hwnd, out var after);
+        return (after.Right, after.Bottom);
     }
 
     /// <summary>The probe window's content: shows the viewport it laid out with and records it for the step check.</summary>
