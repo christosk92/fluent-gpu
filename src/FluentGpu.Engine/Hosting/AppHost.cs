@@ -9487,9 +9487,16 @@ public sealed partial class AppHost : IDisposable
             if (!float.IsNaN(declared) || !_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.Exiting) != 0) continue;
             NodeHandle par = _scene.Parent(n);
             if (par.IsNull || (_scene.Flags(par) & NodeFlags.ZStack) != 0) continue;
+            bool horizontal = ch == AnimChannel.SizeW;
+            if (_scene.HasGrid(par))
+            {
+                // A grid cell is stretched to its column track (FlexLayout.ArrangeGrid), never to the grid's inner box: a Recently played tile
+                // easing to its new column's width while a docking panel's slide resizes the grid follows that track, not the whole row.
+                if (horizontal && _layout.TryGetGridCellWidth(n, out float cell) && MathF.Abs(cell - to) >= 0.5f) _anim.RetargetRelayout(n, ch, cell);
+                continue;
+            }
             ref LayoutInput pl = ref _scene.Layout(par);
             ref LayoutInput nl = ref _scene.Layout(n);
-            bool horizontal = ch == AnimChannel.SizeW;
             if ((pl.Direction == 1) != horizontal) continue;   // only the parent's cross axis stretches
             if ((nl.AlignSelf == FlexAlign.Auto ? pl.AlignItems : nl.AlignSelf) != FlexAlign.Stretch || !SizeImposed(par, horizontal)) continue;
             ref readonly RectF pb = ref _scene.Bounds(par);
