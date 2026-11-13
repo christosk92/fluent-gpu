@@ -645,6 +645,8 @@ public sealed partial class AnimEngine
 
         if (ch is AnimChannel.LayoutW or AnimChannel.LayoutH)
         {
+            // A closing exit orphan is closed now: it gives its parent's space up before the declared size goes back below.
+            if ((_scene.Flags(node) & NodeFlags.Exiting) != 0) _scene.ReleaseOrphanSpace(node);
             ref LayoutInput rli = ref _scene.Layout(node);
             if (ch == AnimChannel.LayoutW) rli.Width = r.RestoreTo; else rli.Height = r.RestoreTo;
             ref NodePaint rp = ref _scene.Paint(node);

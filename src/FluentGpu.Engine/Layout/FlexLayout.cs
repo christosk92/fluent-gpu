@@ -1223,7 +1223,10 @@ public sealed partial class FlexLayout
     /// an authored Width/Height reads the same as the reflow track's eased extent, and an opacity-only exit of a
     /// fixed-height line used to keep its slot for the whole fade (audit B3bc). The extent itself is still the live
     /// LayoutInput main axis the reflow track writes every tick (AnimScheduler compose); a frozen last-arranged Bounds is
-    /// never read, it is exactly what an opacity-only orphan still carries.</para></summary>
+    /// never read, it is exactly what an opacity-only orphan still carries.</para>
+    /// <para>A STRETCHED orphan (auto cross size under a Stretch alignment) holds no cross extent: its last-arranged cross size is the line it was
+    /// stretched to, not its own, so folding it in held the parent at its old cross size for the whole close and dropped it at once when the orphan
+    /// was reclaimed (WinUI's daylist clock column closing beside a cover that eases shorter: the card stood at the old height, then fell 152 DIP).</para></summary>
     private void AddOrphanMain(NodeHandle node, bool row, ref float main, ref float cross, ref int n)
     {
         if (_scene.OrphanCount == 0) return;
@@ -1237,12 +1240,38 @@ public sealed partial class FlexLayout
             float oMain = row ? oli.Width : oli.Height;
             if (float.IsNaN(oMain)) continue;   // no Size track on this axis ⇒ the orphan holds no layout space
             float oCross = row ? oli.Height : oli.Width;
-            if (float.IsNaN(oCross)) oCross = row ? _scene.Bounds(o).H : _scene.Bounds(o).W;
+            if (float.IsNaN(oCross))
+            {
+                FlexAlign align = oli.AlignSelf == FlexAlign.Auto ? _scene.Layout(node).AlignItems : oli.AlignSelf;
+                oCross = align == FlexAlign.Stretch ? 0f : row ? _scene.Bounds(o).H : _scene.Bounds(o).W;
+            }
             main += oMain + MarginMain(oli, row);
             oCross += MarginCross(oli, row);
             if (oCross > cross) cross = oCross;
             n++;
         }
+    }
+
+    /// <summary>Arrange's half of <see cref="AddOrphanMain"/>: the main extent (margins and the gaps beside them included) that the parent's reflow
+    /// exit orphans still hold, which its live children's free space leaves to them while they close. Allocation-free; 0 with no such orphan.</summary>
+    private float HeldOrphanMain(NodeHandle node, bool row, int visible, float gap)
+    {
+        var orphans = _scene.OrphanChildrenOf(node);
+        if (orphans is null) return 0f;
+        float held = 0f;
+        int k = 0;
+        for (int i = 0; i < orphans.Count; i++)
+        {
+            var o = orphans[i];
+            if (!_scene.IsLive(o) || !_scene.OrphanHoldsSpace(o)) continue;
+            ref LayoutInput oli = ref _scene.Layout(o);
+            float oMain = row ? oli.Width : oli.Height;
+            if (float.IsNaN(oMain)) continue;
+            held += oMain + MarginMain(oli, row);
+            k++;
+        }
+        if (k > 0) held += gap * (visible > 0 ? k : k - 1);
+        return held;
     }
 
     // ── Arrange: position + size children within the node's final box ──
@@ -1349,6 +1378,11 @@ public sealed partial class FlexLayout
             n++;
         }
         if (n > 1) usedMain += li.Gap * (n - 1);
+        // A reflow exit orphan still owns its closing extent here too, not only in the parent's Measure (AddOrphanMain): a growing sibling took it at
+        // once on the exit's first frame and only then gave it back as the orphan's track wrote its extent (a daylist copy widened 170 DIP in one frame
+        // beside its closing clock column).
+        float heldMain = _scene.OrphanCount == 0 ? 0f : HeldOrphanMain(node, row, n, li.Gap);
+        usedMain += heldMain;
         float free = availMain - usedMain;
 
         // Distribute free space → each child's final main size.
@@ -1373,7 +1407,7 @@ public sealed partial class FlexLayout
         float consumed = 0f; for (int i = 0; i < n; i++) consumed += finalMain[i];
         { for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c)) consumed += MarginMain(_scene.Layout(c), row); }
         if (n > 1) consumed += li.Gap * (n - 1);
-        float leftover = MathF.Max(0f, availMain - consumed);
+        float leftover = MathF.Max(0f, availMain - consumed - heldMain);
         (float lead, float between) = Distribute(li.Justify, leftover, n);
 
         // Place children. idx increments ONLY for a visited (non-collapsed) child — keeps finalMain[idx] in lockstep

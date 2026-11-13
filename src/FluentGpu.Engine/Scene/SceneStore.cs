@@ -853,6 +853,20 @@ public sealed partial class SceneStore : ISceneBackend
     /// <summary>Whether exit orphan <paramref name="node"/> still occupies its parent's layout space (see <see cref="Orphan"/>).</summary>
     internal bool OrphanHoldsSpace(NodeHandle node) => _spaceHoldingOrphans.Count != 0 && _spaceHoldingOrphans.Contains(node);
 
+    /// <summary>Exit orphan <paramref name="node"/>'s closing has settled: it holds its parent's layout space no more (its size row's settle writes
+    /// the DECLARED size back into its layout input, which a parent still counting it would take for one frame before the reclaim: a sibling
+    /// shrank by the closed child's whole width and sprang back). Dirties the parent. No-op for a node that holds none.</summary>
+    internal void ReleaseOrphanSpace(NodeHandle node)
+    {
+        if (_spaceHoldingOrphans.Count == 0 || !_spaceHoldingOrphans.Remove(node)) return;
+        for (int i = _orphans.Count - 1; i >= 0; i--)
+            if (_orphans[i].Node == node)
+            {
+                if (!_orphans[i].VisualParent.IsNull && IsLive(_orphans[i].VisualParent)) Mark(_orphans[i].VisualParent, NodeFlags.LayoutDirty);
+                break;
+            }
+    }
+
     private void UnindexOrphan(in OrphanEntry entry)
     {
         _spaceHoldingOrphans.Remove(entry.Node);
