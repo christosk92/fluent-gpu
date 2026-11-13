@@ -9097,8 +9097,9 @@ public sealed partial class AppHost : IDisposable
     /// height its content measures now (<see cref="FlexLayout.MeasureNatural"/>, a pure query, at the width the row's box is laid out at), over
     /// the time the row has left (<see cref="AnimEngine.ReaimReflow"/>). The row pins the box's height, so no layout ever shows that height
     /// while it flies: without this it landed on the height of the commit that seeded it and the settle's continuation glided on to the real
-    /// one in a second motion. An enter reflow is re-aimed from its child extent instead (the natural-extent retarget below), and a box with a
-    /// live reflow under it is left alone: its content measures at that row's interp, which the row's own target already accounts for.</summary>
+    /// one in a second motion. An enter reflow is re-aimed from its child extent instead (the natural-extent retarget below). A box with a live
+    /// height row under it measures with that row at its target: the content it lands on (a daylist host re-aimed by its form's swap mid-slide
+    /// took its zone with it only at the settle's continuation, after easing to the height the seeding commit measured).</summary>
     private void FollowContentReflows(List<NodeHandle> roots)
     {
         bool collected = false;
@@ -9109,13 +9110,16 @@ public sealed partial class AppHost : IDisposable
             if (!_anim.TryGetLiveReflow(r, AnimChannel.LayoutH, out float to, out bool natural, out float declared) || natural || !float.IsNaN(declared)) continue;
             if (!HeightFromContent(r)) continue;
             if (!collected) { _anim.CollectLiveReflowNodes(_contentReflowScratch); collected = true; }
-            if (HasLiveReflowBelow(r)) continue;
             ref LayoutInput li = ref _scene.Layout(r);
             float pinned = li.Height;
             li.Height = float.NaN;
+            // A height row flying under it stands at its TARGET for the measure, not at its interp: the content this box lands on is the content
+            // those rows land on (a form that swapped mid-slide re-aimed its own row, and this box must follow it there, not to the height the
+            // seeding commit measured).
+            PresentHeightTargetsBelow(r);
             float wants;
             try { wants = _layout.MeasureNatural(r, float.IsNaN(li.Width) ? _scene.Bounds(r).W : li.Width).Height; }
-            finally { li.Height = pinned; }
+            finally { li.Height = pinned; RestoreHeightsBelow(); }
             if (wants <= 0.5f || MathF.Abs(wants - to) < 0.5f) continue;
             if (s_motionDiag) System.Console.Error.WriteLine($"[motion-diag]   content-reflow node={r.Raw.Index} key={_scene.DebugKeyOf(r)} to={to:0.0} wants={wants:0.0}");
             _anim.ReaimReflow(r, AnimChannel.LayoutH, wants);
@@ -9137,17 +9141,33 @@ public sealed partial class AppHost : IDisposable
         return align != FlexAlign.Stretch;
     }
 
-    /// <summary>Is another node of <see cref="_contentReflowScratch"/> (the live reflow nodes) a descendant of <paramref name="n"/>?</summary>
-    private bool HasLiveReflowBelow(NodeHandle n)
+    private readonly List<(NodeHandle Node, float Height)> _heightsBelowSaved = new(8);
+
+    /// <summary>Write each live height row under <paramref name="n"/> (of <see cref="_contentReflowScratch"/>) at the height it lands at (its declared
+    /// height, else its aim) into its layout input, saving what stood there for <see cref="RestoreHeightsBelow"/>. A pure query's setup: nothing is
+    /// marked (so each written row and the boxes up to <paramref name="n"/> are named to the probe, <see cref="FlexLayout.ProbeWrote"/>: an
+    /// unmarked box between them answered from its ring with the height the row's interp laid it at), and the restore puts every input back.</summary>
+    private void PresentHeightTargetsBelow(NodeHandle n)
     {
+        _heightsBelowSaved.Clear();
         for (int i = 0; i < _contentReflowScratch.Count; i++)
         {
             NodeHandle c = _contentReflowScratch[i];
-            if (c == n) continue;
-            for (NodeHandle p = _scene.Parent(c); !p.IsNull; p = _scene.Parent(p))
-                if (p == n) return true;
+            if (c == n || !_scene.IsLive(c) || !_anim.TryGetLiveReflow(c, AnimChannel.LayoutH, out float to, out _, out float declared)) continue;
+            bool below = false;
+            for (NodeHandle p = _scene.Parent(c); !p.IsNull && !below; p = _scene.Parent(p)) below = p == n;
+            if (!below) continue;
+            ref LayoutInput cl = ref _scene.Layout(c);
+            _heightsBelowSaved.Add((c, cl.Height));
+            cl.Height = float.IsNaN(declared) ? to : declared;
+            _layout.ProbeWrote(c, n);
         }
-        return false;
+    }
+
+    private void RestoreHeightsBelow()
+    {
+        for (int i = 0; i < _heightsBelowSaved.Count; i++) _scene.Layout(_heightsBelowSaved[i].Node).Height = _heightsBelowSaved[i].Height;
+        _heightsBelowSaved.Clear();
     }
 
     private readonly List<AnimEngine.LiveRelayout> _liveRelayoutScratch = new(16);

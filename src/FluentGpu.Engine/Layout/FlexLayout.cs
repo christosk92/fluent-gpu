@@ -271,6 +271,7 @@ public sealed partial class FlexLayout
     {
         size = default; flatLo = flatHi = float.NaN;
         if (Verifying) return false;   // --fg layout-verify: the oracle's re-solve descends for real, it never rides the ring
+        if (_probeWritten.Count != 0 && _probeWritten.Contains(node.Raw.Index)) return false;   // ProbeWrote: an input under it moved unmarked
         uint i = node.Raw.Index;
         if (i >= (uint)_memo.Length) return false;
         // Two complementary validators, both required (P4 fix, 2026-09-19):
@@ -477,6 +478,18 @@ public sealed partial class FlexLayout
     // "parent offered availW" record (TryResolveSizeStable must keep seeing the REAL layout's offer), and a natural
     // virtual viewport answers from its last arranged box instead of re-seeding its layout/extent table at the probe width.
     private bool _naturalProbe;
+    // The boxes whose ring answer the next natural probe must not take: a caller wrote a layout input under them for that probe alone,
+    // unmarked (ProbeWrote), so a clean box between that input and the probe's root still holds the answer the input's old value gave.
+    private readonly HashSet<uint> _probeWritten = new();
+
+    /// <summary>Name <paramref name="node">, whose layout input the caller wrote for the next <see cref="MeasureNatural"/> alone without marking it,
+    /// and every box up to <paramref name="root"> (the probe's root): none of them answers that probe from its cross-pass ring. The probe
+    /// forgets them when it returns.</summary>
+    internal void ProbeWrote(NodeHandle node, NodeHandle root)
+    {
+        for (NodeHandle p = node; !p.IsNull; p = _scene.Parent(p)) { _probeWritten.Add(p.Raw.Index); if (p == root) break; }
+    }
+
     /// <summary>The MIN-CONTENT probe (layout.md §7.2): while set, a wrapping text leaf measures as its longest word
     /// (WrapWholeWords at width 0) and nothing is memoised, so a grid can learn the narrowest width a cell can take
     /// without breaking inside a word. Set only around the cell measures in AutoTrackBounds.</summary>
@@ -537,7 +550,7 @@ public sealed partial class FlexLayout
         Size2 size;
         _naturalProbe = true;
         try { size = Measure(root, availW); }
-        finally { _naturalProbe = false; }
+        finally { _naturalProbe = false; _probeWritten.Clear(); }
         uint ri = root.Raw.Index;
         if (ri < (uint)_arranged.Length && _scene.IsArrangedValid(root)) { ref RectF rb = ref _scene.Bounds(root); rb = _arranged[ri]; }
         RestoreArrangedDescendants(root);
