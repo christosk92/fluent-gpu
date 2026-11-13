@@ -7017,7 +7017,6 @@ public sealed partial class AppHost : IDisposable
             }
             bool virtualsChanged = false;
             double reactiveFlushMs = 0, virtualRealizeMs = 0;
-            ulong topologyBefore = _scene.TopologyStamp;   // a commit that reshapes the tree while a width reflow flies re-probes its destination
             try
             {
                 _anim.DrainSettledCallbacks();                                 // 3− reveal settle callbacks the last frame queued (an Expander unmounting its
@@ -7045,7 +7044,9 @@ public sealed partial class AppHost : IDisposable
             // The capture window closes before layout; a node that gained a transition in the flush counts as captured.
             if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
-            bool reshaped = reconciled && _scene.TopologyStamp != topologyBefore;
+            // A commit that answers the record in place while a width reflow flies (SceneStore.ConsumeRecordAnswered: a page that takes the sizes
+            // of the tier it lands at) re-probes its destination: the record describes the form it left.
+            bool answered = _scene.ConsumeRecordAnswered() && reconciled;
             long tFlush = Stopwatch.GetTimestamp();   // always-on segment timing (FrameStats.*Ms) — see below
             if (FrameLedger.Enabled) _ledgerAlloc.Flush = GC.GetAllocatedBytesForCurrentThread();
             // Spike-gated type roster (RenderCensus): one line when the flush alone exceeded the panel's refresh interval
@@ -7067,9 +7068,9 @@ public sealed partial class AppHost : IDisposable
             bool flowRevealFrame = _anim.HasFlowRevealWork || (capturedProjections && CapturedFlowReveal());
             _layout.DeferOffsetClamp = flowRevealFrame;
             // Runs break at their landing width from the frame after a width reflow's destination was recorded (FlexLayout.BreakTextAtLanding).
-            // Not in the layout of a commit that reshaped the tree: the record predates it (a run it is replacing, which leaves as an exit orphan,
-            // would rewrap for a landing it never reaches); the commit's probe below records the new tree and turns it on for that re-solve.
-            _layout.BreakTextAtLanding = _scene.HasDestinationWidths && !reshaped;
+            // Not in the layout of a commit that answered the record: it predates the form the runs now stand in; the commit's probe below
+            // records the new form and turns it on for that re-solve. (A run that leaves as an exit orphan has no record: SceneStore.Orphan.)
+            _layout.BreakTextAtLanding = _scene.HasDestinationWidths && !answered;
             MountProf.Enter(MountProf.Layout);
             // A width reflow re-aimed by this frame's commit (the panel toggled back mid-slide), or a window resize while one flies: solve the
             // targets once before the frame's own layout, which then lays the frame out where the slide is.
@@ -7189,11 +7190,14 @@ public sealed partial class AppHost : IDisposable
             if (FrameLedger.Enabled) _ledgerAlloc.Layout = GC.GetAllocatedBytesForCurrentThread();
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
-            // A commit that reshapes the tree while a width reflow flies (a page that swaps its form for the width it lands at, a row that mounts
-            // mid-slide): the widths recorded before it describe a tree it has replaced, and a box it built is chosen at the landing width only
-            // once it is recorded there. Probe again (in the projection pass before any FLIP is measured, else just below). A commit that only
-            // re-renders in place (a bound value, a re-pushed prop: most frames of a slide) keeps the record: two more solves a frame for nothing.
-            if (reshaped && _scene.HasDestinationWidths) { _anim.DestinationStale = true; _layout.BreakTextAtLanding = true; }
+            // A commit that answered the record in place (a form that keeps its nodes, SceneStore.ConsumeRecordAnswered), or a layout that solved a
+            // structure reader the record does not cover (a page that swaps its form for the width it lands at, a row that mounts mid-slide:
+            // SceneStore.ConsumeUnrecordedReader): the widths recorded before it describe a tree it has left, and a box it built or re-sized is
+            // chosen at the landing width only once it is recorded there. Probe again (in the projection pass before anything is seeded from this
+            // layout, else just below). A commit that only moves bound values, re-pushes equal props or builds what reads no structure (most frames
+            // of a slide) keeps the record: two more solves a frame for nothing.
+            bool unrecordedReader = _scene.ConsumeUnrecordedReader();
+            if ((answered || unrecordedReader) && _scene.HasDestinationWidths) { _anim.DestinationStale = true; _layout.BreakTextAtLanding = true; }
             if (capturedProjections) ApplyProjections(layoutSize, keepAliveSuppressed);   // FLIP "Last+Invert+Play"
             // A width reflow seeded or re-aimed on a frame with no projection pass, or a window resize while one flies: probe its destination here.
             if (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)) _anim.DestinationStale = true;
@@ -8645,6 +8649,10 @@ public sealed partial class AppHost : IDisposable
         _widthSeedsCommit.Clear();
         if (!suppressed)
         {
+            // A commit that answered the record in place or built a structure reader it does not cover (Paint marks it stale) laid itself out
+            // breaking those runs at their live widths: probe before anything is seeded from that layout, so a reflow this commit starts (a
+            // chapter easing to the height of its new form) aims at the structure the slide shows, not at one the probe takes back.
+            if (_anim.DestinationStale) ProbeReflowDestinations(layoutSize);
             DiscoverProjectionRoots(PosEps, SizeEps);
             // Again while a pass started any: a reflow below a root that the previous pass's starts took back (the page column beside the
             // title bar's and the play bar's reflows at 3200: the detail page's columns under it) was skipped as below a root; seeded in the

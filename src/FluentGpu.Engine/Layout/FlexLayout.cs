@@ -33,8 +33,21 @@ public sealed partial class FlexLayout
     /// <summary>Host-set per frame: a run of more than one line breaks at the width it LANDS at while a width reflow resizes it (see the text
     /// measure). True from the frame AFTER the reflow's destination was first recorded: the slide's first frame is the one the tree answers the
     /// landing width on (a page that swaps its form for it re-renders on the next commit), so a run whose tree is about to be replaced never
-    /// rewraps for a landing it will not reach, and a run that stays rewraps once, on the frame its tree has settled its form.</summary>
-    public bool BreakTextAtLanding { get; set; }
+    /// rewraps for a landing it will not reach, and a run that stays rewraps once, on the frame its tree has settled its form (the host turns it
+    /// off for the layout of a commit that answers the record, and on again once its probe has recorded the new form). A flip changes where every
+    /// recorded run breaks, so it marks them (<see cref="SceneStore.MarkRecordedStructureReaders"/>).</summary>
+    public bool BreakTextAtLanding
+    {
+        get => _breakTextAtLanding;
+        set
+        {
+            if (value == _breakTextAtLanding) return;
+            _breakTextAtLanding = value;
+            _scene.MarkRecordedStructureReaders();
+        }
+    }
+    private bool _breakTextAtLanding;
+    private const float LandingBreakSlack = 1f / 64f;
 
     // `--fg layout` (EngineSwitches.LayoutDiag): per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
@@ -474,7 +487,8 @@ public sealed partial class FlexLayout
     /// width still sizes and places the cells. Intrinsic probes measure at hypothetical widths and keep them.</summary>
     private float StructureW(NodeHandle node, float live)
     {
-        _scene.NoteStructureReader(node);   // a change of its answer marks this node (SceneStore.StructureWidth.cs)
+        // A change of its answer marks this node (SceneStore.StructureWidth.cs); an intrinsic probe's or the oracle's solve audits nothing.
+        _scene.NoteStructureReader(node, audit: !Verifying && !_minContentProbe && !_naturalProbe);
         return _minContentProbe || _naturalProbe ? live : _scene.StructureWidth(node, live);
     }
     // The probe's own per-node text ring (index-keyed; the entry key is the full (text, style, maxW) pure-function input,
@@ -888,12 +902,21 @@ public sealed partial class FlexLayout
             // its height (and everything under it) moves once instead of stepping through every line count on the way. The live width still
             // sizes and places the box; the recorder draws the lines at the width they were broken at (TextMeasureEntry.Structured). A run
             // that auto-fits (MinSizeDip) or is one line at most keeps the live width: a trim follows the box.
+            // A run that can break at its landing is a structure reader whether or not it does on this pass (a record, a clear or a flip of the
+            // landing breaks marks it).
             bool structured = false;
-            if (BreakTextAtLanding && widthConstrained && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && li.TextStyle.MaxLines != 1
-                && li.TextStyle.MinSizeDip <= 0f && !_minContentProbe && !_naturalProbe && _scene.HasDestinationWidths)
+            if (widthConstrained && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && li.TextStyle.MaxLines != 1
+                && li.TextStyle.MinSizeDip <= 0f && !_minContentProbe && !_naturalProbe)
             {
-                float landing = StructureW(node, maxW);
-                if (MathF.Abs(landing - maxW) > 0.5f) { maxW = MathF.Max(0f, landing); structured = true; }
+                if (BreakTextAtLanding && _scene.HasDestinationWidths)
+                {
+                    float landing = StructureW(node, maxW);
+                    // The landing width is a laid-out width, and a run that hugs its words there was laid out at exactly their measured width:
+                    // breaking at that width must keep the line the measure summed (the line breaker sums by word, the measure by glyph, and
+                    // the two can differ in the last bits), so the break takes a sixty-fourth of a DIP of slack.
+                    if (MathF.Abs(landing - maxW) > 0.5f) { maxW = MathF.Max(0f, landing) + LandingBreakSlack; structured = true; }
+                }
+                else _scene.NoteStructureReader(node, audit: !Verifying);
             }
             // Measure cache: skip re-shaping when (text, style, availWidth) are unchanged (the §2.3 down-rule win on a
             // scoped relayout). Pure-function key ⇒ self-invalidating; helps the real shaping path, neutral headless.

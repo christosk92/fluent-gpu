@@ -6603,7 +6603,7 @@ public sealed partial class TreeReconciler
                 if (!t.Text.IsBound)
                 {
                     var newText = _strings.Intern(t.Text.Value);
-                    if (paint.Text != newText) { SetPaintText(ref paint, newText); MarkLayoutShape(node); textWritten = true; }
+                    if (paint.Text != newText) { SetPaintText(ref paint, newText); MarkLayoutShape(node); _scene.NoteRecordedInputWrite(node); textWritten = true; }
                 }
 
                 ref LayoutInput li = ref _scene.Layout(node);
@@ -6685,6 +6685,7 @@ public sealed partial class TreeReconciler
             if (gridChanged || stackChanged || layoutFlagsBefore != layoutFlagsAfter || !SameLayoutInput(in layoutBefore, in layoutAfter))
             {
                 MarkLayoutShape(node);
+                _scene.NoteRecordedInputWrite(node);   // a form re-rendered in place under a flying width reflow (SceneStore.ConsumeRecordAnswered)
                 if (!SameParentFacing(in layoutBefore, in layoutAfter)) MarkParentLayoutDirty(node);
             }
         }

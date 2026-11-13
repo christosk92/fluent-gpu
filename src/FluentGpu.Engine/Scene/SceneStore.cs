@@ -807,6 +807,7 @@ public sealed partial class SceneStore : ISceneBackend
         int idx = (int)node.Raw.Index;
         NodeHandle visualParent = Parent(node);
         float px = abs.X - _bounds[idx].X, py = abs.Y - _bounds[idx].Y;   // frozen parent-world origin
+        if (_destCount > 0) DropOrphanRecord(node);
         DetachFromParent(idx);
         _flags[idx] |= NodeFlags.Exiting;
         _orphans.Add(new OrphanEntry
