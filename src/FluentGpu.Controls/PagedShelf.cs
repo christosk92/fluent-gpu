@@ -676,6 +676,59 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     int NewIndexOf(int oldIndex) => _remapFrom is { } from && _remapTo is { } to ? IndexIn(from, to, oldIndex) : -1;
     int OldIndexOf(int newIndex) => _remapFrom is { } from && _remapTo is { } to ? IndexIn(to, from, newIndex) : newIndex;
 
+    // ── A SLIDE THAT RE-FITS A SINGLE ROW. A single-row strip chooses its columns at the structure width (the width a docking panel's reflow lands
+    // it at, FillRowVirtualLayout.SetStructureMain) and fills the LIVE width with them, so a slide that changes the count re-fitted the strip in the
+    // arrange of its first frame: no render saw the old cells (no glide), every card stepped to the new pitch at the old width (a dock from six
+    // covers to four widened each by half and threw the sixth 460 DIP off the page in one frame), and then shrank with the slide. Instead the
+    // strip keeps what it draws through that arrange (HoldForSlide), and the render that follows re-fits the count at the card width it shows;
+    // from there the cards ease to the width they land at as the slide moves the live width (SlideStep), so the count changes without a card
+    // moving: the covers the new count drops stay where they are and leave with the strip's edge, the ones it adds arrive with it. The live
+    // width is the slide's clock (the reflow's own curve); the hold ends where the live width reaches the structure width.
+    int _shownCount;                               // the columns the strip was last rendered at (what it draws until the next render re-fits)
+    bool _slideHeld;                               // HoldForSlide held them through a structure change that moves the count
+    bool _sliding;                                 // the cards ease from _slideFromCardW to the landing fit as the live width moves to the structure width
+    float _slideFromW, _slideFromCardW;
+
+    /// <summary>The structure width moved to <paramref name="sw"/> (inside the arrange, before the strip's own): when that changes a single row's count,
+    /// hold the columns and the card width the strip draws, so this arrange keeps them and the next render re-fits from them. A move that keeps the
+    /// count leaves a running slide to aim at the new landing width (SlideCardW reads it).</summary>
+    void HoldForSlide(float sw)
+    {
+        if (_measured || _rows != 1 || _cardWidthAgnostic || _firstRealize || !_rendered || _shownCount <= 0 || _layout is not { } layout) return;
+        if (ColumnsAt(sw) == _shownCount) return;
+        float drawn = _cardW.Peek();
+        if (drawn <= 0f) return;
+        layout.HoldColumns(_shownCount, drawn);
+        _slideHeld = true;
+    }
+
+    /// <summary>The card width at live width <paramref name="liveW"/> while a slide re-fits the row: from the width the cards were drawn at to the one
+    /// they land at (the fit at the structure width, under the band as it is now: a tier crossing the slide causes pushes a new gap mid-way), in step
+    /// with the live width's way from where the slide began to the structure width.</summary>
+    float SlideCardW(float liveW)
+    {
+        float sw = _sw.Peek();
+        float span = sw - _slideFromW;
+        float t = MathF.Abs(span) < 0.5f ? 1f : Math.Clamp((liveW - _slideFromW) / span, 0f, 1f);
+        return _slideFromCardW + (CardWAt(sw, _shownCount) - _slideFromCardW) * t;
+    }
+
+    /// <summary>One frame of a slide (the bounds handler, before the strip's arrange): hold the columns at the eased card width, or end the hold
+    /// where the live width reaches the structure width (the strip fits itself again there, at the width the slide eased to).</summary>
+    float SlideStep(float liveW)
+    {
+        float sw = _sw.Peek();
+        if (MathF.Abs(liveW - sw) <= 0.5f)
+        {
+            _sliding = false;
+            _layout?.HoldColumns(0);
+            return CardWAt(liveW, ColumnsAt(sw));
+        }
+        float cw = SlideCardW(liveW);
+        _layout?.HoldColumns(_shownCount, cw);
+        return cw;
+    }
+
     // ── RE-FIT GLIDE (B12). The virtual arrange places a slot at its item's cell in one layout, and a re-fit also re-seats the page (the
     // content's scroll transform), so no parent-relative FLIP can see where an item was ON SCREEN. The glide works in viewport space instead:
     // from the old geometry at the item's old index minus the offset last shown, to the new geometry at its index minus the re-seated
@@ -1243,11 +1296,15 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             // and the strip's cells follow layout (FillRowVirtualLayout sizes them for the chosen count at the live viewport). A measured strip
             // re-renders with its live width and writes the hint there (one writer).
             float sw = r.W > 0f && Context.Scene is { } scene && !_rootNode.IsNull ? scene.StructureWidth(_rootNode, r.W) : r.W;
-            if (sw > 0f && MathF.Abs(sw - _sw.Peek()) > 0.5f) _sw.Value = sw;
+            if (sw > 0f && MathF.Abs(sw - _sw.Peek()) > 0.5f)
+            {
+                HoldForSlide(sw);
+                _sw.Value = sw;
+            }
             else if (_rendered && !_firstRealize && !_cardWidthAgnostic && !_measured && r.W > 1f)
             {
                 // Exact: the bound viewport height reads it too, so a deadband here would leave the band a fraction off where the slide lands.
-                float cw = CardWAt(r.W, ColumnsAt(_sw.Peek()));
+                float cw = _sliding ? SlideStep(r.W) : CardWAt(r.W, ColumnsAt(_sw.Peek()));
                 if (_cardW.Peek() != cw) _cardW.Value = cw;
             }
             TryLatchStripGated();
@@ -1345,6 +1402,22 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // The FIRST render writes it too when it already knows a real width (the call site's width memory): no card has realized yet, so the
         // cards realize at it and nothing re-renders (audit FU2c: without it every card realized at the provisional fit and re-rendered a frame
         // after the mount frame).
+        // A single row's slide (see HoldForSlide): the count re-fits here at the width the cards are drawn at, then eases with the live width.
+        _shownCount = perPageColumns;
+        if (!_measured && _rows == 1 && !_cardWidthAgnostic && _layout is { } slid)
+        {
+            if (_slideHeld && laidOut.IsSet && laidOut.PerPage != perPageColumns && liveW > 1f && MathF.Abs(liveW - w) > 0.5f)
+            {
+                _sliding = true;
+                _slideFromW = liveW;
+                _slideFromCardW = laidOut.CardW;
+            }
+            _slideHeld = false;
+            if (_sliding) cardW = SlideCardW(liveW);
+            if ((_sliding ? slid.HoldColumns(perPageColumns, cardW) : slid.HoldColumns(0))
+                && Context.Scene is { } slideScene && ShelfViewport is { IsNull: false } slideVp && slideScene.IsLive(slideVp) && slideScene.HasScroll(slideVp))
+                slideScene.Mark(slideVp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
+        }
         bool firstRender = !_rendered;
         _rendered = true;
         if ((!_firstRealize || firstRender && w > 1f) && !_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
