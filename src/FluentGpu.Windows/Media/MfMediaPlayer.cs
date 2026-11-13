@@ -19,18 +19,28 @@ namespace FluentGpu.Media.Windows;
 /// <para><b>Warm-engine lease/return</b> (<c>docs/plans/video-smooth-switching-implementation.md</c> §1.5 — fixes E3).
 /// The old shape tore the ENTIRE engine down (<c>MFShutdown</c>, a 2 s join) and rebuilt it (<c>MFStartup</c> +
 /// <c>D3D11CreateDevice</c> + <c>CoCreateInstance</c>) on every track switch — a teardown that raced the successor's
-/// startup and paid the full bring-up cost every time. This backend now keeps ONE <see cref="IVideoEngine"/> warm
-/// across many opens: <see cref="OpenAsync"/> leases it (<see cref="LeaseEngine"/>), posts <c>SetSource</c> for the new
-/// track (a live source switch — no teardown, no rebuild), and hands the resulting <see cref="MfMediaSession"/> a
+/// startup and paid the full bring-up cost every time. This backend keeps its engines warm across many opens:
+/// <see cref="OpenAsync"/> leases one (<see cref="LeaseEngine"/>), posts <c>SetSource</c> for the new track (a live
+/// source switch — no teardown, no rebuild), and hands the resulting <see cref="MfMediaSession"/> a
 /// <see cref="ReturnEngine"/> callback as its release action. When that session is disposed (a track switch, or the
-/// player itself closing), the engine is paused + detached and returned to the pool instead of destroyed — the next
+/// player itself closing), the engine is paused and returned to the pool instead of destroyed — a later
 /// <see cref="OpenAsync"/> reuses it. Sequencing: <c>MediaPlayer.OpenAsync</c> already awaits the OLD session's
 /// <c>DisposeAsync</c> before calling <see cref="OpenAsync"/> on this backend, so <see cref="ReturnEngine"/>
 /// happens-before the next <see cref="LeaseEngine"/> — there is never a race between a return and the next lease.
 /// A <see cref="VideoEngineFlags.Faulted"/> engine (an unrecoverable bring-up failure) is discarded and rebuilt at the
 /// NEXT lease, never reused. Two <see cref="FluentGpu.Media.MediaPlayer"/>s sharing one <see cref="MfMediaPlayer"/>
-/// concurrently is an edge case, not the steady state: the second concurrent lease gets a throwaway engine instead of
-/// fighting the warm one's single-writer ownership (documented decision — plan §8 risks).</para>
+/// concurrently is an edge case, not the steady state: a lease that finds no free engine gets a throwaway one instead
+/// of fighting a warm one's single-writer ownership (documented decision — plan §8 risks).</para>
+/// <para><b>The held picture across a switch: a warm PAIR.</b> An in-place switch keeps the element's slot on the outgoing
+/// source's last frame until the incoming source's first frame (<c>MediaPlayerElement</c>'s hold,
+/// <see cref="VideoBinding.ShowsOtherPicture"/>). That frame lives in the outgoing engine's own swap chain, and a media engine
+/// clears its swap chain the moment it is given another source: one engine reused for the next track showed the slot black
+/// from the switch to the successor's first frame. So the engine whose picture the slot shows is never the one the next open
+/// takes: returned by a session that presented, it HOLDS (paused, its source kept, its last frame on its swap chain), and the
+/// next open leases the pair's other engine (built at the first switch). The holder is detached once its successor's session
+/// has presented its own first frame (<see cref="EnginePresented"/>), a <see cref="SwapchainHandleLedger.DefaultGraceMs"/>
+/// later: the render thread has bound the successor's surface by then. The two engines alternate from track to track, and
+/// each one is torn down <see cref="WarmIdleDisposeMs"/> after its last return.</para>
 /// <para><see cref="OpenAsync"/> never throws for an MF-side open failure: <see cref="IVideoEngine.PostSetSource"/> is
 /// fire-and-forget (no blocking bring-up left to await, no synchronous HRESULT to check) — a failure surfaces later as
 /// a typed <see cref="MediaError"/> on the session's signal sink, exactly like every other in-flight media error.
@@ -46,11 +56,26 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
     private readonly HttpClient _http;
 
     private readonly object _engineLock = new();
-    private IVideoEngine? _warm;
-    private bool _leased;
-    /// <summary>Fires once, <see cref="WarmIdleDisposeMs"/> after the warm engine was returned, and disposes it if it
-    /// is still idle. Re-armed on every return and cancelled by the next lease.</summary>
-    private Timer? _warmIdle;
+
+    /// <summary>One engine of the warm pair.</summary>
+    private sealed class Pooled(IVideoEngine engine)
+    {
+        public readonly IVideoEngine Engine = engine;
+        /// <summary>A live session owns it.</summary>
+        public bool Leased;
+        /// <summary>The session leased on it presented its own first frame (bound it to a slot).</summary>
+        public bool Presented;
+        /// <summary>Returned by a session that presented, and not detached: its last frame is the picture a slot holds until a
+        /// successor presents. Never leased while it holds.</summary>
+        public bool Holds;
+        /// <summary>Tears it down <see cref="WarmIdleDisposeMs"/> after its return unless it is leased again.</summary>
+        public Timer? Idle;
+        /// <summary>Detaches it once a successor presented (the hand-over's grace).</summary>
+        public Timer? Release;
+    }
+
+    /// <summary>The warm pair: at most two pooled engines (null = an empty place).</summary>
+    private readonly Pooled?[] _pool = new Pooled?[2];
     private readonly int _warmIdleMs;
 
     /// <summary>How long a returned engine stays warm before it is torn down.
@@ -94,94 +119,148 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
     /// <inheritdoc/>
     public MediaCapabilities Capabilities { get; }
 
-    /// <summary>Return the warm engine (building/replacing it first if absent or <see cref="VideoEngineFlags.Faulted"/>),
-    /// and mark it leased. A second CONCURRENT lease (a second <see cref="OpenAsync"/> in flight before the first's
-    /// session is disposed) gets its own throwaway engine rather than contend for the warm one's single-writer
-    /// ownership — the warm slot always belongs to at most one live session. A discarded (faulted) engine is disposed
-    /// OFF the lock, on the pool: its dispose joins the engine thread (bounded at 2 s) and MF shuts down on it, and the
-    /// caller may be the UI thread, with every concurrent lease queued behind the lock.</summary>
+    /// <summary>Lease an engine of the warm pair and mark it leased: a free one that does not hold a slot's picture, else the
+    /// pair's second engine (built now), else (both are leased, or one is leased and the other holds) a throwaway engine. A
+    /// faulted pooled engine is discarded first. A discarded engine is disposed OFF the lock, on the pool: its dispose joins the
+    /// engine thread (bounded at 2 s) and MF shuts down on it, and the caller may be the UI thread, with every concurrent lease
+    /// queued behind the lock.</summary>
     private IVideoEngine LeaseEngine()
     {
         IVideoEngine? discarded = null;
         IVideoEngine leased;
         lock (_engineLock)
         {
-            _warmIdle?.Change(Timeout.Infinite, Timeout.Infinite);   // a lease cancels the pending idle teardown
-            bool faulted = _warm is { } w && (w.Snapshot.Flags & VideoEngineFlags.Faulted) != 0;
-            if (_warm is null || faulted)
+            Pooled? pick = null;
+            int free = -1;
+            for (int i = 0; i < _pool.Length; i++)
             {
-                // The lease flag belonged to the engine being replaced; the fresh warm engine is unleased, so this lease
-                // takes it (no extra engine, and the flag cannot stay stuck true with every later return a throwaway).
-                // A discarded engine that is still leased is left to its session: ReturnEngine sees it is no longer
-                // _warm and disposes it off the lock, so each engine is disposed exactly once.
-                if (!_leased) discarded = _warm;
-                if (_warm is not null) Diag.Line($"[video] engine.discard reason=faulted leased={(_leased ? 1 : 0)}");   // F197: why an engine goes away, next to its engine.destroy line
-                _leased = false;
-                _warm = _engineFactory();
-                _warm.Start();
+                Pooled? p = _pool[i];
+                if (p is not null && !p.Leased && discarded is null && (p.Engine.Snapshot.Flags & VideoEngineFlags.Faulted) != 0)
+                {
+                    Diag.Line("[video] engine.discard reason=faulted");   // F197: why an engine goes away, next to its engine.destroy line
+                    StopTimers(p);
+                    discarded = p.Engine;
+                    _pool[i] = p = null;
+                }
+                if (p is null) { if (free < 0) free = i; continue; }
+                if (pick is null && !p.Leased && !p.Holds) pick = p;
             }
-            if (_leased)
+            if (pick is null && free >= 0)
             {
-                Diag.Line("[video] engine.extra reason=concurrent-lease (a second engine alongside the warm one)");
-                var extra = _engineFactory();
-                extra.Start();
-                leased = extra;
+                pick = new Pooled(_engineFactory());
+                pick.Engine.Start();
+                _pool[free] = pick;
+            }
+            if (pick is null)
+            {
+                Diag.Line("[video] engine.extra reason=concurrent-lease (an engine beside the warm pair)");
+                leased = _engineFactory();
+                leased.Start();
             }
             else
             {
-                _leased = true;
-                leased = _warm!;
+                StopTimers(pick);
+                pick.Leased = true;
+                pick.Presented = false;
+                leased = pick.Engine;
             }
         }
         if (discarded is not null) DisposeOffLock(discarded);
         return leased;
     }
 
-    /// <summary>Dispose an engine on the pool, never on the caller: the dispose joins the engine's MTA thread (bounded at
-    /// 2 s) after MF's shutdown, which must not freeze a UI-thread caller or hold <see cref="_engineLock"/>. The same shape
-    /// <see cref="DisposeAsync"/> already uses.</summary>
-    private static void DisposeOffLock(IVideoEngine engine) => _ = Task.Run(engine.Dispose);
-
-    /// <summary>Called from <see cref="MfMediaSession.DisposeAsync"/> (any thread; non-blocking — pause + detach are
-    /// both posts). The warm engine goes back to the pool for the NEXT open; a throwaway (a second concurrent lease, or
-    /// one leased while a rebuild already replaced <see cref="_warm"/>) is disposed outright instead.</summary>
-    private void ReturnEngine(IVideoEngine engine)
+    private static void StopTimers(Pooled p)
     {
-        bool throwaway;
-        lock (_engineLock)
-        {
-            throwaway = !ReferenceEquals(engine, _warm);
-            if (!throwaway)
-            {
-                _leased = false;
-                engine.Commands.Post(VideoCommandKind.Transport, a: 0);   // pause — a warm-parked engine does not play
-                engine.PostDetach();
-                // Detaching releases the SOURCE, not the engine: the D3D11 device, the DXGI manager, the MF engine and
-                // its surfaces all stay resident. Arm the idle teardown so an app that stops watching video gets that
-                // memory back, while a track skip (which re-leases within seconds) still never pays a rebuild.
-                _warmIdle ??= new Timer(static s => ((MfMediaPlayer)s!).DisposeWarmIfIdle(), this, Timeout.Infinite, Timeout.Infinite);
-                _warmIdle.Change(_warmIdleMs, Timeout.Infinite);
-            }
-        }
-        // A throwaway lease (or one orphaned by a rebuild) is disposed off the lock and off the caller — see DisposeOffLock.
-        if (throwaway) DisposeOffLock(engine);
+        p.Idle?.Change(Timeout.Infinite, Timeout.Infinite);
+        p.Release?.Change(Timeout.Infinite, Timeout.Infinite);
     }
 
-    /// <summary>Timer callback: tear the warm engine down if nothing leased it in the meantime. Disposing off the
-    /// timer thread is the same shape <see cref="LeaseEngine"/> already uses for a faulted engine — the engine owns
-    /// its own MTA thread and joins it in Dispose — but it must happen OUTSIDE the lock, because that join can block
-    /// and a concurrent lease would otherwise wait behind it.</summary>
-    private void DisposeWarmIfIdle()
+    private Pooled? Find(IVideoEngine engine)
     {
-        IVideoEngine? idle;
+        foreach (Pooled? p in _pool)
+            if (p is not null && ReferenceEquals(p.Engine, engine)) return p;
+        return null;
+    }
+
+    /// <summary>Dispose an engine on the pool, never on the caller: the dispose joins the engine's MTA thread (bounded at
+    /// 2 s) after MF's shutdown, which must not freeze a UI-thread caller or hold <see cref="_engineLock"/>.</summary>
+    private static void DisposeOffLock(IVideoEngine engine) => _ = Task.Run(engine.Dispose);
+
+    /// <summary>Called by a session (UI thread) the first time it binds its own swap chain with its first frame: that engine's
+    /// picture is the one on screen now, so an engine still holding the previous source's last frame for the slot is let go,
+    /// <see cref="SwapchainHandleLedger.DefaultGraceMs"/> later (the render thread binds the successor's surface within a few
+    /// turns, and the holder's detach clears its swap chain).</summary>
+    private void EnginePresented(IVideoEngine engine)
+    {
         lock (_engineLock)
         {
-            if (_leased || _warm is null) return;   // re-leased between the timer firing and this lock: leave it warm
-            idle = _warm;
-            _warm = null;
+            if (Find(engine) is { } presented) presented.Presented = true;
+            foreach (Pooled? p in _pool)
+            {
+                if (p is null || !p.Holds || ReferenceEquals(p.Engine, engine)) continue;
+                p.Holds = false;
+                Pooled holder = p;
+                holder.Release ??= new Timer(_ => DetachIfIdle(holder), null, Timeout.Infinite, Timeout.Infinite);
+                holder.Release.Change(SwapchainHandleLedger.DefaultGraceMs, Timeout.Infinite);
+            }
+        }
+    }
+
+    /// <summary>Timer callback: the hand-over's grace ended; detach the old holder unless it was leased again meanwhile (that
+    /// lease's own SetSource replaces its source, and a detach posted after it would unload the new one).</summary>
+    private void DetachIfIdle(Pooled holder)
+    {
+        lock (_engineLock)
+        {
+            if (holder.Leased || holder.Holds || !ReferenceEquals(Find(holder.Engine), holder)) return;
+            holder.Engine.PostDetach();
+        }
+        Diag.Line("[video] engine.detach reason=handover (its successor presented)");
+    }
+
+    /// <summary>Called from <see cref="MfMediaSession.DisposeAsync"/> (any thread; non-blocking — every step is a post). A
+    /// pooled engine is paused and kept warm: one whose session presented HOLDS its last frame for the slot (see the class
+    /// remarks) until a successor presents; one whose session never presented is detached at once. Either way its idle
+    /// teardown is armed. A throwaway engine is disposed outright, off the lock and off the caller.</summary>
+    private void ReturnEngine(IVideoEngine engine)
+    {
+        Pooled? p;
+        lock (_engineLock)
+        {
+            p = Find(engine);
+            if (p is not null)
+            {
+                p.Leased = false;
+                p.Engine.Commands.Post(VideoCommandKind.Transport, a: 0);   // pause — a warm-parked engine does not play
+                p.Holds = p.Presented;
+                if (!p.Holds) p.Engine.PostDetach();
+                // Detaching releases the SOURCE, not the engine: the D3D11 device, the DXGI manager, the MF engine and its
+                // surfaces all stay resident. The idle teardown gives that memory back to an app that stops watching video,
+                // while a track skip (which re-leases within seconds) still never pays a rebuild.
+                Pooled idle = p;
+                idle.Idle ??= new Timer(_ => DisposeIfIdle(idle), null, Timeout.Infinite, Timeout.Infinite);
+                idle.Idle.Change(_warmIdleMs, Timeout.Infinite);
+            }
+        }
+        if (p is null) DisposeOffLock(engine);
+    }
+
+    /// <summary>Timer callback: tear a pooled engine down if nothing leased it in the meantime, OUTSIDE the lock (the dispose
+    /// joins the engine thread and can block; a concurrent lease must not wait behind it).</summary>
+    private void DisposeIfIdle(Pooled p)
+    {
+        lock (_engineLock)
+        {
+            if (p.Leased) return;   // re-leased between the timer firing and this lock: leave it warm
+            int i = Array.IndexOf(_pool, p);
+            if (i < 0) return;
+            _pool[i] = null;
+            p.Holds = false;
+            p.Release?.Dispose();
+            p.Idle?.Dispose();
         }
         Diag.Line($"[video] engine.discard reason=idle afterMs={_warmIdleMs}");
-        idle.Dispose();
+        p.Engine.Dispose();
     }
 
     /// <inheritdoc/>
@@ -226,7 +305,7 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
         // then Transport) instead of leaving the engine paused until the session's first post-metadata pump re-asserts it.
         engine.Commands.Post(VideoCommandKind.Transport, a: opts.StartPaused ? 0 : 1);
 
-        var session = new MfMediaSession(engine, epoch, opts, null, ReturnEngine);
+        var session = new MfMediaSession(engine, epoch, opts, null, ReturnEngine, EnginePresented);
         // The catalog is not on the critical path: MF is already downloading the same URL, so the manifest loads alongside it
         // (its own retries and backoff included) and is attached when it lands. Tied to the SESSION's lifetime, not the open's
         // token: it keeps refreshing a live manifest for as long as the session lives.
@@ -310,14 +389,22 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
         _ => null,
     };
 
-    /// <summary>Tear down the warm engine (app shutdown / backend replacement). Off-thread: <see cref="IVideoEngine.Dispose"/>
+    /// <summary>Tear down the warm pair (app shutdown / backend replacement). Off-thread: <see cref="IVideoEngine.Dispose"/>
     /// joins its MTA thread (bounded at 2 s) and this must never block the caller.</summary>
     public async ValueTask DisposeAsync()
     {
-        IVideoEngine? warm;
-        Timer? idle;
-        lock (_engineLock) { warm = _warm; _warm = null; _leased = false; idle = _warmIdle; _warmIdle = null; }
-        idle?.Dispose();
-        if (warm is not null) await Task.Run(warm.Dispose).ConfigureAwait(false);
+        Pooled?[] pool;
+        lock (_engineLock)
+        {
+            pool = (Pooled?[])_pool.Clone();
+            Array.Clear(_pool);
+        }
+        foreach (Pooled? p in pool)
+        {
+            if (p is null) continue;
+            p.Idle?.Dispose();
+            p.Release?.Dispose();
+            await Task.Run(p.Engine.Dispose).ConfigureAwait(false);
+        }
     }
 }
