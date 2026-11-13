@@ -93,6 +93,15 @@ public sealed partial class SceneStore
     }
     private bool _recordedInputWritten;
 
+    /// <summary>The reconciler changed the shape of <paramref name="node"/> in a render (its children came, went or moved, or its own input
+    /// changed): when the record covers it, the commit answers the record like an input write (<see cref="ConsumeRecordAnswered"/>). A parent
+    /// that swaps a recorded form for the one its landing tier draws (its re-render removes the old layer and mounts the new) answers it as
+    /// surely as a form re-rendered in place; the boxes it rewired are what the probe records again (<see cref="RecordRewiredBoxes"/>).</summary>
+    internal void NoteRecordedShapeWrite(NodeHandle node)
+    {
+        if (_destCount > 0 && HasDestinationWidth(node)) _recordedInputWritten = true;
+    }
+
     /// <summary>A bound size or text, a mirrored anchor or a presence flip rewrote <paramref name="node"/>'s own layout input: the box that places
     /// it lays its children out other than its record says (<see cref="RecordStaleBoxes"/>). Unlike a render's write it answers nothing
     /// (<see cref="ConsumeRecordAnswered"/>): a bound size that follows the slide is the slide itself.</summary>
