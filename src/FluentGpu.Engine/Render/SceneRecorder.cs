@@ -2571,6 +2571,19 @@ internal sealed partial class SceneRecordingContext
                 // text node layout has sized to 0×0 (a collapsed slot, a zero-width column) would otherwise still draw
                 // its glyphs past the empty box. Text has no visible extent without a box: nothing to paint.
                 bool paintsText = !p.Text.IsEmpty && b.W > 0f && b.H > 0f;
+                // A run broken at the width it LANDS at while a width reflow resizes its box (TextMeasureEntry.Structured): shape it at that
+                // width, aligned in the box as the run itself aligns, so its lines are the landing ones on every frame of the slide.
+                // A box still narrower than the landing (a page widening as a panel leaves) shows its landing lines through its own width, clipped
+                // at its sides: they would otherwise lie over whatever stands beside the box (a clock column beside a title) until it has grown.
+                RectF run = local;
+                bool clipRun = false;
+                if (paintsText && mc.Valid && mc.Structured && MathF.Abs(mc.MaxW - local.W) > 0.01f)
+                {
+                    float slack = local.W - mc.MaxW;
+                    float shift = style.Align == TextAlign.Center ? slack * 0.5f : style.Align == TextAlign.End ? slack : 0f;
+                    run = new RectF(local.X + shift, local.Y, mc.MaxW, local.H);
+                    clipRun = slack < 0f;
+                }
                 // The run's INK: the box grown by what the measured text overflows it (a no-wrap / no-trim run wider than
                 // its box, more lines than its height). The overflow side depends on alignment, so it is taken on BOTH
                 // sides. Every cull, slice bound, content hash and sub-tile damage reads it; the replay still shapes into
@@ -2578,10 +2591,17 @@ internal sealed partial class SceneRecordingContext
                 RectF ink = default;
                 if (paintsText && mc.Valid)
                 {
-                    float ow = MathF.Max(0f, mc.Size.Width - local.W), oh = MathF.Max(0f, mc.Size.Height - local.H);
-                    if (ow > 0f || oh > 0f)
+                    float ow = MathF.Max(0f, mc.Size.Width - run.W), oh = MathF.Max(0f, mc.Size.Height - run.H);
+                    bool moved = run.X != local.X || run.W != local.W;
+                    if (ow > 0f || oh > 0f || moved)
                     {
-                        ink = new RectF(local.X - ow, local.Y - oh, local.W + 2f * ow, local.H + 2f * oh);
+                        ink = new RectF(run.X - ow, run.Y - oh, run.W + 2f * ow, run.H + 2f * oh);
+                        if (clipRun) ink = new RectF(local.X, ink.Y, local.W, ink.H);   // the clip below cuts the sides at the box
+                        else if (moved)
+                        {
+                            float x0 = MathF.Min(ink.X, local.X), x1 = MathF.Max(ink.X + ink.W, local.X + local.W);
+                            ink = new RectF(x0, ink.Y, x1 - x0, ink.H);
+                        }
                         result.Include(world.TransformBounds(ink));   // the span bounds a clean-subtree cull reads
                     }
                 }
@@ -2590,17 +2610,19 @@ internal sealed partial class SceneRecordingContext
                     // No longer counted on motion: with the glyph renderer's sub-pixel phase atlas a moving run is drawn
                     // CRISP at its 1/N device row rather than unsnapped, so there is nothing for the host's settle frame
                     // to re-snap. The counter stays (it is a public record stat) and now reports the truth: zero.
+                    if (clipRun) dl.PushClip(world.TransformBounds(new RectF(local.X, local.Y - local.H, local.W, local.H * 3f)).Intersect(childClip), key | 0x10);
                     if (scene.TryGetGlyphWipe(node, out var wipe))   // glyph wipe (lyrics karaoke): per-glyph color + lift from the split
-                        dl.DrawGlyphRunGradient(local, p.Text, style.FontFamily, effSize, style.Weight,
+                        dl.DrawGlyphRunGradient(run, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, effLine, (int)style.Stacking, (int)style.LineBounds,
                             world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, ink: in ink,
                             typography: TextTypography.Pack(in style));
                     else
-                        dl.DrawGlyphRun(local, textColor, p.Text, style.FontFamily, effSize, style.Weight,
+                        dl.DrawGlyphRun(run, textColor, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, effLine, (int)style.Stacking, (int)style.LineBounds,
                             world, opacity, key, spanRunId, ink: in ink, typography: TextTypography.Pack(in style));
+                    if (clipRun) dl.PopClip(key | 0x10);
                 }
 
                 // (b1) span-run decoration bars (per-LINE, per span — the rich-text refinement of (b2) below): the

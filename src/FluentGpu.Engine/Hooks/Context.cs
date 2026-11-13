@@ -125,7 +125,6 @@ public static class VideoCompositor
 /// <param name="NoActivate">Reveal the window without activating it (no focus steal); a click still activates it.</param>
 /// <param name="Material">The window's own system backdrop (null: none written, the ground follows the main window's as before).</param>
 /// <param name="MaterialDark">The dark attribute written with <paramref name="Material"/>.</param>
-/// <param name="PowerCapFps">A frame-rate ceiling for this window's motion (0 = none, the default): <c>AppHost.PowerCapFps</c>.</param>
 /// <param name="ToolWindow">No taskbar button and no Alt+Tab entry (<see cref="WindowDesc.ToolWindow"/>).</param>
 /// <param name="DragAnywhere">Every inert pixel moves the window (<see cref="IPlatformWindow.CaptionWhereInert"/>).</param>
 /// <param name="LiveResize">The content follows an edge drag: every size step of the OS resize loop is laid out, rendered and
@@ -136,7 +135,7 @@ public static class VideoCompositor
 public readonly record struct DetachedWindowRequest(
     string Title, FluentGpu.Foundation.Size2 InitialSizeDip, Component Content, bool AlwaysOnTop = true,
     FluentGpu.Foundation.RectF InitialBoundsPx = default, FluentGpu.Foundation.Size2 MinClientSizeDip = default,
-    bool NoActivate = false, WindowMaterial? Material = null, bool MaterialDark = true, int PowerCapFps = 0, bool ToolWindow = false,
+    bool NoActivate = false, WindowMaterial? Material = null, bool MaterialDark = true, bool ToolWindow = false,
     bool DragAnywhere = false, bool LiveResize = false, FluentGpu.Foundation.Size2 MaxClientSizeDip = default);
 
 /// <summary>Where a pop-out open spent its time, split so a slow open names its stage (F110). The window is created hidden and
@@ -184,10 +183,12 @@ public interface IDetachedVideoWindow
     /// <summary>Change this window's own system backdrop and dark attribute (a theme switch): the ground follows (a backdrop clears
     /// transparent while active, <see cref="WindowMaterial.None"/> clears to the theme's opaque ground). Default: no-op.</summary>
     void SetMaterial(WindowMaterial material, bool dark) { }
-    /// <summary>This window's motion frame-rate ceiling (0 = none): <c>AppHost.PowerCapFps</c>. Default: ignored.</summary>
-    int PowerCapFps { get => 0; set { } }
     /// <summary>Move/resize the window (outer rect, physical virtual-screen px).</summary>
     void SetBounds(FluentGpu.Foundation.RectF outerBoundsPx);
+    /// <summary>Fade and scale the whole window on the compositor (<see cref="FluentGpu.Pal.WindowPresentationMotion"/>): an open or
+    /// close that is one motion instead of a window popping in or out. Call it right after the open for the starting hold (it rides the
+    /// window's first composed frame), then again with the entrance once <see cref="OnRevealed"/> fires. Default: no-op.</summary>
+    void AnimatePresentation(in FluentGpu.Pal.WindowPresentationMotion motion) { }
     /// <summary>Move the window's outer origin WITHOUT touching its size (<see cref="Pal.IPlatformWindow.MoveToPx"/>) —
     /// restore a remembered position independent of whatever size the window happens to be at right now. Default:
     /// <see cref="SetBounds"/> with the CURRENT size (<see cref="BoundsPx"/>), for a backend whose window has no

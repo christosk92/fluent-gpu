@@ -1571,6 +1571,11 @@ public sealed partial class TreeReconciler
         // branch kept eating the row's free space. Mirror the defaults instead, so it measures exactly like a boundary
         // whose branch never mounted.
         ref LayoutInput a = ref _scene.Layout(anchor);
+        // The mirror is a write of the anchor's own parent-facing inputs: one that changes them dirties the anchor and the parent that places
+        // it, as an authored write of the same columns does (WriteColumns). Unmarked, an anchor whose root first rendered after the anchor
+        // was laid out (a deferred mount, a branch that lands later) kept the box its parent arranged before the mirror under a clean
+        // parent's arrange early-out: a video slot stretched across its stack instead of its root's 340.
+        LayoutInput before = a;
         ref readonly LayoutInput c = ref child.IsNull ? ref EmptyBoundaryLayout : ref _scene.Layout(child);
         // The anchor's box is its child's MARGIN box: the anchor keeps Margin 0 and its column places the child at the
         // child's leading margin inside it (so a grid cell or a viewport slot, which never read a margin, still honour the
@@ -1612,6 +1617,12 @@ public sealed partial class TreeReconciler
         a.MinW = OutsetByMargin(c.MinW, mH); a.MinH = OutsetByMargin(c.MinH, mV);
         a.MaxW = OutsetByMargin(c.MaxW, mH); a.MaxH = OutsetByMargin(c.MaxH, mV);
         a.MeasureUnboundedWidth = c.MeasureUnboundedWidth;
+        if (!SameParentFacing(in before, in a))
+        {
+            _scene.Mark(anchor, NodeFlags.LayoutDirty);
+            MarkParentLayoutDirty(anchor);
+            _scene.NoteLayoutInputWrite(anchor);
+        }
     }
 
     /// <summary>A border-box extent the anchor mirrors, grown to its child's margin box on that axis. NaN (auto) stays
@@ -3133,6 +3144,7 @@ public sealed partial class TreeReconciler
         li.Width = next;
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.LayoutDirty);
+        _scene.NoteLayoutInputWrite(node);
         RemirrorAncestors(node);   // a component root's bound size: its anchor reserves the mirrored copy
         MarkParentLayoutDirty(node);   // a resized boundary must not relayout only itself
     }
@@ -3152,6 +3164,7 @@ public sealed partial class TreeReconciler
         li.Height = next;
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.LayoutDirty);
+        _scene.NoteLayoutInputWrite(node);
         RemirrorAncestors(node);
         MarkParentLayoutDirty(node);   // a resized boundary must not relayout only itself
     }
@@ -3167,6 +3180,7 @@ public sealed partial class TreeReconciler
         SetPaintText(ref paint, next);
         NodeBindingWriteCount++;
         _scene.Mark(node, NodeFlags.LayoutDirty);
+        _scene.NoteLayoutInputWrite(node);
         NoteTextWrite(node);
     }
 
@@ -6603,7 +6617,7 @@ public sealed partial class TreeReconciler
                 if (!t.Text.IsBound)
                 {
                     var newText = _strings.Intern(t.Text.Value);
-                    if (paint.Text != newText) { SetPaintText(ref paint, newText); MarkLayoutShape(node); textWritten = true; }
+                    if (paint.Text != newText) { SetPaintText(ref paint, newText); MarkLayoutShape(node); _scene.NoteRecordedInputWrite(node); textWritten = true; }
                 }
 
                 ref LayoutInput li = ref _scene.Layout(node);
@@ -6685,6 +6699,7 @@ public sealed partial class TreeReconciler
             if (gridChanged || stackChanged || layoutFlagsBefore != layoutFlagsAfter || !SameLayoutInput(in layoutBefore, in layoutAfter))
             {
                 MarkLayoutShape(node);
+                _scene.NoteRecordedInputWrite(node);   // a form re-rendered in place under a flying width reflow (SceneStore.ConsumeRecordAnswered)
                 if (!SameParentFacing(in layoutBefore, in layoutAfter)) MarkParentLayoutDirty(node);
             }
         }

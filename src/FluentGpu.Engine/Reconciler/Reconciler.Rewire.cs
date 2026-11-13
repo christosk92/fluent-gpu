@@ -60,7 +60,7 @@ public sealed partial class TreeReconciler
                 BindRewire r = _bOps[b]!.Rewire(this, b, next);
                 if (r == BindRewire.Reran)
                 {
-                    if (BindFlag(b, BFWritesLayout) && NodeBindingWriteCount != writes) _layoutShapeMutated = true;
+                    if (BindFlag(b, BFWritesLayout) && NodeBindingWriteCount != writes) { _layoutShapeMutated = true; _scene.NoteRecordedInputWrite(node); }
                 }
                 else if (r == BindRewire.NowStatic)
                 {
@@ -92,7 +92,7 @@ public sealed partial class TreeReconciler
         int writes = NodeBindingWriteCount;
         BindNode(node, next, prev);
         NodeBindingWireCount++;
-        if (NodeBindingWriteCount != writes && GainsLayoutChannel(next, prev)) _layoutShapeMutated = true;
+        if (NodeBindingWriteCount != writes && GainsLayoutChannel(next, prev)) { _layoutShapeMutated = true; _scene.NoteRecordedInputWrite(node); }
     }
 
     /// <summary>Did <paramref name="next"/> bind a LAYOUT channel <paramref name="prev"/> carried static?</summary>

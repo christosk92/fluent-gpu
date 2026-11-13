@@ -24,18 +24,30 @@ public sealed partial class FlexLayout
     /// every standalone layout run (unchanged behaviour).</summary>
     public bool DeferOffsetClamp { get; set; }
 
-    /// <summary>Host-set around a re-solve of a layout this same frame already arranged at OTHER sizes (the commit laid out at its targets, then
-    /// again at its reflows' start, <c>AppHost.SeedReflowsFirst</c>): the cross-pass measure ring is not consulted. A ring slot stored at the
-    /// start's width (the frame before) is clean and its version unchanged, but a hit does not descend, so the node's children keep the Bounds
-    /// that pass at the TARGET left them, and the arrange reads those as their base sizes: a command bar laid out at its start width with its
-    /// trailing group at the target's x, a list's rows at the target width, for one frame. False otherwise.</summary>
-    public bool BypassMeasureRing { get; set; }
-
     /// <summary>Set by the host around its destination probe's target solve (<c>AppHost.SolveReflowTargets</c>): a layout of where width reflows
     /// LAND, which the frame never shows. Its arranged rects must not reach Element.OnBoundsChanged or a measured-bounds hook (they would write
     /// the landing width into app state, and re-render what reads it, before the next solve puts the frame back), nor advance the delivered
     /// baseline those edges compare against.</summary>
     public bool SuppressBoundsDelivery { get; set; }
+
+    /// <summary>Host-set per frame: a run of more than one line breaks at the width it LANDS at while a width reflow resizes it (see the text
+    /// measure). True from the frame AFTER the reflow's destination was first recorded: the slide's first frame is the one the tree answers the
+    /// landing width on (a page that swaps its form for it re-renders on the next commit), so a run whose tree is about to be replaced never
+    /// rewraps for a landing it will not reach, and a run that stays rewraps once, on the frame its tree has settled its form (the host turns it
+    /// off for the layout of a commit that answers the record, and on again once its probe has recorded the new form). A flip changes where every
+    /// recorded run breaks, so it marks them (<see cref="SceneStore.MarkRecordedStructureReaders"/>).</summary>
+    public bool BreakTextAtLanding
+    {
+        get => _breakTextAtLanding;
+        set
+        {
+            if (value == _breakTextAtLanding) return;
+            _breakTextAtLanding = value;
+            _scene.MarkRecordedStructureReaders();
+        }
+    }
+    private bool _breakTextAtLanding;
+    private const float LandingBreakSlack = 1f / 64f;
 
     // `--fg layout` (EngineSwitches.LayoutDiag): per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
@@ -258,7 +270,8 @@ public sealed partial class FlexLayout
     private bool TryRingHit(NodeHandle node, float availW, out Size2 size, out float flatLo, out float flatHi)
     {
         size = default; flatLo = flatHi = float.NaN;
-        if (Verifying || BypassMeasureRing) return false;   // --fg layout-verify: the oracle's re-solve descends for real, it never rides the ring
+        if (Verifying) return false;   // --fg layout-verify: the oracle's re-solve descends for real, it never rides the ring
+        if (_probeWritten.Count != 0 && _probeWritten.Contains(node.Raw.Index)) return false;   // ProbeWrote: an input under it moved unmarked
         uint i = node.Raw.Index;
         if (i >= (uint)_memo.Length) return false;
         // Two complementary validators, both required (P4 fix, 2026-09-19):
@@ -465,6 +478,18 @@ public sealed partial class FlexLayout
     // "parent offered availW" record (TryResolveSizeStable must keep seeing the REAL layout's offer), and a natural
     // virtual viewport answers from its last arranged box instead of re-seeding its layout/extent table at the probe width.
     private bool _naturalProbe;
+    // The boxes whose ring answer the next natural probe must not take: a caller wrote a layout input under them for that probe alone,
+    // unmarked (ProbeWrote), so a clean box between that input and the probe's root still holds the answer the input's old value gave.
+    private readonly HashSet<uint> _probeWritten = new();
+
+    /// <summary>Name <paramref name="node">, whose layout input the caller wrote for the next <see cref="MeasureNatural"/> alone without marking it,
+    /// and every box up to <paramref name="root"> (the probe's root): none of them answers that probe from its cross-pass ring. The probe
+    /// forgets them when it returns.</summary>
+    internal void ProbeWrote(NodeHandle node, NodeHandle root)
+    {
+        for (NodeHandle p = node; !p.IsNull; p = _scene.Parent(p)) { _probeWritten.Add(p.Raw.Index); if (p == root) break; }
+    }
+
     /// <summary>The MIN-CONTENT probe (layout.md §7.2): while set, a wrapping text leaf measures as its longest word
     /// (WrapWholeWords at width 0) and nothing is memoised, so a grid can learn the narrowest width a cell can take
     /// without breaking inside a word. Set only around the cell measures in AutoTrackBounds.</summary>
@@ -474,7 +499,11 @@ public sealed partial class FlexLayout
     /// the width it lands at while a width reflow resizes it (<see cref="SceneStore.StructureWidth"/>), else <paramref name="live"/>. The live
     /// width still sizes and places the cells. Intrinsic probes measure at hypothetical widths and keep them.</summary>
     private float StructureW(NodeHandle node, float live)
-        => _minContentProbe || _naturalProbe ? live : _scene.StructureWidth(node, live);
+    {
+        // A change of its answer marks this node (SceneStore.StructureWidth.cs); an intrinsic probe's or the oracle's solve audits nothing.
+        _scene.NoteStructureReader(node, audit: !Verifying && !_minContentProbe && !_naturalProbe);
+        return _minContentProbe || _naturalProbe ? live : _scene.StructureWidth(node, live);
+    }
     // The probe's own per-node text ring (index-keyed; the entry key is the full (text, style, maxW) pure-function input,
     // so a recycled index can only ever hit a correct answer). Grown in MeasureNatural only — cold, never per frame.
     private TextMeasureCache[] _probeText = System.Array.Empty<TextMeasureCache>();
@@ -521,7 +550,7 @@ public sealed partial class FlexLayout
         Size2 size;
         _naturalProbe = true;
         try { size = Measure(root, availW); }
-        finally { _naturalProbe = false; }
+        finally { _naturalProbe = false; _probeWritten.Clear(); }
         uint ri = root.Raw.Index;
         if (ri < (uint)_arranged.Length && _scene.IsArrangedValid(root)) { ref RectF rb = ref _scene.Bounds(root); rb = _arranged[ri]; }
         RestoreArrangedDescendants(root);
@@ -600,6 +629,24 @@ public sealed partial class FlexLayout
         Arrange(node, ox, oy, w, h);
         _mcArranging = false;
         VerifyParity(node, w, ox, oy, w, h, "RunSubtree");
+    }
+
+    /// <summary>Lay out the subtree rooted at <paramref name="node"/> at <paramref name="width"/> where it stands: the scoped destination probe's solve
+    /// (<c>AppHost.ProbeRecordScopes</c>) of a box whose width comes from above, at the width it lands at. Its height is its declared one, else
+    /// what its content measures at that width, as the column that places it gives it. The host lays it out where the slide is again after.</summary>
+    internal void RunSubtreeAt(NodeHandle node, float width)
+    {
+        if (node.IsNull) return;
+        if (_fonts.CanPrefetchShapes) PrefetchTexts(node);
+        FluentGpu.Hosting.MountProf.SubtreeSolves++;
+        ref RectF b = ref _scene.Bounds(node);
+        float x = b.X, y = b.Y;
+        BeginMeasurePass();
+        var size = Measure(node, width);
+        float declaredH = _scene.Layout(node).Height;
+        float h = float.IsNaN(declaredH) ? size.Height : declaredH;
+        Arrange(node, x, y, width, h);
+        VerifyParity(node, width, x, y, width, h, "RunSubtreeAt");
     }
 
     /// <summary>A parent that arranges each child at a slot it computes itself and ignores the child's explicit
@@ -881,6 +928,27 @@ public sealed partial class FlexLayout
             float maxW = widthConstrained && needsColumnBudget
                 ? MathF.Max(0f, measureW)
                 : float.PositiveInfinity;
+            // Where a run of more than one line BREAKS is a discrete choice, like a wrap row's breaks: while a width reflow resizes the run (a
+            // docking panel's slide) its lines break at the width it lands at (StructureW), so it rewraps once, on the slide's first frame, and
+            // its height (and everything under it) moves once instead of stepping through every line count on the way. The live width still
+            // sizes and places the box; the recorder draws the lines at the width they were broken at (TextMeasureEntry.Structured). A run
+            // that auto-fits (MinSizeDip) or is one line at most keeps the live width: a trim follows the box.
+            // A run that can break at its landing is a structure reader whether or not it does on this pass (a record, a clear or a flip of the
+            // landing breaks marks it).
+            bool structured = false;
+            if (widthConstrained && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && li.TextStyle.MaxLines != 1
+                && li.TextStyle.MinSizeDip <= 0f && !_minContentProbe && !_naturalProbe)
+            {
+                if (BreakTextAtLanding && _scene.HasDestinationWidths)
+                {
+                    float landing = StructureW(node, maxW);
+                    // The landing width is a laid-out width, and a run that hugs its words there was laid out at exactly their measured width:
+                    // breaking at that width must keep the line the measure summed (the line breaker sums by word, the measure by glyph, and
+                    // the two can differ in the last bits), so the break takes a sixty-fourth of a DIP of slack.
+                    if (MathF.Abs(landing - maxW) > 0.5f) { maxW = MathF.Max(0f, landing) + LandingBreakSlack; structured = true; }
+                }
+                else _scene.NoteStructureReader(node, audit: !Verifying);
+            }
             // Measure cache: skip re-shaping when (text, style, availWidth) are unchanged (the §2.3 down-rule win on a
             // scoped relayout). Pure-function key ⇒ self-invalidating; helps the real shaping path, neutral headless.
             // P4: a 2-ENTRY RING — a stretched leaf is measured at the parent's available width AND again at the final
@@ -911,6 +979,7 @@ public sealed partial class FlexLayout
             {
                 _dTextHit++;
                 w = cached.Size.Width; h = cached.Size.Height;
+                mc.MarkLastStructured(structured);   // the same breaks, but whether they are the landing width's is this pass's
             }
             else
             {
@@ -941,11 +1010,12 @@ public sealed partial class FlexLayout
                     Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h),
                     FitSize = fit, FontEpoch = fontEpoch,
                     UnderlineY = m.UnderlineY, UnderlineThickness = m.UnderlineThickness, StrikeY = m.StrikeY,
-                    FirstLineWidth = m.FirstLineWidth,
+                    FirstLineWidth = m.FirstLineWidth, Structured = structured,
                 });
             }
-            // C1: unbounded maxW = the run does not depend on the offer; otherwise it is the same at any maxW in [laid width, maxW].
-            flatKind = _naturalProbe ? 0 : 1;
+            // C1: unbounded maxW = the run does not depend on the offer; otherwise it is the same at any maxW in [laid width, maxW]. A run
+            // broken at its landing width depends on that width, not on the offer: not flat.
+            flatKind = _naturalProbe || structured ? 0 : 1;
             flatTextFree = !(widthConstrained && needsColumnBudget) || !float.IsNaN(li.Width);
             flatTextW = w;
         }
@@ -1203,7 +1273,10 @@ public sealed partial class FlexLayout
     /// an authored Width/Height reads the same as the reflow track's eased extent, and an opacity-only exit of a
     /// fixed-height line used to keep its slot for the whole fade (audit B3bc). The extent itself is still the live
     /// LayoutInput main axis the reflow track writes every tick (AnimScheduler compose); a frozen last-arranged Bounds is
-    /// never read, it is exactly what an opacity-only orphan still carries.</para></summary>
+    /// never read, it is exactly what an opacity-only orphan still carries.</para>
+    /// <para>A STRETCHED orphan (auto cross size under a Stretch alignment) holds no cross extent: its last-arranged cross size is the line it was
+    /// stretched to, not its own, so folding it in held the parent at its old cross size for the whole close and dropped it at once when the orphan
+    /// was reclaimed (WinUI's daylist clock column closing beside a cover that eases shorter: the card stood at the old height, then fell 152 DIP).</para></summary>
     private void AddOrphanMain(NodeHandle node, bool row, ref float main, ref float cross, ref int n)
     {
         if (_scene.OrphanCount == 0) return;
@@ -1217,12 +1290,38 @@ public sealed partial class FlexLayout
             float oMain = row ? oli.Width : oli.Height;
             if (float.IsNaN(oMain)) continue;   // no Size track on this axis ⇒ the orphan holds no layout space
             float oCross = row ? oli.Height : oli.Width;
-            if (float.IsNaN(oCross)) oCross = row ? _scene.Bounds(o).H : _scene.Bounds(o).W;
+            if (float.IsNaN(oCross))
+            {
+                FlexAlign align = oli.AlignSelf == FlexAlign.Auto ? _scene.Layout(node).AlignItems : oli.AlignSelf;
+                oCross = align == FlexAlign.Stretch ? 0f : row ? _scene.Bounds(o).H : _scene.Bounds(o).W;
+            }
             main += oMain + MarginMain(oli, row);
             oCross += MarginCross(oli, row);
             if (oCross > cross) cross = oCross;
             n++;
         }
+    }
+
+    /// <summary>Arrange's half of <see cref="AddOrphanMain"/>: the main extent (margins and the gaps beside them included) that the parent's reflow
+    /// exit orphans still hold, which its live children's free space leaves to them while they close. Allocation-free; 0 with no such orphan.</summary>
+    private float HeldOrphanMain(NodeHandle node, bool row, int visible, float gap)
+    {
+        var orphans = _scene.OrphanChildrenOf(node);
+        if (orphans is null) return 0f;
+        float held = 0f;
+        int k = 0;
+        for (int i = 0; i < orphans.Count; i++)
+        {
+            var o = orphans[i];
+            if (!_scene.IsLive(o) || !_scene.OrphanHoldsSpace(o)) continue;
+            ref LayoutInput oli = ref _scene.Layout(o);
+            float oMain = row ? oli.Width : oli.Height;
+            if (float.IsNaN(oMain)) continue;
+            held += oMain + MarginMain(oli, row);
+            k++;
+        }
+        if (k > 0) held += gap * (visible > 0 ? k : k - 1);
+        return held;
     }
 
     // ── Arrange: position + size children within the node's final box ──
@@ -1329,6 +1428,11 @@ public sealed partial class FlexLayout
             n++;
         }
         if (n > 1) usedMain += li.Gap * (n - 1);
+        // A reflow exit orphan still owns its closing extent here too, not only in the parent's Measure (AddOrphanMain): a growing sibling took it at
+        // once on the exit's first frame and only then gave it back as the orphan's track wrote its extent (a daylist copy widened 170 DIP in one frame
+        // beside its closing clock column).
+        float heldMain = _scene.OrphanCount == 0 ? 0f : HeldOrphanMain(node, row, n, li.Gap);
+        usedMain += heldMain;
         float free = availMain - usedMain;
 
         // Distribute free space → each child's final main size.
@@ -1353,7 +1457,7 @@ public sealed partial class FlexLayout
         float consumed = 0f; for (int i = 0; i < n; i++) consumed += finalMain[i];
         { for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c)) consumed += MarginMain(_scene.Layout(c), row); }
         if (n > 1) consumed += li.Gap * (n - 1);
-        float leftover = MathF.Max(0f, availMain - consumed);
+        float leftover = MathF.Max(0f, availMain - consumed - heldMain);
         (float lead, float between) = Distribute(li.Justify, leftover, n);
 
         // Place children. idx increments ONLY for a visited (non-collapsed) child — keeps finalMain[idx] in lockstep
@@ -1646,6 +1750,75 @@ public sealed partial class FlexLayout
     /// (<c>OffsetOf(WindowOriginIndex)</c>) as small floats. Fixed-geometry layouts (grids, shelves) place cells by
     /// <see cref="IVirtualLayout.ItemRect"/> on the cross axis and by the extent source on the scroll axis.
     /// </summary>
+    private readonly List<(NodeHandle Node, float Width)> _landedCards = new(32);
+
+    /// <summary>Stand the card in fill-row cell <paramref name="cell"/> at the cell's width <paramref name="width"/> for a target solve: down the
+    /// cell's single-child chain (the card's component anchors and its root), each box whose declared width is the card's (the first definite
+    /// width on the chain) takes the cell's. A box of another width and everything under a box with more than one child keep theirs (a card
+    /// lets its gutter set its width, not its content: Wavee's Surface.Host). Saved for <see cref="RestoreLandedCards"/>. With
+    /// <paramref name="stand"/> false it only tells whether the card stands away from <paramref name="width"/>. True when a box of it did.</summary>
+    private bool LandCellCard(NodeHandle cell, float width, bool stand = true)
+    {
+        float card = float.NaN;
+        bool away = false;
+        NodeHandle n = _scene.FirstChild(cell);
+        for (int depth = 0; depth < 8 && !n.IsNull && _scene.NextSibling(n).IsNull; depth++)
+        {
+            ref LayoutInput li = ref _scene.Layout(n);
+            if (!float.IsNaN(li.Width))
+            {
+                if (float.IsNaN(card)) card = li.Width;
+                if (MathF.Abs(li.Width - card) >= 0.5f) break;
+                if (MathF.Abs(li.Width - width) >= 0.01f)
+                {
+                    away = true;
+                    if (!stand) return true;
+                    _landedCards.Add((n, li.Width));
+                    li.Width = width;
+                    _scene.Mark(n, NodeFlags.LayoutDirty);
+                }
+            }
+            n = _scene.FirstChild(n);
+        }
+        return away;
+    }
+
+    /// <summary>Would a target solve of <paramref name="viewport"/>, a horizontal fill-row strip, stand a card of it at its cell's landing width
+    /// (<see cref="LandCellCard"/>)? Each recorded cell's landing is its recorded width (<see cref="SceneStore.StructureWidth"/>), the slot a
+    /// target solve arranges it in. A strip whose record came from a layout that kept a bound card at its live width (a seed's commit) records
+    /// its runs where that card stood, not where it lands.</summary>
+    internal bool HoldsCardAway(NodeHandle viewport)
+    {
+        if (!_scene.TryGetScroll(viewport, out var sc) || sc.Orientation != 1 || sc.ItemCount == 0 || sc.Extent is null
+            || sc.Extent is MeasuredExtent || sc.Layout is not FillRowVirtualLayout || sc.ContentNode.IsNull) return false;
+        int ord = 0;
+        for (var rc = _scene.FirstChild(sc.ContentNode); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
+        {
+            if ((uint)VirtualIndex(in sc, ord) >= (uint)sc.ItemCount) continue;
+            float land = _scene.StructureWidth(rc, float.NaN);
+            if (!float.IsNaN(land) && LandCellCard(rc, land, stand: false)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Put back every card width a target solve stood at its cell (<see cref="LandCellCard"/>), exactly, and dirty each card and the
+    /// box that places it so the next solve lays the frame out as if no probe had run. True when there was one.</summary>
+    internal bool RestoreLandedCards()
+    {
+        for (int i = 0; i < _landedCards.Count; i++)
+        {
+            var (n, w) = _landedCards[i];
+            if (!_scene.IsLive(n)) continue;
+            _scene.Layout(n).Width = w;
+            _scene.Mark(n, NodeFlags.LayoutDirty);
+            NodeHandle p = _scene.Parent(n);
+            if (!p.IsNull) _scene.Mark(p, NodeFlags.LayoutDirty);
+        }
+        bool any = _landedCards.Count > 0;
+        _landedCards.Clear();
+        return any;
+    }
+
     private (float w, float h) ArrangeVirtual(NodeHandle node, in ScrollState sc, NodeHandle content,
                                               float innerW, float innerH, float padL, float padT, bool horizontal)
     {
@@ -1677,6 +1850,11 @@ public sealed partial class FlexLayout
         GridVirtualLayout? measuredGrid = layout is GridVirtualLayout { IsMeasured: true } grid ? grid : null;
         measuredGrid?.ResetMeasurePass(sc.ItemCount, cross);
         bool measured = ext is MeasuredExtent || layout is IMeasuredVirtualLayout;
+        // A destination probe's target solve lays a fill-row strip's cells out where they land, but the card in each cell holds the width the
+        // live slide gave it (a bound card width): its runs would record that width as their landing and break there for the rest of the
+        // slide. The target solve stands each card at its cell's width instead (LandCellCard, before its cell is measured); the host puts the
+        // cards back once it has recorded the landing (RestoreLandedCards).
+        bool landCards = SuppressBoundsDelivery && horizontal && !measured && layout is FillRowVirtualLayout;
         var vpId = new ScrollViewportId((int)node.Raw.Index, node.Raw.Gen);
         var slots = _scene.PlanSlots;
 
@@ -1715,6 +1893,7 @@ public sealed partial class FlexLayout
             }
             else slotCross = cross;
             float measureW = horizontal ? float.PositiveInfinity : MathF.Max(0f, slotCross - mL - mR);
+            if (landCards) LandCellCard(rc, MathF.Max(0f, layout!.ItemRect(index, cross).W - mL - mR));   // before its measure lays the card out
             var cs = Measure(rc, measureW);
             if (!measured) continue;
             float main = horizontal ? cs.Width + mL + mR : cs.Height + mT + mB;

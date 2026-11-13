@@ -213,6 +213,12 @@ public static class PagedShelf
     /// <summary>The clipped, edge-faded viewport box that hosts the virtualized strip. Owned: Height, ClipToBounds, EdgeFade.</summary>
     public const string PartViewport = "Viewport";
 
+    /// <summary>The live width of the card a shelf built with <c>cardWidthBound: true</c> renders in, provided under each slot: a card host
+    /// binds its sizes to it (<c>Prop.Of(() => w.Value ...)</c>), so a width change re-lays the card out and re-renders nothing. Null where
+    /// the slot hands its card the width as a value it re-renders on (another shelf, a spanning lead, a slot before the first fit): the
+    /// host then sizes the card from the width it was built with.</summary>
+    public static readonly Context<IReadSignal<float>?> CardWidth = new(null);
+
     /// <summary>Build a paged shelf. <paramref name="cardAt"/> builds card <c>index</c> at the fitted card width.
     /// <para>Two sizing modes. The default VIRTUALIZED strip (recycles, scales to thousands) needs
     /// <paramref name="cardHeight"/> — the card's full height for a given card width — to size the (cross-axis) viewport
@@ -252,6 +258,11 @@ public static class PagedShelf
         // width hint. This keeps realized item components subscribed only to their data: a container resize re-fits the
         // retained cells in layout without scheduling every card component through _cardW.
         bool cardWidthAgnostic = false,
+        // The card BINDS its width to PagedShelf.CardWidth (the live width of the slot it renders in) instead of taking cardAt's width
+        // literally: cardAt is handed the width the slot renders at, and a width change (every frame of a docking panel's slide) re-lays the
+        // card out and re-renders no slot. Frozen mount configuration. A slot whose card reads the width itself still re-renders on it: a lead
+        // that spans more than one cell (its template derives from its spanned width), and a slot before the shelf's first fit.
+        bool cardWidthBound = false,
         // 0 = unlimited. Clamp the auto-fit column count: a wide viewport stops adding columns and grows each card
         // instead (see FillRowVirtualLayout.Fit) — the editorial "a few large cards" shelf that still adapts to width.
         int maxColumns = 0,
@@ -312,7 +323,7 @@ public static class PagedShelf
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
                                                headerGap, edgeFade, prevGlyph, nextGlyph, parts, overscan, measured,
                                                cardWidthAgnostic, maxColumns, snap, controller, lift, leadMinColumns, selectionMode, selection,
-                                               new ShelfWidthKey(widthSite, widthLine)))
+                                               new ShelfWidthKey(widthSite, widthLine), cardWidthBound))
            // SkeletonProxy: the deriver can't see into this component, so hand it the header + a few real cards to derive
            // — the shelf shimmers as real cards instead of one default bar. The cards are fitted to the MEASURED slot
            // exactly as the live strip fits them (the same Fit, through Responsive's rendered-output proxy idiom): handing
@@ -962,6 +973,26 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
 
     sealed class ShelfCardSlot(PagedShelfCore<T> owner, BoundItemScope<T> scope) : Component
     {
+        // The width this slot's bound card is laid out at (PagedShelf.CardWidth): the shelf's live card width while the card stands on or
+        // within a cell of the visible strip, and the width it last had there while it is further off the page. A card nobody can see is not
+        // re-laid out on every frame of a slide; it takes the live width a cell before it can enter the page, so it never arrives at a stale one.
+        float _heldW = float.NaN;
+        Func<float>? _nearWidth;
+
+        float NearWidth()
+        {
+            float cw = owner._cardW.Value;
+            int index = scope.Index.Value;
+            float offset = (float)owner._shelfHandle.Offset.Value;
+            float view = owner._w.Value + 2f * owner._bleed;
+            int span = Math.Max(1, owner._effSpanSig.Value);
+            float step = cw + owner._gap;
+            float x = owner._bleed + (index <= 0 ? 0 : index + span - 1) * step;
+            if (!(_heldW > 0f) || (x < offset + view + step && x + span * step > offset - step)) _heldW = cw;   // never holds a width it never had
+            // A spanning lead's cell is its span of cards and the gaps between them.
+            return index == 0 && span > 1 ? span * _heldW + (span - 1) * owner._gap : _heldW;
+        }
+
         public override Element Render()
         {
             // DATA read (subscribes): the gated snapshot is what re-renders this card. The BUILDERS come off _latest —
@@ -971,7 +1002,15 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             int index = scope.Index.Value;
             var item = scope.Item.Value;
             if ((uint)index >= (uint)p.VisibleCount) return new BoxEl();
-            float width = owner._cardWidthAgnostic ? owner._maxCardW : owner._cardW.Value;
+            int effSpan = index == 0 ? owner._effSpanSig.Value : 1;   // subscribe at index 0 only — a span flip re-renders ONLY this slot
+            // A bound card (cardWidthBound) takes the live width from PagedShelf.CardWidth, so this slot neither reads nor subscribes it: a
+            // width change re-lays the card out. A single row's spanning lead binds its spanned width the same way (re-rendered at the live
+            // width, its boxes stood at the width of the render before and its caption broke there). A multi-row grid's lead, and before the
+            // first fit every slot (the width is the layout's fallback, not the signal's), subscribe and re-render on it, as every slot of an
+            // unbound shelf does.
+            float hint = owner._cardW.Peek();
+            bool bindsWidth = owner._cardWidthBound && !owner._cardWidthAgnostic && (effSpan <= 1 || owner._rows == 1) && hint > 0f;
+            float width = owner._cardWidthAgnostic ? owner._maxCardW : bindsWidth ? hint : owner._cardW.Value;
             if (width <= 0f) width = owner._layout?.CardW ?? owner._maxCardW;
             // E7 — the lead item's width hint widens to its spanned cell (2*cardW+gap for a 2-span lead). Read ONLY at
             // index 0: this is the one place `_effSpanSig` is subscribed, so a span change re-renders ONLY the lead
@@ -989,14 +1028,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             // of the card subtree (never one template patched into the other's retained nodes).
             var template = d.CardAt;
             bool lead = false;
-            if (index == 0)
+            if (effSpan > 1)
             {
-                int effSpan = owner._effSpanSig.Value;   // subscribe — a span flip re-renders ONLY this slot
-                if (effSpan > 1)
-                {
-                    width = effSpan * width + (effSpan - 1) * owner._gap;
-                    if (d.LeadCardAt is { } leadCardAt) { template = leadCardAt; lead = true; }
-                }
+                width = effSpan * width + (effSpan - 1) * owner._gap;
+                if (d.LeadCardAt is { } leadCardAt) { template = leadCardAt; lead = true; }
             }
             string key = d.KeyOf?.Invoke(item, index) ?? index.ToString(System.Globalization.CultureInfo.InvariantCulture);
             if (lead) key += LeadKeySuffix;
@@ -1006,7 +1041,12 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             // transition owns its size (a second reflow around it would rebase the card's own row onto this one's live width). Only a
             // multi-row strip's plain cards read the arm.
             LayoutTransition? resize = owner._rows > 1 && !owner._measured && !OwnsSize(card) && owner._resizeArmed.Value ? s_slotResize : null;
-            return new BoxEl { Direction = 1, Grow = 1f, Layout = resize, Children = [card] };
+            var root = new BoxEl { Direction = 1, Grow = 1f, Layout = resize, Children = [card] };
+            // The provider sits OVER the slot's root, so the card stays a keyed child of an unkeyed box (the E21 lead remount keeps its key).
+            if (!owner._cardWidthBound) return root;
+            // A single row's cells stand at known places, so a card off the page holds its width (NearWidth); a multi-row grid's follow the live one.
+            IReadSignal<float> slotW = owner._rows == 1 ? UseComputed(_nearWidth ??= NearWidth) : owner._cardW;
+            return Ctx.Provide<IReadSignal<float>?>(PagedShelf.CardWidth, bindsWidth ? slotW : null, root);
         }
     }
     /// <summary>Does a card animate its own size (a <c>Layout</c> or <c>Animate</c> transition with a Size channel)?</summary>
@@ -1028,6 +1068,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     readonly TemplateParts? _parts;
     readonly int _overscan;
     readonly bool _cardWidthAgnostic;
+    readonly bool _cardWidthBound;                // the cards bind PagedShelf.CardWidth (frozen at mount; see PagedShelf.Create)
     readonly ShelfSnap _snap;
     readonly ShelfLift _lift;   // E10 — frozen mount config; see ShelfLift
     readonly ItemsSelectionMode _selectionMode;   // WP1 — frozen mount config; see PagedShelf.Create's selectionMode
@@ -1154,9 +1195,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                           ShelfSnap snap = ShelfSnap.None, ShelfController? controller = null,
                           ShelfLift lift = ShelfLift.Elevate, int leadMinColumns = 0,
                           ItemsSelectionMode selectionMode = ItemsSelectionMode.None, SelectionModel? selection = null,
-                          ShelfWidthKey widthKey = default)
+                          ShelfWidthKey widthKey = default, bool cardWidthBound = false)
     {
         _widthKey = widthKey;
+        _cardWidthBound = cardWidthBound;
         // The width memory (see ShelfWidthMemory): mount at the width this call site's last shelf measured. Written before any render, so
         // nothing has subscribed: the first render fits it, writes the cards' width hint before they realize, and the first measure that
         // agrees moves nothing.

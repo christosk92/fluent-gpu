@@ -1418,6 +1418,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     // ── detached-window seam (the pop-out video mini-player) ──────────────────────────────────────────────────────────
 
+    public void SetSystemTransitions(bool enabled) => Win32Theme.SetTransitionsDisabled((nint)_hwnd.Value, !enabled);
+
     public void SetTopmost(bool topmost)
     {
         // HWND_TOPMOST (-1) / HWND_NOTOPMOST (-2). Persistent (unlike a one-shot bring-to-front); position/size/activation

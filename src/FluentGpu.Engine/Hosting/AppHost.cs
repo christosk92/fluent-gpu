@@ -805,12 +805,12 @@ public sealed partial class AppHost : IDisposable
 
     private bool HasRenderMotion()
     {
-        if (HasOwnRenderMotion() || HoldsVideoPlates) return true;
+        if (HasOwnRenderMotion() || HoldsVideoPlates || _presentationMoving) return true;
         // A child whose present slot was busy this turn left its publication pending (DrainChildRenderSources), and one whose
         // non-blocking present was refused owes that frame: keep the loop ticking so the next turn probes the slot / re-presents
         // instead of sleeping until some unrelated wake.
         foreach (var child in Volatile.Read(ref _childRenderSources))
-            if (child.HasOwnRenderMotion() || child._slotDeferred || child._presentOwed || child.HoldsVideoPlates) return true;
+            if (child.HasOwnRenderMotion() || child._slotDeferred || child._presentOwed || child.HoldsVideoPlates || child._presentationMoving) return true;
         return false;
     }
 
@@ -1554,6 +1554,10 @@ public sealed partial class AppHost : IDisposable
     private readonly List<NodeHandle> _widthSeedsCommit = new(8);                   // every width reflow this commit's SeedReflowsFirst passes started (none of them is "away" from this commit)
     private readonly List<NodeHandle> _destProbeNodes = new(8);                     // the live reflows a destination probe presents at their targets
     private readonly List<(NodeHandle Node, float Width)> _destProbeSaved = new(8);  // the width inputs the probe found, put back exactly after its solve
+    private bool _destProbedThisFrame;                                                // a target solve recorded the tree this frame (RecordSeededDestinations)
+    private bool _recordStaleProbe;                                                   // the record no longer describes a part of the tree: re-record it (ProbeRecordScopes)
+    private readonly List<NodeHandle> _recordScopes = new(8);                        // the boxes ProbeRecordScopes solves and records again
+    private readonly List<NodeHandle> _recordRoots = new(8);                         // the parents of the live width reflows: what a probe records
     private Size2 _destLayoutSize;                                                  // the window size the recorded destination widths were solved at
     private readonly List<(NodeHandle Node, RectF Was)> _wrapMovers = new(16);     // children of wrapping boxes and where they stood before a reflow re-solve
     private readonly List<(NodeHandle Node, float H)> _revealHeights = new(16);    // flow-reveal boxes and their height before a reflow re-solve
@@ -2188,6 +2192,7 @@ public sealed partial class AppHost : IDisposable
     /// <summary>Render thread: apply every popup swapchain mutation the UI posted since the last turn, in order.</summary>
     private void DrainPopupRenderActions()
     {
+        DrainPresentationMotion();
         bool ownResize;
         Size2 ownSize;
         long ownPostedQpc;
@@ -3615,7 +3620,6 @@ public sealed partial class AppHost : IDisposable
         AdoptDetachedChild(child);
         // AFTER the adoption (it copies the parent's Mica flag): a window with its own material owns its ground.
         if (request.Material is { } material) child.SetDetachedMaterial(material, request.MaterialDark);
-        child.PowerCapFps = Math.Max(0, request.PowerCapFps);
         if (request.DragAnywhere) win.CaptionWhereInert = child.IsInertAt;
         // Register the child as a render source for the parent's render loop (a no-op reader when there is no render thread —
         // the pure single-thread parent leaves the child on the inline present path). A copy-on-write publish: no park, and
@@ -4035,6 +4039,12 @@ public sealed partial class AppHost : IDisposable
         // and never from a child's turn.
         if (!_isDetachedChild && !_renderSeam.HasPendingFrame && !HasOwnRenderMotion() && !_presentOwed) _device.ServicePopupWork();
         var list = Volatile.Read(ref _childRenderSources);
+        // The child's slot probe races its own flip: this turn starts on the compositor tick, the very moment DWM latches the child's
+        // last present, and the child's latency waitable signals just after - a 0 ms probe found the slot busy on about every other
+        // tick and the pop-out presented at half the display rate (the mini window's lyrics and settle at 60 on a 120 Hz panel). When
+        // this host has nothing of its own to present this turn (the main window hidden behind the mini player, or at rest) nothing
+        // waits behind the child, so its probe may wait out that flip (ChildSlotGraceMs); otherwise it stays a 0 ms probe (F090).
+        int childGraceMs = _renderSeam.HasPendingFrame || HasOwnRenderMotion() || _presentOwed ? 0 : ChildSlotGraceMs;
         for (int i = 0; i < list.Length; i++)
         {
             var child = list[i];
@@ -4061,7 +4071,7 @@ public sealed partial class AppHost : IDisposable
             // (a busy slot skips, never waits), so a child needs no SlotCatchUp policy of its own.
             var pace = child._childPace;
             long probeStart = Stopwatch.GetTimestamp();
-            bool slotOpen = _device.TryTakePresentSlot(child._swapchain, 0);
+            bool slotOpen = _device.TryTakePresentSlot(child._swapchain, childGraceMs);
             long slotAt = Stopwatch.GetTimestamp();
             pace?.NoteSlotTake(slotAt - probeStart, slotOpen);
             if (!slotOpen)
@@ -4233,12 +4243,12 @@ public sealed partial class AppHost : IDisposable
         // while it was hidden is not overwritten by the open request's value.
         public void SetTopmost(bool topmost) { _child._revealTopmost = topmost; _window.SetTopmost(topmost); }
         public void SetMaterial(WindowMaterial material, bool dark) { if (!_window.IsClosed) _child.SetDetachedMaterial(material, dark); }
-        public int PowerCapFps { get => _child.PowerCapFps; set => _child.PowerCapFps = Math.Max(0, value); }
         public DetachedOpenTiming OpenTiming => _child.OpenTiming;
         public Action<DetachedOpenTiming>? OnRevealed { get => _child.OnRevealed; set => _child.OnRevealed = value; }
         public double FirstVideoBindMs => _child.FirstVideoBindMs;
         public Action<double>? OnFirstVideoBound { get => _child.OnFirstVideoBound; set => _child.OnFirstVideoBound = value; }
         public void SetBounds(RectF outerBoundsPx) => _window.SetBoundsPx(outerBoundsPx);
+        public void AnimatePresentation(in FluentGpu.Pal.WindowPresentationMotion motion) => _child.AnimatePresentation(in motion);
         // Overrides IDetachedVideoWindow.MoveTo's SetBounds(current-size)-based default: the PAL window has its own
         // pure-move primitive (IPlatformWindow.MoveToPx), so route to it directly and skip the BoundsPx read-back.
         public void MoveTo(Point2 outerOriginPx) => _window.MoveToPx(outerOriginPx);
@@ -7021,7 +7031,7 @@ public sealed partial class AppHost : IDisposable
             double reactiveFlushMs = 0, virtualRealizeMs = 0;
             try
             {
-                _anim.DrainSettledCallbacks();                                  // 3− reveal settle callbacks the last frame queued (an Expander unmounting its
+                _anim.DrainSettledCallbacks();                                 // 3− reveal settle callbacks the last frame queued (an Expander unmounting its
                                                                                 // panel, a band's collapse commit) — app code, so never inside phases 6–13
                 long tRx0 = Stopwatch.GetTimestamp();
                 MountProf.Enter(MountProf.Flush);
@@ -7046,6 +7056,9 @@ public sealed partial class AppHost : IDisposable
             // The capture window closes before layout; a node that gained a transition in the flush counts as captured.
             if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
+            // A commit that answers the record in place while a width reflow flies (SceneStore.ConsumeRecordAnswered: a page that takes the sizes
+            // of the tier it lands at) re-probes its destination: the record describes the form it left.
+            bool answered = _scene.ConsumeRecordAnswered() && reconciled;
             long tFlush = Stopwatch.GetTimestamp();   // always-on segment timing (FrameStats.*Ms) — see below
             if (FrameLedger.Enabled) _ledgerAlloc.Flush = GC.GetAllocatedBytesForCurrentThread();
             // Spike-gated type roster (RenderCensus): one line when the flush alone exceeded the panel's refresh interval
@@ -7066,13 +7079,24 @@ public sealed partial class AppHost : IDisposable
             // down instead of jumping in its commit frame). Reset after the 7.05 pass.
             bool flowRevealFrame = _anim.HasFlowRevealWork || (capturedProjections && CapturedFlowReveal());
             _layout.DeferOffsetClamp = flowRevealFrame;
+            // Runs break at their landing width from the frame after a width reflow's destination was recorded (FlexLayout.BreakTextAtLanding).
+            // (A run that leaves as an exit orphan has no record: SceneStore.Orphan.)
+            _layout.BreakTextAtLanding = _scene.HasDestinationWidths;
             MountProf.Enter(MountProf.Layout);
-            // A width reflow re-aimed by this frame's commit (the panel toggled back mid-slide), or a window resize while one flies: solve the
-            // targets once before the frame's own layout, which then lays the frame out where the slide is.
-            if (_everLaidOut && !_needFullLayout && !_scene.Root.IsNull
-                && (_anim.DestinationStale || (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)))
-                && SolveReflowTargets(layoutSize, "before layout"))
-                layoutNeeded = true;
+            // A width reflow re-aimed by this frame's commit (the panel toggled back mid-slide) or a window resize while one flies: solve the
+            // targets once before the frame's own layout, which then lays the frame out where the slide is, at the new record. A commit that answered
+            // the record in place (its forms stand in the sizes of the tier they land at, and the record describes the form they left) records
+            // again only the parts it changed (ProbeRecordScopes).
+            if (answered && _scene.HasDestinationWidths) _recordStaleProbe = true;
+            _destProbedThisFrame = false;
+            if (_everLaidOut && !_needFullLayout && !_scene.Root.IsNull)
+            {
+                if (_anim.DestinationStale || (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)))
+                {
+                    if (SolveReflowTargets(layoutSize, "before layout")) layoutNeeded = true;
+                }
+                else if (_recordStaleProbe && ProbeRecordScopes(layoutSize, "before layout")) layoutNeeded = true;
+            }
             if (layoutNeeded && !_scene.Root.IsNull)
             {
                 if (_needFullLayout || !_everLaidOut)
@@ -7185,10 +7209,16 @@ public sealed partial class AppHost : IDisposable
             if (FrameLedger.Enabled) _ledgerAlloc.Layout = GC.GetAllocatedBytesForCurrentThread();
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
+            // A layout that solved a structure reader the record does not cover (a page that swaps its form for the width it lands at, a row that
+            // mounts mid-slide: SceneStore.ConsumeUnrecordedReader) chose its structure at its live width, and a box it built is chosen at the
+            // landing width only once it is recorded there. Record those parts again (in the projection pass before anything is seeded from this
+            // layout, else just below). A commit that only moves bound values, re-pushes equal props or builds what reads no structure (most frames
+            // of a slide) keeps the record: two more solves a frame for nothing.
+            if (_scene.ConsumeUnrecordedReader() && _scene.HasDestinationWidths) _recordStaleProbe = true;
             if (capturedProjections) ApplyProjections(layoutSize, keepAliveSuppressed);   // FLIP "Last+Invert+Play"
             // A width reflow seeded or re-aimed on a frame with no projection pass, or a window resize while one flies: probe its destination here.
             if (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)) _anim.DestinationStale = true;
-            if (_anim.DestinationStale) ProbeReflowDestinations(layoutSize);
+            if (_anim.DestinationStale || _recordStaleProbe) ProbeReflowDestinations(layoutSize);
             _reconciler.RunEntranceCascades();                 // 6.7 staggered entrances requested this commit: their units are what this layout shows
             _enterReflowsSeeded.Clear();                       // read by ApplyProjections' SeedReflowsFirst (this frame's only)
             _anim.PendingEnterReveal.Clear();                  // seeded at 6.3, read by ApplyProjections as shove carriers
@@ -8606,7 +8636,7 @@ public sealed partial class AppHost : IDisposable
         // per-node loop below can tell a shove apart from an independent move.
         // Cleared FIRST (not just at the tail) so an early-out on any path can never leave a stale frame map behind.
         _reflowShoveFrames.Clear();
-        _anim.CollectLiveReflowNodes(_liveReflowScratch);   // clears the list itself
+        _anim.CollectLiveReflowNodes(_liveReflowScratch, tickedOnly: true);   // clears the list itself; a row not yet ticked has shoved nothing
         for (int i = 0; i < _liveReflowScratch.Count; i++)
         {
             NodeHandle carrier = _liveReflowScratch[i];
@@ -8647,6 +8677,10 @@ public sealed partial class AppHost : IDisposable
         _widthSeedsCommit.Clear();
         if (!suppressed)
         {
+            // A layout that built a structure reader the record does not cover (Paint marks it stale) broke those runs at their live widths:
+            // probe before anything is seeded from it, so a reflow this commit starts (a chapter easing to the height of its new form) aims at
+            // the structure the slide shows, not at one the probe takes back.
+            if (_anim.DestinationStale || _recordStaleProbe) ProbeReflowDestinations(layoutSize);
             DiscoverProjectionRoots(PosEps, SizeEps);
             // Again while a pass started any: a reflow below a root that the previous pass's starts took back (the page column beside the
             // title bar's and the play bar's reflows at 3200: the detail page's columns under it) was skipped as below a root; seeded in the
@@ -8860,11 +8894,10 @@ public sealed partial class AppHost : IDisposable
         RecordSeededDestinations(layoutSize);   // from the commit's layout, or one target solve (the re-solve below then lays out the start)
         if (!started || !_scene.AnyLayoutDirty) return false;
         NoteFlowRevealHeights();
-        // The commit's own pass arranged these subtrees at their targets: the ring's slots for the start (the frame before) would answer without
-        // descending and leave the children at the targets' Bounds (FlexLayout.BypassMeasureRing).
-        _layout.BypassMeasureRing = true;
-        try { _invalidator.RunDirty(layoutSize); }
-        finally { _layout.BypassMeasureRing = false; }
+        // The commit's own pass arranged these subtrees at their targets; the start is the frame before, so a subtree nothing marked since
+        // answers from the measure ring's slot for it (the record above marked every box that reads where the reflows land), and an arrange
+        // whose measure did not descend re-measures its children first (MeasureMemo.KidsGen): none keeps the Bounds its target arrange left.
+        _invalidator.RunDirty(layoutSize);
         _scene.ClearLayoutDirty();
         FollowFlowRevealHeights();
         return true;
@@ -8905,9 +8938,24 @@ public sealed partial class AppHost : IDisposable
     private void RecordSeededDestinations(Size2 layoutSize)
     {
         if (_widthSeeds.Count == 0) return;
-        // Only a width reflow that was already flying before this commit can hold a box away from where it lands: this commit's own seeds (every
-        // pass's) were laid out at their targets by the commit's pass.
-        if (_anim.AnyWidthReflowAwayFromDeclared(_widthSeedsCommit, out NodeHandle away))
+        bool laterPass = _widthSeedsCommit.Count > _widthSeeds.Count;   // an earlier pass laid its seeds out at their start since the commit's pass
+        // A probe this frame recorded the tree as it stands, every width reflow at its target and every box this commit re-sized at its declared
+        // width (the target its new seed aims at): a seed it recorded, under a parent it recorded, lands where the record already says. A form that
+        // answers the record in place re-sizes its parts this way on the slide's first frame (the daylist's columns), so its probe serves its seeds.
+        if (_destProbedThisFrame)
+        {
+            int seeds = _widthSeeds.Count;
+            for (int i = _widthSeeds.Count - 1; i >= 0; i--) if (SeedRecorded(_widthSeeds[i])) _widthSeeds.RemoveAt(i);
+            if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] {seeds - _widthSeeds.Count} seed(s) recorded by this frame's probe");
+            if (_widthSeeds.Count == 0) return;
+        }
+        // Only a width reflow that was already flying before this commit can hold a box away from where it lands (this commit's own seeds, every
+        // pass's, were laid out at their targets by the commit's pass), and only where its width reaches a seed's box: a layer of a stack whose
+        // width comes from above (the video's glide presenter over the page) lands where the commit laid it out whatever the page's slide does.
+        _anim.CollectWidthReflowsAwayFromDeclared(_widthSeedsCommit, _awayScratch);
+        NodeHandle away = FirstAwayReachingSeeds();
+        _awayScratch.Clear();
+        if (!away.IsNull)
         {
             // A width reflow seeded on an earlier frame has ticked: this commit's layout does not show where it lands. Solve the targets once here;
             // the seed pass's own re-solve then lays the frame out at the rows' start.
@@ -8920,7 +8968,6 @@ public sealed partial class AppHost : IDisposable
             SolveReflowTargets(layoutSize, "seed beside a flying reflow");
             return;
         }
-        bool laterPass = _widthSeedsCommit.Count > _widthSeeds.Count;   // an earlier pass laid its seeds out at their start since the commit's pass
         if (!_scene.HasDestinationWidths) _destLayoutSize = layoutSize;   // a later pass adds to this frame's record, first width kept
         else if (!_destLayoutSize.Equals(layoutSize)) { _scene.ClearDestinationWidths(markChanged: false); _destLayoutSize = layoutSize; }
         for (int i = 0; i < _widthSeeds.Count; i++)
@@ -8935,7 +8982,7 @@ public sealed partial class AppHost : IDisposable
                 SolveReflowTargets(layoutSize, "later seed pass");
                 return;
             }
-            _scene.RecordDestinationWidths(root);
+            _scene.RecordDestinationWidths(root, announce: true);
         }
         if (s_motionDiag)
             for (int i = 0; i < _widthSeeds.Count; i++) System.Console.Error.WriteLine($"[dest-width] recorded seed node={_widthSeeds[i].Raw.Index} at={DestDiagPath(_widthSeeds[i])} from the commit's layout");
@@ -8946,16 +8993,52 @@ public sealed partial class AppHost : IDisposable
     /// reflow's parent has there (<see cref="SceneStore.StructureWidth"/>: what column counts, wrap breaks and forms are chosen for while the
     /// reflows fly), then put the rows' current sizes back and solve again, so this frame still shows where the slide is. Runs on a frame that
     /// re-aims a width reflow, seeds one beside another in flight, or resizes the window during one; a fresh slide records the commit's own
-    /// layout instead (<see cref="RecordSeededDestinations"/>). Two solves of the dirty scopes, once per slide direction. True when it probed.</summary>
+    /// layout instead (<see cref="RecordSeededDestinations"/>), and a layout that built a reader the record does not cover records again only
+    /// the parts that changed (<see cref="ProbeRecordScopes"/>). Two solves of the dirty scopes, once per slide direction. True when it probed.</summary>
     private bool ProbeReflowDestinations(Size2 layoutSize)
     {
         NoteFlowRevealHeights();
-        if (!SolveReflowTargets(layoutSize, "after layout")) return false;
-        _layout.BypassMeasureRing = true;
-        try { _invalidator.RunDirty(layoutSize); _scene.ClearLayoutDirty(); }
-        finally { _layout.BypassMeasureRing = false; }
+        if (!(_anim.DestinationStale ? SolveReflowTargets(layoutSize, "after layout") : ProbeRecordScopes(layoutSize, "after layout"))) return false;
+        _invalidator.RunDirty(layoutSize);
+        _scene.ClearLayoutDirty();
         FollowFlowRevealHeights();
         return true;
+    }
+
+    /// <summary>Are width seed <paramref name="n"/> and the parent whose subtree its record covers both in the record?</summary>
+    private bool SeedRecorded(NodeHandle n)
+    {
+        NodeHandle p = _scene.Parent(n);
+        return _scene.HasDestinationWidth(n) && (p.IsNull || _scene.HasDestinationWidth(p));
+    }
+
+    private readonly List<NodeHandle> _awayScratch = new(8);
+
+    /// <summary>The first node of <see cref="_awayScratch"/> (width reflows held away from where they land) whose width can reach the box a seed of
+    /// <see cref="_widthSeeds"/> records (the seed's parent), else Null. A row reaches a box unless the two meet at a z-stack whose width comes
+    /// from above (<see cref="SizeImposed"/>): each layer there is the stack's width or its own, never another layer's.</summary>
+    private NodeHandle FirstAwayReachingSeeds()
+    {
+        for (int a = 0; a < _awayScratch.Count; a++)
+            for (int i = 0; i < _widthSeeds.Count; i++)
+            {
+                NodeHandle n = _widthSeeds[i], p = _scene.Parent(n);
+                NodeHandle meet = CommonAncestor(_awayScratch[a], p.IsNull ? n : p);
+                if (meet.IsNull || (_scene.Flags(meet) & NodeFlags.ZStack) == 0 || !SizeImposed(meet, horizontal: true)) return _awayScratch[a];
+            }
+        return NodeHandle.Null;
+    }
+
+    /// <summary>The deepest box that is <paramref name="a"/> or an ancestor of it and <paramref name="b"/> or an ancestor of it; Null in two trees.</summary>
+    private NodeHandle CommonAncestor(NodeHandle a, NodeHandle b)
+    {
+        int da = 0, db = 0;
+        for (NodeHandle n = a; !n.IsNull; n = _scene.Parent(n)) da++;
+        for (NodeHandle n = b; !n.IsNull; n = _scene.Parent(n)) db++;
+        for (; da > db; da--) a = _scene.Parent(a);
+        for (; db > da; db--) b = _scene.Parent(b);
+        while (a != b) { a = _scene.Parent(a); b = _scene.Parent(b); }
+        return a;
     }
 
     /// <summary>The destination probe's ONE target solve: present every live width reflow at the width it lands at, solve the dirty scopes, record
@@ -8966,6 +9049,7 @@ public sealed partial class AppHost : IDisposable
     private bool SolveReflowTargets(Size2 layoutSize, string where)
     {
         _anim.DestinationStale = false;
+        _recordStaleProbe = false;   // the whole record is solved again
         _anim.CollectLiveReflowNodes(_destProbeNodes);
         bool width = false;
         for (int i = 0; i < _destProbeNodes.Count && !width; i++) width = _anim.HasLiveWidthReflow(_destProbeNodes[i]);
@@ -8989,25 +9073,284 @@ public sealed partial class AppHost : IDisposable
         }
         if (_destProbeSaved.Count == 0) { _destProbeNodes.Clear(); return false; }
         if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] target solve ({where}) at {layoutSize.Width:0}x{layoutSize.Height:0}");
-        // The solve re-arranges subtrees the frame's layout already solved at other sizes: the ring would answer from those (BypassMeasureRing).
         // Nothing it arranges is shown: no OnBoundsChanged or measured-bounds hook hears it (FlexLayout.SuppressBoundsDelivery).
-        _layout.BypassMeasureRing = true;
         _layout.SuppressBoundsDelivery = true;
         try
         {
             _invalidator.RunDirty(layoutSize);
             _scene.ClearLayoutDirty();
         }
-        finally { _layout.BypassMeasureRing = false; _layout.SuppressBoundsDelivery = false; }
+        finally { _layout.SuppressBoundsDelivery = false; }
         for (int i = 0; i < _destProbeSaved.Count; i++)
         {
             NodeHandle n = _destProbeSaved[i].Node, p = _scene.Parent(n);
-            _scene.RecordDestinationWidths(p.IsNull ? n : p);
+            _scene.RecordDestinationWidths(p.IsNull ? n : p, announce: false);
         }
+        _layout.RestoreLandedCards();   // the fill-row cards the solve stood at their cells' landing widths (FlexLayout.LandCellCard)
         for (int i = 0; i < _destProbeSaved.Count; i++) _anim.RestoreProbedWidth(_destProbeSaved[i].Node, _destProbeSaved[i].Width);
         _destProbeSaved.Clear();
         _destLayoutSize = layoutSize;
         _destProbeNodes.Clear();
+        _destProbedThisFrame = true;
+        return true;
+    }
+
+    /// <summary>The scoped destination probe: a commit that answered the record in place, or a layout that built a structure reader the record does
+    /// not cover, changed only some parts of the tree under the flying width reflows (<see cref="SceneStore.RecordStaleBoxes"/>: the daylist that
+    /// swaps its form for the tier it lands at, a tile keyed anew, a bound card's width). For each, the nearest recorded box above it whose width
+    /// comes from above (<see cref="WidthFromAbove"/>) is solved alone at its recorded width, the width reflows inside it at their targets and its
+    /// fill-row cards at their cells' landing widths, and recorded again over its entries (a record otherwise keeps a box's first width); the
+    /// rest of the record already describes where the tree lands, but for a box that has left the flying reflows' parents (a pooled virtual
+    /// cell), which is no longer recorded. Then its rows and cards are put back and the box that places it is marked, so the caller's next
+    /// solve lays the frame out where the slide is. The record it leaves is the one <see cref="SolveReflowTargets"/> leaves, at the cost of the
+    /// changed parts. A stale part under a recorded box that no box above it bounds probes the whole frame. True when it probed.</summary>
+    private bool ProbeRecordScopes(Size2 layoutSize, string where)
+    {
+        _recordStaleProbe = false;
+        _anim.CollectLiveReflowNodes(_destProbeNodes);
+        _recordRoots.Clear();
+        bool unrecordedRoot = false;
+        for (int i = 0; i < _destProbeNodes.Count; i++)
+        {
+            NodeHandle n = _destProbeNodes[i], p = _scene.Parent(n);
+            if (!_anim.HasLiveWidthReflow(n)) continue;
+            NodeHandle root = p.IsNull ? n : p;
+            _recordRoots.Add(root);
+            unrecordedRoot |= !_scene.HasDestinationWidth(root);
+        }
+        // No width reflow flies any more (the whole probe clears the record), one flies whose parent the record has not met (a reflow started since
+        // the record: its subtree lands at no width recorded yet), a stale part no recorded box bounds, or parts that hold half the record or more
+        // (a tier answered across the page: solved apart they cost more than one solve of the whole): the whole frame.
+        if (_recordRoots.Count == 0 || unrecordedRoot || !CollectRecordScopes())
+        {
+            _recordRoots.Clear();
+            _destProbeNodes.Clear();
+            return SolveReflowTargets(layoutSize, where);
+        }
+        // A probe records the subtrees of the flying width reflows' parents, nothing else: a box that left them since (a virtual cell
+        // its strip pooled, the parent of a reflow that landed) is no longer recorded.
+        bool dropped = _scene.KeepDestinationWidthsUnder(_recordRoots);
+        _recordRoots.Clear();
+        if (_recordScopes.Count == 0)
+        {
+            _destProbeNodes.Clear();
+            _scene.FinishScopedRecord();
+            return dropped;
+        }
+        _destProbeSaved.Clear();
+        for (int i = 0; i < _destProbeNodes.Count; i++)
+        {
+            NodeHandle n = _destProbeNodes[i];
+            if (!_anim.HasLiveWidthReflow(n) || !InRecordScope(n)) continue;
+            _destProbeSaved.Add((n, _scene.Layout(n).Width));
+            _anim.PresentReflowTarget(n);
+        }
+        _destProbeNodes.Clear();
+        if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] scoped target solve ({where}) of {_recordScopes.Count} box(es)");
+        _layout.SuppressBoundsDelivery = true;   // nothing it arranges is shown (FlexLayout.SuppressBoundsDelivery)
+        try
+        {
+            for (int i = 0; i < _recordScopes.Count; i++)
+            {
+                NodeHandle r = _recordScopes[i];
+                float w = _scene.StructureWidth(r, float.NaN);
+                _scene.ForgetDestinationSubtree(r);
+                _layout.RunSubtreeAt(r, w);
+            }
+        }
+        finally { _layout.SuppressBoundsDelivery = false; }
+        for (int i = 0; i < _recordScopes.Count; i++) _scene.RerecordDestinationWidths(_recordScopes[i]);
+        _layout.RestoreLandedCards();
+        for (int i = 0; i < _destProbeSaved.Count; i++) _anim.RestoreProbedWidth(_destProbeSaved[i].Node, _destProbeSaved[i].Width);
+        _destProbeSaved.Clear();
+        // Last: the box that places each scope re-solves it at the width the slide gives it, after anything inside it the next solve meets first.
+        for (int i = 0; i < _recordScopes.Count; i++) _scene.Mark(_scene.Parent(_recordScopes[i]), NodeFlags.LayoutDirty);
+        _recordScopes.Clear();
+        _scene.FinishScopedRecord();
+        _destProbedThisFrame = true;
+        return true;
+    }
+
+    /// <summary>The boxes <see cref="ProbeRecordScopes"/> records again, outermost only, from the record's stale boxes, the recorded boxes whose
+    /// children are no longer the ones they were recorded with, and every recorded fill-row strip a target solve would stand a card of at its
+    /// cell's landing (<see cref="FlexLayout.HoldsCardAway"/>). False when one has no recorded box above it whose width comes from above, short of
+    /// the window, a box the record starts at changed itself (<see cref="SceneStore.RecordUnscoped"/>), or the scopes would hold half the record
+    /// or more (<see cref="_scopeBudget"/>): the whole frame is probed instead.</summary>
+    private bool CollectRecordScopes()
+    {
+        _recordScopes.Clear();
+        _scopeBudget = _scene.DestinationCount / 2;
+        if (++_scopePass == int.MaxValue) { Array.Clear(_scopeCovered); Array.Clear(_aboveStamp); _scopePass = 1; }
+        if (_scene.RecordUnscoped) return false;
+        var stale = _scene.RecordStaleBoxes;
+        for (int i = 0; i < stale.Count; i++)
+            if (_scene.IsLive(stale[i]) && !AddRecordScope(stale[i])) return false;
+        var rewired = _scene.RecordRewiredBoxes;
+        for (int i = 0; i < rewired.Count; i++)
+            if (_scene.IsLive(rewired[i]) && !_scene.ChildrenAsRecorded(rewired[i]) && !AddRecordScope(rewired[i])) return false;
+        for (int i = 0, n = _scene.DestinationCount; i < n; i++)
+        {
+            NodeHandle v = _scene.DestinationAt(i);
+            if (!v.IsNull && _scene.HasScroll(v) && _scene.IsLive(v) && _layout.HoldsCardAway(v) && !AddRecordScope(v)) return false;
+        }
+        // Outermost only: a scope's solve and record cover every box under it.
+        int keep = 0;
+        for (int i = 0; i < _recordScopes.Count; i++)
+        {
+            NodeHandle r = _recordScopes[i];
+            bool nested = false;
+            for (NodeHandle a = _scene.Parent(r); !a.IsNull && !nested; a = _scene.Parent(a)) nested = _recordScopes.Contains(a);
+            if (!nested) _recordScopes[keep++] = r;
+        }
+        _recordScopes.RemoveRange(keep, _recordScopes.Count - keep);
+        return true;
+    }
+
+    // The boxes the scopes may hold before the whole frame is the cheaper probe: half the record. Measured on the three themes' docking slides
+    // (Debug, commit frame): scopes of 16 % of the record (Zune 1440's daylist, quick strip and wide shelf) took the frame from 24.1 to 21.5 ms;
+    // scopes of 70 to 99 % (a tier that re-sizes most zones: Zune 1280, Classic, WinUI) cost up to 1 ms more than one solve of the whole frame, as
+    // each is solved alone and then again where the slide is. Counted down as scopes are found, so a large one ends the search at once.
+    private int _scopeBudget;
+
+    private int CountDownSubtree(NodeHandle n, int budget)
+    {
+        budget--;
+        for (NodeHandle c = _scene.FirstChild(n); !c.IsNull && budget > 0; c = _scene.NextSibling(c)) budget = CountDownSubtree(c, budget);
+        return budget;
+    }
+
+    /// <summary>Add the scope of stale box <paramref name="box"/>: the nearest recorded box at or above it whose width comes from above. True when
+    /// it found one below the window and the scopes still hold less than half the record (<see cref="_scopeBudget"/>), or when no recorded box
+    /// stands above it (it lies outside the record: an exit orphan's part).</summary>
+    private bool AddRecordScope(NodeHandle box)
+    {
+        bool recordedAbove = false;
+        _scopeWalk.Clear();
+        for (NodeHandle n = box; !n.IsNull; n = _scene.Parent(n))
+        {
+            int idx = (int)n.Raw.Index;
+            if (idx < _scopeCovered.Length && _scopeCovered[idx] == _scopePass) { CoverWalk(); return true; }   // under a scope this pass added
+            _scopeWalk.Add(idx);
+            if (!_scene.HasDestinationWidth(n)) continue;
+            recordedAbove = true;
+            if (!WidthFromAbove(n)) continue;
+            if (_scene.Parent(n).IsNull) return false;
+            _recordScopes.Add(n);
+            CoverWalk();
+            _scopeBudget = CountDownSubtree(n, _scopeBudget);
+            return _scopeBudget > 0;
+        }
+        return !recordedAbove;
+    }
+
+    // Per node, this CollectRecordScopes pass (_scopePass): a walk from a stale box crossed it on its way to a scope it added (_scopeCovered), and
+    // WidthFromAbove's answer for it (_aboveStamp, _aboveVal). Every stale box shares its ancestors with the others: each is walked once a pass.
+    private int[] _scopeCovered = [], _aboveStamp = [];
+    private bool[] _aboveVal = [];
+    private int _scopePass;
+    private readonly List<int> _scopeWalk = new(64);
+
+    private void CoverWalk()
+    {
+        for (int i = 0; i < _scopeWalk.Count; i++)
+        {
+            int idx = _scopeWalk[i];
+            if (idx >= _scopeCovered.Length) Array.Resize(ref _scopeCovered, Math.Max(idx + 1, Math.Max(1024, _scopeCovered.Length * 2)));
+            _scopeCovered[idx] = _scopePass;
+        }
+    }
+
+    /// <summary>Is <paramref name="n"/> one of <see cref="_recordScopes"/> or under one?</summary>
+    private bool InRecordScope(NodeHandle n)
+    {
+        for (; !n.IsNull; n = _scene.Parent(n))
+            if (_recordScopes.Contains(n)) return true;
+        return false;
+    }
+
+    /// <summary>Is <paramref name="n"/>'s width decided above it whatever its subtree holds: declared, the window's, stretched across a column, filled
+    /// into a z-stack, spanning a vertical scroller or list, or the room a row's siblings leave its only flexible child, each above a box whose own
+    /// width is decided above in turn? A box its content sizes, one of several to share a row's room, a grid track or a horizontal list's item is
+    /// not: a change inside it can move its width, so a solve of its subtree alone could not stand it where the frame lands it.</summary>
+    private bool WidthFromAbove(NodeHandle n)
+    {
+        // Each step either decides or hands the question to the box above, so every box the walk crossed shares the answer (kept for this pass).
+        _aboveWalk.Clear();
+        bool above = WidthFromAboveWalk(n);
+        for (int i = 0; i < _aboveWalk.Count; i++)
+        {
+            int idx = _aboveWalk[i];
+            if (idx >= _aboveStamp.Length)
+            {
+                int len = Math.Max(idx + 1, Math.Max(1024, _aboveStamp.Length * 2));
+                Array.Resize(ref _aboveStamp, len);
+                Array.Resize(ref _aboveVal, len);
+            }
+            _aboveStamp[idx] = _scopePass;
+            _aboveVal[idx] = above;
+        }
+        return above;
+    }
+    private readonly List<int> _aboveWalk = new(64);
+
+    private bool WidthFromAboveWalk(NodeHandle n)
+    {
+        while (true)
+        {
+            int idx = (int)n.Raw.Index;
+            if (idx < _aboveStamp.Length && _aboveStamp[idx] == _scopePass) return _aboveVal[idx];
+            _aboveWalk.Add(idx);
+            ref LayoutInput li = ref _scene.Layout(n);
+            if (!float.IsNaN(li.Width)) return true;
+            NodeHandle p = _scene.Parent(n);
+            if (p.IsNull) return true;   // the root: the window's width
+            if (IsVirtualContent(p))
+            {
+                NodeHandle vp = _scene.Parent(p);
+                if (_scene.ScrollRef(vp).Orientation == 1) return false;   // a horizontal list: its item's width is its main axis
+                n = vp;   // a vertical list's row spans the viewport
+                continue;
+            }
+            if (_scene.TryGetScroll(p, out var sc))
+            {
+                if (sc.Orientation == 1 || sc.ContentNode != n) return false;
+                n = p;   // a vertical scroller's content spans the viewport (FlexLayout.ArrangePlainScroll)
+                continue;
+            }
+            if ((_scene.Flags(p) & NodeFlags.ZStack) != 0)
+            {
+                // A layer fills the stack's width unless aligned Center or End there, or measured at its natural width (FlexLayout.ArrangeZStack).
+                ref LayoutInput zl = ref _scene.Layout(p);
+                FlexAlign za = li.JustifySelf != FlexAlign.Auto ? li.JustifySelf
+                    : zl.Justify == FlexJustify.Center ? FlexAlign.Center : zl.Justify == FlexJustify.End ? FlexAlign.End : FlexAlign.Start;
+                if (za is FlexAlign.Center or FlexAlign.End || li.MeasureUnboundedWidth) return false;
+                n = p;
+                continue;
+            }
+            ref LayoutInput pl = ref _scene.Layout(p);
+            if (pl.Wrap || _scene.HasGrid(p) || _scene.HasStackFallback(p)) return false;
+            if (pl.Direction == 0)
+            {
+                // A row's only flexible child takes the room its siblings leave (FlexLayout's distribution: its base plus the row's free space), whatever
+                // it holds: grown from a zero basis, or grown and shrunk from its content's.
+                if (li.FlexGrow <= 0f || !(li.FlexBasis == 0f || li.FlexShrink > 0f) || !OnlyFlexibleChild(p, n)) return false;
+                n = p;
+                continue;
+            }
+            if ((li.AlignSelf == FlexAlign.Auto ? pl.AlignItems : li.AlignSelf) != FlexAlign.Stretch) return false;
+            n = p;   // stretched across a column
+        }
+    }
+
+    /// <summary>Does no child of <paramref name="row"/> but <paramref name="child"/> grow or shrink?</summary>
+    private bool OnlyFlexibleChild(NodeHandle row, NodeHandle child)
+    {
+        for (NodeHandle c = _scene.FirstChild(row); !c.IsNull; c = _scene.NextSibling(c))
+        {
+            if (c == child) continue;
+            ref LayoutInput cl = ref _scene.Layout(c);
+            if (cl.FlexGrow != 0f || cl.FlexShrink != 0f) return false;
+        }
         return true;
     }
 
@@ -9073,8 +9416,9 @@ public sealed partial class AppHost : IDisposable
     /// height its content measures now (<see cref="FlexLayout.MeasureNatural"/>, a pure query, at the width the row's box is laid out at), over
     /// the time the row has left (<see cref="AnimEngine.ReaimReflow"/>). The row pins the box's height, so no layout ever shows that height
     /// while it flies: without this it landed on the height of the commit that seeded it and the settle's continuation glided on to the real
-    /// one in a second motion. An enter reflow is re-aimed from its child extent instead (the natural-extent retarget below), and a box with a
-    /// live reflow under it is left alone: its content measures at that row's interp, which the row's own target already accounts for.</summary>
+    /// one in a second motion. An enter reflow is re-aimed from its child extent instead (the natural-extent retarget below). A box with a live
+    /// height row under it measures with that row at its target: the content it lands on (a daylist host re-aimed by its form's swap mid-slide
+    /// took its zone with it only at the settle's continuation, after easing to the height the seeding commit measured).</summary>
     private void FollowContentReflows(List<NodeHandle> roots)
     {
         bool collected = false;
@@ -9085,13 +9429,16 @@ public sealed partial class AppHost : IDisposable
             if (!_anim.TryGetLiveReflow(r, AnimChannel.LayoutH, out float to, out bool natural, out float declared) || natural || !float.IsNaN(declared)) continue;
             if (!HeightFromContent(r)) continue;
             if (!collected) { _anim.CollectLiveReflowNodes(_contentReflowScratch); collected = true; }
-            if (HasLiveReflowBelow(r)) continue;
             ref LayoutInput li = ref _scene.Layout(r);
             float pinned = li.Height;
             li.Height = float.NaN;
+            // A height row flying under it stands at its TARGET for the measure, not at its interp: the content this box lands on is the content
+            // those rows land on (a form that swapped mid-slide re-aimed its own row, and this box must follow it there, not to the height the
+            // seeding commit measured).
+            PresentHeightTargetsBelow(r);
             float wants;
             try { wants = _layout.MeasureNatural(r, float.IsNaN(li.Width) ? _scene.Bounds(r).W : li.Width).Height; }
-            finally { li.Height = pinned; }
+            finally { li.Height = pinned; RestoreHeightsBelow(); }
             if (wants <= 0.5f || MathF.Abs(wants - to) < 0.5f) continue;
             if (s_motionDiag) System.Console.Error.WriteLine($"[motion-diag]   content-reflow node={r.Raw.Index} key={_scene.DebugKeyOf(r)} to={to:0.0} wants={wants:0.0}");
             _anim.ReaimReflow(r, AnimChannel.LayoutH, wants);
@@ -9113,17 +9460,33 @@ public sealed partial class AppHost : IDisposable
         return align != FlexAlign.Stretch;
     }
 
-    /// <summary>Is another node of <see cref="_contentReflowScratch"/> (the live reflow nodes) a descendant of <paramref name="n"/>?</summary>
-    private bool HasLiveReflowBelow(NodeHandle n)
+    private readonly List<(NodeHandle Node, float Height)> _heightsBelowSaved = new(8);
+
+    /// <summary>Write each live height row under <paramref name="n"/> (of <see cref="_contentReflowScratch"/>) at the height it lands at (its declared
+    /// height, else its aim) into its layout input, saving what stood there for <see cref="RestoreHeightsBelow"/>. A pure query's setup: nothing is
+    /// marked (so each written row and the boxes up to <paramref name="n"/> are named to the probe, <see cref="FlexLayout.ProbeWrote"/>: an
+    /// unmarked box between them answered from its ring with the height the row's interp laid it at), and the restore puts every input back.</summary>
+    private void PresentHeightTargetsBelow(NodeHandle n)
     {
+        _heightsBelowSaved.Clear();
         for (int i = 0; i < _contentReflowScratch.Count; i++)
         {
             NodeHandle c = _contentReflowScratch[i];
-            if (c == n) continue;
-            for (NodeHandle p = _scene.Parent(c); !p.IsNull; p = _scene.Parent(p))
-                if (p == n) return true;
+            if (c == n || !_scene.IsLive(c) || !_anim.TryGetLiveReflow(c, AnimChannel.LayoutH, out float to, out _, out float declared)) continue;
+            bool below = false;
+            for (NodeHandle p = _scene.Parent(c); !p.IsNull && !below; p = _scene.Parent(p)) below = p == n;
+            if (!below) continue;
+            ref LayoutInput cl = ref _scene.Layout(c);
+            _heightsBelowSaved.Add((c, cl.Height));
+            cl.Height = float.IsNaN(declared) ? to : declared;
+            _layout.ProbeWrote(c, n);
         }
-        return false;
+    }
+
+    private void RestoreHeightsBelow()
+    {
+        for (int i = 0; i < _heightsBelowSaved.Count; i++) _scene.Layout(_heightsBelowSaved[i].Node).Height = _heightsBelowSaved[i].Height;
+        _heightsBelowSaved.Clear();
     }
 
     private readonly List<AnimEngine.LiveRelayout> _liveRelayoutScratch = new(16);
@@ -9409,8 +9772,11 @@ public sealed partial class AppHost : IDisposable
                 if (MathF.Abs(solved - landed) < 0.5f || !_anim.ReflowContinue(node, ch, landed, solved)) continue;
                 ref LayoutInput li = ref _scene.Layout(node);
                 if (ch == AnimChannel.LayoutW) li.Width = landed; else li.Height = landed;
+                // The node's own input moved, not only its place in the parent: marked, so its arrange cannot early-out on the size it had
+                // (a Zune detail hero's info column re-seeded at the 0 it landed on kept its children laid out at the restore's width).
+                _scene.Mark(node, NodeFlags.LayoutDirty);
                 var parent = _scene.Parent(node);
-                _scene.Mark(parent.IsNull ? node : parent, NodeFlags.LayoutDirty);
+                if (!parent.IsNull) _scene.Mark(parent, NodeFlags.LayoutDirty);
                 reseeded = true;
             }
             settled.Clear();

@@ -322,6 +322,12 @@ public static class FluentApp
         else w.Hide();
     }
 
+    /// <summary>Fade and scale the main window as a whole on the compositor (<see cref="WindowPresentationMotion"/>; see
+    /// <c>AppHost.AnimatePresentation</c>): a hide or a show that is one motion. The caller hides the window once a departure has
+    /// landed, and gives a show its starting hold before <see cref="SetWindowVisible"/>(true) and its arrival when the window is shown.
+    /// A no-op without a window. UI thread.</summary>
+    public static void AnimateWindowPresentation(in WindowPresentationMotion motion) => s_host?.AnimatePresentation(in motion);
+
     /// <summary>Relay of <c>AppHost.WindowStateChanged</c>: the main window was minimized, restored, maximized, hidden or
     /// shown (the <see cref="WindowStateChange"/> flags say which; several can be true at once). Raised on the UI thread
     /// once per frame that observed a change, parked frames included — the minimize-to-tray edge. The first frame only

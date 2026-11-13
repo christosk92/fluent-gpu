@@ -1544,6 +1544,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // UI child on TOP of the root (insertAbove=TRUE, ref=null).
         Check(target.DcompRoot->AddVisual(target.DcompVisual, BOOL.TRUE, null), "Root.AddVisual(ui)");
         Check(target.DcompTarget->SetRoot(target.DcompRoot), "Target.SetRoot(root)");
+        PosePendingPresentation(target);   // a starting hold asked for before the first present rides the tree's first commit
         Check(_dcomp->Commit(), "DComp.Commit");
         target.DcompBindPending = false;
     }
@@ -5362,6 +5363,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             }
         }
         if (target.DcompVisual != null) { target.DcompVisual->Release(); target.DcompVisual = null; }
+        if (target.DcompEffect != null) { target.DcompEffect->Release(); target.DcompEffect = null; }
+        if (target.DcompScale != null) { target.DcompScale->Release(); target.DcompScale = null; }
         if (target.DcompRoot != null) { target.DcompRoot->Release(); target.DcompRoot = null; }
         if (target.DcompTarget != null) { target.DcompTarget->Release(); target.DcompTarget = null; }
         if (target.SwapChain != null) { target.SwapChain->Release(); target.SwapChain = null; }
@@ -5665,6 +5668,12 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal IDCompositionTarget* DcompTarget;
     internal IDCompositionVisual* DcompRoot;     // the tree root: the UI child on top (--fg backdrop-plane's plane beneath it)
     internal IDCompositionVisual* DcompVisual;   // the UI child (owns the swapchain content); topmost, painted every frame
+    internal IDCompositionEffectGroup* DcompEffect;        // the window presentation motion's opacity (D3D12Device.Presentation.cs); on DcompRoot
+    internal IDCompositionScaleTransform* DcompScale;      // ...and its scale about the motion's origin
+    internal FluentGpu.Pal.WindowPresentationMotion Presentation;   // the window presentation motion (D3D12Device.Presentation.cs), render thread
+    internal long PresentationStartQpc;
+    internal bool PresentationMoving;     // posed every turn until it lands (a hold asked for before the tree was bound is posed by BindDComp)
+    internal bool PresentationAttached;   // the effect and the transform are on DcompRoot
     internal bool DcompBindPending;   // seam: DComp graph deferred out of UI-thread InitSwapChain; bound on the presenting thread (see BindDComp)
     internal FluentGpu.Pal.IVideoPresenter? VideoPresenter;   // per-window video presenter for THIS swapchain (lazily created; disposed with the swapchain)
     internal CompositionBackdrop? Backdrop;   // non-null ⇒ WUC desktop-acrylic popup (replaces the DComp path)

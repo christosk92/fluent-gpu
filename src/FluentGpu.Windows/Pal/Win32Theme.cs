@@ -10,6 +10,7 @@ public static partial class Win32Theme
     private const uint RRF_RT_REG_DWORD = 0x00000010;
 
     // DWMWINDOWATTRIBUTE
+    private const uint DWMWA_TRANSITIONS_FORCEDISABLED = 3;
     private const uint DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
     private const uint DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     private const uint DWMWA_SYSTEMBACKDROP_TYPE = 38;
@@ -196,6 +197,14 @@ public static partial class Win32Theme
 
     /// <summary>Ask DWM for the standard Win11 rounded window corners. A tool window (WS_EX_TOOLWINDOW) is left square by
     /// the system default, so an overlay that drops its taskbar button calls this to keep the app-window shape.</summary>
+    /// <summary><c>DWMWA_TRANSITIONS_FORCEDISABLED</c>: the system's show / hide transitions for <paramref name="hwnd"/> off (true) or
+    /// back on (false). Best-effort.</summary>
+    public static void SetTransitionsDisabled(nint hwnd, bool disabled)
+    {
+        int v = disabled ? 1 : 0;
+        DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, in v, sizeof(int));
+    }
+
     public static void ApplyRoundCorners(nint hwnd)
     {
         int corner = DWMWCP_ROUND;

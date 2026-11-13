@@ -217,6 +217,9 @@ public sealed partial class FlexLayout
             // change while no flex parent places it (FirstVisibleChild skips it, so its signature stays the collapsed
             // placement's); the flip back into flow marks it (SetMirrorCollapsedIfChanged).
             if ((_scene.Flags(n) & NodeFlags.Visible) == 0 || _scene.IsLayoutCollapsed(n)) continue;
+            // A SizeMode.Relayout row's node is re-solved after the frame's solve with its interpolated size standing in for its declared one
+            // (AppHost.RunIncrementalLayout), which then puts the declared size back: its last arrange hashed the stand-in, by design.
+            if ((_scene.Flags(n) & NodeFlags.Relayouting) != 0) continue;
             if (i < (uint)_verifySig.Length && _verifySig[i] != 0 && _verifySigGen[i] == n.Raw.Gen)
             {
                 ulong now = VerifySig(n);
@@ -321,6 +324,7 @@ public sealed partial class FlexLayout
         for (int i = 0; i < _verifyNodeCount; i++)
         {
             var node = _verifyNodes[i];
+            if (PresentedByRelayout(node)) continue;
             RectF fresh = _scene.Bounds(node), had = _verifySaved[i];
             if (Near(fresh.X, had.X) && Near(fresh.Y, had.Y) && Near(fresh.W, had.W) && Near(fresh.H, had.H)) continue;
             if (log && mismatches < 16)
@@ -340,6 +344,22 @@ public sealed partial class FlexLayout
 
         static bool Near(float a, float b) => a == b || System.MathF.Abs(a - b) <= 0.01f
             || (float.IsNaN(a) && float.IsNaN(b));
+    }
+
+    /// <summary>Is <paramref name="node"/> laid out by a SizeMode.Relayout row rather than by the solve the oracle replays? The row re-solves its
+    /// node's subtree after every solve at the interpolated size (AppHost.RunIncrementalLayout) and its settle restores the declared size with
+    /// a dirty mark, so until then the node, everything under it and the transparent boundaries that wrap it (a component's anchor takes its
+    /// root's box) stand where the row put them: the oracle compares them once the row lands.</summary>
+    private bool PresentedByRelayout(NodeHandle node)
+    {
+        for (var a = node; !a.IsNull; a = _scene.Parent(a))
+            if ((_scene.Flags(a) & NodeFlags.Relayouting) != 0) return true;
+        for (var c = node; !c.IsNull && FluentGpu.Hooks.SkeletonReveal.IsTransparentBoundary(_scene.ElementTypeId(c)); )
+        {
+            c = _scene.FirstChild(c);
+            if (!c.IsNull && (_scene.Flags(c) & NodeFlags.Relayouting) != 0) return true;
+        }
+        return false;
     }
 
     private void CollectVerifyNodes(NodeHandle root)

@@ -173,12 +173,13 @@ public sealed partial class AnimEngine
         return count;
     }
 
-    /// <summary>True when an advancing width (LayoutW) reflow row outside <paramref name="except"/> holds its node's layout input away from the
-    /// declared width it lands at (it has ticked or been presented), so a layout solved now does not show where it lands. The host asks once on
-    /// a frame that seeds width reflows (<c>AppHost.RecordSeededDestinations</c>). Allocation-free.</summary>
-    public bool AnyWidthReflowAwayFromDeclared(List<NodeHandle> except, out NodeHandle away)
+    /// <summary>Collect into <paramref name="away"/> (cleared first) every node whose advancing width (LayoutW) reflow row, outside
+    /// <paramref name="except"/>, holds its layout input away from the declared width it lands at (it has ticked or been presented): a layout
+    /// solved now does not show where those land. The host asks once on a frame that seeds width reflows (<c>AppHost.RecordSeededDestinations</c>).
+    /// Allocation-free once the list has grown.</summary>
+    public void CollectWidthReflowsAwayFromDeclared(List<NodeHandle> except, List<NodeHandle> away)
     {
-        away = NodeHandle.Null;
+        away.Clear();
         for (int n = _slab.FirstActiveNode; n >= 0; n = _slab.NextActiveNode(n))
             for (int s = _slab.HeadOnNode(n); s >= 0; s = _slab.At(s).NextOnNode)
             {
@@ -186,9 +187,8 @@ public sealed partial class AnimEngine
                 if (!IsSlideWidthRow(in r) || except.Contains(r.Node)) continue;
                 float laid = _scene.Layout(r.Node).Width;
                 bool same = float.IsNaN(laid) ? float.IsNaN(r.RestoreTo) : MathF.Abs(laid - r.RestoreTo) < 0.5f;
-                if (!same) { away = r.Node; return true; }
+                if (!same) away.Add(r.Node);
             }
-        return false;
     }
 
     /// <summary>True when <paramref name="node"/> has an advancing width (LayoutW) reflow row. O(1) for a node with no rows.</summary>
@@ -393,8 +393,10 @@ public sealed partial class AnimEngine
     /// adds each node ONCE even when both axes reflow. Walks the slab's active-node chain (O(active nodes), the same
     /// structure the tick passes use) and allocates nothing: the caller owns the list, so a pre-sized one keeps the
     /// whole path inside the phase 6–13 zero-alloc budget. Settled (Done, awaiting PASS3) and Parked rows are skipped
-    /// — retargeting either would resurrect an animation the engine has already decided is over or quiesced.</summary>
-    public void CollectLiveReflowNodes(List<NodeHandle> dst)
+    /// — retargeting either would resurrect an animation the engine has already decided is over or quiesced.
+    /// <para><paramref name="tickedOnly"/> leaves out a row that has not advanced since it was seeded (no elapsed time: its layout still holds its
+    /// start): it has moved nothing yet, so no change a commit lays out is its shove (the projection's shove map).</para></summary>
+    public void CollectLiveReflowNodes(List<NodeHandle> dst, bool tickedOnly = false)
     {
         dst.Clear();
         for (int n = _slab.FirstActiveNode; n >= 0; n = _slab.NextActiveNode(n))
@@ -403,6 +405,7 @@ public sealed partial class AnimEngine
                 ref readonly AnimValue r = ref _slab.At(s);
                 if (r.Channel is not (AnimChannel.LayoutW or AnimChannel.LayoutH)) continue;
                 if (r.Has(AnimFlags.Done) || r.Has(AnimFlags.Parked)) continue;
+                if (tickedOnly && r.ElapsedMs <= 0f) continue;
                 dst.Add(r.Node);
                 break;   // one entry per node — the caller re-solves the node, not the axis
             }
@@ -645,6 +648,8 @@ public sealed partial class AnimEngine
 
         if (ch is AnimChannel.LayoutW or AnimChannel.LayoutH)
         {
+            // A closing exit orphan is closed now: it gives its parent's space up before the declared size goes back below.
+            if ((_scene.Flags(node) & NodeFlags.Exiting) != 0) _scene.ReleaseOrphanSpace(node);
             ref LayoutInput rli = ref _scene.Layout(node);
             if (ch == AnimChannel.LayoutW) rli.Width = r.RestoreTo; else rli.Height = r.RestoreTo;
             ref NodePaint rp = ref _scene.Paint(node);

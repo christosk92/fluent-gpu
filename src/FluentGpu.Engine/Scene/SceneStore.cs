@@ -739,6 +739,7 @@ public sealed partial class SceneStore : ISceneBackend
         _childCount[p]++;
         MarkRecordDirty(c, RecordDirtyLayout);
         PropagateMovedSubtreeBits(p, c);
+        NoteChildrenChanged(p);
     }
 
     /// <summary>A re-attached subtree keeps the record-dirty bits it gathered under its old parent; its NEW ancestors must hold
@@ -766,6 +767,7 @@ public sealed partial class SceneStore : ISceneBackend
         _childCount[p]++;
         MarkRecordDirty(c, RecordDirtyLayout);
         PropagateMovedSubtreeBits(p, c);
+        NoteChildrenChanged(p);
     }
 
     /// <summary>Unlink a child from its parent without freeing it (used by keyed reconcile to reorder).</summary>
@@ -785,6 +787,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_nextSib[c] != 0) _prevSib[_nextSib[c]] = _prevSib[c]; else _lastChild[p] = _prevSib[c];
         _childCount[p]--;
         _parent[c] = _prevSib[c] = _nextSib[c] = 0;
+        NoteChildrenChanged(p);
     }
 
     // ── exit-animation orphans ────────────────────────────────────────────────────────────────────
@@ -807,6 +810,7 @@ public sealed partial class SceneStore : ISceneBackend
         int idx = (int)node.Raw.Index;
         NodeHandle visualParent = Parent(node);
         float px = abs.X - _bounds[idx].X, py = abs.Y - _bounds[idx].Y;   // frozen parent-world origin
+        if (_destCount > 0) DropOrphanRecord(node);
         DetachFromParent(idx);
         _flags[idx] |= NodeFlags.Exiting;
         _orphans.Add(new OrphanEntry
@@ -852,6 +856,20 @@ public sealed partial class SceneStore : ISceneBackend
 
     /// <summary>Whether exit orphan <paramref name="node"/> still occupies its parent's layout space (see <see cref="Orphan"/>).</summary>
     internal bool OrphanHoldsSpace(NodeHandle node) => _spaceHoldingOrphans.Count != 0 && _spaceHoldingOrphans.Contains(node);
+
+    /// <summary>Exit orphan <paramref name="node"/>'s closing has settled: it holds its parent's layout space no more (its size row's settle writes
+    /// the DECLARED size back into its layout input, which a parent still counting it would take for one frame before the reclaim: a sibling
+    /// shrank by the closed child's whole width and sprang back). Dirties the parent. No-op for a node that holds none.</summary>
+    internal void ReleaseOrphanSpace(NodeHandle node)
+    {
+        if (_spaceHoldingOrphans.Count == 0 || !_spaceHoldingOrphans.Remove(node)) return;
+        for (int i = _orphans.Count - 1; i >= 0; i--)
+            if (_orphans[i].Node == node)
+            {
+                if (!_orphans[i].VisualParent.IsNull && IsLive(_orphans[i].VisualParent)) Mark(_orphans[i].VisualParent, NodeFlags.LayoutDirty);
+                break;
+            }
+    }
 
     private void UnindexOrphan(in OrphanEntry entry)
     {
