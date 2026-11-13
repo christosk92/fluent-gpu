@@ -517,6 +517,10 @@ public interface IPlatformPopupWindow : IDisposable
 /// <see cref="IPlatformWindow.SetTopmost"/>); <paramref name="ToolWindow"/> = no taskbar button and no Alt+Tab entry;
 /// <paramref name="Resizable"/> false = the user cannot drag the frame or maximize (code still sizes it), while the frame, the
 /// shadow and the rounded corners stay. The defaults keep the ordinary app window.
+/// A restored placement: <paramref name="InitialBoundsPx"/> (the NORMAL outer rect, physical virtual-screen px; empty = none)
+/// creates the window directly at that rect, clamped by <see cref="WindowPlacementRules.ClampIntoWorkArea"/> into the work area
+/// of the monitor nearest it, and <see cref="SizePx"/> is then ignored; <paramref name="InitialMaximized"/> creates it maximized
+/// on that monitor with that rect as its restore rect. Nothing moves or resizes after creation.
 /// <paramref name="LiveResize"/> = a <paramref name="Composited"/> window lays out, renders and presents every step of an OS
 /// edge-resize loop at the new client size (<see cref="IPlatformWindow.LiveResize"/>), instead of the default defer that keeps
 /// the content at its pre-drag size until mouse-up. For a small window whose layout is a function of its size (a mini player);
@@ -534,6 +538,8 @@ public readonly record struct WindowDesc(
     bool Topmost = false,
     bool ToolWindow = false,
     bool Resizable = true,
+    RectF InitialBoundsPx = default,
+    bool InitialMaximized = false,
     bool LiveResize = false,
     Size2 MaxClientSizeDip = default);
 
