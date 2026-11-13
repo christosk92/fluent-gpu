@@ -8911,18 +8911,24 @@ public sealed partial class AppHost : IDisposable
     private void RecordSeededDestinations(Size2 layoutSize)
     {
         if (_widthSeeds.Count == 0) return;
+        bool laterPass = _widthSeedsCommit.Count > _widthSeeds.Count;   // an earlier pass laid its seeds out at their start since the commit's pass
         // A probe this frame recorded the tree as it stands, every width reflow at its target and every box this commit re-sized at its declared
         // width (the target its new seed aims at): a seed it recorded, under a parent it recorded, lands where the record already says. A form that
         // answers the record in place re-sizes its parts this way on the slide's first frame (the daylist's columns), so its probe serves its seeds.
-        if (_destProbedThisFrame && SeedsRecorded())
+        if (_destProbedThisFrame)
         {
-            if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] {_widthSeeds.Count} seed(s) recorded by this frame's probe");
-            _widthSeeds.Clear();
-            return;
+            int seeds = _widthSeeds.Count;
+            for (int i = _widthSeeds.Count - 1; i >= 0; i--) if (SeedRecorded(_widthSeeds[i])) _widthSeeds.RemoveAt(i);
+            if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] {seeds - _widthSeeds.Count} seed(s) recorded by this frame's probe");
+            if (_widthSeeds.Count == 0) return;
         }
-        // Only a width reflow that was already flying before this commit can hold a box away from where it lands: this commit's own seeds (every
-        // pass's) were laid out at their targets by the commit's pass.
-        if (_anim.AnyWidthReflowAwayFromDeclared(_widthSeedsCommit, out NodeHandle away))
+        // Only a width reflow that was already flying before this commit can hold a box away from where it lands (this commit's own seeds, every
+        // pass's, were laid out at their targets by the commit's pass), and only where its width reaches a seed's box: a layer of a stack whose
+        // width comes from above (the video's glide presenter over the page) lands where the commit laid it out whatever the page's slide does.
+        _anim.CollectWidthReflowsAwayFromDeclared(_widthSeedsCommit, _awayScratch);
+        NodeHandle away = FirstAwayReachingSeeds();
+        _awayScratch.Clear();
+        if (!away.IsNull)
         {
             // A width reflow seeded on an earlier frame has ticked: this commit's layout does not show where it lands. Solve the targets once here;
             // the seed pass's own re-solve then lays the frame out at the rows' start.
@@ -8935,7 +8941,6 @@ public sealed partial class AppHost : IDisposable
             SolveReflowTargets(layoutSize, "seed beside a flying reflow");
             return;
         }
-        bool laterPass = _widthSeedsCommit.Count > _widthSeeds.Count;   // an earlier pass laid its seeds out at their start since the commit's pass
         if (!_scene.HasDestinationWidths) _destLayoutSize = layoutSize;   // a later pass adds to this frame's record, first width kept
         else if (!_destLayoutSize.Equals(layoutSize)) { _scene.ClearDestinationWidths(markChanged: false); _destLayoutSize = layoutSize; }
         for (int i = 0; i < _widthSeeds.Count; i++)
@@ -8972,22 +8977,47 @@ public sealed partial class AppHost : IDisposable
         return true;
     }
 
+    /// <summary>Are width seed <paramref name="n"/> and the parent whose subtree its record covers both in the record?</summary>
+    private bool SeedRecorded(NodeHandle n)
+    {
+        NodeHandle p = _scene.Parent(n);
+        return _scene.HasDestinationWidth(n) && (p.IsNull || _scene.HasDestinationWidth(p));
+    }
+
+    private readonly List<NodeHandle> _awayScratch = new(8);
+
+    /// <summary>The first node of <see cref="_awayScratch"/> (width reflows held away from where they land) whose width can reach the box a seed of
+    /// <see cref="_widthSeeds"/> records (the seed's parent), else Null. A row reaches a box unless the two meet at a z-stack whose width comes
+    /// from above (<see cref="SizeImposed"/>): each layer there is the stack's width or its own, never another layer's.</summary>
+    private NodeHandle FirstAwayReachingSeeds()
+    {
+        for (int a = 0; a < _awayScratch.Count; a++)
+            for (int i = 0; i < _widthSeeds.Count; i++)
+            {
+                NodeHandle n = _widthSeeds[i], p = _scene.Parent(n);
+                NodeHandle meet = CommonAncestor(_awayScratch[a], p.IsNull ? n : p);
+                if (meet.IsNull || (_scene.Flags(meet) & NodeFlags.ZStack) == 0 || !SizeImposed(meet, horizontal: true)) return _awayScratch[a];
+            }
+        return NodeHandle.Null;
+    }
+
+    /// <summary>The deepest box that is <paramref name="a"/> or an ancestor of it and <paramref name="b"/> or an ancestor of it; Null in two trees.</summary>
+    private NodeHandle CommonAncestor(NodeHandle a, NodeHandle b)
+    {
+        int da = 0, db = 0;
+        for (NodeHandle n = a; !n.IsNull; n = _scene.Parent(n)) da++;
+        for (NodeHandle n = b; !n.IsNull; n = _scene.Parent(n)) db++;
+        for (; da > db; da--) a = _scene.Parent(a);
+        for (; db > da; db--) b = _scene.Parent(b);
+        while (a != b) { a = _scene.Parent(a); b = _scene.Parent(b); }
+        return a;
+    }
+
     /// <summary>The destination probe's ONE target solve: present every live width reflow at the width it lands at, solve the dirty scopes, record
     /// the width each box under each reflow's parent has there (<see cref="SceneStore.StructureWidth"/>), and present the rows back at their
     /// current sizes (dirtying their parents). The caller's next solve puts the frame back where the slide is: the frame's own layout (the
     /// pre-layout probe), the seed pass's re-solve at the rows' start (<see cref="SeedReflowsFirst"/>), or one restore solve
     /// (<see cref="ProbeReflowDestinations"/>). Allocation-free once the lists have grown. True when a live width reflow was solved.</summary>
-    /// <summary>Are this pass's width seeds, and the parents whose subtrees a seed record covers, all in the record?</summary>
-    private bool SeedsRecorded()
-    {
-        for (int i = 0; i < _widthSeeds.Count; i++)
-        {
-            NodeHandle n = _widthSeeds[i], p = _scene.Parent(n);
-            if (!_scene.HasDestinationWidth(n) || (!p.IsNull && !_scene.HasDestinationWidth(p))) return false;
-        }
-        return true;
-    }
-
     private bool SolveReflowTargets(Size2 layoutSize, string where)
     {
         _anim.DestinationStale = false;
