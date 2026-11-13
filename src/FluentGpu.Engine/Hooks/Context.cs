@@ -128,11 +128,16 @@ public static class VideoCompositor
 /// <param name="PowerCapFps">A frame-rate ceiling for this window's motion (0 = none, the default): <c>AppHost.PowerCapFps</c>.</param>
 /// <param name="ToolWindow">No taskbar button and no Alt+Tab entry (<see cref="WindowDesc.ToolWindow"/>).</param>
 /// <param name="DragAnywhere">Every inert pixel moves the window (<see cref="IPlatformWindow.CaptionWhereInert"/>).</param>
+/// <param name="LiveResize">The content follows an edge drag: every size step of the OS resize loop is laid out, rendered and
+/// presented at the new client size (<see cref="WindowDesc.LiveResize"/>), so <c>Viewport.Size</c> changes during the drag.
+/// False (the default) keeps the composited defer: the content stays at its pre-drag size until mouse-up.</param>
+/// <param name="MaxClientSizeDip">Optional maximum client size (DIP) the user can drag the window to; an empty axis has no
+/// ceiling beyond the platform's (<see cref="WindowDesc.MaxClientSizeDip"/>).</param>
 public readonly record struct DetachedWindowRequest(
     string Title, FluentGpu.Foundation.Size2 InitialSizeDip, Component Content, bool AlwaysOnTop = true,
     FluentGpu.Foundation.RectF InitialBoundsPx = default, FluentGpu.Foundation.Size2 MinClientSizeDip = default,
     bool NoActivate = false, WindowMaterial? Material = null, bool MaterialDark = true, int PowerCapFps = 0, bool ToolWindow = false,
-    bool DragAnywhere = false);
+    bool DragAnywhere = false, bool LiveResize = false, FluentGpu.Foundation.Size2 MaxClientSizeDip = default);
 
 /// <summary>Where a pop-out open spent its time, split so a slow open names its stage (F110). The window is created hidden and
 /// revealed once its first frame has presented, so the four stages are separate costs and only the first two are paid

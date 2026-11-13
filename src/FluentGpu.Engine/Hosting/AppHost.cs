@@ -286,6 +286,10 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// submit). This is the ONLY per-frame identity that survives the UI→render-thread boundary; see
     /// <see cref="AppHost.LastPresentPublishSeq"/> for the ack side and the join contract.</summary>
     public ulong PublishSeq { get; init; }
+    /// <summary>The newest publish seq this host had PRESENTED when the frame ended (<see cref="AppHost.LastPresentPublishSeq"/>
+    /// read then). <c>PresentedPublishSeq &gt;= PublishSeq</c> means this frame reached the screen before its Paint returned, as a
+    /// live-resize step does (<see cref="FluentGpu.Pal.IPlatformWindow.LiveResize"/>); under async it usually trails.</summary>
+    public ulong PresentedPublishSeq { get; init; }
     // Hitch attribution: GC collection deltas since the previous painted frame (ALWAYS-ON — a slow-frame log line
     // needs "a gen-2 landed here" without a flag).
     public int Gc0Delta { get; init; }
@@ -3543,7 +3547,9 @@ public sealed partial class AppHost : IDisposable
             Composited: true, CustomFrame: true, SkipDropAndTouchpad: true,   // a video pop-out takes no file drop (F110)
             // Born topmost when asked (WS_EX_TOPMOST at creation), not only after the reveal's SetWindowPos: the window is in the
             // topmost band from its first z-order placement, whatever activation happens around the reveal.
-            Topmost: request.AlwaysOnTop, ToolWindow: request.ToolWindow);
+            Topmost: request.AlwaysOnTop, ToolWindow: request.ToolWindow,
+            // An opted-in pop-out follows an edge drag live; the ceiling is resolved by the platform at the live DPI.
+            LiveResize: request.LiveResize, MaxClientSizeDip: request.MaxClientSizeDip);
         var win = _app.CreateWindow(desc);
 
         // A 16:9-ish client floor so the mini-player can never be dragged down to an unusable sliver (caller-overridable).
@@ -6777,11 +6783,13 @@ public sealed partial class AppHost : IDisposable
             //      essential wake bit still paint — NoEssentialModalWakeReasons masks them off so a seek ticker cannot
             //      starve mid-drag refill.
             // Only a keep-alive repaint asks: the mask is computed for it alone, never on the ordinary RunFrame path.
+            // A LiveResize window's content is live through an edge drag, so its keep-alive ticks follow the MOVE rule (case 1
+            // only): ambient motion keeps advancing at the timer's rate while the user holds the edge still.
             if (keepAlive && !resized && _everLaidOut && !_needFullLayout
                 && _uiPosts.IsEmpty && !_scene.AnyLayoutDirty
                 && ComputeWakeReasons() is var wakeReasons
                 && (wakeReasons == WakeReasons.None
-                    || (_window.SizedInModalLoop && _anim.NextDueMs(_timers.NowMs) > 0f
+                    || (_window.SizedInModalLoop && !_window.LiveResize && _anim.NextDueMs(_timers.NowMs) > 0f
                         && NoEssentialModalWakeReasons(wakeReasons))))
             {
                 // Modal-loop keep-alive idle skip: the whole pipeline (record/submit/present) was skipped, not just
@@ -7667,7 +7675,17 @@ public sealed partial class AppHost : IDisposable
                     suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld,
                     freeze: freezeKind, dissolveT: dissolveT,
                     dissolveMs: freezeKind == Threading.FreezeKind.Dissolve ? _fzDissolveMs : 0f, dissolveId: _fzDissolveId);
-                if (_renderThread is not null)
+                // A live-resize step (IPlatformWindow.LiveResize: a resized keep-alive frame inside the modal size loop) waits until THIS
+                // frame was presented (WaitLiveResizePresent): the WM_SIZE that asked for it returns only once the buffer at the new size
+                // went to DWM, so the HWND and its content reach the same composition as nearly as the flip model allows, and the loop's
+                // next step reads the newest size (never a queue of stale ones). Every other frame keeps the async fire-and-return.
+                bool liveResizeStep = settlePresent && _window.LiveResize && _window.InModalLoop;
+                if (liveResizeStep && OwningRenderThread is { } liveRt)
+                {
+                    WaitLiveResizePresent(liveRt);
+                    tSubmitDone = Stopwatch.GetTimestamp();
+                }
+                else if (_renderThread is not null)
                 {
                     // A freeze CAPTURE frame waits for its turn even under async: the render side adopts only the newest publication, so the
                     // hold frame that follows must not be published until this one was consumed (else the snapshot is never taken).
@@ -7873,6 +7891,7 @@ public sealed partial class AppHost : IDisposable
                 Fps = _fps,
                 PresentFps = _presentFps,
                 PresentedSequence = this.PresentedSequence,
+                PresentedPublishSeq = RenderPresentSeq,
                 FrameMs = _frameMs,
                 ComponentsRendered = componentsRendered,
                 FlushMs = ToMs(tFlush - frameStart),   // incl. flip/FLIP-capture + reactive flush + reconcile
@@ -9955,9 +9974,28 @@ public sealed partial class AppHost : IDisposable
             DumpNode(c, depth + 1);
     }
 
-    /// <summary>True during a composited modal edge-drag: HWND size advances but GPU resize + relayout wait for mouse-up.</summary>
+    /// <summary>UI thread, a live-resize step (<see cref="IPlatformWindow.LiveResize"/>): run render turns until the publication this
+    /// Paint just made was presented on this host's swapchain. One turn is not always enough: a pop-out's turn only PROBES its
+    /// present slot (F090: the shared thread never waits on a secondary swapchain), so while its previous present is still queued
+    /// (at most until the next composition) the frame stays pending and the next turn presents it. Bounded by three refresh periods
+    /// so a window whose presents stand down (hidden, covered) or a refused present can never hold the modal loop; the frame is
+    /// then presented by a later turn as usual. Between turns it yields rather than sleeps (a sleep rounds up to the timer quantum).</summary>
+    private void WaitLiveResizePresent(Threading.RenderThread rt)
+    {
+        ulong seq = _framePublishSeq;
+        long deadline = Stopwatch.GetTimestamp() + 3 * RefreshPeriodQpcOrDefault();
+        while (true)
+        {
+            rt.DrainSync();
+            if (RenderPresentSeq >= seq || _renderFailed || Stopwatch.GetTimestamp() >= deadline) return;
+            System.Threading.Thread.Yield();
+        }
+    }
+
+    /// <summary>True during a composited modal edge-drag: HWND size advances but GPU resize + relayout wait for mouse-up. A
+    /// window that opted in to <see cref="IPlatformWindow.LiveResize"/> never defers: each step resizes and relayouts.</summary>
     private bool DeferModalResize(bool keepAlive)
-        => keepAlive && _window.InModalLoop && _window.Composited;
+        => keepAlive && _window.InModalLoop && _window.Composited && !_window.LiveResize;
 
     /// <summary>Layout/submit viewport in DIP while a modal resize is deferred — keep the last presented size until
     /// WM_EXITSIZEMOVE.</summary>

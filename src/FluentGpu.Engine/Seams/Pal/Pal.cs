@@ -516,7 +516,12 @@ public interface IPlatformPopupWindow : IDisposable
 /// The overlay shape (a desktop widget): <paramref name="Topmost"/> = created above every non-topmost window (re-settable through
 /// <see cref="IPlatformWindow.SetTopmost"/>); <paramref name="ToolWindow"/> = no taskbar button and no Alt+Tab entry;
 /// <paramref name="Resizable"/> false = the user cannot drag the frame or maximize (code still sizes it), while the frame, the
-/// shadow and the rounded corners stay. The defaults keep the ordinary app window.</summary>
+/// shadow and the rounded corners stay. The defaults keep the ordinary app window.
+/// <paramref name="LiveResize"/> = a <paramref name="Composited"/> window lays out, renders and presents every step of an OS
+/// edge-resize loop at the new client size (<see cref="IPlatformWindow.LiveResize"/>), instead of the default defer that keeps
+/// the content at its pre-drag size until mouse-up. For a small window whose layout is a function of its size (a mini player);
+/// the main window keeps the defer. <paramref name="MaxClientSizeDip"/> is the opt-in maximum tracking size in logical DIP,
+/// resolved like <paramref name="MinClientSizeDip"/> (live DPI plus the frame); an empty axis keeps USER32's default.</summary>
 public readonly record struct WindowDesc(
     string Title,
     Size2 SizePx,
@@ -528,7 +533,9 @@ public readonly record struct WindowDesc(
     bool SkipDropAndTouchpad = false,
     bool Topmost = false,
     bool ToolWindow = false,
-    bool Resizable = true);
+    bool Resizable = true,
+    bool LiveResize = false,
+    Size2 MaxClientSizeDip = default);
 
 /// <summary>How native input should affect a bounded platform wait.</summary>
 public enum PlatformInputWakePolicy : byte
@@ -719,8 +726,14 @@ public interface IPlatformWindow : IDisposable
     bool InModalLoop => false;
 
     /// <summary>True when the window's pixels are a DComp flip surface (WS_EX_NOREDIRECTIONBITMAP). Composited windows
-    /// defer GPU resize + relayout to mouse-up during a modal edge-drag; non-composited windows live-paint (throttled).</summary>
+    /// defer GPU resize + relayout to mouse-up during a modal edge-drag (unless <see cref="LiveResize"/>); non-composited
+    /// windows live-paint (throttled).</summary>
     bool Composited => false;
+
+    /// <summary>The descriptor's <see cref="WindowDesc.LiveResize"/>: a composited window that does NOT defer during an edge
+    /// drag. Each <c>WM_SIZE</c> of the modal loop paints at once (no throttle): the host resizes the swapchain, lays out at the
+    /// new size and waits for that frame's present before the loop moves on, so the content follows the frame. Default false.</summary>
+    bool LiveResize => false;
 
     /// <summary>True once the current modal loop has delivered WM_SIZE (edge resize, not pure titlebar move).</summary>
     bool SizedInModalLoop => false;
@@ -876,6 +889,10 @@ public interface IPlatformWindow : IDisposable
     /// <summary>The descriptor's opt-in minimum client size (<see cref="WindowDesc.MinClientSizeDip"/>, logical DIP at the
     /// raw OS DPI scale; an empty axis = no floor). The size-to-content phase clamps its target to it. Default: none.</summary>
     Size2 MinClientSizeDip => default;
+
+    /// <summary>The descriptor's opt-in maximum client size (<see cref="WindowDesc.MaxClientSizeDip"/>, logical DIP at the raw OS
+    /// DPI scale; an empty axis = no ceiling beyond the platform's). Default: none.</summary>
+    Size2 MaxClientSizeDip => default;
 
     /// <summary>A counter the backend bumps each time the USER resized the window (Win32: a <c>WM_EXITSIZEMOVE</c> whose
     /// modal loop changed the client size, or a restored-to-restored <c>WM_SIZE</c> outside that loop at an unchanged DPI

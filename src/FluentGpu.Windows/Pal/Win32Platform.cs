@@ -677,6 +677,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // Descriptor minimum CLIENT size (logical DIP) is resolved against the live per-monitor DPI on each query.
     private readonly Size2 _minClientDip;
     private Size2 _minClientPx;
+    // WindowDesc.MaxClientSizeDip: the opt-in maximum CLIENT size (logical DIP), resolved against the live DPI on each
+    // WM_GETMINMAXINFO exactly like the descriptor minimum; an empty axis keeps USER32's maximum tracking size.
+    private readonly Size2 _maxClientDip;
     private DropRegistration? _dropReg;   // OS file/folder drop registration (Win32DropTarget IDropTarget); null = not registered
     // The DirectManipulation touchpad producer (scroll-feel-rework-v2 §7, Phase D). null = unavailable (MTA thread /
     // CoCreate failed) OR session-disabled after a wedge — either way the §3.3 wheel-fallback classifier owns the
@@ -689,6 +692,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // redirection bitmap). DWM re-composites that surface at the HWND's new screen position on a pure move, so a composited
     // window needs NO per-step WM_MOVE repaint to track the cursor — the per-step paint is pure overhead/lag there.
     private readonly bool _composited;
+    // WindowDesc.LiveResize: a composited window that paints every WM_SIZE of its modal edge-resize loop at once (no throttle)
+    // and keeps its move-loop keep-alive ticks during the resize, instead of the composited full defer.
+    private readonly bool _liveResize;
     // WindowDesc.Resizable false: the edge/corner sizing hits answer HTBORDER and the maximize box is dropped. The thick
     // frame itself stays, so the frame metrics (AdjustForFrame), the DWM shadow and the rounded corners are unchanged.
     private readonly bool _resizable;
@@ -789,6 +795,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _customFrame = desc.CustomFrame;   // must be set BEFORE CreateWindowExW: WM_NCCALCSIZE fires during creation
         _composited = desc.Composited;     // gates the WM_MOVE per-step repaint: DWM relocates the DComp surface on a pure move
         _minClientDip = desc.MinClientSizeDip; // WM_GETMINMAXINFO may run inside CreateWindowExW
+        _maxClientDip = desc.MaxClientSizeDip;
+        _liveResize = desc.LiveResize && desc.Composited;
         _resizable = desc.Resizable;       // WM_NCHITTEST may run inside CreateWindowExW
         _style = desc.Resizable ? WS_OVERLAPPEDWINDOW : WS_OVERLAPPEDWINDOW & ~WsMaximizeBox;
         // A custom-frame TOOL window keeps no system menu: DWM otherwise draws its small caption close button over the
@@ -977,6 +985,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     public bool IsClosed => _closed;
     public bool InModalLoop => _inMoveSizeLoop;   // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE — host suppresses redundant keep-alive paints
     public bool Composited => _composited;
+    public bool LiveResize => _liveResize;
     public bool SizedInModalLoop => _sizedInMoveSizeLoop;
     public Action? PaintRequested { get; set; }
     /// <summary>Raised on every keep-alive beat of THIS window's modal move/size loop (see <see cref="IPlatformWindow.ModalLoopTick"/>):
@@ -1113,6 +1122,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     /// <inheritdoc cref="IPlatformWindow.MinClientSizeDip"/>
     public Size2 MinClientSizeDip => _minClientDip;
+    public Size2 MaxClientSizeDip => _maxClientDip;
 
     /// <inheritdoc cref="IPlatformWindow.UserResizeEpoch"/>
     public long UserResizeEpoch => _userResizeEpoch;
@@ -2264,7 +2274,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // windows retain the dynamic physical-px setter. No request keeps USER32's default for that axis.
                 bool clampW = _minClientPx.Width > 0f || _minClientDip.Width > 0f;
                 bool clampH = _minClientPx.Height > 0f || _minClientDip.Height > 0f;
-                if (clampW || clampH)
+                // WindowDesc.MaxClientSizeDip: the opt-in ceiling, per axis, with the same DIP-to-px and frame arithmetic.
+                bool capW = _maxClientDip.Width > 0f, capH = _maxClientDip.Height > 0f;
+                if (clampW || clampH || capW || capH)
                 {
                     // Preserve USER32's unrequested axis/limits, but explicitly replace opted-in axes: a responsive app
                     // may deliberately support a width below the generic top-level minimum.
@@ -2281,6 +2293,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     MINMAXINFO* mmi = (MINMAXINFO*)(nint)lParam;
                     if (clampW) mmi->ptMinTrackSize.x = minW;
                     if (clampH) mmi->ptMinTrackSize.y = minH;
+                    if (capW || capH)
+                    {
+                        ClientToWindowPx(hWnd, MinTrackSizing.DipToPx(_maxClientDip.Width, dpi),
+                            MinTrackSizing.DipToPx(_maxClientDip.Height, dpi), out int maxW, out int maxH);
+                        // Never below the minimum: USER32 resolves a crossed pair by the maximum, which would shrink the floor.
+                        if (capW) mmi->ptMaxTrackSize.x = Math.Max(maxW, mmi->ptMinTrackSize.x);
+                        if (capH) mmi->ptMaxTrackSize.y = Math.Max(maxH, mmi->ptMinTrackSize.y);
+                    }
                     return true;
                 }
                 return false;
@@ -2322,7 +2342,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     // Live video is the ONE exemption from the composited full defer: with no frames the video visual
                     // keeps its pre-resize rect while the frame moves under it, so the picture lags the window. Fall
                     // through to the throttled paint so the hole and the child are recomputed together.
-                    if (!(_composited && !_hasLiveVideo) && !ThrottleModalResizePaint()) PaintRequested?.Invoke();
+                    // A LiveResize window paints EVERY step, unthrottled: the host lays out and presents at this size before
+                    // returning (the newest size always wins: the loop sends the next WM_SIZE only after this one returned).
+                    // The stamp holds the keep-alive timer off while steps arrive (the step's frame already advanced motion).
+                    if (_liveResize) { _lastModalPaintMs = Environment.TickCount64; _moveLoopPaints++; PaintRequested?.Invoke(); }
+                    else if (!(_composited && !_hasLiveVideo) && !ThrottleModalResizePaint()) PaintRequested?.Invoke();
                     // The peers beat even when this window defers its own paint (F093): the loop's timer can be starved by
                     // the mouse-input peeking, and the other windows must not freeze with it. The host throttles the round.
                     ModalLoopTick?.Invoke();
@@ -2419,8 +2443,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     long loopMs = Environment.TickCount64 - _moveLoopStartMs;
                     string cost = $"ms={loopMs} ticks={_moveLoopTicks} paints={_moveLoopPaints} " +
                         $"fps={(loopMs > 0 ? _moveLoopPaints * 1000.0 / loopMs : 0):0.#} video={(_hasLiveVideo ? 1 : 0)}";
+                    if (_liveResize) cost += " live=1";
                     // `paints` counts keep-alive frames (chrome fades), never motion: a composited window's pixels follow the
-                    // move inside DWM without a repaint. `size` is any loop that resized (a snap preview latches it too).
+                    // move inside DWM without a repaint. A LiveResize window also counts each WM_SIZE step it painted (live=1).
+                    // `size` is any loop that resized (a snap preview latches it too).
                     Diag.Line(sized ? $"[window.size] end {cost}" : $"[window.move] end {cost}");
                 }
                 // A pure titlebar drag between two monitors fires no WM_DISPLAYCHANGE (the desktop topology didn't
@@ -2433,10 +2459,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 if ((nuint)wParam == PresenceTimerId) { CheckPointerPresence("watch"); return true; }
                 if ((nuint)wParam == MoveLoopTimerId)
                 {
-                    // Composited edge-resize: full defer (zero paints). Composited pure move + non-composited: throttled
-                    // keep-alives so ambient animation can advance without flooding the modal loop.
+                    // Composited edge-resize: full defer (zero paints), unless the window opted in to LiveResize. Composited
+                    // pure move + non-composited + LiveResize: throttled keep-alives so ambient animation can advance without
+                    // flooding the modal loop.
                     if (_inMoveSizeLoop) _moveLoopTicks++;
-                    if (!(_composited && _inMoveSizeLoop && _sizedInMoveSizeLoop && !_hasLiveVideo)
+                    // A LiveResize window keeps these ticks through an edge resize, as for a move (animations run mid-drag).
+                    if (!(_composited && _inMoveSizeLoop && _sizedInMoveSizeLoop && !_hasLiveVideo && !_liveResize)
                         && !(_inMoveSizeLoop && ThrottleModalTickPaint()))
                     {
                         if (_inMoveSizeLoop) _moveLoopPaints++;

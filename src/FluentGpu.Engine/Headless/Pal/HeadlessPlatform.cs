@@ -78,6 +78,8 @@ public sealed class HeadlessWindow : IPlatformWindow
         CustomFrame = desc.CustomFrame;
         Composited = desc.Composited;
         MinClientSizeDip = desc.MinClientSizeDip;
+        MaxClientSizeDip = desc.MaxClientSizeDip;
+        LiveResize = desc.LiveResize && desc.Composited;
         Topmost = desc.Topmost;
         ToolWindow = desc.ToolWindow;
         Resizable = desc.Resizable;
@@ -92,6 +94,8 @@ public sealed class HeadlessWindow : IPlatformWindow
     public bool Resizable { get; }
     /// <summary>The descriptor's opt-in minimum client size, retained for headless contract assertions.</summary>
     public Size2 MinClientSizeDip { get; }
+    /// <summary>The descriptor's opt-in maximum client size, retained for headless contract assertions.</summary>
+    public Size2 MaxClientSizeDip { get; }
 
     public NativeHandle Handle => new(0, NativeHandleKind.Headless);
     /// <summary>Settable (test seam): simulate a window resize / per-monitor DPI change (WM_DPICHANGED) mid-session —
@@ -126,6 +130,9 @@ public sealed class HeadlessWindow : IPlatformWindow
     public bool SizedInModalLoop { get; set; }
     /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.Composited"/>
     public bool Composited { get; set; }
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.LiveResize"/> Seeded from the descriptor (a composited window only, as
+    /// on Win32); settable so a driver can simulate the opt-in with <see cref="InModalLoop"/>.
+    public bool LiveResize { get; set; }
     public CursorId LastCursor { get; private set; }
     public bool Shown { get; private set; }
 
