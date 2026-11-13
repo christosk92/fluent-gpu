@@ -9453,8 +9453,11 @@ public sealed partial class AppHost : IDisposable
                 if (MathF.Abs(solved - landed) < 0.5f || !_anim.ReflowContinue(node, ch, landed, solved)) continue;
                 ref LayoutInput li = ref _scene.Layout(node);
                 if (ch == AnimChannel.LayoutW) li.Width = landed; else li.Height = landed;
+                // The node's own input moved, not only its place in the parent: marked, so its arrange cannot early-out on the size it had
+                // (a Zune detail hero's info column re-seeded at the 0 it landed on kept its children laid out at the restore's width).
+                _scene.Mark(node, NodeFlags.LayoutDirty);
                 var parent = _scene.Parent(node);
-                _scene.Mark(parent.IsNull ? node : parent, NodeFlags.LayoutDirty);
+                if (!parent.IsNull) _scene.Mark(parent, NodeFlags.LayoutDirty);
                 reseeded = true;
             }
             settled.Clear();
