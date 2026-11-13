@@ -33,19 +33,8 @@ public sealed partial class FlexLayout
     /// <summary>Host-set per frame: a run of more than one line breaks at the width it LANDS at while a width reflow resizes it (see the text
     /// measure). True from the frame AFTER the reflow's destination was first recorded: the slide's first frame is the one the tree answers the
     /// landing width on (a page that swaps its form for it re-renders on the next commit), so a run whose tree is about to be replaced never
-    /// rewraps for a landing it will not reach, and a run that stays rewraps once, on the frame its tree has settled its form. A flip changes
-    /// where every recorded run breaks, so it marks the recorded structure readers (<see cref="SceneStore.MarkRecordedStructureReaders"/>).</summary>
-    public bool BreakTextAtLanding
-    {
-        get => _breakTextAtLanding;
-        set
-        {
-            if (value == _breakTextAtLanding) return;
-            _breakTextAtLanding = value;
-            _scene.MarkRecordedStructureReaders();
-        }
-    }
-    private bool _breakTextAtLanding;
+    /// rewraps for a landing it will not reach, and a run that stays rewraps once, on the frame its tree has settled its form.</summary>
+    public bool BreakTextAtLanding { get; set; }
 
     // `--fg layout` (EngineSwitches.LayoutDiag): per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
@@ -899,18 +888,12 @@ public sealed partial class FlexLayout
             // its height (and everything under it) moves once instead of stepping through every line count on the way. The live width still
             // sizes and places the box; the recorder draws the lines at the width they were broken at (TextMeasureEntry.Structured). A run
             // that auto-fits (MinSizeDip) or is one line at most keeps the live width: a trim follows the box.
-            // A run that can break at its landing is a structure reader whether or not it does on this pass (a record or a flip of the
-            // landing breaks marks it).
             bool structured = false;
-            if (widthConstrained && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && li.TextStyle.MaxLines != 1
-                && li.TextStyle.MinSizeDip <= 0f && !_minContentProbe && !_naturalProbe)
+            if (BreakTextAtLanding && widthConstrained && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && li.TextStyle.MaxLines != 1
+                && li.TextStyle.MinSizeDip <= 0f && !_minContentProbe && !_naturalProbe && _scene.HasDestinationWidths)
             {
-                if (BreakTextAtLanding && _scene.HasDestinationWidths)
-                {
-                    float landing = StructureW(node, maxW);
-                    if (MathF.Abs(landing - maxW) > 0.5f) { maxW = MathF.Max(0f, landing); structured = true; }
-                }
-                else _scene.NoteStructureReader(node);
+                float landing = StructureW(node, maxW);
+                if (MathF.Abs(landing - maxW) > 0.5f) { maxW = MathF.Max(0f, landing); structured = true; }
             }
             // Measure cache: skip re-shaping when (text, style, availWidth) are unchanged (the §2.3 down-rule win on a
             // scoped relayout). Pure-function key ⇒ self-invalidating; helps the real shaping path, neutral headless.

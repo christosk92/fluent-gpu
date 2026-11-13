@@ -13,9 +13,11 @@ namespace FluentGpu.Scene;
 /// grown to the scene's size.
 /// <para>The structure width is a layout INPUT of the nodes whose solve reads it (<see cref="NoteStructureReader"/>): a grid's column
 /// count, a wrap row's breaks, a virtual fill's columns, a multi-line run's breaks. So every change of what it answers marks those
-/// readers layout-dirty, like any other input write: a record that enters a reader, a clear that drops one, and a flip of the layout's
-/// landing breaks (<see cref="MarkRecordedStructureReaders"/>). Without the mark a measure-ring slot or an arrange early-out stored under
-/// the old answer would keep answering for it (a grid laid out at its slide's start with the column count of the frame before).</para>
+/// readers layout-dirty, like any other input write: a record that enters a reader and a clear that drops one. Without the mark a
+/// measure-ring slot or an arrange early-out stored under the old answer would keep answering for it (a grid laid out at its slide's
+/// start with the column count of the frame before). The layout's landing-break flip (FlexLayout.BreakTextAtLanding) marks nothing
+/// yet: a run stored before it keeps its live breaks until its width moves, as it always has, because the record a form that re-renders
+/// in place mid-slide leaves standing is the old form's (marking it bulged Zune Home's daylist by a line for the whole float).</para>
 /// </summary>
 public sealed partial class SceneStore
 {
@@ -39,17 +41,6 @@ public sealed partial class SceneStore
         if (!n.IsNull && idx < _structReader.Length && _structReader[idx] == n && IsLive(n)) Mark(n, NodeFlags.LayoutDirty);
     }
 
-    /// <summary>The layout's landing breaks flipped: mark every recorded structure reader whose box stands away from its landing width. One
-    /// that stands at it answers the same either way (a run whose box is its landing width breaks there at any offer; a box's structure
-    /// width is its live width), and a slot stored at another width is only asked again after the record changes, which marks it.</summary>
-    internal void MarkRecordedStructureReaders()
-    {
-        for (int i = 0; i < _destCount; i++)
-        {
-            int idx = _destWrote[i];
-            if (MathF.Abs(_bounds[idx].W - _destW[idx]) > 0.5f) MarkIfStructureReader(idx, _destNode[idx]);
-        }
-    }
 
     /// <summary>True while destination widths are recorded (a width reflow is in flight and the host probed its target).</summary>
     public bool HasDestinationWidths => _destCount > 0;
