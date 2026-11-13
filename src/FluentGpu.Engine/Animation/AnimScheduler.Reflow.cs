@@ -173,13 +173,12 @@ public sealed partial class AnimEngine
         return count;
     }
 
-    /// <summary>Collect into <paramref name="away"/> (cleared first) every node whose advancing width (LayoutW) reflow row, outside
-    /// <paramref name="except"/>, holds its layout input away from the declared width it lands at (it has ticked or been presented): a layout
-    /// solved now does not show where those land. The host asks once on a frame that seeds width reflows (<c>AppHost.RecordSeededDestinations</c>).
-    /// Allocation-free once the list has grown.</summary>
-    public void CollectWidthReflowsAwayFromDeclared(List<NodeHandle> except, List<NodeHandle> away)
+    /// <summary>True when an advancing width (LayoutW) reflow row outside <paramref name="except"/> holds its node's layout input away from the
+    /// declared width it lands at (it has ticked or been presented), so a layout solved now does not show where it lands. The host asks once on
+    /// a frame that seeds width reflows (<c>AppHost.RecordSeededDestinations</c>). Allocation-free.</summary>
+    public bool AnyWidthReflowAwayFromDeclared(List<NodeHandle> except, out NodeHandle away)
     {
-        away.Clear();
+        away = NodeHandle.Null;
         for (int n = _slab.FirstActiveNode; n >= 0; n = _slab.NextActiveNode(n))
             for (int s = _slab.HeadOnNode(n); s >= 0; s = _slab.At(s).NextOnNode)
             {
@@ -187,8 +186,9 @@ public sealed partial class AnimEngine
                 if (!IsSlideWidthRow(in r) || except.Contains(r.Node)) continue;
                 float laid = _scene.Layout(r.Node).Width;
                 bool same = float.IsNaN(laid) ? float.IsNaN(r.RestoreTo) : MathF.Abs(laid - r.RestoreTo) < 0.5f;
-                if (!same) away.Add(r.Node);
+                if (!same) { away = r.Node; return true; }
             }
+        return false;
     }
 
     /// <summary>True when <paramref name="node"/> has an advancing width (LayoutW) reflow row. O(1) for a node with no rows.</summary>
