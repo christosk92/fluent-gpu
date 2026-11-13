@@ -8604,7 +8604,7 @@ public sealed partial class AppHost : IDisposable
         // per-node loop below can tell a shove apart from an independent move.
         // Cleared FIRST (not just at the tail) so an early-out on any path can never leave a stale frame map behind.
         _reflowShoveFrames.Clear();
-        _anim.CollectLiveReflowNodes(_liveReflowScratch);   // clears the list itself
+        _anim.CollectLiveReflowNodes(_liveReflowScratch, tickedOnly: true);   // clears the list itself; a row not yet ticked has shoved nothing
         for (int i = 0; i < _liveReflowScratch.Count; i++)
         {
             NodeHandle carrier = _liveReflowScratch[i];

@@ -393,8 +393,10 @@ public sealed partial class AnimEngine
     /// adds each node ONCE even when both axes reflow. Walks the slab's active-node chain (O(active nodes), the same
     /// structure the tick passes use) and allocates nothing: the caller owns the list, so a pre-sized one keeps the
     /// whole path inside the phase 6–13 zero-alloc budget. Settled (Done, awaiting PASS3) and Parked rows are skipped
-    /// — retargeting either would resurrect an animation the engine has already decided is over or quiesced.</summary>
-    public void CollectLiveReflowNodes(List<NodeHandle> dst)
+    /// — retargeting either would resurrect an animation the engine has already decided is over or quiesced.
+    /// <para><paramref name="tickedOnly"/> leaves out a row that has not advanced since it was seeded (no elapsed time: its layout still holds its
+    /// start): it has moved nothing yet, so no change a commit lays out is its shove (the projection's shove map).</para></summary>
+    public void CollectLiveReflowNodes(List<NodeHandle> dst, bool tickedOnly = false)
     {
         dst.Clear();
         for (int n = _slab.FirstActiveNode; n >= 0; n = _slab.NextActiveNode(n))
@@ -403,6 +405,7 @@ public sealed partial class AnimEngine
                 ref readonly AnimValue r = ref _slab.At(s);
                 if (r.Channel is not (AnimChannel.LayoutW or AnimChannel.LayoutH)) continue;
                 if (r.Has(AnimFlags.Done) || r.Has(AnimFlags.Parked)) continue;
+                if (tickedOnly && r.ElapsedMs <= 0f) continue;
                 dst.Add(r.Node);
                 break;   // one entry per node — the caller re-solves the node, not the axis
             }
