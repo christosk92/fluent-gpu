@@ -7058,6 +7058,10 @@ public sealed partial class AppHost : IDisposable
             // down instead of jumping in its commit frame). Reset after the 7.05 pass.
             bool flowRevealFrame = _anim.HasFlowRevealWork || (capturedProjections && CapturedFlowReveal());
             _layout.DeferOffsetClamp = flowRevealFrame;
+            // Runs break at their landing width from the frame after a width reflow's destination was recorded (FlexLayout.BreakTextAtLanding).
+            // Not in a commit's own layout: the record predates the commit (a run it is replacing, which leaves as an exit orphan, would rewrap
+            // for a landing it never reaches); the commit's probe below records the new tree and turns it on for that probe's re-solve.
+            _layout.BreakTextAtLanding = _scene.HasDestinationWidths && !reconciled;
             MountProf.Enter(MountProf.Layout);
             // A width reflow re-aimed by this frame's commit (the panel toggled back mid-slide), or a window resize while one flies: solve the
             // targets once before the frame's own layout, which then lays the frame out where the slide is.
@@ -7177,6 +7181,10 @@ public sealed partial class AppHost : IDisposable
             if (FrameLedger.Enabled) _ledgerAlloc.Layout = GC.GetAllocatedBytesForCurrentThread();
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
+            // A commit that re-renders while a width reflow flies (a page that changes its form for the width it lands at, a row that mounts
+            // mid-slide): the widths recorded before it describe a tree it has replaced, and a box it built is chosen at the landing width only
+            // once it is recorded there. Probe again (in the projection pass before any FLIP is measured, else just below).
+            if (reconciled && _scene.HasDestinationWidths) { _anim.DestinationStale = true; _layout.BreakTextAtLanding = true; }
             if (capturedProjections) ApplyProjections(layoutSize, keepAliveSuppressed);   // FLIP "Last+Invert+Play"
             // A width reflow seeded or re-aimed on a frame with no projection pass, or a window resize while one flies: probe its destination here.
             if (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)) _anim.DestinationStale = true;

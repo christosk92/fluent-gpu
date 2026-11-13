@@ -37,6 +37,12 @@ public sealed partial class FlexLayout
     /// baseline those edges compare against.</summary>
     public bool SuppressBoundsDelivery { get; set; }
 
+    /// <summary>Host-set per frame: a run of more than one line breaks at the width it LANDS at while a width reflow resizes it (see the text
+    /// measure). True from the frame AFTER the reflow's destination was first recorded: the slide's first frame is the one the tree answers the
+    /// landing width on (a page that swaps its form for it re-renders on the next commit), so a run whose tree is about to be replaced never
+    /// rewraps for a landing it will not reach, and a run that stays rewraps once, on the frame its tree has settled its form.</summary>
+    public bool BreakTextAtLanding { get; set; }
+
     // `--fg layout` (EngineSwitches.LayoutDiag): per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
     // measure≫arrange flags a redundant-measure blow-up. Gated to a single bool check (zero work/alloc) when off.
@@ -881,6 +887,18 @@ public sealed partial class FlexLayout
             float maxW = widthConstrained && needsColumnBudget
                 ? MathF.Max(0f, measureW)
                 : float.PositiveInfinity;
+            // Where a run of more than one line BREAKS is a discrete choice, like a wrap row's breaks: while a width reflow resizes the run (a
+            // docking panel's slide) its lines break at the width it lands at (StructureW), so it rewraps once, on the slide's first frame, and
+            // its height (and everything under it) moves once instead of stepping through every line count on the way. The live width still
+            // sizes and places the box; the recorder draws the lines at the width they were broken at (TextMeasureEntry.Structured). A run
+            // that auto-fits (MinSizeDip) or is one line at most keeps the live width: a trim follows the box.
+            bool structured = false;
+            if (BreakTextAtLanding && widthConstrained && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && li.TextStyle.MaxLines != 1
+                && li.TextStyle.MinSizeDip <= 0f && !_minContentProbe && !_naturalProbe && _scene.HasDestinationWidths)
+            {
+                float landing = StructureW(node, maxW);
+                if (MathF.Abs(landing - maxW) > 0.5f) { maxW = MathF.Max(0f, landing); structured = true; }
+            }
             // Measure cache: skip re-shaping when (text, style, availWidth) are unchanged (the §2.3 down-rule win on a
             // scoped relayout). Pure-function key ⇒ self-invalidating; helps the real shaping path, neutral headless.
             // P4: a 2-ENTRY RING — a stretched leaf is measured at the parent's available width AND again at the final
@@ -911,6 +929,7 @@ public sealed partial class FlexLayout
             {
                 _dTextHit++;
                 w = cached.Size.Width; h = cached.Size.Height;
+                mc.MarkLastStructured(structured);   // the same breaks, but whether they are the landing width's is this pass's
             }
             else
             {
@@ -941,11 +960,12 @@ public sealed partial class FlexLayout
                     Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h),
                     FitSize = fit, FontEpoch = fontEpoch,
                     UnderlineY = m.UnderlineY, UnderlineThickness = m.UnderlineThickness, StrikeY = m.StrikeY,
-                    FirstLineWidth = m.FirstLineWidth,
+                    FirstLineWidth = m.FirstLineWidth, Structured = structured,
                 });
             }
-            // C1: unbounded maxW = the run does not depend on the offer; otherwise it is the same at any maxW in [laid width, maxW].
-            flatKind = _naturalProbe ? 0 : 1;
+            // C1: unbounded maxW = the run does not depend on the offer; otherwise it is the same at any maxW in [laid width, maxW]. A run
+            // broken at its landing width depends on that width, not on the offer: not flat.
+            flatKind = _naturalProbe || structured ? 0 : 1;
             flatTextFree = !(widthConstrained && needsColumnBudget) || !float.IsNaN(li.Width);
             flatTextW = w;
         }

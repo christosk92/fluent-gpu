@@ -5,9 +5,9 @@ namespace FluentGpu.Scene;
 /// <summary>
 /// The width structure is chosen for. While a WIDTH reflow is in flight (a docking panel's reservation easing through real layout),
 /// every box it resizes takes a new laid-out width on each frame of the slide, but what the box SHOWS (a grid's column count, where a
-/// wrapping row breaks, a shelf's columns, a form or rung a component picks) belongs to the width it will have when the reflow lands.
-/// The host solves the layout once at the reflows' targets on the frame that seeds or re-aims them (<c>AppHost</c>'s destination probe)
-/// and records here the width every box under each reflow's parent has in that solve. <see cref="StructureWidth"/> answers that width
+/// wrapping row breaks, where a multi-line text run breaks its lines, a shelf's columns, a form or rung a component picks) belongs to the
+/// width it will have when the reflow lands. The host solves the layout once at the reflows' targets on the frame that seeds or re-aims
+/// them, and again on a commit while one flies (<c>AppHost</c>'s destination probe), and records here the width every box under each reflow's parent has in that solve. <see cref="StructureWidth"/> answers that width
 /// while the reflow flies and the live width otherwise; the live width still sizes and places what was chosen. The record is dropped
 /// when the last width reflow lands, so nothing stays decided for a width the box never reaches. Allocation-free once the columns have
 /// grown to the scene's size.

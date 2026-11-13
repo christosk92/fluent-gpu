@@ -2571,6 +2571,15 @@ internal sealed partial class SceneRecordingContext
                 // text node layout has sized to 0×0 (a collapsed slot, a zero-width column) would otherwise still draw
                 // its glyphs past the empty box. Text has no visible extent without a box: nothing to paint.
                 bool paintsText = !p.Text.IsEmpty && b.W > 0f && b.H > 0f;
+                // A run broken at the width it LANDS at while a width reflow resizes its box (TextMeasureEntry.Structured): shape it at that
+                // width, aligned in the box as the run itself aligns, so its lines are the landing ones on every frame of the slide.
+                RectF run = local;
+                if (paintsText && mc.Valid && mc.Structured && MathF.Abs(mc.MaxW - local.W) > 0.01f)
+                {
+                    float slack = local.W - mc.MaxW;
+                    float shift = style.Align == TextAlign.Center ? slack * 0.5f : style.Align == TextAlign.End ? slack : 0f;
+                    run = new RectF(local.X + shift, local.Y, mc.MaxW, local.H);
+                }
                 // The run's INK: the box grown by what the measured text overflows it (a no-wrap / no-trim run wider than
                 // its box, more lines than its height). The overflow side depends on alignment, so it is taken on BOTH
                 // sides. Every cull, slice bound, content hash and sub-tile damage reads it; the replay still shapes into
@@ -2578,10 +2587,16 @@ internal sealed partial class SceneRecordingContext
                 RectF ink = default;
                 if (paintsText && mc.Valid)
                 {
-                    float ow = MathF.Max(0f, mc.Size.Width - local.W), oh = MathF.Max(0f, mc.Size.Height - local.H);
-                    if (ow > 0f || oh > 0f)
+                    float ow = MathF.Max(0f, mc.Size.Width - run.W), oh = MathF.Max(0f, mc.Size.Height - run.H);
+                    bool moved = run.X != local.X || run.W != local.W;
+                    if (ow > 0f || oh > 0f || moved)
                     {
-                        ink = new RectF(local.X - ow, local.Y - oh, local.W + 2f * ow, local.H + 2f * oh);
+                        ink = new RectF(run.X - ow, run.Y - oh, run.W + 2f * ow, run.H + 2f * oh);
+                        if (moved)
+                        {
+                            float x0 = MathF.Min(ink.X, local.X), x1 = MathF.Max(ink.X + ink.W, local.X + local.W);
+                            ink = new RectF(x0, ink.Y, x1 - x0, ink.H);
+                        }
                         result.Include(world.TransformBounds(ink));   // the span bounds a clean-subtree cull reads
                     }
                 }
@@ -2591,13 +2606,13 @@ internal sealed partial class SceneRecordingContext
                     // CRISP at its 1/N device row rather than unsnapped, so there is nothing for the host's settle frame
                     // to re-snap. The counter stays (it is a public record stat) and now reports the truth: zero.
                     if (scene.TryGetGlyphWipe(node, out var wipe))   // glyph wipe (lyrics karaoke): per-glyph color + lift from the split
-                        dl.DrawGlyphRunGradient(local, p.Text, style.FontFamily, effSize, style.Weight,
+                        dl.DrawGlyphRunGradient(run, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, effLine, (int)style.Stacking, (int)style.LineBounds,
                             world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, ink: in ink,
                             typography: TextTypography.Pack(in style));
                     else
-                        dl.DrawGlyphRun(local, textColor, p.Text, style.FontFamily, effSize, style.Weight,
+                        dl.DrawGlyphRun(run, textColor, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, effLine, (int)style.Stacking, (int)style.LineBounds,
                             world, opacity, key, spanRunId, ink: in ink, typography: TextTypography.Pack(in style));

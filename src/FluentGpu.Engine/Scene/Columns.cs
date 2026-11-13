@@ -52,6 +52,10 @@ public struct TextMeasureEntry
     /// <summary>First line's advance without trailing hanging whitespace (TextMetrics.FirstLineWidth; NaN = not
     /// reported) — the width and alignment basis of an aligned single-run decoration bar.</summary>
     public float FirstLineWidth;
+    /// <summary>The lines were broken at <see cref="MaxW"/> as the width the run LANDS at while a width reflow resizes it
+    /// (<c>SceneStore.StructureWidth</c>), not at its box: the recorder draws them at that width (aligned in the box), so the run keeps
+    /// its landing breaks while its box eases.</summary>
+    public bool Structured;
 
     public readonly bool Matches(StringId text, in TextStyle style, float maxW, int fontEpoch = 0)
         => Valid && Text == text && MaxW == maxW && FontEpoch == fontEpoch && Style == style;
@@ -87,6 +91,13 @@ public struct TextMeasureCache
         hit = default; return false;
     }
 
+    /// <summary>Stamp the entry <see cref="TryGet"/> just hit as broken at a landing width or not (<see cref="TextMeasureEntry.Structured"/>):
+    /// the same input gives the same lines either way, but which width the recorder draws them at is the current pass's.</summary>
+    public void MarkLastStructured(bool structured)
+    {
+        if (_last == 0) E0.Structured = structured; else E1.Structured = structured;
+    }
+
     /// <summary>Store a fresh measure into the ring. A measure at a width a slot already holds REPLACES that slot (a re-measure
     /// at the same width: new text, style or font epoch), so the stale entry can never win <see cref="ResolveForWidth"/>'s
     /// exact-width match; a new width alternates slots, keeping the two widths a stretched leaf is measured at.</summary>
@@ -101,12 +112,15 @@ public struct TextMeasureCache
     }
 
     /// <summary>The entry the recorder should read for a run drawn at <paramref name="width"/>: an exact MaxW match wins,
-    /// else the most recently used entry, else any valid one. <c>Valid == false</c> ⇒ no measure has run for this node.</summary>
+    /// else the most recently used entry, else any valid one. <c>Valid == false</c> ⇒ no measure has run for this node. A run the last pass
+    /// broke at its landing width (<see cref="TextMeasureEntry.Structured"/>) is that entry whatever the box's width: an older entry measured
+    /// at the box's width would draw the breaks the layout no longer has.</summary>
     public readonly TextMeasureEntry ResolveForWidth(float width)
     {
+        ref readonly TextMeasureEntry last = ref _last == 0 ? ref E0 : ref E1;
+        if (last.Valid && last.Structured) return last;
         if (E0.Valid && E0.MaxW == width) return E0;
         if (E1.Valid && E1.MaxW == width) return E1;
-        ref readonly TextMeasureEntry last = ref _last == 0 ? ref E0 : ref E1;
         if (last.Valid) return last;
         return E0.Valid ? E0 : E1;
     }
