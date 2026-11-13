@@ -261,6 +261,7 @@ public sealed partial class FlexLayout
         if (_arranged.Length < cap) System.Array.Resize(ref _arranged, cap);
         if (_arrangedVer.Length < cap) System.Array.Resize(ref _arrangedVer, cap);
         if (_measuredPass.Length < cap) System.Array.Resize(ref _measuredPass, cap);
+        if (_gridCellW.Length < cap) System.Array.Resize(ref _gridCellW, cap);
         _pass++;
     }
 
@@ -743,6 +744,22 @@ public sealed partial class FlexLayout
     // stale and their Bounds still hold the last arranged rect (do not "restore" those).
     private int[] _measuredPass = System.Array.Empty<int>();
     private int _pass;
+    // The width of the column track ArrangeGrid last placed each grid cell in (its margins taken off): the box a cell easing its width
+    // through layout (SizeMode.Relayout) follows, which the cell's own arranged rect no longer says while it eases.
+    private float[] _gridCellW = System.Array.Empty<float>();
+
+    /// <summary>The width of the column track the grid <paramref name="cell"/> sits in was last arranged at (its margins taken off), or false when
+    /// <paramref name="cell"/> is no grid's child or has not been placed by one. A cell easing its width through layout (SizeMode.Relayout) follows
+    /// it while the grid resizes (a docking panel's slide), never the grid's whole inner box.</summary>
+    public bool TryGetGridCellWidth(NodeHandle cell, out float width)
+    {
+        width = 0f;
+        var parent = _scene.Parent(cell);
+        uint i = cell.Raw.Index;
+        if (parent.IsNull || !_scene.HasGrid(parent) || i >= (uint)_gridCellW.Length || !_scene.IsArrangedValid(cell)) return false;
+        width = _gridCellW[i];
+        return width > 0f;
+    }
 
     private void SetArrangedBounds(NodeHandle node, in RectF next)
     {
@@ -2237,6 +2254,13 @@ public sealed partial class FlexLayout
             {
                 var m = GridCellMargin(rowKids[j]);
                 float cw = MathF.Max(0f, colW[j] - m.Horizontal);
+                uint ki = rowKids[j].Raw.Index;
+                if (ki < (uint)_gridCellW.Length) _gridCellW[ki] = cw;
+                // A cell easing its width through layout (SizeMode.Relayout writes the interpolated width into its LayoutInput) is placed at the
+                // width it eases through, from its track's leading edge: the same box the firewall's scoped re-solve gives it (RunSubtree),
+                // so a full arrange of the grid (every tick of a docking panel's slide) and the cell's own re-solve agree.
+                ref LayoutInput kl = ref _scene.Layout(rowKids[j]);
+                if ((_scene.Flags(rowKids[j]) & NodeFlags.Relayouting) != 0 && !float.IsNaN(kl.Width)) cw = MathF.Max(0f, kl.Width);
                 if (!autoRow) Measure(rowKids[j], cw);   // base sizes for the cell's own flex, at the cell's width so text wraps to the track
                 Arrange(rowKids[j], colX[j] + m.Left, rowTop + m.Top, cw, MathF.Max(0f, rowH - m.Vertical));
             }
