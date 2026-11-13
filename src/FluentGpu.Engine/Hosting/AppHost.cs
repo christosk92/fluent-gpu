@@ -7011,9 +7011,10 @@ public sealed partial class AppHost : IDisposable
             }
             bool virtualsChanged = false;
             double reactiveFlushMs = 0, virtualRealizeMs = 0;
+            ulong topologyBefore = _scene.TopologyStamp;   // a commit that reshapes the tree while a width reflow flies re-probes its destination
             try
             {
-                _anim.DrainSettledCallbacks();                                  // 3− reveal settle callbacks the last frame queued (an Expander unmounting its
+                _anim.DrainSettledCallbacks();                                 // 3− reveal settle callbacks the last frame queued (an Expander unmounting its
                                                                                 // panel, a band's collapse commit) — app code, so never inside phases 6–13
                 long tRx0 = Stopwatch.GetTimestamp();
                 MountProf.Enter(MountProf.Flush);
@@ -7038,6 +7039,7 @@ public sealed partial class AppHost : IDisposable
             // The capture window closes before layout; a node that gained a transition in the flush counts as captured.
             if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
+            bool reshaped = reconciled && _scene.TopologyStamp != topologyBefore;
             long tFlush = Stopwatch.GetTimestamp();   // always-on segment timing (FrameStats.*Ms) — see below
             if (FrameLedger.Enabled) _ledgerAlloc.Flush = GC.GetAllocatedBytesForCurrentThread();
             // Spike-gated type roster (RenderCensus): one line when the flush alone exceeded the panel's refresh interval
@@ -7059,9 +7061,9 @@ public sealed partial class AppHost : IDisposable
             bool flowRevealFrame = _anim.HasFlowRevealWork || (capturedProjections && CapturedFlowReveal());
             _layout.DeferOffsetClamp = flowRevealFrame;
             // Runs break at their landing width from the frame after a width reflow's destination was recorded (FlexLayout.BreakTextAtLanding).
-            // Not in a commit's own layout: the record predates the commit (a run it is replacing, which leaves as an exit orphan, would rewrap
-            // for a landing it never reaches); the commit's probe below records the new tree and turns it on for that probe's re-solve.
-            _layout.BreakTextAtLanding = _scene.HasDestinationWidths && !reconciled;
+            // Not in the layout of a commit that reshaped the tree: the record predates it (a run it is replacing, which leaves as an exit orphan,
+            // would rewrap for a landing it never reaches); the commit's probe below records the new tree and turns it on for that re-solve.
+            _layout.BreakTextAtLanding = _scene.HasDestinationWidths && !reshaped;
             MountProf.Enter(MountProf.Layout);
             // A width reflow re-aimed by this frame's commit (the panel toggled back mid-slide), or a window resize while one flies: solve the
             // targets once before the frame's own layout, which then lays the frame out where the slide is.
@@ -7181,10 +7183,11 @@ public sealed partial class AppHost : IDisposable
             if (FrameLedger.Enabled) _ledgerAlloc.Layout = GC.GetAllocatedBytesForCurrentThread();
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
-            // A commit that re-renders while a width reflow flies (a page that changes its form for the width it lands at, a row that mounts
+            // A commit that reshapes the tree while a width reflow flies (a page that swaps its form for the width it lands at, a row that mounts
             // mid-slide): the widths recorded before it describe a tree it has replaced, and a box it built is chosen at the landing width only
-            // once it is recorded there. Probe again (in the projection pass before any FLIP is measured, else just below).
-            if (reconciled && _scene.HasDestinationWidths) { _anim.DestinationStale = true; _layout.BreakTextAtLanding = true; }
+            // once it is recorded there. Probe again (in the projection pass before any FLIP is measured, else just below). A commit that only
+            // re-renders in place (a bound value, a re-pushed prop: most frames of a slide) keeps the record: two more solves a frame for nothing.
+            if (reshaped && _scene.HasDestinationWidths) { _anim.DestinationStale = true; _layout.BreakTextAtLanding = true; }
             if (capturedProjections) ApplyProjections(layoutSize, keepAliveSuppressed);   // FLIP "Last+Invert+Play"
             // A width reflow seeded or re-aimed on a frame with no projection pass, or a window resize while one flies: probe its destination here.
             if (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)) _anim.DestinationStale = true;
