@@ -268,6 +268,21 @@ static class Program
             return;
         }
 
+        // Live resize of a detached window (DetachedWindowRequest.LiveResize): opens an opted-in and a default pop-out and
+        // drives each one's own modal size loop by messages (no cursor), printing a per-window verdict. `--live-resize-probe
+        // [outDir]`; stderr is teed to <outDir>/live-resize.log. Exit 0 PASS, 1 FAIL, 2 unsupported. A real window: GPU required.
+        int lrp = Array.IndexOf(args, "--live-resize-probe");
+        if (lrp >= 0)
+        {
+            LiveResizeProbe.OutDir = lrp + 1 < args.Length && !args[lrp + 1].StartsWith("--") ? args[lrp + 1] : ".tmp/live-resize";
+            FluentApp.DiagnosticRun = LiveResizeProbe.TryRun;
+            FluentAppHarness.Run(() => new GalleryShell { InitialPage = page },
+                new AppOptions { Title = "FluentGpu — Live resize probe", Width = 900, Height = 600, CustomFrame = true },
+                new HarnessOptions { Frames = frames });
+            Environment.Exit(LiveResizeProbe.ExitCode);
+            return;
+        }
+
         // Automated end-to-end video test with timings (video-engine-design.html measurement plan): the real gallery host
         // scrolling a 100k-row list while a detached pop-out plays a clear MP4; baseline / pop-out / UI actions / source
         // switching / placement churn / pop-out reopen, each with a threshold. `--video-e2e [outDir] [--seconds N]
@@ -296,7 +311,7 @@ static class Program
 
         // M0 of the DRM-free video compositing spine: restructured DComp present tree + IVideoPresenter + an
         // engine-owned test surface through the real CreateSurfaceFromHandle path + a graded hole, captured to a PNG
-        // (docs/plans/video-phase1-plan.md §4). `--video-m0 <png>` [--frames N]. Screen capture (the DComp child is
+        // (docs/plans/video-phase1-plan.md §4). `--video-m0 <png>` [--frames N]. Screen capture (the video visual is
         // composited by DWM, not in our back buffer), so it needs a live composited desktop session.
         int vm0 = Array.IndexOf(args, "--video-m0");
         if (vm0 >= 0)
@@ -312,7 +327,7 @@ static class Program
 
         // M3 of the DRM-free video compositing spine: IMFMediaEngineEx windowless-swapchain decode of a CLEAR MP4 →
         // GetVideoSwapchainHandle → the SAME IVideoPresenter M0 proved, composited z-below the UI. `--video-real <png>`
-        // [--frames N]. Screen capture (the DComp child is composited by DWM), needs a live composited desktop session.
+        // [--frames N]. Screen capture (the video visual is composited by DWM), needs a live composited desktop session.
         int vreal = Array.IndexOf(args, "--video-real");
         if (vreal >= 0)
         {

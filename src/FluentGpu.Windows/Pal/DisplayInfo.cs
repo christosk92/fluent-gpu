@@ -27,6 +27,15 @@ public readonly record struct DisplayModeInfo(
     long RefreshPeriodQpc,
     bool Valid);
 
+/// <summary>The display connected behind one monitor, as the display path describes it (<see cref="DisplayInfo.TargetForWindow"/>).</summary>
+/// <param name="DeviceName">The GDI device name (<c>\\.\DISPLAY17</c>): changes when a display is re-plugged.</param>
+/// <param name="FriendlyName">The monitor's EDID name (<c>Q24G4</c>), "" when it reports none.</param>
+/// <param name="DevicePath">The target's device path: stable for this monitor on this connection, the key to remember it by.</param>
+/// <param name="OutputTechnology">DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY as reported (5 = HDMI, 10 = DisplayPort, 16/17 = indirect, ...);
+/// -2 when unknown. Through a dock this is what the dock's converter reports, not what the GPU drives.</param>
+/// <param name="Valid">False when the window had no monitor or no active path matched it.</param>
+public readonly record struct DisplayTargetInfo(string DeviceName, string FriendlyName, string DevicePath, int OutputTechnology, bool Valid);
+
 /// <summary>
 /// The window's TRUE per-monitor refresh rate, via <c>QueryDisplayConfig</c> — replacing
 /// <c>DwmGetCompositionTimingInfo(HWND.NULL)</c> (primary-monitor-global by API contract, so it never re-derives
@@ -106,6 +115,51 @@ public static class DisplayInfo
             if (info.Valid) list.Add(info);
         }
         return list;
+    }
+
+    /// <summary>Raised when a presenting window's monitor changed (the edge the <c>[d3d12.display] monitor=</c> line is written on): the
+    /// window, its new monitor's GDI device name, and whether it is the main window. Raised on the RENDER thread, from the cold monitor-edge
+    /// path only (never per present): a handler posts what it needs and returns.</summary>
+    public static event Action<nint, string, bool>? WindowMonitorChanged;
+
+    /// <summary>The renderer reports a window's monitor edge (<see cref="WindowMonitorChanged"/>). Never throws into the render thread.</summary>
+    public static void RaiseWindowMonitorChanged(nint hwnd, string deviceName, bool primary)
+    {
+        try { WindowMonitorChanged?.Invoke(hwnd, deviceName, primary); }
+        catch { /* a subscriber's fault is never the renderer's */ }
+    }
+
+    /// <summary>What the display path behind <paramref name="hwnd"/>'s monitor says about the connected display (COLD path: a
+    /// QueryDisplayConfig walk): its friendly name (EDID), its device path (stable per monitor AND connection: the same monitor behind
+    /// a dock and plugged in directly are two paths), the output technology Windows reports and the GDI device name. Passive: it reads
+    /// what Windows already knows and touches no link. <see cref="DisplayTargetInfo.Valid"/> false when the window has no monitor or
+    /// no active path matches.</summary>
+    public static unsafe DisplayTargetInfo TargetForWindow(nint hwnd)
+    {
+        HMONITOR mon = MonitorFromWindow((HWND)hwnd, MONITOR_DEFAULTTONEAREST);
+        if (mon == HMONITOR.NULL) return default;
+        MONITORINFOEXW mi = default;
+        mi.Base.cbSize = (uint)sizeof(MONITORINFOEXW);
+        if (!GetMonitorInfoW(mon, (MONITORINFO*)&mi)) return default;
+        string deviceName = FixedBufferToString(mi.szDevice);
+        if (!TryQueryActivePaths(out DISPLAYCONFIG_PATH_INFO[]? paths, out int count) || paths is null)
+            return new DisplayTargetInfo(deviceName, "", "", -2, false);
+        for (int i = 0; i < count; i++)
+        {
+            ref readonly DISPLAYCONFIG_PATH_INFO path = ref paths[i];
+            if (!TryGetSourceDeviceName(path.sourceInfo.adapterId, path.sourceInfo.id, out DISPLAYCONFIG_SOURCE_DEVICE_NAME src)) continue;
+            if (!FixedBufferEquals(src.viewGdiDeviceName, deviceName)) continue;
+            DISPLAYCONFIG_TARGET_DEVICE_NAME target = default;
+            target.header.type = DISPLAYCONFIG_DEVICE_INFO_TYPE.DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+            target.header.size = (uint)sizeof(DISPLAYCONFIG_TARGET_DEVICE_NAME);
+            target.header.adapterId = path.targetInfo.adapterId;
+            target.header.id = path.targetInfo.id;
+            if (DisplayConfigGetDeviceInfo((DISPLAYCONFIG_DEVICE_INFO_HEADER*)&target) != ERROR_SUCCESS)
+                return new DisplayTargetInfo(deviceName, "", "", -2, false);
+            return new DisplayTargetInfo(deviceName, FixedBufferToString(target.monitorFriendlyDeviceName),
+                FixedBufferToString(target.monitorDevicePath), (int)target.outputTechnology, true);
+        }
+        return new DisplayTargetInfo(deviceName, "", "", -2, false);
     }
 
     /// <summary>Shared join: resolve the monitor's GDI device name, match it against an active

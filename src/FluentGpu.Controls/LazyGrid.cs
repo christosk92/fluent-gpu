@@ -190,7 +190,8 @@ public sealed class LazyGrid : Component
     readonly Func<int, GridDrawerInfo, Element>? _drawer;  // (index, column geometry) → the inline drawer subtree
     readonly Func<int, float>? _drawerHeight;        // (index) → the drawer's exact height (so the extent is exact)
 
-    readonly Signal<float> _w = new(0f);             // own measured width → column count
+    readonly Signal<float> _w = new(0f);             // own measured width → cell width and row height
+    float _sw;                                       // the width the column count is chosen at (SceneStore.StructureWidth; written with _w)
     // Two windows, two signals, two readers — deliberately NOT one tuple. The REALIZED window (visible rows + overscan,
     // packed by PackKey) is what the render subscribes to: it moves only when a row enters or leaves the realized band,
     // so wheel-speed scrolling inside the band never re-renders the grid. The exact VISIBLE range moves on every row
@@ -334,7 +335,7 @@ public sealed class LazyGrid : Component
             "LazyGrid overscanRows must be >= 1 for the 24px offset floor");
 
         bool widthKnown = w > 1f;
-        int cols = widthKnown ? Math.Max(1, (int)((w + _gap) / (_minColW + _gap))) : 1;
+        int cols = widthKnown ? ColumnsAt() : 1;
         float cellW = widthKnown ? MathF.Max(_minColW * 0.5f, (w - (cols - 1) * _gap) / cols) : 0f;
         float rowH = widthKnown ? cellW + _rowExtra : 0f;
         int totalRows = count <= 0 ? 0 : (count + cols - 1) / cols;
@@ -463,7 +464,7 @@ public sealed class LazyGrid : Component
         float w = _w.Peek();
         if (w <= 1f) { _realized.Value = long.MinValue + 1; _visible.Value = default; return; }
 
-        int cols = Math.Max(1, (int)((w + _gap) / (_minColW + _gap)));
+        int cols = ColumnsAt();
         float cellW = MathF.Max(_minColW * 0.5f, (w - (cols - 1) * _gap) / cols);
         float rowH = cellW + _rowExtra;
         int totalRows = count <= 0 ? 0 : (count + cols - 1) / cols;
@@ -560,9 +561,23 @@ public sealed class LazyGrid : Component
     {
         Direction = 1,
         OnRealized = h => _node = h,
-        OnBoundsChanged = r => { if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f) _w.Value = r.W; },
+        OnBoundsChanged = r =>
+        {
+            if (r.W <= 0f) return;
+            // The columns are chosen at the structure width: the width the grid lands at while a docking panel's reflow resizes it, so the
+            // count changes once per slide; the live width sizes the cells.
+            _sw = Context.Scene is { } scene ? scene.StructureWidth(_node, r.W) : r.W;
+            if (MathF.Abs(r.W - _w.Peek()) > 0.5f) _w.Value = r.W;
+        },
         Children = [inner],
     };
+
+    /// <summary>The column count at the structure width (the live width before the first measure).</summary>
+    int ColumnsAt()
+    {
+        float w = _sw > 1f ? _sw : _w.Peek();
+        return Math.Max(1, (int)((w + _gap) / (_minColW + _gap)));
+    }
 
     void PreserveColumnAnchor(int oldCols, float oldRowH, float oldTop, int cols, float rowH, float sectionTop)
     {

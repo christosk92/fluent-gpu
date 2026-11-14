@@ -111,12 +111,48 @@ public static class FluentApp
         if (s_window is { IsClosed: false } w) w.SetTopmost(topmost);
     }
 
-    /// <summary>The main window's outer rect in physical virtual-screen px (default before the window exists) — what an
-    /// app persists to put the window back where the user left it, paired with <see cref="MoveWindowPx"/>.</summary>
+    /// <summary>The main window's outer rect in physical virtual-screen px (default before the window exists). To put the
+    /// window back where the user left it, persist <see cref="MainWindowPlacement"/> instead (it is the restore rect while
+    /// maximized, minimized or full screen) and pass it as <see cref="AppOptions.InitialBoundsPx"/>.</summary>
     public static RectF WindowBoundsPx => s_window is { IsClosed: false } w ? w.OuterBoundsPx : default;
 
+    /// <summary>The main window's normal placement as it is now: its restore outer rect (physical virtual-screen px) and
+    /// maximized flag, the pair <see cref="AppOptions.InitialBoundsPx"/>/<see cref="AppOptions.InitialMaximized"/> takes back,
+    /// plus whether it is minimized, hidden or full screen right now (<see cref="WindowPlacement.IsSettledPlacement"/> is the
+    /// state worth saving). Null before the window exists or after it closed. UI-thread only.</summary>
+    public static WindowPlacement? MainWindowPlacement => s_window is { IsClosed: false } w ? w.Placement : null;
+
+    /// <summary>Raised on the UI thread, at the top of a frame, after the main window's placement may have changed: the end of
+    /// a move or resize drag (once per gesture, never per drag step), a snap, maximize, minimize, restore, show, hide, full
+    /// screen or a DPI hop. Coalesced: several changes before the frame are one call. Read <see cref="MainWindowPlacement"/>
+    /// from it (debounce a write: a snap or a maximize animation can raise it more than once).</summary>
+    public static event Action? MainWindowPlacementChanged;
+
+    /// <summary>What <see cref="AppOptions.InitialBoundsPx"/> = <paramref name="savedBoundsPx"/> (and
+    /// <see cref="AppOptions.InitialMaximized"/>) will create on this machine now: the clamped rect, whether the clamp moved
+    /// it, the target monitor's DPI scale and the client size in raw DIP. The main window's creation runs the same
+    /// resolution, so a first frame seeded from <see cref="WindowRestorePlan.ClientSizeDip"/> (the app zoom) is final.
+    /// Pass the same <paramref name="customFrame"/>/<paramref name="resizable"/> as the options. Any thread, before
+    /// <see cref="Run(Func{Component}, AppOptions?)"/>.</summary>
+    public static WindowRestorePlan ResolveMainWindowRestore(RectF savedBoundsPx, bool maximized, bool customFrame, bool resizable = true)
+        => Win32Placement.Resolve(savedBoundsPx, maximized && resizable, customFrame, resizable);
+
+    // MainWindowPlacementChanged's coalescing: the window raises its edge inside the window procedure; one post per burst
+    // carries it to the top of the next frame.
+    private static int s_placementPostPending;
+    private static readonly Action s_raisePlacementChanged = static () =>
+    {
+        Volatile.Write(ref s_placementPostPending, 0);
+        MainWindowPlacementChanged?.Invoke();
+    };
+    private static readonly Action s_onPlacementChanged = static () =>
+    {
+        if (MainWindowPlacementChanged is null || s_host is not { } host) return;
+        if (Interlocked.Exchange(ref s_placementPostPending, 1) == 0) host.Post(s_raisePlacementChanged);
+    };
+
     /// <summary>Capture the main window as the user sees it — DWM's composite, so the Mica/acrylic backdrop, the DWM frame and
-    /// DirectComposition children (video) are in it, unlike the <c>--screenshot</c> swapchain readback — to a PNG at
+    /// composition children (video) are in it, unlike the <c>--screenshot</c> swapchain readback — to a PNG at
     /// <paramref name="path"/> (directory created, file overwritten). The visible frame bounds
     /// (<c>DWMWA_EXTENDED_FRAME_BOUNDS</c>, physical px) grown by <paramref name="padPx"/> and clipped to the virtual screen;
     /// a window another window covers is raised topmost for the grab and put back. False (with a <c>[shot-window]</c>
@@ -286,6 +322,12 @@ public static class FluentApp
         else w.Hide();
     }
 
+    /// <summary>Fade and scale the main window as a whole on the compositor (<see cref="WindowPresentationMotion"/>; see
+    /// <c>AppHost.AnimatePresentation</c>): a hide or a show that is one motion. The caller hides the window once a departure has
+    /// landed, and gives a show its starting hold before <see cref="SetWindowVisible"/>(true) and its arrival when the window is shown.
+    /// A no-op without a window. UI thread.</summary>
+    public static void AnimateWindowPresentation(in WindowPresentationMotion motion) => s_host?.AnimatePresentation(in motion);
+
     /// <summary>Relay of <c>AppHost.WindowStateChanged</c>: the main window was minimized, restored, maximized, hidden or
     /// shown (the <see cref="WindowStateChange"/> flags say which; several can be true at once). Raised on the UI thread
     /// once per frame that observed a change, parked frames included — the minimize-to-tray edge. The first frame only
@@ -361,7 +403,9 @@ public static class FluentApp
         Zoom: ZoomLadder.Clamp(o.Zoom),
         Topmost: o.Topmost,
         ToolWindow: o.ToolWindow,
-        Resizable: o.Resizable);
+        Resizable: o.Resizable,
+        InitialBoundsPx: o.InitialBoundsPx,
+        InitialMaximized: o.InitialMaximized);
 
     internal static void RunCore(Func<Component> root, AppOptions o, HarnessOptions h)
     {
@@ -474,6 +518,7 @@ public static class FluentApp
         // The close veto reads the LIVE static on every request, so a handler set before Run or during it both apply.
         s_window = window;
         window.CloseRequested = static reason => CloseRequested is { } veto && veto(reason);
+        window.PlacementChanged = s_onPlacementChanged;
 
         // Prefer the exact OS ramp (theme-aware accent fills); fall back to the base accent (Tok.SetAccent derives a ramp).
         if (Win32Theme.ReadAccentRamp() is { } ramp) Tok.SetAccent(in ramp);
@@ -978,6 +1023,18 @@ public sealed record AppOptions
     public int Width { get; init; } = 800;
     /// <summary>Initial client height (DIP).</summary>
     public int Height { get; init; } = 600;
+    /// <summary>A restored placement for the main window: the NORMAL outer rect the user left it at, in physical virtual-screen
+    /// px (what <see cref="FluentApp.MainWindowPlacement"/> read last run). Empty (the default) opens at
+    /// <see cref="Width"/>×<see cref="Height"/> DIP at the OS default position. Set, the window is created directly at that
+    /// rect (<see cref="Width"/>/<see cref="Height"/> are ignored), clamped into the work area of the monitor nearest it like
+    /// a detached window's restore (<see cref="FluentGpu.Pal.WindowPlacementRules"/>), so a placement saved on a monitor that is
+    /// gone, or at another resolution, opens fully on screen. <see cref="FluentApp.ResolveMainWindowRestore"/> predicts the
+    /// client size it gets (seed a size-dependent first frame from it). Nothing moves or resizes after creation.</summary>
+    public RectF InitialBoundsPx { get; init; }
+    /// <summary>With <see cref="InitialBoundsPx"/>: create the window maximized on that rect's monitor, the rect being its
+    /// restore size (<c>GetWindowPlacement</c>'s <c>rcNormalPosition</c>). Ignored without a rect or when not
+    /// <see cref="Resizable"/>.</summary>
+    public bool InitialMaximized { get; init; }
     /// <summary>Optional minimum client width while interactively resizing, in DIP. 0 keeps the platform default.</summary>
     public int MinWidth { get; init; }
     /// <summary>Optional minimum client height while interactively resizing, in DIP. 0 keeps the platform default.</summary>

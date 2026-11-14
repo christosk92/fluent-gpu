@@ -85,6 +85,11 @@ public sealed partial class SceneRecordingSnapshot
     /// damage read this one.</para></summary>
     private uint[] _overlaySelfEpoch = [];
     private uint _overlayEpoch = 1;
+    /// <summary>A stamp carrying this bit says the mark is TRANSFORM-class: a pose that only moved, scaled or rotated the
+    /// node (<see cref="MarkCompositorTransformChanged"/>). The recorder reads it as <c>RecordDirtyTransform</c>, exactly as
+    /// it reads a transform-only write of the UI's: a slice root recorded pose-free keeps its bytes (its transform is its
+    /// composite pose), anything that bakes the transform re-records. Epochs stay below the bit.</summary>
+    private const uint OverlayTransformBit = 0x8000_0000u;
     private int _overlayRowCount;               // rows handed out during the current overlay epoch
     private int _overlayOverflowCount;          // row requests this epoch that found the pool full
     private int _overlayRowDemand;              // sticky peak demand, honoured by the next ReserveCompositorRows
@@ -160,7 +165,7 @@ public sealed partial class SceneRecordingSnapshot
         for (int i = 0; i < _overlayRowCount; i++) _overlayRow[_overlayRows[i].Node] = 0;
         _overlayRowCount = 0;
         _overlayOverflowCount = 0;
-        if (++_overlayEpoch != 0) return;
+        if (++_overlayEpoch < OverlayTransformBit) return;
         Array.Clear(_overlayDirtyEpoch);
         Array.Clear(_overlaySelfEpoch);
         _overlayEpoch = 1;
@@ -170,14 +175,14 @@ public sealed partial class SceneRecordingSnapshot
     /// by its cadence, or one that is already Done. Such a tick must still write the pose (the node reads its posed
     /// paint, and its span still re-records if something else dirtied it) but must contribute NO repaint band: posing
     /// an unchanged value as a change is what made a 60 Hz marquee damage the window at panel rate.</param>
-    internal ref NodePaint CompositorPaint(NodeHandle node, bool changed = true)
+    internal ref NodePaint CompositorPaint(NodeHandle node, bool changed = true, bool trail = true, bool transformOnly = false)
     {
         uint index = node.Raw.Index;
         int slot = AcquireOverlayRow(index);
         // Stamp the self epoch only on a row we actually GOT. An overflowing node discards its pose and presents its
         // authored one, which gate.compositor-row-overflow pins as "not self-dirty"; the ancestor trail is still
         // marked, because the subtree must re-record either way.
-        if (changed && slot >= 0) MarkCompositorSelfChanged(node); else MarkCompositorDirty(node);
+        MarkPosed(node, changed, trail, slot, transformOnly);
         if (slot < 0)
         {
             _overlaySpill = _paint[index];   // discarded; the node presents its authored pose for this tick
@@ -191,6 +196,24 @@ public sealed partial class SceneRecordingSnapshot
         }
         return ref row.Paint;
     }
+
+    /// <summary>What a byte-changing overlay write marks. A CHANGED pose that landed in a row: the node's self epoch (a
+    /// repaint band) and the ancestor trail (its slice re-records). A pose that did not land (the pool overflowed: the node
+    /// presents its authored value) or whose caller asks for a <paramref name="trail"/>: the trail alone. An UNCHANGED pose
+    /// whose slice was already recorded with this very value (<paramref name="trail"/> false): nothing. The row holds the
+    /// value for any walk another reason starts, and the slice is kept. Laying the trail there re-walked the slice on every
+    /// recorded turn a held, paused, finished or cadence-held row re-posed its value, for identical bytes.</summary>
+    private void MarkPosed(NodeHandle node, bool changed, bool trail, int slot, bool transformOnly = false)
+    {
+        if (changed && slot >= 0)
+        {
+            if (transformOnly) MarkCompositorTransformChanged(node); else MarkCompositorSelfChanged(node);
+        }
+        else if (trail || slot < 0) MarkCompositorDirty(node);
+    }
+
+    /// <summary>This node holds an overlay row in the current epoch (its last pose write landed).</summary>
+    internal bool OverlayRowHeld(NodeHandle node) => _overlayRow[node.Raw.Index] > 0;
 
     /// <summary>A scroll POSE write (content translate, a scroll effect's folded transform): the overlay row WITHOUT the
     /// dirty trail or the self epoch. Since the retained-tile recorder partition a pose is a COMPOSITE parameter — a
@@ -216,12 +239,13 @@ public sealed partial class SceneRecordingSnapshot
     }
 
     /// <param name="changed">See <see cref="CompositorPaint"/> — false re-poses an identical value and damages nothing.</param>
-    internal void SetCompositorInteraction(NodeHandle node, bool press, float value, bool changed = true)
+    /// <returns>The pose landed in an overlay row.</returns>
+    internal bool SetCompositorInteraction(NodeHandle node, bool press, float value, bool changed = true, bool trail = true)
     {
         uint index = node.Raw.Index;
         int slot = AcquireOverlayRow(index);
-        if (changed && slot >= 0) MarkCompositorSelfChanged(node); else MarkCompositorDirty(node);
-        if (slot < 0) return;
+        MarkPosed(node, changed, trail, slot);
+        if (slot < 0) return false;
         ref OverlayRow row = ref _overlayRows[slot];
         if ((row.Have & HaveInteraction) == 0)
         {
@@ -229,15 +253,17 @@ public sealed partial class SceneRecordingSnapshot
             row.Have |= HaveInteraction;
         }
         if (press) row.Interaction.PressT = value; else row.Interaction.HoverT = value;
+        return true;
     }
 
     /// <param name="changed">See <see cref="CompositorPaint"/> — false re-poses an identical value and damages nothing.</param>
-    internal void SetCompositorBrush(NodeHandle node, float value, bool changed = true)
+    /// <returns>The pose landed in an overlay row.</returns>
+    internal bool SetCompositorBrush(NodeHandle node, float value, bool changed = true, bool trail = true)
     {
         uint index = node.Raw.Index;
         int slot = AcquireOverlayRow(index);
-        if (changed && slot >= 0) MarkCompositorSelfChanged(node); else MarkCompositorDirty(node);
-        if (slot < 0) return;
+        MarkPosed(node, changed, trail, slot);
+        if (slot < 0) return false;
         ref OverlayRow row = ref _overlayRows[slot];
         if ((row.Have & HaveBrush) == 0)
         {
@@ -245,18 +271,20 @@ public sealed partial class SceneRecordingSnapshot
             row.Have |= HaveBrush;
         }
         row.Brush.T = value;
+        return true;
     }
 
     /// <summary>A posed glyph-wipe split (<c>AnimChannel.GlyphWipeSplit</c>) over the node's authored <see cref="GlyphWipe"/>:
     /// colours, softness and lift stay as authored, only the split moves. A node with no authored wipe poses nothing.</summary>
     /// <param name="changed">See <see cref="CompositorPaint"/> — false re-poses an identical value and damages nothing.</param>
-    internal void SetCompositorGlyphWipe(NodeHandle node, float split, bool changed = true)
+    /// <returns>The pose landed in an overlay row (true as well for a node with no wipe: nothing is owed).</returns>
+    internal bool SetCompositorGlyphWipe(NodeHandle node, float split, bool changed = true, bool trail = true)
     {
         uint index = node.Raw.Index;
-        if (!_glyphWipe.TryGet((int)index, out GlyphWipe authored)) return;
+        if (!_glyphWipe.TryGet((int)index, out GlyphWipe authored)) return true;
         int slot = AcquireOverlayRow(index);
-        if (changed && slot >= 0) MarkCompositorSelfChanged(node); else MarkCompositorDirty(node);
-        if (slot < 0) return;
+        MarkPosed(node, changed, trail, slot);
+        if (slot < 0) return false;
         ref OverlayRow row = ref _overlayRows[slot];
         if ((row.Have & HaveWipe) == 0)
         {
@@ -264,6 +292,7 @@ public sealed partial class SceneRecordingSnapshot
             row.Have |= HaveWipe;
         }
         row.Wipe = row.Wipe with { Split = split };
+        return true;
     }
 
     /// <summary>This node's row for the current overlay epoch, binding a free one on first touch. -1 means the pool is
@@ -301,7 +330,23 @@ public sealed partial class SceneRecordingSnapshot
         {
             uint index = current.Raw.Index;
             if (_overlayDirtyEpoch[index] == _overlayEpoch) break;
-            _overlayDirtyEpoch[index] = _overlayEpoch;
+            _overlayDirtyEpoch[index] = _overlayEpoch;   // over a transform-class stamp too: content wins, and the walk goes on up
+        }
+    }
+
+    /// <summary>This node's pose changed this epoch, and ONLY its transform (translate, scale, rotation): its self stamp and its
+    /// ancestors' trail are transform-class. The node's own trail entry is NOT written: a slice root recorded pose-free tests
+    /// its descendants' dirt, and its own move is not one. A content-class stamp already there this epoch stays.</summary>
+    internal void MarkCompositorTransformChanged(NodeHandle node)
+    {
+        uint transform = _overlayEpoch | OverlayTransformBit;
+        if (_overlaySelfEpoch[node.Raw.Index] != _overlayEpoch) _overlaySelfEpoch[node.Raw.Index] = transform;
+        for (var current = Parent(node); !current.IsNull; current = Parent(current))
+        {
+            uint index = current.Raw.Index;
+            uint stamp = _overlayDirtyEpoch[index];
+            if (stamp == _overlayEpoch || stamp == transform) break;
+            _overlayDirtyEpoch[index] = transform;
         }
     }
 

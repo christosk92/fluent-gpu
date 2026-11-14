@@ -184,8 +184,13 @@ public sealed unsafe partial class D3D12Device
         public TileKey Key;
         public PixelRect Damage;
         public bool Busy;
-        public (DrawOp Op, PixelRect R, float A, float B)[] Ops;   // forensics: the segment's ops reaching the tile
+        public (DrawOp Op, PixelRect R, float A, float B, int Text, string? Resolved)[] Ops;   // forensics: the segment's ops reaching the tile
         public int OpN;
+        // forensics: the segment the tile belongs to (its scene node, role/segment, kind) and its content key at the raster
+        public int Node, Sub;
+        public uint NodeGen;
+        public SliceKind Kind;
+        public ulong ContentKey;
     }
     private readonly DamageCheck[] _dmgChecks = new DamageCheck[16];
     private long _dcSkipped;
@@ -247,8 +252,9 @@ public sealed unsafe partial class D3D12Device
     /// <summary>Forensics: the ops of the segment whose footprint reaches the tile (tile px), kept with the check.</summary>
     private void DvCaptureOps(ref DamageCheck c, in CompositeFrame frame, in SliceRow row, in TileRaster tr)
     {
-        c.Ops ??= new (DrawOp, PixelRect, float, float)[256];
+        c.Ops ??= new (DrawOp, PixelRect, float, float, int, string?)[256];
         c.OpN = 0;
+        c.Node = row.NodeIndex; c.NodeGen = row.Gen; c.Sub = row.Sub; c.Kind = row.Kind; c.ContentKey = row.ContentKey;
         ReadOnlySpan<byte> stream = frame.StreamOf(in row);
         float sc = _frameScale <= 0f ? 1f : _frameScale;
         float ox = tr.Key.Tx * (float)TileGrid.W + row.Frame.OriginX, oy = tr.Key.Ty * (float)TileGrid.H + row.Frame.OriginY;
@@ -264,10 +270,12 @@ public sealed unsafe partial class D3D12Device
                 if (r.Right > 0 && r.Bottom > 0 && r.Left < tr.W && r.Top < tr.H)
                 {
                     float a = 0f, bb = 0f;
-                    if (op == DrawOp.DrawGlyphRunGradient) { var g = System.Runtime.InteropServices.MemoryMarshal.Read<DrawGlyphRunGradientCmd>(payload); a = g.Split; bb = g.Lift; }
-                    else if (op == DrawOp.DrawGlyphRun) { var g = System.Runtime.InteropServices.MemoryMarshal.Read<DrawGlyphRunCmd>(payload); a = g.FontSize; }
+                    int text = 0;
+                    if (op == DrawOp.DrawGlyphRunGradient) { var g = System.Runtime.InteropServices.MemoryMarshal.Read<DrawGlyphRunGradientCmd>(payload); a = g.Split; bb = g.Lift; text = g.Text.Value; }
+                    else if (op == DrawOp.DrawGlyphRun) { var g = System.Runtime.InteropServices.MemoryMarshal.Read<DrawGlyphRunCmd>(payload); a = g.FontSize; text = g.Text.Value; }
                     if (c.OpN == c.Ops.Length) Array.Resize(ref c.Ops, c.OpN * 2);
-                    c.Ops[c.OpN++] = (op, r, a, bb);
+                    // the text the raster resolved its id to (a reclaimed id resolves to "" once its quarantine is over)
+                    c.Ops[c.OpN++] = (op, r, a, bb, text, text != 0 ? _strings.Resolve(new StringId(text)) : null);
                 }
             }
             pos += sizeof(int) + body;
@@ -365,13 +373,15 @@ public sealed unsafe partial class D3D12Device
             {
                 Volatile.Write(ref _dcMismatches, _dcMismatches + 1);
                 Console.Error.WriteLine(string.Create(ci,
-                    $"[damage-validate] MISMATCH turn={c.Turn} slice={c.Key.SliceId} tile=({c.Key.Tx},{c.Key.Ty}) {c.W}x{c.H} damage=[{c.Damage.Left},{c.Damage.Top} → {c.Damage.Right},{c.Damage.Bottom}) px={bad} outsideDamage={outside} bbox=[{x0},{y0} → {x1 + 1},{y1 + 1}) maxDelta={maxDelta}"));
+                    $"[damage-validate] MISMATCH turn={c.Turn} slice={c.Key.SliceId} node={c.Node}:{c.NodeGen} sub={c.Sub} kind={c.Kind} contentKey={c.ContentKey:X} tile=({c.Key.Tx},{c.Key.Ty}) {c.W}x{c.H} damage=[{c.Damage.Left},{c.Damage.Top} → {c.Damage.Right},{c.Damage.Bottom}) px={bad} outsideDamage={outside} bbox=[{x0},{y0} → {x1 + 1},{y1 + 1}) maxDelta={maxDelta} (A = the partial raster, B = a whole raster of the same bytes now)"));
                 if (_dcMismatches <= 6)
                     for (int k = 0; k < c.OpN; k++)
                     {
-                        var (op, r, fa, fb) = c.Ops[k];
+                        var (op, r, fa, fb, text, resolved) = c.Ops[k];
                         if (r.Right < x0 - 24 || r.Left > x1 + 24 || r.Bottom < y0 - 24 || r.Top > y1 + 24) continue;
-                        Console.Error.WriteLine(string.Create(ci, $"[damage-validate]   op#{k} {op} [{r.Left},{r.Top} → {r.Right},{r.Bottom}) a={fa:0.###} b={fb:0.###}"));
+                        // a glyph op: its text id, what it resolved to at the raster, and what it resolves to now
+                        string t = text == 0 ? "" : string.Create(ci, $" text#{text} raster=\"{Clip(resolved)}\" now=\"{Clip(_strings.Resolve(new StringId(text)))}\" inside={r.Left < c.Damage.Right && r.Right > c.Damage.Left && r.Top < c.Damage.Bottom && r.Bottom > c.Damage.Top}");
+                        Console.Error.WriteLine(string.Create(ci, $"[damage-validate]   op#{k} {op} [{r.Left},{r.Top} → {r.Right},{r.Bottom}) a={fa:0.###} b={fb:0.###}{t}"));
                     }
             }
             else if (_dcValidated % 100 == 1)
@@ -379,6 +389,8 @@ public sealed unsafe partial class D3D12Device
                     $"[damage-validate] ok validated={_dcValidated} mismatches={_dcMismatches} skipped={_dcSkipped}"));
         }
     }
+
+    private static string Clip(string? s) => s is null ? "" : s.Length <= 40 ? s : s[..40] + "…";
 
     /// <summary>Device teardown (the GPU is drained): release the validation readbacks.</summary>
     private void ReleaseDamageChecks()

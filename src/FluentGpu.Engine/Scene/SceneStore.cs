@@ -739,6 +739,7 @@ public sealed partial class SceneStore : ISceneBackend
         _childCount[p]++;
         MarkRecordDirty(c, RecordDirtyLayout);
         PropagateMovedSubtreeBits(p, c);
+        NoteChildrenChanged(p);
     }
 
     /// <summary>A re-attached subtree keeps the record-dirty bits it gathered under its old parent; its NEW ancestors must hold
@@ -766,6 +767,7 @@ public sealed partial class SceneStore : ISceneBackend
         _childCount[p]++;
         MarkRecordDirty(c, RecordDirtyLayout);
         PropagateMovedSubtreeBits(p, c);
+        NoteChildrenChanged(p);
     }
 
     /// <summary>Unlink a child from its parent without freeing it (used by keyed reconcile to reorder).</summary>
@@ -785,6 +787,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_nextSib[c] != 0) _prevSib[_nextSib[c]] = _prevSib[c]; else _lastChild[p] = _prevSib[c];
         _childCount[p]--;
         _parent[c] = _prevSib[c] = _nextSib[c] = 0;
+        NoteChildrenChanged(p);
     }
 
     // ── exit-animation orphans ────────────────────────────────────────────────────────────────────
@@ -807,6 +810,7 @@ public sealed partial class SceneStore : ISceneBackend
         int idx = (int)node.Raw.Index;
         NodeHandle visualParent = Parent(node);
         float px = abs.X - _bounds[idx].X, py = abs.Y - _bounds[idx].Y;   // frozen parent-world origin
+        if (_destCount > 0) DropOrphanRecord(node);
         DetachFromParent(idx);
         _flags[idx] |= NodeFlags.Exiting;
         _orphans.Add(new OrphanEntry
@@ -852,6 +856,20 @@ public sealed partial class SceneStore : ISceneBackend
 
     /// <summary>Whether exit orphan <paramref name="node"/> still occupies its parent's layout space (see <see cref="Orphan"/>).</summary>
     internal bool OrphanHoldsSpace(NodeHandle node) => _spaceHoldingOrphans.Count != 0 && _spaceHoldingOrphans.Contains(node);
+
+    /// <summary>Exit orphan <paramref name="node"/>'s closing has settled: it holds its parent's layout space no more (its size row's settle writes
+    /// the DECLARED size back into its layout input, which a parent still counting it would take for one frame before the reclaim: a sibling
+    /// shrank by the closed child's whole width and sprang back). Dirties the parent. No-op for a node that holds none.</summary>
+    internal void ReleaseOrphanSpace(NodeHandle node)
+    {
+        if (_spaceHoldingOrphans.Count == 0 || !_spaceHoldingOrphans.Remove(node)) return;
+        for (int i = _orphans.Count - 1; i >= 0; i--)
+            if (_orphans[i].Node == node)
+            {
+                if (!_orphans[i].VisualParent.IsNull && IsLive(_orphans[i].VisualParent)) Mark(_orphans[i].VisualParent, NodeFlags.LayoutDirty);
+                break;
+            }
+    }
 
     private void UnindexOrphan(in OrphanEntry entry)
     {
@@ -1182,7 +1200,9 @@ public sealed partial class SceneStore : ISceneBackend
     {
         if (!_brushAnims.TryGet(idx, out var ba)) return;
         if (_gen[idx] == 0) { RemoveBrushAnim(idx); return; }
-        ba.T = t < 0f ? 0f : (t > 1f ? 1f : t);
+        t = t < 0f ? 0f : (t > 1f ? 1f : t);
+        if (ba.T == t && t < 1f) return;   // the same progress again (a held or paused fade's feedback): nothing to redraw
+        ba.T = t;
         _flags[idx] |= NodeFlags.PaintDirty;
         MarkRecordDirty(idx);
         if (ba.T >= 1f) RemoveBrushAnim(idx);
@@ -1307,7 +1327,9 @@ public sealed partial class SceneStore : ISceneBackend
     {
         int idx = (int)h.Raw.Index;
         if (!_glyphWipes.TryGet(idx, out var w)) return;
-        _glyphWipes.GetOrAdd(idx) = w with { Split = split < 0f ? 0f : (split > 1f ? 1f : split) };
+        split = split < 0f ? 0f : (split > 1f ? 1f : split);
+        if (w.Split == split) return;   // a held row's feedback re-sends the value it holds: nothing to redraw
+        _glyphWipes.GetOrAdd(idx) = w with { Split = split };
         _flags[idx] |= NodeFlags.PaintDirty;
         MarkRecordDirty(idx);
     }
@@ -2166,6 +2188,8 @@ public sealed partial class SceneStore : ISceneBackend
     public void SetInteractT(NodeHandle node, bool press, float t)
     {
         if (!IsLive(node)) return;
+        // the same progress again (a held fade's feedback): nothing to redraw, and no write intent on the side table
+        if (_interact.TryGet((int)node.Raw.Index, out InteractionAnim held) && (press ? held.PressT : held.HoverT) == t) return;
         ref InteractionAnim ia = ref InteractRef(node);
         if (press) ia.PressT = t; else ia.HoverT = t;
         Mark(node, NodeFlags.PaintDirty);
@@ -2671,6 +2695,36 @@ public sealed partial class SceneStore : ISceneBackend
             }
         }
         return new RectF(x, y, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
+    }
+
+    /// <summary><see cref="IsShown"/> AND some of its box survives every clipping ancestor (<see cref="NodeFlags.ClipsToBounds"/>:
+    /// a scroll viewport, a clipped card) and the root: the "is any of it in view" test a per-frame consumer (an animated image's
+    /// clock) needs. The node's box is carried up the parent chain in each ancestor's own space (the
+    /// <see cref="AbsoluteRect"/> offsets: bounds, translation, the parent's child shift) and cut by every clip it meets.
+    /// Translation-only, like <see cref="AbsoluteRect"/>. Allocation-free; O(depth).</summary>
+    public bool IsInView(NodeHandle h)
+    {
+        if (!IsShown(h)) return false;
+        float l = 0f, t = 0f, r = _bounds[h.Raw.Index].W, b = _bounds[h.Raw.Index].H;
+        for (var n = h; !n.IsNull; )
+        {
+            var parent = Parent(n);
+            if (parent.IsNull) break;
+            float dx = _bounds[n.Raw.Index].X + _paint[n.Raw.Index].LocalTransform.Dx + _paint[parent.Raw.Index].ChildShiftX;
+            float dy = _bounds[n.Raw.Index].Y + _paint[n.Raw.Index].LocalTransform.Dy + _paint[parent.Raw.Index].ChildShiftY;
+            l += dx; r += dx; t += dy; b += dy;
+            n = parent;
+            if ((_flags[n.Raw.Index] & NodeFlags.ClipsToBounds) != 0 || n == Root)
+            {
+                ref RectF pb = ref _bounds[n.Raw.Index];
+                if (l < 0f) l = 0f;
+                if (t < 0f) t = 0f;
+                if (r > pb.W) r = pb.W;
+                if (b > pb.H) b = pb.H;
+                if (r <= l || b <= t) return false;
+            }
+        }
+        return true;
     }
 
     /// <summary>Does the tree say <paramref name="h"/> is on screen: live, linked to <see cref="Root"/> (a KeepAlive-parked

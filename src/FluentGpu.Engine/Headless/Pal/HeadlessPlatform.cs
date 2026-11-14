@@ -6,13 +6,32 @@ namespace FluentGpu.Pal.Headless;
 public sealed class HeadlessPlatformApp : IPlatformApp
 {
     private readonly List<HeadlessPopupWindow> _popupWindows = new();
+    // The run's main window, the "monitor" the default work area follows: the first one CreateWindow builds, or, for a host
+    // handed a window built directly (Wavee's headless shell builds its window, then this app), the last window built on this
+    // thread before this app was.
+    private HeadlessWindow? _firstWindow = HeadlessWindow.LastBuiltOnThread;
+    private RectF? _workArea;
 
-    public IPlatformWindow CreateWindow(in WindowDesc desc) => new HeadlessWindow(desc);
+    public IPlatformWindow CreateWindow(in WindowDesc desc)
+    {
+        var w = new HeadlessWindow(desc);
+        _firstWindow ??= w;
+        return w;
+    }
     public IClipboard Clipboard { get; } = new HeadlessClipboard();
 
-    /// <summary>The synthetic monitor work area returned by <see cref="GetWorkArea"/> (physical virtual-screen px).
-    /// Tests set this to simulate a taskbar-clipped / multi-monitor desktop; default = a 1920×1080 primary monitor.</summary>
-    public RectF WorkArea { get; set; } = new(0f, 0f, 1920f, 1080f);
+    /// <summary>The synthetic monitor work area returned by <see cref="GetWorkArea"/> (physical virtual-screen px). By default
+    /// it FOLLOWS the run's main window (its client origin and size, read at each call, so a resize moves it too): a headless
+    /// render shows exactly that window, so a popup window placed against a larger desktop would land where no render can
+    /// show it, and a menu's room (MenuFlyoutPresenter's cap) would be measured against space the render does not have. Set
+    /// it to simulate a taskbar-clipped or multi-monitor desktop; before any window exists it is a 1920×1080 primary monitor.</summary>
+    public RectF WorkArea
+    {
+        get => _workArea ?? (_firstWindow is { } w
+            ? new RectF(w.ClientOriginPx.X, w.ClientOriginPx.Y, w.ClientSizePx.Width, w.ClientSizePx.Height)
+            : new RectF(0f, 0f, 1920f, 1080f));
+        set => _workArea = value;
+    }
 
     /// <summary>Optional per-point resolver for multi-monitor tests (wins over <see cref="WorkArea"/> when set) —
     /// e.g. return a different work-area rect for points on a synthetic secondary monitor.</summary>
@@ -45,15 +64,22 @@ public sealed class HeadlessPlatformApp : IPlatformApp
 public sealed class HeadlessWindow : IPlatformWindow
 {
     private readonly Queue<InputEvent> _queue = new();
+    [ThreadStatic] private static WeakReference<HeadlessWindow>? t_lastBuilt;
+
+    /// <summary>The last window built on this thread (still alive), for <see cref="HeadlessPlatformApp"/>'s default work area.</summary>
+    internal static HeadlessWindow? LastBuiltOnThread => t_lastBuilt is { } r && r.TryGetTarget(out var w) ? w : null;
 
     public HeadlessWindow(in WindowDesc desc)
     {
+        t_lastBuilt = new WeakReference<HeadlessWindow>(this);
         ClientSizePx = desc.SizePx;
         _dpiScale = desc.Scale <= 0 ? 1f : desc.Scale;
         _zoom = ZoomLadder.Clamp(desc.Zoom);
         CustomFrame = desc.CustomFrame;
         Composited = desc.Composited;
         MinClientSizeDip = desc.MinClientSizeDip;
+        MaxClientSizeDip = desc.MaxClientSizeDip;
+        LiveResize = desc.LiveResize && desc.Composited;
         Topmost = desc.Topmost;
         ToolWindow = desc.ToolWindow;
         Resizable = desc.Resizable;
@@ -68,6 +94,8 @@ public sealed class HeadlessWindow : IPlatformWindow
     public bool Resizable { get; }
     /// <summary>The descriptor's opt-in minimum client size, retained for headless contract assertions.</summary>
     public Size2 MinClientSizeDip { get; }
+    /// <summary>The descriptor's opt-in maximum client size, retained for headless contract assertions.</summary>
+    public Size2 MaxClientSizeDip { get; }
 
     public NativeHandle Handle => new(0, NativeHandleKind.Headless);
     /// <summary>Settable (test seam): simulate a window resize / per-monitor DPI change (WM_DPICHANGED) mid-session —
@@ -102,6 +130,9 @@ public sealed class HeadlessWindow : IPlatformWindow
     public bool SizedInModalLoop { get; set; }
     /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.Composited"/>
     public bool Composited { get; set; }
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.LiveResize"/> Seeded from the descriptor (a composited window only, as
+    /// on Win32); settable so a driver can simulate the opt-in with <see cref="InModalLoop"/>.
+    public bool LiveResize { get; set; }
     public CursorId LastCursor { get; private set; }
     public bool Shown { get; private set; }
 

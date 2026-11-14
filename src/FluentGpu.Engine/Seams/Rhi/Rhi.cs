@@ -205,17 +205,17 @@ public partial interface IGpuDevice : IDisposable
     /// VRAM-pressure eviction (adreno-hang-fixes.md M5); default keeps every other backend unaffected.</summary>
     bool TryGetVramUsage(out long usedBytes, out long budgetBytes) { usedBytes = 0; budgetBytes = 0; return false; }
 
-    /// <summary>The composited-video presenter (DirectComposition child visuals for externally-produced video / protected
+    /// <summary>The composited-video presenter (composition visuals for externally-produced video / protected
     /// DRM surfaces), or <see langword="null"/> when this backend/target cannot composite video — the headless seam, or
     /// an opaque non-composited window. Default <see langword="null"/> keeps every non-D3D12 backend AND the headless
     /// test seam free of video, so the host's phase-11 video-surface drain is a no-op there and the zero-alloc gates are
-    /// untouched by construction. The D3D12 backend returns its render-thread-confined <c>DCompVideoPresenter</c> (only
-    /// while the primary swapchain is composited).</summary>
+    /// untouched by construction. The D3D12 backend returns its render-thread-confined <c>CompositionVideoPresenter</c>
+    /// (only while the primary swapchain is composited).</summary>
     FluentGpu.Pal.IVideoPresenter? VideoPresenter => null;
 
-    /// <summary>The composited-video presenter bound to a SPECIFIC swapchain's DirectComposition root — the per-window
+    /// <summary>The composited-video presenter bound to a SPECIFIC swapchain's window — the per-window
     /// form of <see cref="VideoPresenter"/> (which targets the primary swapchain). A detached/secondary video window
-    /// passes its own swapchain here so its video child visuals attach under ITS DComp root, not the primary's. Returns
+    /// passes its own swapchain here so its video composites under ITS window, not the primary's. Returns
     /// <see langword="null"/> when the target is not composited / the backend cannot composite video. Default routes to
     /// the primary <see cref="VideoPresenter"/> so single-window backends are unaffected.</summary>
     FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(ISwapchain swapchain) => VideoPresenter;
@@ -330,6 +330,23 @@ public partial interface IGpuDevice : IDisposable
     /// Default no-op (headless / backends with no deferred-retire resource pool).</summary>
     void ReclaimCompletedUploads() { }
 
+    /// <summary>True when this backend keeps a closed popup's swap chain for the next popup (<see cref="ISwapchain.ParkPopup"/>):
+    /// the host's popup pool and its idle prewarm run only then, so a backend that cannot park (headless) never starts one.
+    /// Default false.</summary>
+    bool CanParkPopups => false;
+
+    /// <summary>Render thread, the primary host's turn only, on a turn in which the primary presents nothing: run the popup pool's
+    /// deferred device work (the idle prewarm's swap chain build, the release of popups let go once their frames retired). The
+    /// backend also runs it right after the primary's own present; never ahead of it. Default no-op.</summary>
+    void ServicePopupWork() { }
+
+    /// <summary>The newest submit serial whose GPU work has retired (the device's one monotonic submit fence; compare with
+    /// <see cref="ISwapchain.LastSubmitSerial"/>). A frosted plate over a video may only shrink, fade or go once the frame that drops
+    /// its veil has retired: until then the glass still shows the veil, and the compositor would show it without the blur
+    /// (<c>VideoPlacementApplier</c>). Render thread. Default <see cref="ulong.MaxValue"/>: a backend with no submit queue retires
+    /// everything at once.</summary>
+    ulong CompletedSubmitSerial => ulong.MaxValue;
+
     /// <summary>Record + batch + submit to a specific swapchain target (windowed popup HWNDs). Backends without
     /// secondary-swapchain support fall back to the primary target via the legacy overload.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
@@ -394,6 +411,11 @@ public interface ISwapchain : IDisposable
     Size2 SizePx { get; }
     void Resize(Size2 px);
     void Present();
+
+    /// <summary>Where the last <see cref="Resize"/> that changed the size spent its time, in ms: the CPU wait for this target's
+    /// in-flight GPU work (<c>WaitGpuMs</c>) and the buffer reallocation itself (<c>BuffersMs</c>). Diagnostics only (the
+    /// <c>[window.resize]</c> line); the default (a backend that does not measure) is zero.</summary>
+    (double WaitGpuMs, double BuffersMs) LastResizeSplit => default;
 
     /// <summary>Present WITHOUT blocking the calling thread on this target's present queue (DXGI_PRESENT_DO_NOT_WAIT): the
     /// non-blocking secondary present (F085) a detached pop-out's frame takes on the render thread it shares with the main
@@ -478,6 +500,19 @@ public interface ISwapchain : IDisposable
     /// so the frame loop keeps presenting the popup until the composition animation commits + settles (and, for close,
     /// defers disposal until it clears).</summary>
     bool PopupAnimating => false;
+
+    /// <summary>Render thread: keep this closed popup's swapchain (its buffers, RTV heap, command list and composition chrome)
+    /// for the next popup on the same window instead of releasing it (the host's popup pool). The backend sheds what an idle
+    /// popup does not need without waiting on the GPU (the buffers shrink to 1x1 once this target's frames retired) and a
+    /// popup created but never built is built here (the pool's idle prewarm). False when the backend cannot park it: the host
+    /// then disposes it. Default false.</summary>
+    bool ParkPopup() => false;
+
+    /// <summary>Render thread: ready a parked popup swapchain (<see cref="ParkPopup"/>) for a new popup: its open/close motion
+    /// state is reset and <see cref="HasPresentedContent"/> reads false until the new popup's first frame presents, so the host's
+    /// reveal never shows the previous menu. False when it can no longer serve (released with a lost device): the host disposes
+    /// it and builds a new one. Default false.</summary>
+    bool UnparkPopup() => false;
 
     // ── Per-target diagnostics + present pacing (detached-window-render-isolation-implementation.md §3.3) ──
     // Moved off IGpuDevice: each was a device-wide LAST-WRITER field that a secondary target's submit/present could
@@ -604,6 +639,10 @@ public interface ISwapchain : IDisposable
     /// GPU work runs longer than the bound presents anyway (one skewed frame, counted). Armed ONLY for a turn that moves video
     /// geometry, never on steady playback or idle. Default no-op: a backend with no present queue to skew against.</summary>
     void HintGeometryMotionPresent() { }
+
+    /// <summary>The device submit serial of THIS target's most recent submit: its GPU work has retired once
+    /// <see cref="IGpuDevice.CompletedSubmitSerial"/> reaches it. Render thread. Default 0 (no serial: counts as retired).</summary>
+    ulong LastSubmitSerial => 0;
 
     /// <summary>Run (or drop) the sync <see cref="HintSettlePresent"/> armed. The host calls this AFTER it committed the
     /// frame's video placement, so the hole and the video geometry reach DWM in the same composition: a blocking flush

@@ -6,7 +6,8 @@
 //   * Runtime  (PrRuntime.cpp)  — MF, the D3D11 video device + DXGI manager, the CDM + PMP host, the ONE media engine,
 //                                 its notify sink + scheme handler, and the MTA runtime thread with its work queue;
 //   * License  (PrLicense.cpp)  — one open TEMPORARY CDM key session per KID, the non-blocking relay;
-//   * Session  (PrSession.cpp)  — one CencMediaSource over one SegmentStore, its feeder thread and its snapshot.
+//   * Session  (PrSession.cpp)  — one video's tracks over one SegmentStore, its feeder thread and its snapshot. The engine
+//                                 plays sessions as PROGRAMS of the runtime's one persistent source (CencMediaSource.h).
 // A stale handle resolves to nothing (E_HANDLE), which is the property the whole rework is for: a predecessor's
 // teardown can no longer land on its successor.
 //
@@ -71,6 +72,8 @@
 #include "FgPlayReady.h"
 #include "EventRing.h"
 #include "OpmWindow.h"
+#include "MfAudioGuard.h"
+#include "AudioWarm.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -258,6 +261,30 @@ inline void RaiseLog(uint64_t handle, const std::string& line)
     }
     std::wstring w = Widen(line);
     Sink().ring.Push(handle, FgPrEvent_Log, 0, 0, w.c_str(), /*droppable*/ true);
+}
+
+/// The freeze trail (FgPrEvent_Phase): one step of a protected start or end that could block the GPU or the compositor, stamped
+/// with the QPC it happened at (not when the ring delivers it). A blocking step is PhaseBegin + PhaseEnd; PhaseEnd carries the
+/// duration. Never dropped; a few per attach.
+inline void RaisePhase(uint64_t handle, const wchar_t* name, int64_t qpc = 0, int64_t durTicks = 0)
+{
+    if (!Sink().Get()) return;
+    Sink().ring.Push(handle, FgPrEvent_Phase, qpc ? qpc : QpcNow(), durTicks > 0 ? durTicks : 0, name, /*droppable*/ false);
+}
+
+/// Stamp `<step>.begin` now and return the QPC, for the matching PhaseEnd.
+inline int64_t PhaseBegin(uint64_t handle, const wchar_t* beginName)
+{
+    const int64_t t0 = QpcNow();
+    RaisePhase(handle, beginName, t0);
+    return t0;
+}
+
+/// Stamp `<step>.end` now with its duration since `t0` (PhaseBegin's return).
+inline void PhaseEnd(uint64_t handle, const wchar_t* endName, int64_t t0)
+{
+    const int64_t now = QpcNow();
+    RaisePhase(handle, endName, now, t0 ? now - t0 : 0);
 }
 
 }   // namespace fgpr
@@ -605,10 +632,6 @@ struct Runtime
     // ── touched on the runtime thread ONLY ──────────────────────────────────────────────────────────────────────────
     bool comInitialized = false;
     bool mfStarted = false;
-    /// MFStartup has returned (set by BringUp, early in the bring-up). The feeder builds its Media Foundation source as
-    /// soon as the init segments land - possibly before the runtime thread is up (the early kick at FgPrSessionAttach) -
-    /// and waits on this, never on the whole bring-up.
-    std::atomic<bool> mfReady{ false };
     winrt::com_ptr<ID3D11Device> d3d;
     winrt::com_ptr<IMFDXGIDeviceManager> dxgiManager;
     UINT resetToken = 0;
@@ -626,15 +649,8 @@ struct Runtime
     /// is created and stopped by TearDown AFTER it is shut down (both on the runtime thread); FgPrSessionPlaceOpmWindow moves it
     /// from the UI thread (OpmWindow is internally synchronized). A runtime whose window could not be created simply has none.
     OpmWindow opm;
-
-    /// The CDM-scope IMFTrustedInput (PrSession.cpp CompleteAttach), held only when `trustedInputReuse` is on: created by
-    /// the first protected attach, handed to every later source, released with the CDM (PrRuntime.cpp TearDown; a CDM
-    /// reset is a whole new Runtime, so there is no other reset point). Runtime thread only.
-    winrt::com_ptr<IMFTrustedInput> trustedInput;
-    /// FG_PLAYREADY_TRUSTED_INPUT_REUSE=1 (read once at bring-up). OFF by default: a second source over the same trusted
-    /// input may make PMP reject the ITA proxy for another KID, so the default stays one trusted input per attach until
-    /// the on-box check (two KIDs, then a re-attach) has passed. Runtime thread only.
-    bool trustedInputReuse = false;
+    /// The session whose first placement of `opm` the freeze trail last stamped ("opm.place"): one stamp per attached session.
+    std::atomic<uint64_t> opmPhaseSession{ 0 };
 
     /// The session whose source the engine is playing — or is about to play, while its init segments are still on the
     /// wire (PrSession.cpp CompleteAttach). Written on the runtime thread, read by the notify sink on MF threads.
@@ -646,22 +662,48 @@ struct Runtime
     /// the same session handle is attached again.
     std::atomic<uint64_t> attachGen{ 0 };
 
-    /// The session whose CencMediaSource the engine currently HOLDS (the last successful SetSource), which outlives
-    /// `attached` after a detach: the old source stays loaded (paused) until a successor's own SetSource replaces it, so no
-    /// empty SetSource ever races the successor's load, or until the grace armed in `releaseGate` runs out and it is
-    /// unloaded. Runtime thread only.
-    uint64_t engineSource = 0;
+    // ── THE PIPELINE (PrSession.cpp "The pipeline") ─────────────────────────────────────────────────────────────────
+    // ONE source, topology, decoder, renderer and swap chain for as long as they stay healthy: each next video is a PROGRAM
+    // bound into the source (ProgramSwitch: pause, bind, seek, play), never a new SetSource. Runtime thread only, unless marked.
+    /// The source the engine holds (the last successful SetSource; null before the first protected open). It is replaced
+    /// (PipelineBuild, a new SetSource) only for the first open, a program whose streams it cannot carry, or once it broke.
+    winrt::com_ptr<CencMediaSource> source;
+    uint64_t sourceSerial = 0;              // names the source in its cenc:// URL
+    bool sourceLoaded = false;              // its first program reached LOADEDMETADATA: the engine runs a seek on it
+    const char* sourceBroken = nullptr;     // why it can carry no further program (an engine ERROR, RESOURCELOST); null = healthy
+    /// The scheme handler's view of the source a SetSource is loading: an MF thread resolves the URL after SetSource returned.
+    std::mutex sourceUrlMx;
+    winrt::com_ptr<CencMediaSource> sourceForUrl;   // sourceUrlMx
+    uint64_t sourceForUrlSerial = 0;                // sourceUrlMx
 
-    /// The armed unload of `engineSource` (PrSession.cpp ScheduleEngineRelease). Runtime thread only.
-    handover::ReleaseGate releaseGate;
-    /// F198: the swap-chain handles no session publishes any more (replaced, or its session detached), kept open for
-    /// health::kHandleGraceMs so the managed render thread can finish binding their successors, then closed (PrSession.cpp
-    /// RetireSwapchainHandle). Runtime thread only.
+    /// The swap chain the engine presents into, as ONE runtime-owned NT handle for as long as it is the same object: a
+    /// program switch publishes the same handle, so the presenter's value gate never re-wraps it (the "wuc.attach" a switch
+    /// used to cost). GetVideoSwapchainHandle hands out a fresh NT handle per call, so a new value is compared by OBJECT
+    /// (CompareObjectHandles) before it is adopted (PrSession.cpp AdoptSwapchainHandle). Written on the runtime thread.
+    std::atomic<uint64_t> swapchainHandle{ 0 };
+    /// Bumped whenever `swapchainHandle` names a NEW swap chain, or RESOURCELOST asks the presenter to wrap the same one again:
+    /// FgPrSnapshot.handleGeneration, the managed binding's only reason to force a re-bind.
+    std::atomic<int32_t> swapchainGen{ 0 };
+    /// F198: handles no longer current (a replaced swap chain), kept open for health::kHandleGraceMs so the managed render thread
+    /// can finish binding the successor, then closed (PrSession.cpp RetireSwapchainHandle).
     health::RetiredHandles retiredHandles;
+    /// The stream size applied to the engine (UpdateVideoStream's destination) and the engine's native size when it was: the
+    /// ENGINE's state, so it outlives a program switch. Every UpdateVideoStream(dst) - an unchanged size included - makes MF
+    /// free and rebuild its pool of protected frame buffers (a desktop stall), so FgPrSessionSetStreamSize skips a request this
+    /// already holds. Reset when a new source loads (its swap chain is sized at LOADEDMETADATA).
+    int32_t streamW = 0, streamH = 0, streamNativeW = 0, streamNativeH = 0;
+    bool streamSkipLogged = false;   // the skip is logged once per source
 
-    /// Joins destroyed sessions' feeder threads off the runtime thread (PrSession.cpp DestroyInternal); drained before
-    /// Media Foundation is shut down and shut down by FgPrRuntimeDestroy.
+    /// Joins destroyed sessions' feeder threads off the runtime thread (PrSession.cpp DestroyInternal); drained at runtime
+    /// teardown and shut down by FgPrRuntimeDestroy.
     handover::FeederReaper reaper;
+
+    /// The default render endpoint's warm-up (AudioWarm.h): started by BringUp, waited on (only while one runs) by a protected
+    /// attach before its SetSource, stopped by TearDown.
+    AudioWarmer audioWarm;
+    /// attachGen + 1 of the attach whose session start the mfcore guard (MfAudioGuard.h) failed with its stand-in, else 0.
+    /// Written by the guard's fallback on the MF thread; read by the ERROR event and the backstop on the runtime thread.
+    std::atomic<uint64_t> guardFailedGen{ 0 };
 
     bool Ready() const { return bringUp.load(std::memory_order_acquire) == S_OK && !shuttingDown.load(std::memory_order_acquire); }
     int64_t UptimeMs() const { return MsSinceQpc(createdQpc); }
@@ -745,7 +787,9 @@ struct Session
     std::atomic<bool> feedStop{ false };
 
     std::mutex feedMx;
-    winrt::com_ptr<CencMediaSource> source;       // feedMx — rebuilt on a re-attach (MF shuts a replaced source down)
+    // feedMx — the session's tracks, built when the inits land and never replaced: the engine plays them while the session is
+    // the program (Runtime::source binds them), and they keep their buffer across every attach and detach.
+    std::shared_ptr<CencMediaStream> videoTrack, audioTrack;
     cenc::InitInfo videoInfo, audioInfo;          // feedMx (the feeder writes, attach reads)
     bool haveAudio = false;                       // feedMx
     std::atomic<bool> initsLoaded{ false };
@@ -803,11 +847,52 @@ struct Session
     fgpr::plan::WaitGate waitGate;                // the engine's WAITING state (FgPrEvent_Waiting / FgPrEvent_Resumed edges)
     int64_t startCorrectionMs = 0;                // how far behind the carried start the engine clock was at CANPLAY (0 = adopted it)
     bool wantPlay = true;                         // the transport level to apply at attach / after a paused open
+    bool frameStepInFlight = false;               // a FrameStep was issued and its FRAMESTEPCOMPLETED has not arrived (per attach)
+    int intentReasserts = 0;                      // engine pauses answered with a Play since the last PLAYING / verb (bound: 3)
     std::atomic<int64_t> volumeMicro{ 1000000 };
     std::atomic<int64_t> rateMicro{ 1000000 };
     int32_t streamWidth = 0, streamHeight = 0;    // FgPrSessionSetStreamSize (0×0 = natural)
     int64_t lastStreamLogQpc = 0;                 // runtime thread: when the "[cenc] stream size" line was last written
     int32_t handleTries = 0;
+
+    // ── the program (runtime thread): this session as what the source plays (PrSession.cpp "The pipeline") ──────────────
+    int64_t programBaseMs = 0;                    // where this session's time 0 lies on the source's timeline
+    struct ProgramStart
+    {
+        int32_t mode = FgPrProgram_Open;  // how this attach put the session on the engine (FgPrProgram)
+        bool firstFramePending = false;   // a switch's first frame is still to come (FIRSTFRAMEREADY fires once per load)
+        bool seeked = false;              // the switch's seek landed: the rendered-frame counter now counts this program's frames
+        uint32_t baseRendered = 0;        // FRAMES_RENDERED when it landed
+        int32_t polls = 0;
+        bool rebuildTried = false;        // this attach already fell back to a full rebuild once
+        int64_t switchQpc = 0;            // when the attach's bind or build began (the program.switch line's ms)
+    } program;
+    uint64_t programProbeGen = 0;                 // a superseded switch's first-frame poll is a no-op
+    // The program's end: the source reported every selected track drained (programEndMs = the end of what they delivered), and
+    // Ended is raised once the clock reaches it, or stops short of it. Reset by every attach and seek.
+    bool programDrained = false;
+    bool programEndArmed = false;                 // an end check is scheduled
+    int64_t programEndMs = 0;
+    int64_t drainCheckPosMs = -1;                 // the position the end check last saw, and when it last moved
+    int64_t drainCheckMovedQpc = 0;
+    // The swap chains MF built for this attach (each handle the runtime adopted: the metadata publication, a FORMATCHANGE or
+    // RESOURCELOST re-creation), and when the last one landed: the "[cenc] swapchain build=" lines. Reset with every attach.
+    int32_t swapchainBuilds = 0;
+    int64_t lastSwapchainBuildQpc = 0;
+    // The stream-size probe (runtime thread): after an UpdateVideoStream(dst) of FgPrSessionSetStreamSize, the first frame the
+    // renderer counts (FRAMES_RENDERED moving past `baseRendered`) is the first one drawn into the resized swap chain. `gen`
+    // advances on every new request, detach and attach, so a poll of a superseded request is a no-op.
+    struct StreamProbe
+    {
+        bool armed = false;
+        bool whilePlaying = false;   // made while the source played: a pause before its frame asks for the repaint
+        int32_t w = 0, h = 0;
+        int64_t calledQpc = 0;       // when UpdateVideoStream returned
+        double applyMs = 0.0;        // how long UpdateVideoStream itself took
+        uint32_t baseRendered = 0;   // the raw FRAMES_RENDERED when it returned
+        int32_t polls = 0;
+    } streamProbe;
+    uint64_t streamProbeGen = 0;
     // F066 (runtime thread): the renderer's frame counters accumulated across MF's post-flush resets, when they were last read,
     // and the no-rendered-frame watch. Reset with every attach; the accumulated totals are published through the atomics below.
     health::FrameCounters frames;
@@ -821,7 +906,8 @@ struct Session
     std::atomic<int32_t> state{ FgPrState_Idle };
     std::atomic<int32_t> errorHr{ 0 };
     std::atomic<int32_t> readyState{ 0 };
-    std::atomic<uint64_t> swapchainHandle{ 0 };
+    std::atomic<uint64_t> swapchainHandle{ 0 };   // the runtime's handle while attached, 0 otherwise (the session never owns it)
+    std::atomic<int32_t> handleGeneration{ 0 };   // Runtime::swapchainGen as of the last publication to this session
     std::atomic<int32_t> width{ 0 }, height{ 0 };
     std::atomic<int32_t> seeking{ 0 };
     // (the representation indices - on screen / downloading - live in the SegmentStore, written by the video stream)
@@ -831,8 +917,10 @@ struct Session
     std::atomic<int64_t> bufferedAheadMs{ 0 };
     std::atomic<int64_t> retainedBehindMs{ 0 };
     std::atomic<int64_t> firstFrameQpc{ 0 };
-    std::atomic<int32_t> appliedStreamW{ 0 }, appliedStreamH{ 0 };   // FgPrSnapshot.streamWidth/Height: the applied stream size
+    std::atomic<int32_t> appliedStreamW{ 0 }, appliedStreamH{ 0 };   // the applied stream size (the frame-health check, the no-frame line)
     std::atomic<int64_t> framesRendered{ 0 }, framesDropped{ 0 };    // FgPrSnapshot.framesRendered/Dropped (F066), this attach
+    std::atomic<int64_t> framesSampledQpc{ 0 };                      // FgPrSnapshot.framesSampledQpc: when the counters above were read
+    std::atomic<int32_t> feedComplete{ 0 };                          // FgPrSnapshot.feedComplete: every track's feed reached its end
     std::atomic<uint64_t> bytesDownloaded{ 0 };
     std::atomic<uint64_t> downloadElapsedMs{ 0 };
 
@@ -909,13 +997,20 @@ HRESULT LicenseEnableContent(uint64_t runtime, const EnableKeys& keys, IMFConten
 void LicensesShutdown(Runtime& rt);                       // runtime thread, FgPrRuntimeDestroy: close every key session
 
 // PrSession.cpp
-winrt::com_ptr<::IUnknown> SessionSourceForUrl(const wchar_t* url);   // the scheme handler's resolver (any thread)
+winrt::com_ptr<::IUnknown> SourceForUrl(Runtime& rt, const wchar_t* url);   // the scheme handler's resolver (any thread)
 void SessionPublishHandle(Runtime& rt, Session& s, bool reRaise);      // runtime thread
 void SessionOnFormatChange(Runtime& rt, Session& s);                   // runtime thread: a size report, never a re-publication
 void SessionSamplePosition(Runtime& rt, Session& s, bool raiseNow);    // runtime thread
 void SessionOnCanPlay(Runtime& rt, Session& s);                        // runtime thread
 bool SessionSeekLanded(Runtime& rt, Session& s);                       // runtime thread, SEEKED: true = a deferred seek now runs
+void SessionApplyIntent(Runtime& rt, Session& s, const char* after);  // runtime thread: the engine's level := wantPlay
 void SessionsShutdown(Runtime& rt);                                    // runtime thread, FgPrRuntimeDestroy
 void SessionsKeySettled(Runtime& rt);                                  // runtime thread: a licence left Pending, re-ask the key gate
+void SessionProgramSeeked(Runtime& rt, const std::shared_ptr<Session>& sp);   // runtime thread: a switch's seek landed
+void SessionProgramFirstFrame(Runtime& rt, Session& s, int64_t qpc, const char* via);   // runtime thread: the program's first frame
+void SessionCheckProgramEnd(Runtime& rt, Session& s, bool engineWaiting);   // runtime thread: Ended once a drained program played out
+/// Runtime thread, an engine ERROR on the attached session: the source is broken; a switch that has not shown its first frame yet
+/// falls back to a full rebuild of the pipeline for this video (true = handled, raise nothing).
+bool SessionPipelineFailed(Runtime& rt, const std::shared_ptr<Session>& sp, int64_t code, HRESULT hr);
 
 }   // namespace fgpr

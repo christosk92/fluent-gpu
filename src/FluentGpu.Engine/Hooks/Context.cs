@@ -122,9 +122,21 @@ public static class VideoCompositor
 /// picks a picture-in-picture home at the bottom-right of the parent's monitor. A restored rect is still clamped to a
 /// visible monitor, so a window remembered on a display that is now gone still opens where the user can see it.</param>
 /// <param name="MinClientSizeDip">Optional minimum client size (DIP). Empty ⇒ the host's 16:9-ish default floor.</param>
+/// <param name="NoActivate">Reveal the window without activating it (no focus steal); a click still activates it.</param>
+/// <param name="Material">The window's own system backdrop (null: none written, the ground follows the main window's as before).</param>
+/// <param name="MaterialDark">The dark attribute written with <paramref name="Material"/>.</param>
+/// <param name="ToolWindow">No taskbar button and no Alt+Tab entry (<see cref="WindowDesc.ToolWindow"/>).</param>
+/// <param name="DragAnywhere">Every inert pixel moves the window (<see cref="IPlatformWindow.CaptionWhereInert"/>).</param>
+/// <param name="LiveResize">The content follows an edge drag: every size step of the OS resize loop is laid out, rendered and
+/// presented at the new client size (<see cref="WindowDesc.LiveResize"/>), so <c>Viewport.Size</c> changes during the drag.
+/// False (the default) keeps the composited defer: the content stays at its pre-drag size until mouse-up.</param>
+/// <param name="MaxClientSizeDip">Optional maximum client size (DIP) the user can drag the window to; an empty axis has no
+/// ceiling beyond the platform's (<see cref="WindowDesc.MaxClientSizeDip"/>).</param>
 public readonly record struct DetachedWindowRequest(
     string Title, FluentGpu.Foundation.Size2 InitialSizeDip, Component Content, bool AlwaysOnTop = true,
-    FluentGpu.Foundation.RectF InitialBoundsPx = default, FluentGpu.Foundation.Size2 MinClientSizeDip = default);
+    FluentGpu.Foundation.RectF InitialBoundsPx = default, FluentGpu.Foundation.Size2 MinClientSizeDip = default,
+    bool NoActivate = false, WindowMaterial? Material = null, bool MaterialDark = true, bool ToolWindow = false,
+    bool DragAnywhere = false, bool LiveResize = false, FluentGpu.Foundation.Size2 MaxClientSizeDip = default);
 
 /// <summary>Where a pop-out open spent its time, split so a slow open names its stage (F110). The window is created hidden and
 /// revealed once its first frame has presented, so the four stages are separate costs and only the first two are paid
@@ -168,8 +180,15 @@ public interface IDetachedVideoWindow
     bool IsOpen { get; }
     /// <summary>Toggle persistent always-on-top.</summary>
     void SetTopmost(bool topmost);
+    /// <summary>Change this window's own system backdrop and dark attribute (a theme switch): the ground follows (a backdrop clears
+    /// transparent while active, <see cref="WindowMaterial.None"/> clears to the theme's opaque ground). Default: no-op.</summary>
+    void SetMaterial(WindowMaterial material, bool dark) { }
     /// <summary>Move/resize the window (outer rect, physical virtual-screen px).</summary>
     void SetBounds(FluentGpu.Foundation.RectF outerBoundsPx);
+    /// <summary>Fade and scale the whole window on the compositor (<see cref="FluentGpu.Pal.WindowPresentationMotion"/>): an open or
+    /// close that is one motion instead of a window popping in or out. Call it right after the open for the starting hold (it rides the
+    /// window's first composed frame), then again with the entrance once <see cref="OnRevealed"/> fires. Default: no-op.</summary>
+    void AnimatePresentation(in FluentGpu.Pal.WindowPresentationMotion motion) { }
     /// <summary>Move the window's outer origin WITHOUT touching its size (<see cref="Pal.IPlatformWindow.MoveToPx"/>) —
     /// restore a remembered position independent of whatever size the window happens to be at right now. Default:
     /// <see cref="SetBounds"/> with the CURRENT size (<see cref="BoundsPx"/>), for a backend whose window has no
@@ -245,6 +264,11 @@ public interface IDetachedVideoWindow
     /// treat this like <see cref="OnClosed"/>'s sibling — typically marshal to the UI thread and close the pop-out
     /// (it can no longer present) rather than leave a frozen/blank window around. Default no-op.</summary>
     Action? OnRenderFailed { get; set; }
+    /// <summary>Fired on the UI thread at the end of every frame THIS window's host renders, with its stats (the child's own
+    /// <see cref="FluentGpu.Hosting.AppHost.FrameCompleted"/>; <c>FluentApp.FrameCompleted</c> forwards the main window's only).
+    /// An app whose per-frame work rides the main window's frames (a fetch drain, a debounce clock) attaches it here while the
+    /// main window is hidden and this one is the only surface. Default: ignored.</summary>
+    Action<FluentGpu.Hosting.FrameStats>? FrameCompleted { get => null; set { } }
 }
 
 public sealed class InputHooks
@@ -306,6 +330,53 @@ public sealed class InputHooks
     public event Action<Point2>? PointerDownObserved;
     public event Action? ScrollStartedObserved;
     public void NotifyWindowBlur() { WindowBlurred?.Invoke(); WindowBlurObserved?.Invoke(); }
+
+    /// <summary>The hovering mouse/pen pointer left this window: it moved from inside the root bounds to outside them
+    /// (onto the desktop, another app, another monitor; Win32's off-screen park after WM_POINTERLEAVE), or the window
+    /// blurred while it was in. Once per leave, also when nothing is hovered, never per frame; a captured drag carried
+    /// out does not count until its release. Not raised for a move onto a windowed popup of this window's scene (a menu
+    /// or its cascade hanging past the window edge), nor for touch. UI thread, from the input dispatch: after the hover
+    /// exits of that move, so <see cref="GetPointerPosition"/> no longer reports a point over the content (during a blur
+    /// it is null, and the blur's exits already saw null); on a blur it comes before <see cref="WindowBlurObserved"/>.
+    /// Paired with <see cref="PointerEnteredWindowObserved"/>; <see cref="IsPointerInWindow"/> reads the current state.</summary>
+    public event Action? PointerLeftWindowObserved;
+    /// <summary>The hovering mouse/pen pointer came (back) into this window: the first mouse/pen event inside the root
+    /// bounds (or over a windowed popup of this scene) after a leave, a blur, or since the window opened. Once per entry,
+    /// UI thread, after that event's hover resolve. Pairs with <see cref="PointerLeftWindowObserved"/>.</summary>
+    public event Action? PointerEnteredWindowObserved;
+    /// <summary>Is a hovering mouse/pen pointer in this window now (the state the two edges above announce)? False before
+    /// the first pointer event. Host-wired to <c>InputDispatcher.PointerInWindow</c>; null in a host-less tree.</summary>
+    public Func<bool>? IsPointerInWindow;
+    /// <summary>A mouse/pen button went down on this window's content (true) or came up, was cancelled or the window blurred
+    /// (false): once per edge, at the end of the input batch, before that batch's <see cref="PointerLeftWindowObserved"/>.
+    /// Controls that idle out or hide on a leave hold while it is true, so a drag that started on them (a scrub, a volume
+    /// drag) keeps them until its release, wherever the pointer went.</summary>
+    public event Action<bool>? PointerHeldObserved;
+    /// <summary>Is a mouse/pen button held on this window's content now (the state <see cref="PointerHeldObserved"/>
+    /// announces)? Host-wired to <c>InputDispatcher.PointerHeld</c>; null in a host-less tree.</summary>
+    public Func<bool>? IsPointerHeld;
+    /// <summary>Host seam: the dispatcher's button-held edge.</summary>
+    public void NotifyPointerHeld(bool held) => PointerHeldObserved?.Invoke(held);
+
+    /// <summary>Host-wired to the platform window's presence watch (<c>IPlatformWindow.SetPointerPresenceWatch</c>).</summary>
+    public Action<bool>? SetPointerPresenceWatch;
+    private int _presenceWatchers;
+    /// <summary>Count one watcher in (<paramref name="on"/>) or out. While any is in, the platform confirms that a pointer
+    /// resting in this window is still over it and raises <see cref="PointerLeftWindowObserved"/> when it is not (a window
+    /// shown over the resting pointer sends no leave of its own). A surface whose controls hide on a window leave holds one
+    /// while they show, and releases it on unmount; pair every in with one out.</summary>
+    public void WatchPointerPresence(bool on)
+    {
+        int before = _presenceWatchers;
+        _presenceWatchers = Math.Max(0, before + (on ? 1 : -1));
+        if ((before > 0) != (_presenceWatchers > 0)) SetPointerPresenceWatch?.Invoke(_presenceWatchers > 0);
+    }
+    /// <summary>Host seam: the dispatcher's pointer-in-window edge (true = entered).</summary>
+    public void NotifyPointerWindowEdge(bool entered)
+    {
+        if (entered) PointerEnteredWindowObserved?.Invoke();
+        else PointerLeftWindowObserved?.Invoke();
+    }
     public void NotifyPointerDown(Point2 point) => PointerDownObserved?.Invoke(point);
     public void NotifyScrollStarted() => ScrollStartedObserved?.Invoke();
 

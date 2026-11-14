@@ -253,14 +253,32 @@ The production-pacing policy remains owned by [threading-render-seam.md §11.1](
   (layout, warming virtual lists, decode, drag dwell). `WM_EXITSIZEMOVE` triggers the settle resize (§5.3) with
   `HintSettlePresent`, armed from the published `RenderFrame.SettlePresent` (F101): an inline present runs one `DwmFlush`
   after the frame's video placement commit (`CompleteSettlePresent`); a render-thread present never flushes.
+  **Opt-in live resize (`WindowDesc.LiveResize`, `DetachedWindowRequest.LiveResize`)**: a composited window whose layout is a
+  function of its size (the mini player) skips the defer. Each size step paints at once, unthrottled, AHEAD of the rect: in
+  `WM_WINDOWPOSCHANGING` (after USER32's min/max clamp) the window reports the coming client size (`PaintingAheadOfSize`),
+  the host resizes the swapchain, lays out at that size (layout transitions suppressed, as in the loop) and waits until the
+  frame was presented (`AppHost.WaitLiveResizePresent`: render turns until its publication was presented, at most three
+  refresh periods), its GPU work retired before the flip (the render turn's geometry-motion fence wait); only then does the
+  window take the rect, so the flip and the rect reach the same DWM composition and the `WM_SIZE` that follows paints
+  nothing. This holds for an edge drag and for another program's `SetWindowPos` or Snap; the engine's own sizing calls
+  (`SetBoundsPx`, client resize, full screen, the DPI rect) are laid out by the host's own frame instead. A step that arrives
+  while the previous one is painting (a message pumped inside the paint) is held and applied from a posted message after
+  it, never under it. A pop-out's present waits on its own slot (its previous present must have been composed), so a step
+  costs about one refresh. The loop timer keeps its ≤30 Hz ticks under the move rule. Painting after the rect (at
+  `WM_SIZE`) showed the previous step's frame in the new rect on 44-83 % of a top-left drag's frames (the still edges a
+  step short of the window's); ahead of it, 0-6 % on the fast sweeps (filmed at 120 Hz). The residue is 1-2 px for one
+  composition, with DWM's own window border drawn a pixel off in the same frame (on up to 22 % of a slow 1-4 px/step sweep).
 
   | Window | Move | Edge resize | Mouse-up |
   |---|---|---|---|
   | Composited | ≤30 Hz ambient ticks; no geometry resize | zero geometry paints; DComp pin-top-left | one settle paint |
+  | Composited + `LiveResize` | ≤30 Hz ambient ticks; no geometry resize | every step: resize, relayout, present before the window takes the rect; ≤30 Hz ticks | one settle paint |
   | Non-composited | per-step paint (idle-skip when quiet) | ≤30 Hz live relayout | settle paint |
 
-  `IPlatformWindow` exposes `InModalLoop`, `SizedInModalLoop`, and `Composited` so `AppHost.DeferModalResize`
+  `IPlatformWindow` exposes `InModalLoop`, `SizedInModalLoop`, `Composited`, `LiveResize` and `PaintingAheadOfSize` so `AppHost.DeferModalResize`
   and span-reuse policy can key off the same PAL state Win32 derives from `WM_ENTERSIZEMOVE`/`WM_SIZE`.
+  `WindowDesc.MaxClientSizeDip` (`DetachedWindowRequest.MaxClientSizeDip`) sets `ptMaxTrackSize` per requested axis in
+  `WM_GETMINMAXINFO` with the minimum's arithmetic (DIP at the live DPI, plus the frame), never below the minimum.
 
   **Content-driven MOVE: none — drag handles are `TitleBarHit.Caption` regions.** A throwaway Win32 probe
   (2026-09-22, `EnableMouseInPointer(TRUE)`) proved that a press which starts as a CLIENT `WM_POINTERDOWN` can never
@@ -799,7 +817,7 @@ never touched by a device-lost event.
 
 ---
 
-## 7. NEW PAL seam: `IVideoPresenter` (DComp sibling visual; FluentGpu never touches video pixels)
+## 7. NEW PAL seam: `IVideoPresenter` (a compositor visual below the UI; FluentGpu never touches video pixels)
 
 ```csharp
 namespace FluentGpu.Pal;
@@ -808,21 +826,23 @@ public readonly struct VideoSurfaceId { public readonly uint Value; }   // POD; 
 
 public interface IVideoPresenter
 {
-    VideoSurfaceId CreateSurface();                            // adds a DComp child visual below the swapchain
+    VideoSurfaceId CreateSurface();                            // adds a composition visual below the swapchain
     void BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle);   // surface-handoff + DRM attach point
     void Place(VideoSurfaceId id, in RectPx deviceRect, float opacity, int z); // off-loop transform poke
     void SetVisible(VideoSurfaceId id, bool visible);
     void Destroy(VideoSurfaceId id);
-    void Commit();                                             // flush queued mutations in one DComp Commit (phase 11)
+    void Commit();                                             // flush queued mutations in one compositor Commit (phase 11)
 }
 ```
 
-`FluentGpu.Windows` Pal/ → DComp child visual (as-built `FluentGpu.Windows/Pal/DCompVideoPresenter.cs`,
-`src/FluentGpu.Engine/Seams/Pal/IVideoPresenter.cs`) whose content is an external DirectComposition surface
+`FluentGpu.Windows` Pal/ → a Windows.UI.Composition sprite (as-built `FluentGpu.Windows/Pal/CompositionVideoPresenter.cs`,
+`src/FluentGpu.Engine/Seams/Pal/IVideoPresenter.cs`: its surface brush, Stretch = Fill, stretches the swap chain's current buffer to
+the placed rect, on the window's own non-topmost `DesktopWindowTarget` beneath the UI's DComp target; the DirectComposition presenter
+that scaled by a declared content size was deleted on 2026-11-11) whose content is an external DirectComposition surface
 **handle** the app's video backend produces (native in-process PlayReady CDM / clear `IMFMediaEngineEx`
 windowless-swapchain). **`BindSurfaceHandle` is the surface-handoff seam** — an external owner creates the
 handle (`DCompositionCreateSurfaceHandle` / `GetVideoSwapchainHandle`) and the Windows impl wraps it via
-`IDCompositionDevice::CreateSurfaceFromHandle`; it is also the **single DRM attach point** (a PROTECTED handle
+`ICompositorInterop::CreateCompositionSurfaceForHandle`; it is also the **single DRM attach point** (a PROTECTED handle
 changes nothing else in the seam). Supersedes the earlier `GetMediaPlayerSink` sink-pull shape
 <!-- canon-allow: names the superseded seam method on purpose -->. FluentGpu records only `DrawVideoCmd` (the
 hole-punch) and pokes `Place`. **The heaviest continuous work is off our thread by construction** — this is the

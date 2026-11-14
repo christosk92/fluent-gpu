@@ -29,7 +29,7 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 /// a typed failure (Drm while the license is pending or the topology is being built, Network while the store is still
 /// empty). It is armed once at connect and disarmed by the first frame; it is a deadline, not a poll.</para>
 /// </summary>
-public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource, IMediaClockSource
+public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource, IMediaClockSource, IMediaFrameCounterSource
 {
     private readonly IProtectedVideoPlayer _player;
     private readonly ProtectedVideoRequest _request;
@@ -60,12 +60,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     private bool _seekPublished;
     private long _seekTargetMs;
 
-    // Decides the stream size (a bucket of the natural frame, settled, and echoed by the native snapshot before the
-    // compositor is told) — shared with the clear session. _sizeRetry re-pumps once a settle window or an echo wait ends.
-    private readonly VideoStreamSizeGate _sizeGate = new();
-    private Timer? _sizeRetry;
-    // The clock the size gate reads; a test replaces it to step time.
-    internal Func<long> ClockMs { get; set; } = static () => Environment.TickCount64;
+    // Decides the stream size: pinned to the natural size for the life of the attach, so no layout, full-screen edge or window
+    // move ever makes Media Foundation free and rebuild its protected frame-buffer pool (a desktop-wide stall).
+    private readonly VideoStreamSizeGate _sizeGate = new(pinned: true);
 
     // The CANPLAY deadline (a single one-shot timer; fires one pump).
     private Timer? _startDeadline;
@@ -214,9 +211,21 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         // The carried start position is published at once: the seek bar never shows 0:00 for a source opening at 1:23.
         if (_request.StartPosition > TimeSpan.Zero) sink.Position(_request.StartPosition);
         PublishCatalog(sink);
+        // The opening rung's declared size, before the decoder reports one: the presenter fits the stream's destination from it,
+        // so the size request reaches native before LOADEDMETADATA and MF's first swap chain is built at that size (PumpGeometry).
+        if (_activeQuality?.Resolution is { IsEmpty: false } declared) sink.ExpectedNaturalSize(declared);
         StartOnce();
+        // A representation is requested only when it differs from the one the source opened on: re-requesting the opening rung
+        // made the source deliver a format change at its first sample. "Opened on" is a TRUE init-url match (FindInitialQuality
+        // falls back to the first rung when none matches).
         if (!_qualitySelection.IsAuto && _qualitySelection.VariantId is { } initialPin)
-            RequestRepresentation(initialPin, PinRetainMs, Environment.TickCount64);
+        {
+            if (_videoTrack is not null && FindRepresentation(_videoTrack, initialPin) is { } pinned
+                && string.Equals(pinned.InitUrl, _request.InitUrl, StringComparison.Ordinal))
+                _player.LogDiagnostic($"pin.open id={initialPin} {pinned.Quality.Resolution.Width}x{pinned.Quality.Resolution.Height} opened on the pinned rung, no request");
+            else
+                RequestRepresentation(initialPin, PinRetainMs, Environment.TickCount64);
+        }
         RequestPump();
     }
 
@@ -235,6 +244,14 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         if (!_player.TryReadClock(out long ms, out long qpc, out bool running)) return false;
         sample = new MediaClockSample(TimeSpan.FromMilliseconds(ms), qpc, _rate, running);
         return true;
+    }
+
+    /// <summary>The native renderer's frame counters as the runtime last read them (<see cref="IMediaFrameCounterSource"/>), between
+    /// pumps. Any thread; no allocation.</summary>
+    public bool TryReadFrameCounters(out MediaFrameCounters counters)
+    {
+        counters = default;
+        return !_disposed && _player.TryReadFrameCounters(out counters);
     }
 
     private void OnPlayerPumpRequested() => RequestPump();
@@ -271,16 +288,6 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     {
         Volatile.Write(ref _deadlinePassed, 1);
         RequestPump();
-    }
-
-    // Asks for one more pump after `ms` (a settle window or an echo wait is pending): the native runtime raises no event for
-    // an applied stream size, and a deferred size decision must not wait for an unrelated one. Any thread.
-    private void ArmSizeRetry(int ms)
-    {
-        if (ms <= 0 || _disposed) return;
-        _sizeRetry ??= new Timer(static s => ((ProtectedMediaSession)s!).RequestPump(), this, Timeout.Infinite, Timeout.Infinite);
-        try { _sizeRetry.Change(ms, Timeout.Infinite); }
-        catch (ObjectDisposedException) { }   // disposed from another thread between the check and here
     }
 
     private void DisarmStartDeadline()
@@ -414,11 +421,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         RequestPump();
     }
 
-    /// <summary>The floor the laid-out viewport height is clamped to before it becomes an ABR cap. Real video surfaces
-    /// are small (191 DIP docked, 202 DIP pop-out, 135 DIP at the pop-out minimum) and every one is below every rung a
-    /// manifest offers, so the raw height would filter the whole ladder away and Auto would collapse to the bottom rung
-    /// on any bandwidth. A viewport is a hint about what is worth downloading, not a licence to starve the ladder.</summary>
-    private const int MinViewportCapHeight = 720;
+    /// <summary>The floor a viewport height is clamped to before it becomes an ABR cap (the rule lives on the controller,
+    /// <see cref="AdaptiveBitrateController.ViewportCapFor"/>).</summary>
+    private const int MinViewportCapHeight = AdaptiveBitrateController.MinViewportCapHeight;
 
     /// <summary>How long a LOWER viewport cap must hold unchanged before it is committed. A fullscreen exit animates
     /// through many heights; a cap that follows each one samples a surface mid-resize. Raising is never delayed.</summary>
@@ -438,8 +443,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         // mid-replacement — neither is a real viewport. A pending switch also restarts any lower-cap timer, so the
         // switch itself never counts towards "stable".
         if (abr is null || _disposed || height <= 0) return;
+        abr.ViewportRequestedHeight = height;   // what the surface asks for, even mid-switch: the next source's opening cap reads it
         if (_pendingRepresentationId is not null) { _viewportLowerCandidate = 0; return; }
-        int cap = QuantiseViewportCap(Math.Max(height, MinViewportCapHeight));
+        int cap = QuantiseViewportCap(height);
         if (_viewportMaxHeight == int.MaxValue || cap >= _viewportMaxHeight)
         {
             CommitViewportCap(abr, cap, nowTicks);
@@ -466,19 +472,13 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         abr.ViewportMaxHeight = cap;
     }
 
-    /// <summary>The smallest ladder height at or above <paramref name="height"/>; the tallest rung when the surface is
-    /// taller than every rung; the raw height when no rung declares a resolution.</summary>
+    /// <summary>The viewport cap for a surface <paramref name="height"/> over this ladder: the floor and the quantise UP are
+    /// <see cref="AdaptiveBitrateController.ViewportCapFor"/>, the one rule the app's opening pick uses too.</summary>
     private int QuantiseViewportCap(int height)
     {
-        int atOrAbove = int.MaxValue, tallest = 0;
-        for (int i = 0; i < _qualityVariants.Length; i++)
-        {
-            int rung = _qualityVariants[i].Resolution.Height;
-            if (rung > tallest) tallest = rung;
-            if (rung >= height && rung < atOrAbove) atOrAbove = rung;
-        }
-        if (atOrAbove != int.MaxValue) return atOrAbove;
-        return tallest > 0 ? tallest : height;
+        Span<int> heights = stackalloc int[_qualityVariants.Length];
+        for (int i = 0; i < heights.Length; i++) heights[i] = _qualityVariants[i].Resolution.Height;
+        return AdaptiveBitrateController.ViewportCapFor(height, heights);
     }
 
     /// <summary>
@@ -486,7 +486,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     /// cures (the runtime was replaced after a device removal/reset or a hardware-DRM context reset, or never came up) is
     /// <see cref="MediaRecovery.Retryable"/> in a NON-DRM category with the HRESULT as <see cref="MediaError.UnderlyingCode"/>:
     /// the owner reopens the source in place instead of telling the user their license failed. Anything else keeps the
-    /// historical <see cref="MediaErrorCategory.Drm"/> + <see cref="MediaRecovery.NeedsLicense"/>. Pure.
+    /// historical <see cref="MediaErrorCategory.Drm"/> + <see cref="MediaRecovery.NeedsLicense"/>. A start the native mfcore guard
+    /// failed (<see cref="ProtectedRuntimeFaults.IsTransientStart"/>) is retryable on the SAME runtime: the owner re-opens it. Pure.
     /// </summary>
     internal static MediaError ProtectedFailure(string? message, int hr, bool needsRuntimeRebuild, MediaLocus? locus)
     {
@@ -494,6 +495,10 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             return new MediaError(MediaErrorCategory.Output,
                 message ?? $"The protected video pipeline was reset (0x{unchecked((uint)hr):X8}).",
                 hr != 0 ? hr : null, locus, MediaRecovery.Retryable);
+        if (ProtectedRuntimeFaults.IsTransientStart(hr))
+            return new MediaError(MediaErrorCategory.Output,
+                message ?? $"The protected video's audio output was not ready when it started (0x{unchecked((uint)hr):X8}).",
+                hr, locus, MediaRecovery.Retryable);
         return new MediaError(MediaErrorCategory.Drm,
             message ?? "Protected playback failed (CDM/license).", null, locus, MediaRecovery.NeedsLicense);
     }
@@ -662,43 +667,50 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         // The SURFACE half (F132): hand the handle the last state pump saw to this element's binding, then size and place it.
         // It reads what the state pump published (state, natural size, surface readiness) and writes none of it, so a pump
         // with no element and an element with no pump of its own never disagree. A terminal error ends the surface work.
-        _player.Bind(binding);
         ProtectedVideoState pv = _player.State.Value;
         if (pv == ProtectedVideoState.Error) return;
         bool presenting = _player.HasFirstFrame && _player.HasSurface;
+        // A slot still showing ANOTHER picture (the element holds the previous source's last frame across an in-place switch) is
+        // taken over only with this attach's first frame: binding the new handle before it would put a swap chain with no frame
+        // of ours on screen, and sizing or placing the slot would scale the held frame by our size. Until then this pump only
+        // sizes the stream (the destination is the successor's own fit, which the element passes).
+        bool holdsOther = !presenting && binding.ShowsOtherPicture();
+        if (!holdsOther) _player.Bind(binding);
 
-        // The composited surface (just bound above): size the STREAM to what the destination can show — the same rule as the
-        // clear path, so a 4K rung in a 640-px card allocates a third-size buffer — and place it.
+        // The composited surface (just bound above): the STREAM is pinned to the natural size and the compositor stretches it to
+        // the placed rect, in every presenter (docked, floating, pop-out, mini, Theatre, Cinema, full screen). Every
+        // UpdateVideoStream(dst) makes Media Foundation free its pool of dst-sized protected buffers and build a new one, and with
+        // protected content that free or build stalls the whole desktop, so no layout, full-screen edge or window move resizes it:
+        // only the attach's first known natural size and a rung change ask (the gate's pinned mode).
+        // No request before the surface exists: native builds the first swap chain at LOADEDMETADATA at the native size (no
+        // stream size set = natural), which IS the size the pin then asks for, and native skips an unchanged size, so the first
+        // build is the only one. A presize from the manifest's declared size could only be wrong (a decoder that reports another
+        // size would build twice).
         // It is SHOWN only while presenting (this attach's first frame and a live surface): MF's swap chain holds the
         // previous source's last frame until the new one decodes, and a detached slot would show another session's.
-        // The stream is a BUCKET of the natural frame (never the raw destination), requested once the destination has held
-        // still, and the compositor keeps the previous content size until the native snapshot echoes the new one as
-        // applied. A rect that is not laid out sizes and places nothing (F051): the slot just stays hidden.
-        if (_player.HasSurface)
+        // A rect that is not laid out sizes and places nothing (F051): the slot just stays hidden.
+        if (_player.HasSurface && VideoStreamSizing.IsLaidOut(videoRect))
         {
-            if (VideoStreamSizing.IsLaidOut(videoRect))
+            VideoStreamStep step = _sizeGate.Pin(binding, _naturalSize, videoRect);
+            if (!step.Request.IsEmpty)
             {
-                VideoStreamStep step = _sizeGate.Step(_naturalSize, videoRect, scale, _player.AppliedStreamSize,
-                    pv == ProtectedVideoState.Playing, ClockMs(), binding.Display);
-                if (!step.Request.IsEmpty) _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
-                ArmSizeRetry(step.RetryInMs);
-                SizeI content = step.Content;
-                binding.SetContentSize(content);
-                binding.Place(videoRect);
-                PlaceOutputProtection(binding, videoRect, scale);
-                binding.SetVisible(presenting);   // belt-and-braces: the element ANDs the same readiness (VideoSurface) into its final write
-                sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content, videoRect, scale <= 0f ? 1f : scale)
-                    { Token = binding.Token });
+                // Always on, once per request (the attach's natural size, a rung change); the player's own stream.size line follows
+                // when the request reaches native.
+                _player.LogDiagnostic($"{step.PinLine} pumping={binding.Token} votes={_sizeGate.VoteCount}");
+                _player.SetStreamSize(step.Request, binding.Token, binding.HostOrdinal);
             }
-            else
-            {
-                binding.SetVisible(false);
-            }
+            PlaceOutputProtection(binding, videoRect, scale);
+            if (holdsOther) return;
+            // One stream size for every binding of this session: the swap chain's, never a binding's own request.
+            binding.SetStreamSize(step.Size, pinned: true);
+            _sizeGate.PublishSizeToVoters(binding);
+            binding.Place(videoRect);
+            sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, step.Size, videoRect, scale <= 0f ? 1f : scale)
+                { Token = binding.Token });
         }
-        else
-        {
-            binding.SetVisible(false);   // detached (or not produced yet): never leave a stale slot showing
-        }
+        // No SetVisible here (as on the clear path): visibility is the element's, written LAST in its pump, ANDing its activity, a
+        // non-empty viewport and this session's readiness (VideoSurface: this attach's first frame and a live surface), or holding
+        // the previous source's picture. A not-yet-presenting or detached slot is therefore hidden by the element, never shown.
     }
 
     /// <summary>Keep the runtime's hidden OPM window over the video (F264): the placed rect in device pixels of the presenting
@@ -712,7 +724,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     }
 
     /// <summary>The video rect (DIP) in device pixels, pixel rule R: X, Y, Right and Bottom each rounded independently,
-    /// midpoints away from zero, so two neighbours never differ from the DComp rect by more than the rounding itself. Pure.</summary>
+    /// midpoints away from zero, so two neighbours never differ from the composited video's rect by more than the rounding itself. Pure.</summary>
     internal static (int Left, int Top, int Right, int Bottom) OutputProtectionRect(RectF videoRect, float scale)
     {
         float s = scale <= 0f ? 1f : scale;
@@ -986,7 +998,6 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _disposed = true;
         _sink = null;
         DisarmStartDeadline();
-        _sizeRetry?.Dispose();
         PumpRequested = null;
         _player.PumpRequested -= OnPlayerPumpRequested;
         // Detach + destroy are posted native work items (non-blocking); the runtime and its engine stay warm.

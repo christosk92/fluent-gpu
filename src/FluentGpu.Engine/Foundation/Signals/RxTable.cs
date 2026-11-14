@@ -13,7 +13,7 @@ namespace FluentGpu.Signals;
 /// </summary>
 public sealed class RxTable
 {
-    private const byte FLive = 1, FQueued = 2, FStructural = 4, FFreeAfterQueue = 8, FRunning = 16, FCleanups = 32;
+    private const byte FLive = 1, FQueued = 2, FStructural = 4, FFreeAfterQueue = 8, FRunning = 16, FCleanups = 32, FRequeue = 64;
 
     /// <summary>The kind of a row whose body is an <see cref="Action"/> held by the table itself (<see cref="CreateAction"/>):
     /// the row form of an <see cref="Effect"/> (UseSignalEffect), run without the host's <see cref="Runner"/>.</summary>
@@ -146,6 +146,13 @@ public sealed class RxTable
     /// <summary>Imperatively mark a row DIRTY and schedule it (a forced re-run).</summary>
     public void Schedule(int row) => MarkDirty(row, null);
 
+    /// <summary>Is the row queued and out of date (DIRTY, or CHECK until its sources are polled): it runs later in this flush?</summary>
+    internal bool IsPendingRun(int row) => (_flags[row] & (FLive | FQueued)) == (FLive | FQueued) && _state[row] != Computation.Clean;
+
+    /// <summary>From inside the row's own run, which ran nothing: leave it DIRTY and queue it again once the run returns, so it runs
+    /// in a later batch of the same flush (a component waiting for one above it: the reconciler's ancestors-first rule).</summary>
+    internal void RequeueAfterRun(int row) => _flags[row] |= FRequeue;
+
     /// <summary>Run a row now (its first run, or a forced one), tracking what it reads.</summary>
     public void RunNow(int row) { if (IsLive(row)) Run(row); }
 
@@ -229,7 +236,16 @@ public sealed class RxTable
                 _flags[row] = f;
                 if ((f & FFreeAfterQueue) != 0 && (f & FQueued) == 0) Free(row);
             }
-            if ((f & FLive) != 0) _state[row] = Computation.Clean;
+            if ((f & FLive) != 0)
+            {
+                if ((f & FRequeue) == 0) _state[row] = Computation.Clean;
+                else
+                {
+                    _flags[row] = (byte)(f & ~FRequeue);
+                    _state[row] = Computation.Dirty;
+                    Enqueue(row);
+                }
+            }
         }
     }
 

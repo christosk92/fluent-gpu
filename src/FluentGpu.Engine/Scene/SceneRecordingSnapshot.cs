@@ -808,10 +808,18 @@ public sealed partial class SceneRecordingSnapshot
     // unchanged — span reuse must still be denied along it.
     public NodeFlags Flags(NodeHandle node) => node.Raw.Index < (uint)Capacity
         ? (_uiDirtConsumed ? _flags[node.Raw.Index] & ~UiDirtyAxes : _flags[node.Raw.Index])
-          | (_overlaySelfEpoch[node.Raw.Index] == _overlayEpoch ? NodeFlags.TransformDirty | NodeFlags.PaintDirty : 0)
+          | OverlaySelfFlags(_overlaySelfEpoch[node.Raw.Index])
         : default;
+    // An overlay stamp of this epoch as a record-dirty class: content, or transform when it carries OverlayTransformBit
+    // (a pose that only moved / scaled / rotated the node: MarkCompositorTransformChanged).
+    private byte OverlayClass(uint stamp)
+        => stamp == _overlayEpoch ? SceneStore.RecordDirtyContent
+         : stamp == (_overlayEpoch | OverlayTransformBit) ? SceneStore.RecordDirtyTransform : (byte)0;
+    private NodeFlags OverlaySelfFlags(uint stamp)
+        => stamp == _overlayEpoch ? NodeFlags.TransformDirty | NodeFlags.PaintDirty
+         : stamp == (_overlayEpoch | OverlayTransformBit) ? NodeFlags.TransformDirty : 0;
     public byte RecordDirtyBits(NodeHandle node) => (byte)((_uiDirtConsumed ? 0 : _dirty[node.Raw.Index])
-        | (_overlayDirtyEpoch[node.Raw.Index] == _overlayEpoch ? SceneStore.RecordDirtyContent : 0));
+        | OverlayClass(_overlayDirtyEpoch[node.Raw.Index]) | (OverlayClass(_overlaySelfEpoch[node.Raw.Index]) & SceneStore.RecordDirtyTransform));
     // Also the SELF epoch, and for the same reason as Flags above: this is the recorder's OTHER route to a repaint
     // band (`contentDirtyNode`). It used to read "does this node have a paint row this epoch", which is true for a
     // HELD pose too — the row is still written, it just carries the same number — so a cadence-held marquee kept
@@ -819,9 +827,9 @@ public sealed partial class SceneRecordingSnapshot
     // a pose that actually changed, and only when a row was really acquired, so an overflowed node (whose pose is
     // discarded and which presents its authored paint) still reports 0 — gate.compositor-row-overflow.
     public byte RecordDirtySelfBits(NodeHandle node) => (byte)((_uiDirtConsumed ? 0 : _dirtySelf[node.Raw.Index])
-        | (_overlaySelfEpoch[node.Raw.Index] == _overlayEpoch ? SceneStore.RecordDirtyContent : 0));
+        | OverlayClass(_overlaySelfEpoch[node.Raw.Index]));
     public byte RecordDirtyDescendantBits(NodeHandle node) => (byte)((_uiDirtConsumed ? 0 : _dirtyDescendant[node.Raw.Index])
-        | (_overlayDirtyEpoch[node.Raw.Index] == _overlayEpoch ? SceneStore.RecordDirtyContent : 0));
+        | OverlayClass(_overlayDirtyEpoch[node.Raw.Index]));
 
     // The UI's dirt of THIS publication (its record-dirty bits and dirty-axis flags) is what changed since the previous
     // publication. The render thread records a publication on its fresh turn, then again on every motion turn until the next

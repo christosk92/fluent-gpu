@@ -12,7 +12,7 @@ namespace FluentGpu.Media.Codecs.Wic;
 /// texture format). The EXIF Orientation tag is applied (a camera photo decodes upright and reports its DISPLAY dims), matching WinUI's BitmapImage. All WIC COM objects are created and used ENTIRELY on the calling worker thread (per-thread cached
 /// factory) and never cross the scheduler seam — only POD pixels do (the FGCOM per-thread-COM rule).
 /// </summary>
-public sealed unsafe class WicImageCodec : IImageCodec, IDisposable
+public sealed unsafe partial class WicImageCodec : IImageCodec, IAnimatedImageCodec, IDisposable
 {
     // CLSID_WICImagingFactory {CACAF262-9370-4615-A13B-9F5539DA4C0A}
     private static readonly Guid CLSID_WICImagingFactory = new(0xCACAF262, 0x9370, 0x4615, 0xA1, 0x3B, 0x9F, 0x55, 0x39, 0xDA, 0x4C, 0x0A);

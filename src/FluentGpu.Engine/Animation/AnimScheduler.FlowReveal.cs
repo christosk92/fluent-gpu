@@ -654,9 +654,14 @@ public sealed partial class AnimEngine
         return false;
     }
 
-    // Does a child's height come from its parent's slot? A Grow child of a column; or a z-stack layer, which fills the stack's slot
-    // vertically unless it is Center/End aligned (FlexLayout.ArrangeZStack). Without the z-stack arm a window body that is a ZStack broke
-    // the walk, and a page's reveal climbed to the window column and shoved the docked player bar off the bottom (owner video 2026-10-26).
+    // Does a child's height come from its parent's slot? A Grow child of a column; a z-stack layer, which fills the stack's slot
+    // vertically unless it is Center/End aligned (FlexLayout.ArrangeZStack); or a child STRETCHED across a single-line row, which
+    // FlexLayout sizes to the row's inner height (cross-axis Stretch, the default AlignItems). Callers rule out a declared Height and
+    // then ask whether the PARENT is definite, so a stretched child of a content-sized row still grows with a reveal. Without the
+    // z-stack arm a window body that is a ZStack broke the walk, and a page's reveal climbed to the window column and shoved the docked
+    // player bar off the bottom (owner video 2026-10-26). Without the row arm a reveal in the docked rail (its host stretched across
+    // the window's content row) extended every clip up to that row past the rail's foot, and the shifted body painted over the
+    // player bar until the spring rested (owner video 2026-11-11). A wrapping row stretches to its LINE, which follows content.
     private bool FillsParentHeight(NodeHandle p, in LayoutInput li)
     {
         if ((_scene.Flags(p) & NodeFlags.ZStack) != 0)
@@ -664,7 +669,13 @@ public sealed partial class AnimEngine
             FlexAlign a = li.AlignSelf == FlexAlign.Auto ? _scene.Layout(p).AlignItems : li.AlignSelf;
             return a != FlexAlign.Center && a != FlexAlign.End;
         }
-        return li.FlexGrow > 0f && _scene.Layout(p).Direction == 1;
+        ref readonly LayoutInput pl = ref _scene.Layout(p);
+        if (pl.Direction == 0)
+        {
+            if (_scene.HasGrid(p) || pl.Wrap) return false;
+            return (li.AlignSelf == FlexAlign.Auto ? pl.AlignItems : li.AlignSelf) == FlexAlign.Stretch;
+        }
+        return li.FlexGrow > 0f && pl.Direction == 1;
     }
 
     private ref NodePaint TouchFlow(NodeHandle n)

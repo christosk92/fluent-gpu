@@ -192,16 +192,40 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     // Engine thread only: the stall serial the progress check is anchored to, and the playhead at that moment.
     private int _waitAnchorSerial = -1;
     private double _waitAnchorPos;
-    // Stopwatch timestamp of the FIRST FRAME of the current source (FIRSTFRAMEREADY, then LOADEDDATA, then PLAYING as the
-    // fallbacks when MF raises none of the earlier ones — a paused open raises no PLAYING); 0 until it lands. Written on MF workers (CompareExchange: first writer wins) and cleared by
-    // ResetPerSourceState, published as VideoEngineSnapshot.FirstFrameTimestamp for the session's surface publish.
+    // Stopwatch timestamp of the moment MF first said the current source has a frame READY (FIRSTFRAMEREADY, then LOADEDDATA, then
+    // PLAYING as the fallbacks when MF raises none of the earlier ones — a paused open raises no PLAYING); 0 until then. Written on
+    // MF workers (CompareExchange: first writer wins), cleared by ResetPerSourceState. Ready is not on screen: on a switch while
+    // playing these events come about 270 ms before MF presents the source's first frame (measured 2026-11-11, clear path, the
+    // vp-switch clips), and until then the swap chain still shows the previous source's last frame.
+    private long _frameReadyTicks;
+    // Engine thread only: Stopwatch timestamp of the FIRST FRAME of the current source ON SCREEN, 0 until then; published as
+    // VideoEngineSnapshot.FirstFrameTimestamp (the session binds, ends an element's hold and publishes readiness on it). While the
+    // source plays it is the first FRAMES_RENDERED tick after the ready event (the renderer counts a frame within one composed
+    // frame of showing it); while it does not play, the ready event itself (MF paints the paused frame then). See ResolveFirstFrame.
     private long _firstFrameTicks;
+    // Engine thread only: the ready frame waits for the renderer to count one (FRAMES_RENDERED past _firstFrameBaseRendered).
+    private bool _firstFramePending;
+    private uint _firstFrameBaseRendered;
+    private int _firstFramePolls;
+    // Engine thread only: a Transport command reached this source, when the first did, and what the last one asked (the session's
+    // intent). Before the first the engine is paused by the load itself (HTML: a new source starts paused), which says nothing
+    // about whether the session means to play it.
+    private bool _transportSet;
+    private bool _transportPlay;
+    private long _transportTicks;
+    // One "counters unreadable" line per process: a renderer that cannot report frames cannot on any source.
+    private static int s_firstFrameUnreadableLogged;
     // SEEKED events of the current source (Interlocked: MF workers). Counted, not a flag, so a paused seek whose SEEKING and
     // SEEKED coalesce into one refresh still moves a published value — see VideoEngineSnapshot.SeekedCount.
     private int _seekedCount;
-    // Engine thread only: the stream size the last StreamRect actually applied (UpdateVideoStream(dst) succeeded) — published
-    // as VideoEngineSnapshot.StreamW/H, the echo a session keeps its compositor content size behind. Per source.
+    // Engine thread only: the stream size the last StreamRect actually applied (UpdateVideoStream(dst) succeeded): the frame-health
+    // check plays only once one was, and the no-frame line names it. Per source.
     private uint _appliedStreamW, _appliedStreamH;
+    // Engine thread only: when PollFrameStats last read the counters (VideoEngineSnapshot.FramesSampledTimestamp; 0 = never this source).
+    private long _framesSampledTicks;
+    // Fast engine-thread refresh while a first frame is pending: a frame is due within one frame period while playing.
+    private const int FastPollMs = 4;
+    private const long FastPollWindowMs = 1000;
     private VideoEngineSnapshot _lastPublished;
     private long _lastRaiseTicks;
     // Engine thread only: the source loops (the Loop command), the loop seam's measurement (LoopSeamProbe: its period is the gapless
@@ -278,7 +302,9 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     }
 
     private int RefreshIntervalMs()
-        => !_hasSource ? ParkedRefreshMs
+        => _firstFramePending
+            ? (Stopwatch.GetElapsedTime(Volatile.Read(ref _frameReadyTicks)).TotalMilliseconds < FastPollWindowMs ? FastPollMs : ActiveRefreshMs)
+         : !_hasSource ? ParkedRefreshMs
          : _loop && _playing && _metadataTrusted && _seam.Near(_lastPosition, _cachedDuration) ? LoopSeamProbe.NearMs
          : !_metadataTrusted || _playing || _liveLatched ? ActiveRefreshMs : ParkedRefreshMs;
 
@@ -432,6 +458,11 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         if (c.TryTake(VideoCommandKind.Transport, out double play, out _, out _, out _))
         {
             if (_engine != null) { if (play != 0) _engine->Play(); else _engine->Pause(); }
+            if (_hasSource)
+            {
+                if (!_transportSet) { _transportSet = true; _transportTicks = Stopwatch.GetTimestamp(); }
+                _transportPlay = play != 0;
+            }
         }
 
         if (c.TryTake(VideoCommandKind.Seek, out double seconds, out int approxFlag, out _, out _))
@@ -478,10 +509,18 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             {
                 RECT dst = new() { left = 0, top = 0, right = w, bottom = h };
                 MFARGB border = new() { rgbBlue = 0, rgbGreen = 0, rgbRed = 0, rgbAlpha = 255 };
+                long t0 = Stopwatch.GetTimestamp();
                 int hr = _engineEx->UpdateVideoStream(null, &dst, &border);
+                double callMs = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
                 if (hr < 0) Log("UpdateVideoStream(dst)", hr);
                 else if (w > 0 && h > 0)
                 {
+                    // Always-on, once per stream-size change (cold): the resize is a Media Foundation reconfiguration whose call blocks this
+                    // thread (measured 21-90 ms shrinking from 1080p, 2-3 ms growing) and which, on the Adreno X1-85, holds the picture
+                    // ~35-42 ms some 100-200 ms later (a frame-exact desktop capture, 2026-11-11). This line dates each one in the log.
+                    if (_appliedStreamW != (uint)w || _appliedStreamH != (uint)h)
+                        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                            $"[video] stream.applied {_appliedStreamW}x{_appliedStreamH}->{w}x{h} callMs={callMs:F1}"));
                     _appliedStreamW = (uint)w; _appliedStreamH = (uint)h;
                     _frameWatch.Restart(Environment.TickCount64);   // a re-sized (re-created) stream gets a fresh no-frame window
                 }
@@ -516,13 +555,15 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         _liveLatched = false;
         _nanAfterMetadataLogged = false;
         _metadataTrusted = false;
-        Interlocked.Exchange(ref _firstFrameTicks, 0);
+        Interlocked.Exchange(ref _frameReadyTicks, 0);
+        _firstFrameTicks = 0; _firstFramePending = false; _firstFramePolls = 0;
+        _transportSet = false; _transportPlay = false; _transportTicks = 0;
         Interlocked.Exchange(ref _seekedCount, 0);
         _naturalW = 0; _naturalH = 0; _naturalQueriedForEpoch = -1;
         _appliedStreamW = 0; _appliedStreamH = 0;
         _cachedHandle = 0; _handleQueriedForEpoch = -1;
         _handles.Retire(Environment.TickCount64);   // F198: the old source's handle is superseded; it is closed a replacement or a grace later
-        _frames.Reset(); _frameWatch.Reset(); _nextStatsPollMs = 0; _frameStatsReadable = false;
+        _frames.Reset(); _frameWatch.Reset(); _nextStatsPollMs = 0; _frameStatsReadable = false; _framesSampledTicks = 0;
         _cachedDuration = 0;
         _seam.Reset(_seam.Period); _lastPosition = 0;
         // The source changed, so whatever swap-chain handle the old one produced is invalid, exactly like a native
@@ -666,7 +707,8 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
 
         if (_naturalQueriedForEpoch == epoch) flags |= VideoEngineFlags.NaturalSizeKnown;
         if (_liveLatched) flags |= VideoEngineFlags.LiveSource;
-        long firstFrame = metadata ? Volatile.Read(ref _firstFrameTicks) : 0;
+        if (metadata && _firstFrameTicks == 0) ResolveFirstFrame((flags & VideoEngineFlags.NaturalSizeKnown) != 0);
+        long firstFrame = metadata ? _firstFrameTicks : 0;
 
         // F066: rendered/dropped-frame health. Polled only while VIDEO is actually playing - not paused, parked, starved, seeking or
         // failed, with a frame's worth of data (HAVE_FUTURE_DATA, as the native path gates it), and only once a stream rect was applied (an engine with no element mounted may never create a swap chain to render
@@ -721,10 +763,9 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             ErrorHr = _errorHr,
             FirstFrameTimestamp = firstFrame,
             SeekedCount = Volatile.Read(ref _seekedCount),
-            StreamW = _appliedStreamW,
-            StreamH = _appliedStreamH,
             FramesRendered = _frames.Rendered,
             FramesDropped = _frames.Dropped,
+            FramesSampledTimestamp = _framesSampledTicks,
         };
         _snapshot.Publish(snap);
 
@@ -740,7 +781,6 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             snap.SwapchainHandle != _lastPublished.SwapchainHandle ||
             snap.FirstFrameTimestamp != _lastPublished.FirstFrameTimestamp ||
             snap.SeekedCount != _lastPublished.SeekedCount ||
-            snap.StreamW != _lastPublished.StreamW || snap.StreamH != _lastPublished.StreamH ||
             snap.ErrorCode != _lastPublished.ErrorCode;
 
         long now = snap.PositionTimestamp;
@@ -784,10 +824,57 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         finally { PropVariantClear(&pv); }
     }
 
+    /// <summary>Engine thread, every refresh of a source with trusted metadata and no first frame yet: is the frame MF said was
+    /// ready on screen? A source that plays shows it when the renderer counts it (FRAMES_RENDERED past the value read once the
+    /// ready event and the session's play were both in; a counter that went down was reset by the new source's flush, and any
+    /// count after that reset is its frame). One the session's last Transport paused, or that ended, shows it at the event, as MF
+    /// paints a paused frame then; an audio-only source has no picture to wait for. Before the session's first Transport nothing
+    /// is decided (the engine is paused by the load itself, whatever the session means to do). No timeout: a source that plays and never counts a frame
+    /// is RenderedFrameWatch's to fault, not a reason to call a picture shown. One `[video] first.frame.presented` line per source.</summary>
+    private void ResolveFirstFrame(bool naturalKnown)
+    {
+        long ready = Volatile.Read(ref _frameReadyTicks);
+        if (ready == 0 || _engine == null) return;
+        string? via = null;
+        long at = 0;
+        if (naturalKnown && (_naturalW == 0 || _naturalH == 0)) { via = "novideo"; at = ready; }
+        else if (!_transportSet) return;
+        else if (_ended) { via = "ended"; at = Stopwatch.GetTimestamp(); }
+        else if (!_transportPlay) { via = "paused"; at = _firstFramePending ? Stopwatch.GetTimestamp() : Math.Max(ready, _transportTicks); }
+        else if (!_firstFramePending)
+        {
+            if (TryReadFrameStats(out uint baseRendered, out _))
+            {
+                _firstFramePending = true;
+                _firstFrameBaseRendered = baseRendered;
+                return;
+            }
+            via = "unreadable"; at = ready;
+            if (Interlocked.Exchange(ref s_firstFrameUnreadableLogged, 1) == 0)
+                Diag.Line("[video] first frame: renderer counters unreadable, FIRSTFRAMEREADY used");
+        }
+        else
+        {
+            _firstFramePolls++;
+            if (!TryReadFrameStats(out uint rendered, out _)) { via = "unreadable"; at = Stopwatch.GetTimestamp(); }
+            else if (rendered > _firstFrameBaseRendered || (rendered < _firstFrameBaseRendered && rendered > 0)) { via = "frame"; at = Stopwatch.GetTimestamp(); }
+            else if (rendered < _firstFrameBaseRendered) _firstFrameBaseRendered = rendered;
+        }
+        if (via is null) return;
+        _firstFramePending = false;
+        _firstFrameTicks = at;
+        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[video] first.frame.presented backend=mf afterReadyMs={Stopwatch.GetElapsedTime(ready, at).TotalMilliseconds:F1} via={via} polls={_firstFramePolls}"));
+    }
+
     private void PollFrameStats()
     {
         _frameStatsReadable = TryReadFrameStats(out uint rendered, out uint dropped);
-        if (_frameStatsReadable) _frames.Observe(rendered, dropped);
+        if (_frameStatsReadable)
+        {
+            _frames.Observe(rendered, dropped);
+            _framesSampledTicks = Stopwatch.GetTimestamp();
+        }
     }
 
     // A new source starts counting from whatever the (warm) engine's counters read now: MF resets them itself once the new source
@@ -826,17 +913,17 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_PLAYING:
                 if (!_metadataLoaded) break;
                 _playing = true; _canPlay = true; _ended = false; _waiting = false;
-                // Frames are flowing: the LAST first-frame fallback (after FIRSTFRAMEREADY and LOADEDDATA; first writer wins).
-                Interlocked.CompareExchange(ref _firstFrameTicks, Stopwatch.GetTimestamp(), 0);
+                // Frames are flowing: the LAST frame-ready fallback (after FIRSTFRAMEREADY and LOADEDDATA; first writer wins).
+                Interlocked.CompareExchange(ref _frameReadyTicks, Stopwatch.GetTimestamp(), 0);
                 break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY:
-                if (_metadataLoaded) Interlocked.CompareExchange(ref _firstFrameTicks, Stopwatch.GetTimestamp(), 0);
+                if (_metadataLoaded) Interlocked.CompareExchange(ref _frameReadyTicks, Stopwatch.GetTimestamp(), 0);
                 break;
             // HAVE_CURRENT_DATA: the frame at the current position is decoded. The engine never calls SetPreload, so a PAUSED
             // open may get no FIRSTFRAMEREADY and never raises PLAYING; this is the fallback that still lets the poster drop
             // (Chromium sets up its frame here; Gecko's OnLoadedData calls OnLoadedFirstFrame for the same reason).
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_LOADEDDATA:
-                if (_metadataLoaded) Interlocked.CompareExchange(ref _firstFrameTicks, Stopwatch.GetTimestamp(), 0);
+                if (_metadataLoaded) Interlocked.CompareExchange(ref _frameReadyTicks, Stopwatch.GetTimestamp(), 0);
                 break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_PAUSE: _playing = false; _waiting = false; break;
             // Starvation: the engine ran out of data to present. Only after this source first had enough (CANPLAY / PLAYING) —

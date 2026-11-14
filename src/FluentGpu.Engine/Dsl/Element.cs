@@ -232,7 +232,7 @@ public sealed record BoxEl : Element
     public bool TabShape { get => (_cPaint ?? BoxColdPaint.Default).TabShape; init { if (!EqualityComparer<bool>.Default.Equals((_cPaint ?? BoxColdPaint.Default).TabShape, value)) CPaint.TabShape = value; } } // selected TabView header: rounded top + bottom flares
     public float TabFlareRadius { get => (_cPaint ?? BoxColdPaint.Default).TabFlareRadius; init { if (!EqualityComparer<float>.Default.Equals((_cPaint ?? BoxColdPaint.Default).TabFlareRadius, value)) CPaint.TabFlareRadius = value; } }
     /// <summary>Punch a VIDEO HOLE at this box (DrawOp.DrawVideo): instead of painting, the box ERASES the UI pixels
-    /// already painted under it toward premultiplied zero, so the DComp video visual composited BELOW the swapchain shows
+    /// already painted under it toward premultiplied zero, so the video visual composited BELOW the swapchain shows
     /// through. Painter-ordered — anything recorded after it (letterbox bars, transport chrome) paints back OVER the
     /// video. Supersedes <see cref="Fill"/> for this node; see gpu-renderer.md §7.3 for the offscreen-layer limitation
     /// (inside an opacity/blur/acrylic layer the erase hits the layer RT, not the back buffer).</summary>
@@ -1075,6 +1075,19 @@ public sealed record ImageEl : Element
     /// still shows or restores instantly (a player bar's now-playing artwork); every other image is restored, inside a held
     /// first frame, when the window returns.</summary>
     public bool KeepWhileHidden { get; init; }
+    /// <summary>Play the image when its file is an animation (an animated WebP): frames advance by their own durations and loop
+    /// as the file says (forever when it says 0), only while this element is in view and the window is painting; scrolled away,
+    /// minimised or covered, the clock stops and the decoder frees itself a few seconds later. Off by default, so no existing
+    /// image starts moving. The first frame lands through the ordinary decode (with its <see cref="Placeholder"/> and reveal), then
+    /// a worker decodes the following frames a few ahead and each is shown in place, repainting this element's rect only.
+    /// <para>Frames decode at the file's OWN size (a decoder-side scale costs several frame budgets at video sizes): author the
+    /// file at the size it shows; the GPU samples it down for a smaller box. Nodes showing the same <see cref="Source"/> at the
+    /// same decode size share one playback.</para>
+    /// <para>Reduced motion (<c>Motion.ReducedMotion</c>) shows the first frame and never plays, the standard meaning for a
+    /// decorative animation. A still, a single-frame file, a GIF (its frames need disposal compositing the decoder leaves out)
+    /// or a machine without a WebP decoder behaves exactly as an image without this flag: the static path, unchanged (when the
+    /// decode fails, the <see cref="Placeholder"/> shows; a transparent one lets a poster under the element show).</para></summary>
+    public bool Animate { get; init; }
     /// <summary>A color composited ATOP the image in the image shader after sampling: over the image's own pixels only (scaled by their
     /// alpha), never over its transparent parts, so on an alpha texture it tints the texture (alpha 1 recolours it outright). On an opaque
     /// image it is a plain source-over wash. Transparent disables it.</summary>

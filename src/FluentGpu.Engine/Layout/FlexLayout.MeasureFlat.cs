@@ -27,7 +27,8 @@ namespace FluentGpu.Layout;
 //   end, checked as the child is measured) and at the offer it would get at the low end. Offers are monotone in the box's offer,
 //   so the two ends cover the range, and the low end reduces to one number, the child-available width it needs (FlatTrack): a
 //   column child its FlatLo plus its margin, a fixed row child its FlatLo, a grow row child (FlatLo - basis)·G/g plus the fixed
-//   children and the gaps. An explicit width hands every child the same offer whatever the box is offered: every offer.
+//   children, every grow child's main margin and the gaps (RowGrowAvail's leftover, solved for the child-available width). An
+//   explicit width hands every child the same offer whatever the box is offered: every offer.
 // - everything else (viewports, grids, z-stacks, wrap boxes, a probe): no interval, today's behaviour.
 // A within-pass interval holds only inside its pass (_measureGen) and while the subtree's layout version is the one it was recorded
 // at (a write that marks anything below layout-dirty in the middle of the pass - a bind firing during layout - voids it) and the
@@ -108,6 +109,7 @@ public sealed partial class FlexLayout
             if (cli.FlexGrow > 0f)
             {
                 growSum += cli.FlexGrow;
+                fixedSum += MarginMain(cli, row);   // RowGrowAvail takes a grow child's own margin out of the leftover too
                 float basis = float.IsNaN(cli.FlexBasis) ? 0f : cli.FlexBasis;
                 if (cm.FlatLo - basis > 0f) growScaled = MathF.Max(growScaled, (cm.FlatLo - basis) / cli.FlexGrow);
             }

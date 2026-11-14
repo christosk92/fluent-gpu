@@ -618,7 +618,9 @@ internal sealed partial class SceneRecordingContext
         for (int i = 0; i < pendingStructuralDamage.Length; i++)
             stats.AddRepaintWindow(RepaintBand(pendingStructuralDamage[i], RepaintUnknownHaloDip));
         uint spanFrame = spans?.BeginFrame(scene.Capacity) ?? 0;
+        long sp = FluentGpu.Hosting.SplitSpans.Now();
         slices.BeginPass(scene);
+        FluentGpu.Hosting.SplitSpans.Add(FluentGpu.Hosting.SplitSpans.RecBeginPass, ref sp);
         // Unmount/removal damage: a freed subtree stops covering the band it presented at, and — unlike a move — nothing
         // re-touches that band, so a region-aware repaint would freeze last frame's pixels there. The span table holds the
         // EXACT extent it presented at (halos folded in) under its pre-free (index, gen), in the space of the slice it was
@@ -750,6 +752,7 @@ internal sealed partial class SceneRecordingContext
         stats.CurGen = slices.CurGen(SliceRecorder.RootSlot);
         stats.PriorGen = slices.PriorGen(SliceRecorder.RootSlot);
         stats.SliceDepth = -1;
+        FluentGpu.Hosting.SplitSpans.Add(FluentGpu.Hosting.SplitSpans.RecSetup, ref sp);
         Walk(scene, rootDl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
             1f, 1f, false, false, default, skips[..skipCount], spans, spanFrame, spanReuseOff, spanStoreOn, ref stats);
         stats.SelfNode = NodeHandle.Null;
@@ -880,11 +883,14 @@ internal sealed partial class SceneRecordingContext
         // The detached fly snapshots: the topmost band (after every scene band), in the root slice's tail.
         if (!detached.IsEmpty) RecordDetachedNodes(rootDl, images, detached, scene.OverlayClip);
 
+        FluentGpu.Hosting.SplitSpans.Add(FluentGpu.Hosting.SplitSpans.RecWalk, ref sp);
         slices.EndPass(keptAll);
+        FluentGpu.Hosting.SplitSpans.Add(FluentGpu.Hosting.SplitSpans.RecEndPass, ref sp);
 
         // Lay out the composite plan at the scene's current poses (no stream is written). A slice whose placement moved
         // since the last turn adds its old ∪ new footprint to the repaint set.
         slices.Place(scene, ref stats.Repaint);
+        FluentGpu.Hosting.SplitSpans.Add(FluentGpu.Hosting.SplitSpans.RecPlace, ref sp);
 
         PublishPosedHoles(slices.PosedHoles);
         if (standalone)
@@ -1632,10 +1638,11 @@ internal sealed partial class SceneRecordingContext
         if (isEdgeFade && edgeFade.WhileStuck && !stickyCut && !fadeClipped) isEdgeFade = false;
         PushLayerCmd groupLayer = default;
         RectF groupSourceClip = default;
+        float efsx = 0f;   // an edge fade's DIP→device px scale (left/right bands): a partial keep re-scales a patched overflow cue's bands by it
         if (isEdgeFade)
         {
             // DIP→device px scale from this node's own box (uniform DPI ⇒ sx≈sy); corners + bands scale with it.
-            float efsx = b.W > 0.01f ? deviceBounds.W / b.W : 1f;
+            efsx = b.W > 0.01f ? deviceBounds.W / b.W : 1f;
             float efsy = b.H > 0.01f ? deviceBounds.H / b.H : 1f;
             var efc = new CornerRadius4(p.Corners.TopLeft * efsx, p.Corners.TopRight * efsx, p.Corners.BottomRight * efsx, p.Corners.BottomLeft * efsx);
             RectF edgeCompositeClip = deviceBounds.Intersect(clip);
@@ -1778,6 +1785,7 @@ internal sealed partial class SceneRecordingContext
                             spans is not null && spans.IsBlocked((int)node.Raw.Index, spanFrame), scene.RecordDirtyBits(node),
                             stats.KeepDenySlot == selfSlot, selfSlot == SliceRecorder.RootSlot, missClass: 2, wholeArena: true, out uint lwhyDetail);
                         sl.BeginWalk(selfSlot, lwhy, lwhyDetail);
+                        if (lwhy == WalkWhy.RecordDirty && sl.EvidenceEnabled) NoteWalkCulprit(scene, sl, selfSlot, node);
                         sl.SetLayerInputSig(selfSlot, layerSig);
                         stats.CurGen = sl.CurGen(selfSlot);
                         stats.PriorGen = sl.PriorGen(selfSlot);
@@ -1811,7 +1819,8 @@ internal sealed partial class SceneRecordingContext
                     EnterSlice(ref stats, sl, slot, layerDx, layerDy, carryAdditive: true);
                     RectF walkClip = posedLayer ? RectF.Infinite : clip;
                     NoteCut(scene, sl, slot, node, CutLayer, isOpacityGroup, in parentWorld, parentOpacity, depth, walkClip, parentScaleX, parentScaleY,
-                        parentInMotion, parentScrollInMotion, in inherited, true, in saved, posedLayer ? clip : RectF.Infinite, ref stats);
+                        parentInMotion, parentScrollInMotion, in inherited, true, in saved, posedLayer ? clip : RectF.Infinite, ref stats,
+                        markerAt: group ? markerAt : -1, cueScaleX: isEdgeFade ? efsx : 0f);
                     SpanRecordResult res;
                     try
                     {
@@ -2037,6 +2046,7 @@ internal sealed partial class SceneRecordingContext
                     recordDirtyBits, stats.KeepDenySlot == selfSlot, selfSlot == SliceRecorder.RootSlot, missClass,
                     wholeArena: missClass != 0, out uint whyDetail);
                 sl.BeginWalk(selfSlot, why, whyDetail);
+                if (why == WalkWhy.RecordDirty && sl.EvidenceEnabled) NoteWalkCulprit(scene, sl, selfSlot, node);
                 stats.CurGen = sl.CurGen(selfSlot);
                 stats.PriorGen = sl.PriorGen(selfSlot);
             }
@@ -2391,7 +2401,7 @@ internal sealed partial class SceneRecordingContext
                 // Only an EXACT match is dropped: a hover wash, a tinted card, any fill that is not literally the
                 // layer's own base still paints. Where the layer does NOT run the spec is absent (Materials policy off,
                 // a video hole, an OS-backed popup — all clear it) or the backend supplies the Fallback itself
-                // (SubmitStreaming's PushLayer, the non-primary-swapchain route), so the solid plate survives.
+                // (the direct route's acrylic fallback, the non-primary-swapchain route), so the solid plate survives.
                 // Only where the layer was actually RECORDED (acrylicLayer: an acrylic slice's own walk, whose Backdrop
                 // item frosts the plate, or a standalone stream): an acrylic that could not be cut keeps this fill — it
                 // is the whole surface there.
@@ -2561,6 +2571,19 @@ internal sealed partial class SceneRecordingContext
                 // text node layout has sized to 0×0 (a collapsed slot, a zero-width column) would otherwise still draw
                 // its glyphs past the empty box. Text has no visible extent without a box: nothing to paint.
                 bool paintsText = !p.Text.IsEmpty && b.W > 0f && b.H > 0f;
+                // A run broken at the width it LANDS at while a width reflow resizes its box (TextMeasureEntry.Structured): shape it at that
+                // width, aligned in the box as the run itself aligns, so its lines are the landing ones on every frame of the slide.
+                // A box still narrower than the landing (a page widening as a panel leaves) shows its landing lines through its own width, clipped
+                // at its sides: they would otherwise lie over whatever stands beside the box (a clock column beside a title) until it has grown.
+                RectF run = local;
+                bool clipRun = false;
+                if (paintsText && mc.Valid && mc.Structured && MathF.Abs(mc.MaxW - local.W) > 0.01f)
+                {
+                    float slack = local.W - mc.MaxW;
+                    float shift = style.Align == TextAlign.Center ? slack * 0.5f : style.Align == TextAlign.End ? slack : 0f;
+                    run = new RectF(local.X + shift, local.Y, mc.MaxW, local.H);
+                    clipRun = slack < 0f;
+                }
                 // The run's INK: the box grown by what the measured text overflows it (a no-wrap / no-trim run wider than
                 // its box, more lines than its height). The overflow side depends on alignment, so it is taken on BOTH
                 // sides. Every cull, slice bound, content hash and sub-tile damage reads it; the replay still shapes into
@@ -2568,10 +2591,17 @@ internal sealed partial class SceneRecordingContext
                 RectF ink = default;
                 if (paintsText && mc.Valid)
                 {
-                    float ow = MathF.Max(0f, mc.Size.Width - local.W), oh = MathF.Max(0f, mc.Size.Height - local.H);
-                    if (ow > 0f || oh > 0f)
+                    float ow = MathF.Max(0f, mc.Size.Width - run.W), oh = MathF.Max(0f, mc.Size.Height - run.H);
+                    bool moved = run.X != local.X || run.W != local.W;
+                    if (ow > 0f || oh > 0f || moved)
                     {
-                        ink = new RectF(local.X - ow, local.Y - oh, local.W + 2f * ow, local.H + 2f * oh);
+                        ink = new RectF(run.X - ow, run.Y - oh, run.W + 2f * ow, run.H + 2f * oh);
+                        if (clipRun) ink = new RectF(local.X, ink.Y, local.W, ink.H);   // the clip below cuts the sides at the box
+                        else if (moved)
+                        {
+                            float x0 = MathF.Min(ink.X, local.X), x1 = MathF.Max(ink.X + ink.W, local.X + local.W);
+                            ink = new RectF(x0, ink.Y, x1 - x0, ink.H);
+                        }
                         result.Include(world.TransformBounds(ink));   // the span bounds a clean-subtree cull reads
                     }
                 }
@@ -2580,17 +2610,19 @@ internal sealed partial class SceneRecordingContext
                     // No longer counted on motion: with the glyph renderer's sub-pixel phase atlas a moving run is drawn
                     // CRISP at its 1/N device row rather than unsnapped, so there is nothing for the host's settle frame
                     // to re-snap. The counter stays (it is a public record stat) and now reports the truth: zero.
+                    if (clipRun) dl.PushClip(world.TransformBounds(new RectF(local.X, local.Y - local.H, local.W, local.H * 3f)).Intersect(childClip), key | 0x10);
                     if (scene.TryGetGlyphWipe(node, out var wipe))   // glyph wipe (lyrics karaoke): per-glyph color + lift from the split
-                        dl.DrawGlyphRunGradient(local, p.Text, style.FontFamily, effSize, style.Weight,
+                        dl.DrawGlyphRunGradient(run, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, effLine, (int)style.Stacking, (int)style.LineBounds,
                             world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, ink: in ink,
                             typography: TextTypography.Pack(in style));
                     else
-                        dl.DrawGlyphRun(local, textColor, p.Text, style.FontFamily, effSize, style.Weight,
+                        dl.DrawGlyphRun(run, textColor, p.Text, style.FontFamily, effSize, style.Weight,
                             (int)style.Wrap, (int)style.Trim, style.MaxLines,
                             style.CharSpacing, effLine, (int)style.Stacking, (int)style.LineBounds,
                             world, opacity, key, spanRunId, ink: in ink, typography: TextTypography.Pack(in style));
+                    if (clipRun) dl.PopClip(key | 0x10);
                 }
 
                 // (b1) span-run decoration bars (per-LINE, per span — the rich-text refinement of (b2) below): the
@@ -3037,10 +3069,15 @@ internal sealed partial class SceneRecordingContext
                     }
                     bool bandClip = itemBandClipChanged && !itemBandClip.IsEmpty;
                     bool bandFade = !itemBandClip.IsEmpty && itemBandTopFade > 0.5f;
-                    // One offscreen group feathers the contiguous recyclable suffix. The prefix is emitted outside this
+                    // One edge fade feathers the contiguous recyclable suffix. The prefix is emitted outside this
                     // scope (and a pinned prefix is replayed after it), so sticky chrome stays crisp while rows dissolve
                     // at the exact hard paint/input boundary. Group alpha remains 1: child opacity is already carried by
                     // each Walk, and multiplying it again here would double-dim a translucent list.
+                    // The fade is DISTRIBUTABLE (a pure top fade at alpha 1): a band that holds child slices (a row's
+                    // repaint boundary, such as the playing row's meter) composites its tiles and those slices each under
+                    // the analytic feather whenever none of them overlap inside the fade strip, and through one group
+                    // surface only on the turns they do (SliceRecorder.Distributable). Without the flag every such band
+                    // was one page-sized group surface, repaired on every turn a row's slice changed.
                     float bandPx = itemBandTopFade * MathF.Abs(parentScaleY);
                     if (contentSlice && (bandClip || bandFade) && stats.InlineLayerDepth == 0
                         && (bandSlot = stats.Slices!.FindOrCreate((int)node.Raw.Index, node.Raw.Gen, SliceRole.Band, SliceKind.Scroll)) >= 0)
@@ -3048,7 +3085,7 @@ internal sealed partial class SceneRecordingContext
                         var sl = stats.Slices!;
                         int bflags = (int)CompositeSliceFlags.ParamsUp
                             | (bandClip ? (int)CompositeSliceFlags.OuterClip : 0)
-                            | (bandFade ? (int)CompositeSliceFlags.Layer : 0);
+                            | (bandFade ? (int)CompositeSliceFlags.Layer | (int)CompositeSliceFlags.DistributeFade : 0);
                         PushLayerCmd bandLayer = bandFade
                             ? DrawList.EdgeFadeLayerCmd(itemBandClip, itemBandClip, default, 1f, (int)EdgeMask.Top,
                                 0f, bandPx, 0f, 0f, (int)FadeFalloff.Smoothstep, 1f, 0f)

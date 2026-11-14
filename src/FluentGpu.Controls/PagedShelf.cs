@@ -213,6 +213,12 @@ public static class PagedShelf
     /// <summary>The clipped, edge-faded viewport box that hosts the virtualized strip. Owned: Height, ClipToBounds, EdgeFade.</summary>
     public const string PartViewport = "Viewport";
 
+    /// <summary>The live width of the card a shelf built with <c>cardWidthBound: true</c> renders in, provided under each slot: a card host
+    /// binds its sizes to it (<c>Prop.Of(() => w.Value ...)</c>), so a width change re-lays the card out and re-renders nothing. Null where
+    /// the slot hands its card the width as a value it re-renders on (another shelf, a spanning lead, a slot before the first fit): the
+    /// host then sizes the card from the width it was built with.</summary>
+    public static readonly Context<IReadSignal<float>?> CardWidth = new(null);
+
     /// <summary>Build a paged shelf. <paramref name="cardAt"/> builds card <c>index</c> at the fitted card width.
     /// <para>Two sizing modes. The default VIRTUALIZED strip (recycles, scales to thousands) needs
     /// <paramref name="cardHeight"/> — the card's full height for a given card width — to size the (cross-axis) viewport
@@ -252,6 +258,11 @@ public static class PagedShelf
         // width hint. This keeps realized item components subscribed only to their data: a container resize re-fits the
         // retained cells in layout without scheduling every card component through _cardW.
         bool cardWidthAgnostic = false,
+        // The card BINDS its width to PagedShelf.CardWidth (the live width of the slot it renders in) instead of taking cardAt's width
+        // literally: cardAt is handed the width the slot renders at, and a width change (every frame of a docking panel's slide) re-lays the
+        // card out and re-renders no slot. Frozen mount configuration. A slot whose card reads the width itself still re-renders on it: a lead
+        // that spans more than one cell (its template derives from its spanned width), and a slot before the shelf's first fit.
+        bool cardWidthBound = false,
         // 0 = unlimited. Clamp the auto-fit column count: a wide viewport stops adding columns and grows each card
         // instead (see FillRowVirtualLayout.Fit) — the editorial "a few large cards" shelf that still adapts to width.
         int maxColumns = 0,
@@ -312,7 +323,7 @@ public static class PagedShelf
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
                                                headerGap, edgeFade, prevGlyph, nextGlyph, parts, overscan, measured,
                                                cardWidthAgnostic, maxColumns, snap, controller, lift, leadMinColumns, selectionMode, selection,
-                                               new ShelfWidthKey(widthSite, widthLine)))
+                                               new ShelfWidthKey(widthSite, widthLine), cardWidthBound))
            // SkeletonProxy: the deriver can't see into this component, so hand it the header + a few real cards to derive
            // — the shelf shimmers as real cards instead of one default bar. The cards are fitted to the MEASURED slot
            // exactly as the live strip fits them (the same Fit, through Responsive's rendered-output proxy idiom): handing
@@ -665,6 +676,59 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     int NewIndexOf(int oldIndex) => _remapFrom is { } from && _remapTo is { } to ? IndexIn(from, to, oldIndex) : -1;
     int OldIndexOf(int newIndex) => _remapFrom is { } from && _remapTo is { } to ? IndexIn(to, from, newIndex) : newIndex;
 
+    // ── A SLIDE THAT RE-FITS A SINGLE ROW. A single-row strip chooses its columns at the structure width (the width a docking panel's reflow lands
+    // it at, FillRowVirtualLayout.SetStructureMain) and fills the LIVE width with them, so a slide that changes the count re-fitted the strip in the
+    // arrange of its first frame: no render saw the old cells (no glide), every card stepped to the new pitch at the old width (a dock from six
+    // covers to four widened each by half and threw the sixth 460 DIP off the page in one frame), and then shrank with the slide. Instead the
+    // strip keeps what it draws through that arrange (HoldForSlide), and the render that follows re-fits the count at the card width it shows;
+    // from there the cards ease to the width they land at as the slide moves the live width (SlideStep), so the count changes without a card
+    // moving: the covers the new count drops stay where they are and leave with the strip's edge, the ones it adds arrive with it. The live
+    // width is the slide's clock (the reflow's own curve); the hold ends where the live width reaches the structure width.
+    int _shownCount;                               // the columns the strip was last rendered at (what it draws until the next render re-fits)
+    bool _slideHeld;                               // HoldForSlide held them through a structure change that moves the count
+    bool _sliding;                                 // the cards ease from _slideFromCardW to the landing fit as the live width moves to the structure width
+    float _slideFromW, _slideFromCardW;
+
+    /// <summary>The structure width moved to <paramref name="sw"/> (inside the arrange, before the strip's own): when that changes a single row's count,
+    /// hold the columns and the card width the strip draws, so this arrange keeps them and the next render re-fits from them. A move that keeps the
+    /// count leaves a running slide to aim at the new landing width (SlideCardW reads it).</summary>
+    void HoldForSlide(float sw)
+    {
+        if (_measured || _rows != 1 || _cardWidthAgnostic || _firstRealize || !_rendered || _shownCount <= 0 || _layout is not { } layout) return;
+        if (ColumnsAt(sw) == _shownCount) return;
+        float drawn = _cardW.Peek();
+        if (drawn <= 0f) return;
+        layout.HoldColumns(_shownCount, drawn);
+        _slideHeld = true;
+    }
+
+    /// <summary>The card width at live width <paramref name="liveW"/> while a slide re-fits the row: from the width the cards were drawn at to the one
+    /// they land at (the fit at the structure width, under the band as it is now: a tier crossing the slide causes pushes a new gap mid-way), in step
+    /// with the live width's way from where the slide began to the structure width.</summary>
+    float SlideCardW(float liveW)
+    {
+        float sw = _sw.Peek();
+        float span = sw - _slideFromW;
+        float t = MathF.Abs(span) < 0.5f ? 1f : Math.Clamp((liveW - _slideFromW) / span, 0f, 1f);
+        return _slideFromCardW + (CardWAt(sw, _shownCount) - _slideFromCardW) * t;
+    }
+
+    /// <summary>One frame of a slide (the bounds handler, before the strip's arrange): hold the columns at the eased card width, or end the hold
+    /// where the live width reaches the structure width (the strip fits itself again there, at the width the slide eased to).</summary>
+    float SlideStep(float liveW)
+    {
+        float sw = _sw.Peek();
+        if (MathF.Abs(liveW - sw) <= 0.5f)
+        {
+            _sliding = false;
+            _layout?.HoldColumns(0);
+            return CardWAt(liveW, ColumnsAt(sw));
+        }
+        float cw = SlideCardW(liveW);
+        _layout?.HoldColumns(_shownCount, cw);
+        return cw;
+    }
+
     // ── RE-FIT GLIDE (B12). The virtual arrange places a slot at its item's cell in one layout, and a re-fit also re-seats the page (the
     // content's scroll transform), so no parent-relative FLIP can see where an item was ON SCREEN. The glide works in viewport space instead:
     // from the old geometry at the item's old index minus the offset last shown, to the new geometry at its index minus the re-seated
@@ -769,7 +833,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             {
                 // A multi-row page holds cols x rows items: read the old size before the band moves, so the page can keep its first item.
                 bool multiRow = !_measured && _rows > 1;
-                float w = _w.Peek();
+                float w = _sw.Peek();
                 int oldPerPage = multiRow ? PerPageItemsAt(w) : 0;
                 _pager = fit.Pager; _minCardW = fit.MinCardW; _maxCardW = fit.MaxCardW; _gap = fit.Gap;
                 _fixedCardW = fit.FixedCardW; _maxColumns = maxColumns; _leadMinColumns = leadMin; _rows = rows;
@@ -799,6 +863,19 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     /// strip's shape, so the mount's count stays). Pure.</summary>
     internal static int LiveRowsFor(int mounted, int pushed, bool measured)
         => !measured && mounted > 1 && pushed > 1 ? pushed : mounted;
+
+    /// <summary>The columns per page the fit chooses at width <paramref name="w"/> under the current band.</summary>
+    int ColumnsAt(float w) => FillRowVirtualLayout.Fit(w, _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns).PerPage;
+
+    /// <summary>The card width <paramref name="cols"/> columns take at the live width <paramref name="w"/>: the fit's own width when the columns are
+    /// the ones it chooses there, else the live width's share for each of them (<c>FillRowVirtualLayout</c>'s structure fit). The band's cap chose the
+    /// count; it does not hold a held count's cards, which would stand still at the cap and leave the strip's end empty while the slide moves on.</summary>
+    float CardWAt(float w, int cols)
+    {
+        var (fitCols, fitW) = FillRowVirtualLayout.Fit(w, _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns);
+        if (fitCols == cols || _fixedCardW > 0f || _perPageOverride > 0 || w <= 1f) return fitW;
+        return MathF.Max(1f, (w - (cols - 1) * _gap) / cols);
+    }
 
     /// <summary>Items per page at width <paramref name="w"/> under the current band and rows (the render's own perPageItems).</summary>
     int PerPageItemsAt(float w)
@@ -923,7 +1000,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         if ((uint)index >= (uint)count) return;
         // Peek-only page grid (PageGrid reads the subscribing _count — this runs from focus dispatch, which may sit
         // inside a tracked run; it must never subscribe anything).
-        int cols = Math.Max(1, FillRowVirtualLayout.Fit(_w.Peek(), _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns).PerPage);
+        int cols = Math.Max(1, FillRowVirtualLayout.Fit(_sw.Peek(), _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns).PerPage);
         int leadSpan = _leadSpanSig.Peek();
         int maxPage = Math.Max(0, PageCountFor(count, cols, leadSpan) - 1);
         int page = Math.Clamp(PageOfItem(index, cols, leadSpan), 0, maxPage);
@@ -949,6 +1026,26 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
 
     sealed class ShelfCardSlot(PagedShelfCore<T> owner, BoundItemScope<T> scope) : Component
     {
+        // The width this slot's bound card is laid out at (PagedShelf.CardWidth): the shelf's live card width while the card stands on or
+        // within a cell of the visible strip, and the width it last had there while it is further off the page. A card nobody can see is not
+        // re-laid out on every frame of a slide; it takes the live width a cell before it can enter the page, so it never arrives at a stale one.
+        float _heldW = float.NaN;
+        Func<float>? _nearWidth;
+
+        float NearWidth()
+        {
+            float cw = owner._cardW.Value;
+            int index = scope.Index.Value;
+            float offset = (float)owner._shelfHandle.Offset.Value;
+            float view = owner._w.Value + 2f * owner._bleed;
+            int span = Math.Max(1, owner._effSpanSig.Value);
+            float step = cw + owner._gap;
+            float x = owner._bleed + (index <= 0 ? 0 : index + span - 1) * step;
+            if (!(_heldW > 0f) || (x < offset + view + step && x + span * step > offset - step)) _heldW = cw;   // never holds a width it never had
+            // A spanning lead's cell is its span of cards and the gaps between them.
+            return index == 0 && span > 1 ? span * _heldW + (span - 1) * owner._gap : _heldW;
+        }
+
         public override Element Render()
         {
             // DATA read (subscribes): the gated snapshot is what re-renders this card. The BUILDERS come off _latest —
@@ -958,7 +1055,15 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             int index = scope.Index.Value;
             var item = scope.Item.Value;
             if ((uint)index >= (uint)p.VisibleCount) return new BoxEl();
-            float width = owner._cardWidthAgnostic ? owner._maxCardW : owner._cardW.Value;
+            int effSpan = index == 0 ? owner._effSpanSig.Value : 1;   // subscribe at index 0 only — a span flip re-renders ONLY this slot
+            // A bound card (cardWidthBound) takes the live width from PagedShelf.CardWidth, so this slot neither reads nor subscribes it: a
+            // width change re-lays the card out. A single row's spanning lead binds its spanned width the same way (re-rendered at the live
+            // width, its boxes stood at the width of the render before and its caption broke there). A multi-row grid's lead, and before the
+            // first fit every slot (the width is the layout's fallback, not the signal's), subscribe and re-render on it, as every slot of an
+            // unbound shelf does.
+            float hint = owner._cardW.Peek();
+            bool bindsWidth = owner._cardWidthBound && !owner._cardWidthAgnostic && (effSpan <= 1 || owner._rows == 1) && hint > 0f;
+            float width = owner._cardWidthAgnostic ? owner._maxCardW : bindsWidth ? hint : owner._cardW.Value;
             if (width <= 0f) width = owner._layout?.CardW ?? owner._maxCardW;
             // E7 — the lead item's width hint widens to its spanned cell (2*cardW+gap for a 2-span lead). Read ONLY at
             // index 0: this is the one place `_effSpanSig` is subscribed, so a span change re-renders ONLY the lead
@@ -976,14 +1081,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             // of the card subtree (never one template patched into the other's retained nodes).
             var template = d.CardAt;
             bool lead = false;
-            if (index == 0)
+            if (effSpan > 1)
             {
-                int effSpan = owner._effSpanSig.Value;   // subscribe — a span flip re-renders ONLY this slot
-                if (effSpan > 1)
-                {
-                    width = effSpan * width + (effSpan - 1) * owner._gap;
-                    if (d.LeadCardAt is { } leadCardAt) { template = leadCardAt; lead = true; }
-                }
+                width = effSpan * width + (effSpan - 1) * owner._gap;
+                if (d.LeadCardAt is { } leadCardAt) { template = leadCardAt; lead = true; }
             }
             string key = d.KeyOf?.Invoke(item, index) ?? index.ToString(System.Globalization.CultureInfo.InvariantCulture);
             if (lead) key += LeadKeySuffix;
@@ -993,7 +1094,12 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             // transition owns its size (a second reflow around it would rebase the card's own row onto this one's live width). Only a
             // multi-row strip's plain cards read the arm.
             LayoutTransition? resize = owner._rows > 1 && !owner._measured && !OwnsSize(card) && owner._resizeArmed.Value ? s_slotResize : null;
-            return new BoxEl { Direction = 1, Grow = 1f, Layout = resize, Children = [card] };
+            var root = new BoxEl { Direction = 1, Grow = 1f, Layout = resize, Children = [card] };
+            // The provider sits OVER the slot's root, so the card stays a keyed child of an unkeyed box (the E21 lead remount keeps its key).
+            if (!owner._cardWidthBound) return root;
+            // A single row's cells stand at known places, so a card off the page holds its width (NearWidth); a multi-row grid's follow the live one.
+            IReadSignal<float> slotW = owner._rows == 1 ? UseComputed(_nearWidth ??= NearWidth) : owner._cardW;
+            return Ctx.Provide<IReadSignal<float>?>(PagedShelf.CardWidth, bindsWidth ? slotW : null, root);
         }
     }
     /// <summary>Does a card animate its own size (a <c>Layout</c> or <c>Animate</c> transition with a Size channel)?</summary>
@@ -1015,6 +1121,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     readonly TemplateParts? _parts;
     readonly int _overscan;
     readonly bool _cardWidthAgnostic;
+    readonly bool _cardWidthBound;                // the cards bind PagedShelf.CardWidth (frozen at mount; see PagedShelf.Create)
     readonly ShelfSnap _snap;
     readonly ShelfLift _lift;   // E10 — frozen mount config; see ShelfLift
     readonly ItemsSelectionMode _selectionMode;   // WP1 — frozen mount config; see PagedShelf.Create's selectionMode
@@ -1025,6 +1132,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     const string LeadKeySuffix = "\u0001lead";
 
     readonly Signal<float> _w = new(0f);              // self-measured available width (no app broker)
+    readonly Signal<float> _sw = new(0f);             // the width the columns are chosen at (SceneStore.StructureWidth of the shelf's box)
     readonly Signal<int> _page = new(0);              // current page (chevrons/pips; re-synced from the settled offset)
     readonly Signal<int> _pageNav = new(0);           // pager NAV intent — only chevron/pip navigation re-arms the glide,
                                                       // a free-scroll page re-sync must NOT snap the strip to the grid
@@ -1140,13 +1248,14 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                           ShelfSnap snap = ShelfSnap.None, ShelfController? controller = null,
                           ShelfLift lift = ShelfLift.Elevate, int leadMinColumns = 0,
                           ItemsSelectionMode selectionMode = ItemsSelectionMode.None, SelectionModel? selection = null,
-                          ShelfWidthKey widthKey = default)
+                          ShelfWidthKey widthKey = default, bool cardWidthBound = false)
     {
         _widthKey = widthKey;
+        _cardWidthBound = cardWidthBound;
         // The width memory (see ShelfWidthMemory): mount at the width this call site's last shelf measured. Written before any render, so
         // nothing has subscribed: the first render fits it, writes the cards' width hint before they realize, and the first measure that
         // agrees moves nothing.
-        if (ShelfWidthMemory.TryGet(widthKey, out float remembered)) _w.Value = remembered;
+        if (ShelfWidthMemory.TryGet(widthKey, out float remembered)) { _w.Value = remembered; _sw.Value = remembered; }
         _leadMinColumns = Math.Max(0, leadMinColumns);
         _selectionMode = selectionMode;
         _selection = selection;
@@ -1182,6 +1291,22 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         {
             if (r.W > 0f) ShelfWidthMemory.Set(_widthKey, r.W);
             if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f) _w.Value = r.W;
+            // The columns are chosen at the structure width (the width the shelf lands at while a docking panel's reflow resizes it): a
+            // change re-renders the shelf, which re-fits. A live width that keeps them only re-sizes the cards: their width hint follows here,
+            // and the strip's cells follow layout (FillRowVirtualLayout sizes them for the chosen count at the live viewport). A measured strip
+            // re-renders with its live width and writes the hint there (one writer).
+            float sw = r.W > 0f && Context.Scene is { } scene && !_rootNode.IsNull ? scene.StructureWidth(_rootNode, r.W) : r.W;
+            if (sw > 0f && MathF.Abs(sw - _sw.Peek()) > 0.5f)
+            {
+                HoldForSlide(sw);
+                _sw.Value = sw;
+            }
+            else if (_rendered && !_firstRealize && !_cardWidthAgnostic && !_measured && r.W > 1f)
+            {
+                // Exact: the bound viewport height reads it too, so a deadband here would leave the band a fraction off where the slide lands.
+                float cw = _sliding ? SlideStep(r.W) : CardWAt(r.W, ColumnsAt(_sw.Peek()));
+                if (_cardW.Peek() != cw) _cardW.Value = cw;
+            }
             TryLatchStripGated();
         };
         _pagerGoTo = GoToPage;
@@ -1230,7 +1355,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         _pageScrollSig = pageScrollSig;                 // the hoisted watcher/latch delegates read the live slot
         _inputHooks = UseContext(InputHooks.Current);   // keyboard page-follow's focus-visual probe (FollowFocusToPage)
         _ = _bandTick.Value;                           // subscribe → the latch's wake re-renders us with the strip
-        float w = _w.Value;                            // subscribe → re-fit on resize
+        float w = _sw.Value;                           // subscribe → re-fit when the width the columns are chosen at moves
+        // The live width sizes the cards for those columns. A measured strip pins its own width to it (below), so it re-renders with it; a
+        // fill strip's cells follow layout, and its cards' width hint follows from the bounds handler.
+        float liveW = _measured ? _w.Value : _w.Peek();
         int page = _page.Value;                        // subscribe → pager state + glide retarget
         int leadSpan = _leadSpanSig.Value;              // subscribe (E7) — a live span push re-renders us: pageCount,
                                                         // the controller/pips, and _layout.SetLeadSpan below all follow
@@ -1252,7 +1380,8 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         }
 
         // Compute the fit the layout will land at (count-independent), to size the strip + page math.
-        var (perPageColumns, cardW) = FillRowVirtualLayout.Fit(w, _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns);
+        int perPageColumns = ColumnsAt(w);
+        float cardW = CardWAt(liveW > 1f ? liveW : w, perPageColumns);
         // B12: a multi-row strip's columns are THIS render's decision from the width it measured (FillRowVirtualLayout.HoldColumns): a width
         // that crosses a column threshold between two renders (a docking panel easing the page) only re-sizes the cells there, and the next
         // render re-fits the strip on a commit, where the cells' own resize and the re-fit glide below are measured.
@@ -1273,6 +1402,22 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // The FIRST render writes it too when it already knows a real width (the call site's width memory): no card has realized yet, so the
         // cards realize at it and nothing re-renders (audit FU2c: without it every card realized at the provisional fit and re-rendered a frame
         // after the mount frame).
+        // A single row's slide (see HoldForSlide): the count re-fits here at the width the cards are drawn at, then eases with the live width.
+        _shownCount = perPageColumns;
+        if (!_measured && _rows == 1 && !_cardWidthAgnostic && _layout is { } slid)
+        {
+            if (_slideHeld && laidOut.IsSet && laidOut.PerPage != perPageColumns && liveW > 1f && MathF.Abs(liveW - w) > 0.5f)
+            {
+                _sliding = true;
+                _slideFromW = liveW;
+                _slideFromCardW = laidOut.CardW;
+            }
+            _slideHeld = false;
+            if (_sliding) cardW = SlideCardW(liveW);
+            if ((_sliding ? slid.HoldColumns(perPageColumns, cardW) : slid.HoldColumns(0))
+                && Context.Scene is { } slideScene && ShelfViewport is { IsNull: false } slideVp && slideScene.IsLive(slideVp) && slideScene.HasScroll(slideVp))
+                slideScene.Mark(slideVp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
+        }
         bool firstRender = !_rendered;
         _rendered = true;
         if ((!_firstRealize || firstRender && w > 1f) && !_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
@@ -1297,7 +1442,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             if (_keepPage >= 0)
             {
                 // The band is laid out: the page that holds the old page's first item, at the MEASURED width (ApplyFit's was a guess).
-                int kept = FillRowVirtualLayout.PageKeepingFirstItem(_keepPage, _keepOldPerPage, PerPageItemsAt(_w.Peek()));
+                int kept = FillRowVirtualLayout.PageKeepingFirstItem(_keepPage, _keepOldPerPage, PerPageItemsAt(_sw.Peek()));
                 _keepPage = -1;
                 if (kept != _page.Peek()) _page.Value = kept;
             }
@@ -1696,7 +1841,8 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
     // callbacks whose closures freeze at ItemsView mount, so they must NOT capture a render-time fit.
     (int Cols, float PageW, int PageCount) PageGrid()
     {
-        var (cols, cw) = FillRowVirtualLayout.Fit(_w.Peek(), _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns);
+        int cols = ColumnsAt(_sw.Peek());
+        float cw = CardWAt(_w.Peek(), cols);
         return (cols, cols * (cw + _gap), PageCountFor(_count, cols, _leadSpanSig.Peek()));
     }
 
@@ -2108,10 +2254,21 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         return strip;
     }
 
+    /// <summary>The fill strip's viewport height for cards <paramref name="cardW"/> wide (NaN without a caller card height): the rows, their gaps
+    /// and, for a single elevating row, the lift's clearance.</summary>
+    float ViewportHeight(float cardW)
+    {
+        float shelfH = _cardHeight is null || !(cardW > 0f) ? float.NaN : _rows * _cardHeight(cardW) + (_rows - 1) * _gap;
+        return shelfH > 0f
+            ? (_rows == 1 && _lift == ShelfLift.Elevate ? shelfH + ShadowClearance + LiftClearance : shelfH)
+            : float.NaN;
+    }
+
+    Func<float>? _viewportHeightFn;   // the bound viewport height's thunk (one per shelf: it reads the live fields)
+
     // Persistent bound viewport with caller-supplied card height.
     Element VirtualBody(int perPageItems, float cardW, bool fade, bool stripMounted)
     {
-        float shelfH = _cardHeight is null ? float.NaN : _rows * _cardHeight(cardW) + (_rows - 1) * _gap;
         // Build on the FIRST render even while the gate holds. ItemsView's fields freeze at MOUNT, and this shelf has
         // always built (and mounted) its strip on its first render — when _w is still 0, so the frozen overscan is the
         // caller's floor. Building here keeps that value byte-identical no matter which later render finally mounts it;
@@ -2123,13 +2280,15 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         Element items = stripMounted ? strip : StripPlaceholder;
 
         // E10 — same gating as MeasuredVirtualBody: the clearance is only ever spent when BindCard reserved it.
-        float vpH = shelfH > 0f
-            ? (_rows == 1 && _lift == ShelfLift.Elevate ? shelfH + ShadowClearance + LiftClearance : shelfH)
-            : float.NaN;
+        float vpH = ViewportHeight(cardW);
+        // The cards' width follows the shelf's live width between renders (the bounds handler writes _cardW while a docking panel's slide resizes
+        // the shelf and its columns hold): the viewport's height follows it through a bound height, so the band grows and shrinks with its cards
+        // frame by frame instead of keeping the height of the render that chose the columns.
+        bool follow = vpH > 0f && !_cardWidthAgnostic && _rows == 1;   // a multi-row strip re-fits its rows in its own render (B12)
         return _parts.Apply(PagedShelf.PartViewport, new BoxEl
         {
-            Height = vpH,
-            MinHeight = vpH,
+            Height = follow ? Prop.Of(_viewportHeightFn ??= () => ViewportHeight(_cardW.Value)) : vpH,
+            MinHeight = follow ? float.NaN : vpH,
             ClipToBounds = true,
             // Clip-ESCAPE root: the hover-elevated cell hoists out of this clip + the inner scroller's edge fade — its
             // lift/halo paint into the page while resting content stays exactly clipped. SINGLE-ROW ONLY (HoverElevate):

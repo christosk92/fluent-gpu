@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using FluentGpu.Scene;
 using FluentGpu.Scroll.Effects;
 using FluentGpu.Scroll.Runtime;
@@ -15,6 +16,12 @@ namespace FluentGpu.Hosting;
 internal sealed class SnapshotScrollPoseSink : IScrollPoseSink
 {
     private SceneRecordingSnapshot? _scene;
+    // The last value this sink posed per (node index, non-transform channel): what the slices were recorded with whenever
+    // it differs from the snapshot's authored column. Bounded by the scene's node capacity times the channels; an entry
+    // of a freed node costs at most one spare re-record of the node that reuses its index.
+    private readonly Dictionary<ulong, float> _posed = new();
+    // A pose moved on a turn no record has consumed yet: until one does, an unchanged re-pose keeps its dirty trail.
+    private bool _unrecorded;
 
     /// <summary>A non-transform channel changed on the tick since <see cref="Bind"/>.</summary>
     public bool RecordRequired { get; private set; }
@@ -49,10 +56,36 @@ internal sealed class SnapshotScrollPoseSink : IScrollPoseSink
             AppHost.ApplyEffectChannel(ref scene.CompositorPosePaint(h), channel, value);
             return;
         }
-        ref NodePaint p = ref scene.CompositorPaint(h, changed);
+        // A byte-changing pose re-records its slice only when the slice holds another value. It holds what the snapshot
+        // presents (its authored column: the UI posed the same effect before the capture and marked the node itself when
+        // that moved) unless THIS sink posed something else last (a render pose ahead of the UI's). `changed` cannot tell:
+        // the poser reports every row of a newly adopted coverage as changed, so every publication of any UI frame (a
+        // lyrics step, a seek tick) used to mark every such node, and a page's hero re-recorded on each of them.
+        if (EngineSwitches.ScrollPoseMarkAll)
+        {
+            // --fg scroll-pose-mark-all: the reference arm (every row the poser reports changed marks its node)
+            ref NodePaint all = ref scene.CompositorPaint(h, changed);
+            AppHost.ApplyEffectChannel(ref all, channel, value);
+            if (changed) RecordRequired = true;
+            return;
+        }
+        NodePaint probe = scene.Paint(h);
+        bool write = AppHost.ApplyEffectChannel(ref probe, channel, value);   // the presented paint is not this value
+        ulong key = (ulong)(uint)node << 8 | (byte)channel;
+        bool moved = _posed.TryGetValue(key, out float last) ? last != value : write;
+        _posed[key] = value;
+        if (!write && !moved) return;
+        if (moved) _unrecorded = true;
+        // `write` without `moved`: the overlay must hold the value again (it is rebuilt every tick), but the slice was
+        // recorded with it, unless a move no record has consumed yet is still owed.
+        ref NodePaint p = ref scene.CompositorPaint(h, moved, trail: _unrecorded);
         AppHost.ApplyEffectChannel(ref p, channel, value);
-        if (changed) RecordRequired = true;
+        if (!scene.OverlayRowHeld(h)) _posed.Remove(key);   // it did not land: the node shows its authored value, the next pose is a move
+        if (moved) RecordRequired = true;
     }
+
+    /// <summary>A record consumed the moves posed so far (render thread, right after the turn's record).</summary>
+    public void NoteRecorded() => _unrecorded = false;
 
     public void PoseTransform(int node, in EffectTransform transform, bool changed)
     {

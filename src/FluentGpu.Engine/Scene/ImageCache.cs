@@ -2185,12 +2185,16 @@ public sealed class FakeImageDecoder : IImageDecoder
         return true;
     }
 
-    /// <summary>A stable hash of <paramref name="source"/> (FNV-1a over its chars): the same image paints the same in every run.</summary>
+    /// <summary>A stable hash of <paramref name="source"/> (FNV-1a over its chars): the same image paints the same in every run. A file under the
+    /// app's own folder (bundled art addressed by its absolute path) hashes its path below that folder, so a build run from another folder paints
+    /// it the same too.</summary>
     private static uint SeedOf(string? source)
     {
         uint h = 2166136261u;
-        if (source is not null)
-            foreach (char c in source) h = unchecked((h ^ c) * 16777619u);
+        if (source is null) return h;
+        string root = System.AppContext.BaseDirectory;
+        int start = root.Length > 0 && source.Length > root.Length && source.StartsWith(root, System.StringComparison.OrdinalIgnoreCase) ? root.Length : 0;
+        for (int i = start; i < source.Length; i++) h = unchecked((h ^ source[i]) * 16777619u);
         return h;
     }
 

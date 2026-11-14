@@ -21,7 +21,7 @@ Enabling video / switching tracks with video freezes the UI. Verified root cause
   per-render `List<Element>(8)`/`ToArray`.
 - **E5** `MediaPlayer.OpenAsync` continuation writes ~6 signals into `MediaPlayerCore` from a pool thread
   (`MediaPlayer.cs:327-356`) — sole-writer violation.
-- **E6** `DCompVideoPresenter.Check` throws into AppHost's device-lost catch; cold bind inline after Present.
+- **E6** the DirectComposition video presenter (deleted 2026-11-11)'s `Check` throws into AppHost's device-lost catch; cold bind inline after Present.
 
 ## Cross-plan contract (pinned)
 
@@ -205,7 +205,7 @@ Everything else (`NativeSizeAnswer`, blocking properties/methods, `Initialize`) 
 - Transport verbs are pure posts + the same optimistic sink publishes (`PlayAsync` → `Commands.Post(Transport, i:1)`;
   Seek/Rate/Volume/Muted/GoLive likewise; `ConnectSignals` re-asserts as posts). Zero blocking calls remain.
 - `PumpVideo` reads ONE snapshot per pump; `if (s.SourceEpoch != _sourceEpoch) return;`; position extrapolated
-  (`pos + elapsed·rate` while Playing); StreamRect/Repaint via posts; `binding.Bind/SetContentSize/Place/SetVisible`
+  (`pos + elapsed·rate` while Playing); StreamRect/Repaint via posts; `binding.Bind/Place/SetVisible` (and a content size, deleted 2026-11-11)
   unchanged; latch rules (never regress duration, latch live) stay as session fields fed from the snapshot.
 - `DisposeAsync` non-blocking: unhook `StateChanged`, null the sink, then `_release?.Invoke(_engine)` (else
   `_engine.Dispose()`). No `Task.Run`, no join on the switch path.
@@ -306,7 +306,7 @@ seed-before-RunEx ordering is preserved). Add idempotent `static Warmup()` → `
 
 ## 5. DComp presenter never throws (fixes E6)
 
-`DCompVideoPresenter.Check` → non-throwing `Ok(hr, what)` (Diag log once per distinct hr per slot); failing placement
+the DirectComposition video presenter (deleted 2026-11-11)'s `Check` → non-throwing `Ok(hr, what)` (Diag log once per distinct hr per slot); failing placement
 marks + skips; `CreateSurface` returns none on failure; `VideoSurfaceRegistry.Drain` keeps a failed slot dirty and
 retries next drain; delete the `catch … when (s_diag)`; replace `FG_DRM_DIAG` with always-on `Diag`-gated lines.
 `BindSurfaceHandle` failure self-heals via the next presentation-epoch handle change.
@@ -335,7 +335,7 @@ retries next drain; delete the `catch … when (s_diag)`; replace `FG_DRM_DIAG` 
 | C — facade marshal | `Engine/Media/Playback/MediaPlayer.cs` | — |
 | D — element | `Controls/Media/MediaPlayerElement.cs`; `VerticalSlice/Suites/ControlsSuite.cs` media block | — |
 | E — DRM preload | `WindowsApi/Media/PlayReady/{DesktopProtectedVideoPlayer,ProtectedMediaBackend}.cs` | — |
-| F — presenter/registry/canon | `Windows/Pal/DCompVideoPresenter.cs`; `Engine/Media/Playback/VideoSurfaceRegistry.cs`; `docs/design/subsystems/media-pipeline.md` | — |
+| F — presenter/registry/canon | the DirectComposition video presenter (deleted 2026-11-11); `Engine/Media/Playback/VideoSurfaceRegistry.cs`; `docs/design/subsystems/media-pipeline.md` | — |
 
 ## 8. Risks
 

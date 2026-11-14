@@ -129,6 +129,15 @@ public sealed class DirectWriteFontSystem : IFontSystem, IDisposable
         return _engine.TryInkBounds(out ink);
     }
 
+    /// <inheritdoc/>
+    public bool TryMeasureDrawn(StringId text, in TextStyle style, float maxWidth, out TextDrawn drawn)
+    {
+        string s = _strings.Resolve(text);
+        LayoutFor(s.AsSpan(), in style, maxWidth, float.PositiveInfinity, measure: true);
+        drawn = new TextDrawn(_engine.LineCount, _engine.Cut, _engine.Ellipsis, _engine.HasOverhang());   // the overhang: a cold scan of this layout
+        return true;
+    }
+
     public int HitTestText(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, Point2 point, out bool trailing,
         float alignWidth = float.PositiveInfinity)
     {

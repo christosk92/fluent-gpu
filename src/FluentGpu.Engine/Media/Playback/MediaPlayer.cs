@@ -128,6 +128,17 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
         return false;
     }
 
+    /// <summary>The connected session's renderer frame counters as the engine last read them, with the instant they were read
+    /// (<see cref="MediaFrameCounters"/>). <see cref="Statistics"/> carries them as of the last state pump, which is not on the
+    /// counters' own cadence; a reader that differences counters over time reads this instead. Any thread, no allocation. False
+    /// when the session has none (none connected, not opened, not sampled yet, or not a <see cref="IMediaFrameCounterSource"/>).</summary>
+    public bool TryReadFrameCounters(out MediaFrameCounters counters)
+    {
+        if (!_disposed && _session is IMediaFrameCounterSource source && source.TryReadFrameCounters(out counters)) return true;
+        counters = default;
+        return false;
+    }
+
     // ── the one-call easy path (all funnel into Play(MediaSource)) ───────────────────────────────────────────────────
 
     /// <summary>Play a URI or local path (auto buffering / SMTC / default tracks).</summary>
@@ -259,6 +270,8 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     public IReadSignal<TimelineInfo> Timeline => _core.Timeline;
     /// <inheritdoc/>
     public IReadSignal<SizeI> NaturalSize => _core.NaturalSize;
+    /// <inheritdoc/>
+    public IReadSignal<SizeI> ExpectedNaturalSize => _core.ExpectedNaturalSize;
     /// <inheritdoc/>
     public IReadSignal<VideoGeometry> VideoGeometry => _core.VideoGeometry;
     /// <inheritdoc/>
@@ -561,12 +574,13 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
                 // "IsNone until the first video frame" — the headless player already does this). In-place switches keep this
                 // MediaPlayer, so without it the old surface keeps the element's hole punched and its poster down over the
                 // held outgoing frame, and the old natural size reads as "a frame was seen" to every first-frame heuristic.
-                // The new session republishes each of these from its own metadata. Known consequence: MediaPlayerElement reads an
-                // empty NaturalSize as audio-only (IsAudioOnly), so during the Opening leg of a Switch holeActive goes false
-                // and PumpNow hides the DComp child: the outgoing frame is replaced by the stage colour at once while the poster
-                // fades in, instead of crossfading over the held frame. A host with its own poster (Wavee) masks it.
+                // The new session republishes each of these from its own metadata. MediaPlayerElement does not read the reset as
+                // audio-only while its slot still shows the outgoing frame: it HOLDS that frame at its own size and placement until
+                // the new source's first frame (MediaPlayerElement.PictureShownOut), and the new session does not take the slot over
+                // before then (VideoBinding.ShowsOtherPicture).
                 _core.SetVideoSurface(default);
                 _core.SetNaturalSize(SizeI.Zero);
+                _core.SetExpectedNaturalSize(SizeI.Zero);
                 _core.SetDuration(TimeSpan.Zero);
                 _activeCaptions = null;   // the old source's captions would re-publish a cue from the next PumpVideo
                 _core.SetActiveCue(null);
@@ -857,6 +871,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
             _core.SetBuffering(BufferingInfo.None);
             _core.SetTimeline(TimelineInfo.Empty);
             _core.SetNaturalSize(SizeI.Zero);
+            _core.SetExpectedNaturalSize(SizeI.Zero);
             _core.SetVideoGeometry(global::FluentGpu.Media.VideoGeometry.Empty);
             _core.SetVideoColor(VideoColorInfo.Sdr);
             _core.SetSurfaceGeometry(VideoSurfaceGeometry.Empty);

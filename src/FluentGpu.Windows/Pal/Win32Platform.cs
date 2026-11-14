@@ -32,8 +32,19 @@ public sealed unsafe partial class Win32App : IPlatformApp
 
     public Win32App()
     {
-        SetProcessDpiAwarenessContext(unchecked((nint)(-4)));
+        EnsureDpiAwareness();
         ReadSystemParams();
+    }
+
+    private static int s_dpiAwarenessSet;
+
+    /// <summary>Make the process per-monitor-v2 DPI aware (once; later calls are no-ops). The <see cref="Win32App"/> ctor does
+    /// it; code that must read monitors in physical px BEFORE the platform exists (a restored placement resolved for the
+    /// first frame, <see cref="Win32Placement.Resolve"/>) calls it first so it reads the units the window will have.</summary>
+    public static void EnsureDpiAwareness()
+    {
+        if (Interlocked.Exchange(ref s_dpiAwarenessSet, 1) == 0)
+            SetProcessDpiAwarenessContext(unchecked((nint)(-4)));
     }
 
     /// <summary>One-time OS user-preference reads into <see cref="SystemParams"/> — the same sources WinUI consults:
@@ -110,7 +121,10 @@ public sealed unsafe partial class Win32App : IPlatformApp
     /// <summary>Work area (desktop minus taskbar) of the monitor containing the point, in physical virtual-screen px.
     /// The same data WinUI's windowed popups place against (FlyoutBase_Partial.cpp:3382-3388 monitor bounds;
     /// Popup.cpp windowed placement) — <c>MonitorFromPoint(MONITOR_DEFAULTTONEAREST)</c> + <c>GetMonitorInfoW().rcWork</c>.</summary>
-    public RectF GetWorkArea(Point2 screenPointPx)
+    public RectF GetWorkArea(Point2 screenPointPx) => WorkAreaAt(screenPointPx);
+
+    /// <summary>The static form of <see cref="GetWorkArea"/> (it reads no instance state), for app code that places its own windows.</summary>
+    public static RectF WorkAreaAt(Point2 screenPointPx)
     {
         POINT pt = new() { x = (int)MathF.Round(screenPointPx.X), y = (int)MathF.Round(screenPointPx.Y) };
         HMONITOR mon = MonitorFromPoint(pt, MonitorDefaultToNearest);
@@ -193,6 +207,49 @@ public sealed unsafe partial class Win32App : IPlatformApp
         var handler = s_appNavigationCommand;
         if (handler is null) return false;
         handler(which);
+        return true;
+    }
+
+    // ── global hot keys (RegisterHotKey) ────────────────────────────────────────────────────────────────────────────
+    // A system-wide shortcut (Wavee's Ctrl+Alt+M) is registered against the MAIN window, so WM_HOTKEY lands in its
+    // Handle32 on the UI thread whether or not the app has the focus. Static bridge, the single-window rationale above.
+    private static Action<int>? s_hotKeyPressed;
+    private static nint s_hotKeyWindow;
+
+    /// <summary>Fired on the UI thread with the id of a pressed global hot key (<see cref="TryRegisterHotKey"/>).</summary>
+    public static event Action<int>? HotKeyPressed
+    {
+        add => s_hotKeyPressed += value;
+        remove => s_hotKeyPressed -= value;
+    }
+
+    /// <summary>Register a system-wide hot key (<paramref name="modifiers"/>: MOD_ALT 1, MOD_CONTROL 2, MOD_SHIFT 4, MOD_WIN 8;
+    /// MOD_NOREPEAT is added) against <paramref name="hwnd"/>. False when another app holds the combination (or no window): the
+    /// caller fails quietly. UI thread.</summary>
+    public static bool TryRegisterHotKey(nint hwnd, int id, uint modifiers, uint virtualKey)
+    {
+        if (hwnd == 0) return false;
+        s_hotKeyWindow = hwnd;
+        return RegisterHotKeyNative(hwnd, id, modifiers | 0x4000u /*MOD_NOREPEAT*/, virtualKey) != 0;
+    }
+
+    /// <summary>Release a hot key <see cref="TryRegisterHotKey"/> took. UI thread.</summary>
+    public static void UnregisterHotKey(int id)
+    {
+        if (s_hotKeyWindow != 0) UnregisterHotKeyNative(s_hotKeyWindow, id);
+    }
+
+    [System.Runtime.InteropServices.LibraryImport("user32.dll", EntryPoint = "RegisterHotKey")]
+    private static partial int RegisterHotKeyNative(nint hwnd, int id, uint modifiers, uint vk);
+    [System.Runtime.InteropServices.LibraryImport("user32.dll", EntryPoint = "UnregisterHotKey")]
+    private static partial int UnregisterHotKeyNative(nint hwnd, int id);
+
+    /// <summary>Raise <see cref="HotKeyPressed"/>. Called by <see cref="Win32Window"/>'s WM_HOTKEY case.</summary>
+    internal static bool RaiseHotKey(int id)
+    {
+        var handler = s_hotKeyPressed;
+        if (handler is null) return false;
+        handler(id);
         return true;
     }
 
@@ -299,10 +356,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                        // stay live even while the mouse is held still mid-drag. Safe only because keep-alive paints no longer
                        // block on vblank (IGpuDevice.SuppressLatencyWaitOnce); a blocking paint here would stall each step.
                        WM_MOVE = 0x0003, WM_ENTERSIZEMOVE = 0x0231, WM_EXITSIZEMOVE = 0x0232, WM_TIMER = 0x0113,
-                       WM_DROPFILES = 0x0233;   // OS file/folder drop (DragAcceptFiles); wParam = HDROP
+                       WM_DROPFILES = 0x0233,   // OS file/folder drop (DragAcceptFiles); wParam = HDROP
+                       WM_WINDOWPOSCHANGING = 0x0046,  // a LiveResize window paints the coming size ahead of it (PaintAheadOfSize)
+                       WM_WINDOWPOSCHANGED = 0x0047;   // the placement edge outside the modal loop (PlacementChanged)
 
     private const nuint MoveLoopTimerId = 1;   // SetTimer id for the modal move/size loop keep-alive pump
     private const nuint LiftTimerId = 2;       // SetTimer id for the touchpad wheel-fallback silence-lift check (fires even when no frames pump)
+    private const nuint PendingBoundsTimerId = 3;   // SetTimer id: a held full-screen window change no present committed is applied anyway
+    private const nuint PresenceTimerId = 4;        // SetTimer id: the pointer-presence watch (SetPointerPresenceWatch)
+    private const uint PresenceWatchMs = 100;
+    private const uint PendingBoundsTimeoutMs = 250;
+    private const uint CommitWaitMs = 100;          // the presenting thread's one bounded wait for the window thread to apply the change
     // ── Pointer input (EnableMouseInPointer): the WM_MOUSE* client stream is retired — mouse, touch and pen all arrive
     //    here as WM_POINTER* (PT_MOUSE/PT_TOUCH/PT_PEN/PT_TOUCHPAD). One contact = one PointerId; implicit contact→window capture
     //    replaces the SetCapture refcount. WM_POINTERWHEEL/HWHEEL REPLACE WM_MOUSEWHEEL/HWHEEL once mouse-in-pointer is on.
@@ -381,6 +445,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // Private posted message: open the system menu at (x, y) screen px OUTSIDE the frame (IPlatformWindow.ShowSystemMenu
     // is called from input dispatch; TrackPopupMenu runs a modal loop, so it must not run inside RunFrame). WM_APP range.
     private const uint WM_FG_SHOWSYSMENU = 0x8000 + 0x0F51;
+    // Private posted message: apply the held full-screen window change (IPlatformWindow.CommitPendingBounds from the render
+    // thread). wParam = the pending change's generation; a message for an older one is a no-op.
+    private const uint WM_FG_COMMITBOUNDS = 0x8000 + 0x0F52;
+    // Private posted message: apply the size step held while the previous one painted ahead (PaintAheadOfSize). Posted when the step
+    // arrives, so it runs after the previous step's SetWindowPos completed and before any step queued after it.
+    private const uint WM_FG_APPLYHELDSTEP = 0x8000 + 0x0F53;
 
     // `--fg nc` (EngineSwitches.NcDiag): trace custom-frame caption-button non-client input — which WM_NC* messages actually arrive over a
     // button and whether synthesis runs — to stderr. Off by default (zero cost); diagnoses "no hover / clicks don't
@@ -391,6 +461,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
+    private const uint WsMaximize = 0x01000000;
     private const uint WsMaximizeBox = 0x00010000, WsSysMenu = 0x00080000, WsExTopmost = 0x00000008, WsExToolWindow = 0x00000080;
     private const int GWL_STYLE = -16;
     private const int GWL_EXSTYLE = -20;
@@ -411,6 +482,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private const int GWLP_USERDATA = -21;
     private const int IDC_ARROW = 32512;
     private const uint SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+    private const uint SWP_SHOWWINDOW = 0x0040, SWP_HIDEWINDOW = 0x0080;
     private const uint WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
 
     // OS file/folder drop is handled by Win32DropTarget (a hand-rolled OLE IDropTarget registered via RegisterDragDrop);
@@ -623,6 +695,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // Descriptor minimum CLIENT size (logical DIP) is resolved against the live per-monitor DPI on each query.
     private readonly Size2 _minClientDip;
     private Size2 _minClientPx;
+    // WindowDesc.MaxClientSizeDip: the opt-in maximum CLIENT size (logical DIP), resolved against the live DPI on each
+    // WM_GETMINMAXINFO exactly like the descriptor minimum; an empty axis keeps USER32's maximum tracking size.
+    private readonly Size2 _maxClientDip;
     private DropRegistration? _dropReg;   // OS file/folder drop registration (Win32DropTarget IDropTarget); null = not registered
     // The DirectManipulation touchpad producer (scroll-feel-rework-v2 §7, Phase D). null = unavailable (MTA thread /
     // CoCreate failed) OR session-disabled after a wedge — either way the §3.3 wheel-fallback classifier owns the
@@ -635,6 +710,19 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // redirection bitmap). DWM re-composites that surface at the HWND's new screen position on a pure move, so a composited
     // window needs NO per-step WM_MOVE repaint to track the cursor — the per-step paint is pure overhead/lag there.
     private readonly bool _composited;
+    // WindowDesc.LiveResize: a composited window that paints every size step at once (no throttle), ahead of the size
+    // (PaintAheadOfSize), and keeps its move-loop keep-alive ticks during the resize, instead of the composited full defer.
+    private readonly bool _liveResize;
+    // PaintAheadOfSize: inside the WM_WINDOWPOSCHANGING whose size the host is painting (IPlatformWindow.PaintingAheadOfSize), the
+    // client size that frame was presented at (its WM_SIZE needs no second paint), and the size before it (UserResizeEpoch compares
+    // the WM_SIZE with that, not with the size already reported ahead).
+    private bool _paintingAhead;
+    private int _aheadW, _aheadH, _aheadFromW, _aheadFromH;
+    private WINDOWPOS _heldStep;     // a step that arrived inside the previous step's paint (ApplyHeldStep)
+    private bool _heldStepPending;
+    // > 0 while the engine's own SetWindowPos runs (a bounds, client-size, full-screen or DPI change the host asked for): the host is
+    // already laying that size out or will at its next frame, so no frame is painted ahead of it from inside the call.
+    private int _engineWindowPos;
     // WindowDesc.Resizable false: the edge/corner sizing hits answer HTBORDER and the maximize box is dropped. The thick
     // frame itself stays, so the frame metrics (AdjustForFrame), the DWM shadow and the rounded corners are unchanged.
     private readonly bool _resizable;
@@ -670,6 +758,20 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private bool _windowedWasZoomed;
     private nint _windowedStyle;
     private RECT _windowedRect;
+    private int _windowedClientW, _windowedClientH;   // the client size when full screen was entered: the exit's target client size
+    // A full-screen window change held for the first frame presented at its client size (SetFullscreen, deferred path): the
+    // style + rect wait here until the presenting thread commits them (CommitPendingBounds), or the timer applies them anyway.
+    private volatile bool _boundsPending;
+    private bool _pendingOn;
+    private RECT _pendingRect;
+    private nint _pendingStyle;
+    private int _pendingClientW, _pendingClientH;
+    private long _pendingSinceQpc;
+    private bool _applyingPending;            // inside ApplyPendingBounds's SetWindowPos (its WM_SIZE needs no paint)
+    private volatile int _pendingGen;         // bumped per deferred request; WM_FG_COMMITBOUNDS carries the one it was posted for
+    private volatile int _commitPostedGen;    // the generation a commit was already posted for: later presents do not wait again
+    private HANDLE _boundsAppliedEvent;       // auto-reset: the window thread applied the held change (lazy)
+    private uint _windowThreadId;             // the thread that created the HWND (its messages run there)
     private HANDLE _preciseWaitTimer;       // lazy one-shot timer for display-rate waits
     private bool _preciseWaitUnavailable;   // sticky creation failure => plain timeout forever
     private HANDLE _presentAckEvent;        // auto-reset: general cross-thread Wake signal waited with messages (not message-only)
@@ -721,11 +823,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _customFrame = desc.CustomFrame;   // must be set BEFORE CreateWindowExW: WM_NCCALCSIZE fires during creation
         _composited = desc.Composited;     // gates the WM_MOVE per-step repaint: DWM relocates the DComp surface on a pure move
         _minClientDip = desc.MinClientSizeDip; // WM_GETMINMAXINFO may run inside CreateWindowExW
+        _maxClientDip = desc.MaxClientSizeDip;
+        _liveResize = desc.LiveResize && desc.Composited;
         _resizable = desc.Resizable;       // WM_NCHITTEST may run inside CreateWindowExW
-        _style = desc.Resizable ? WS_OVERLAPPEDWINDOW : WS_OVERLAPPEDWINDOW & ~WsMaximizeBox;
         // A custom-frame TOOL window keeps no system menu: DWM otherwise draws its small caption close button over the
         // reclaimed caption strip (the client's top-right corner) — the engine draws all the chrome there is.
-        if (desc.ToolWindow && desc.CustomFrame) _style &= ~WsSysMenu;
+        _style = StyleFor(desc.Resizable, desc.ToolWindow, desc.CustomFrame);
         _exStyle = (desc.Composited ? (uint)WS_EX_NOREDIRECTIONBITMAP : 0u)
             | (desc.Topmost ? WsExTopmost : 0u) | (desc.ToolWindow ? WsExToolWindow : 0u);
         _self = GCHandle.Alloc(this);
@@ -765,17 +868,34 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
         RECT rc = new() { left = 0, top = 0, right = _w, bottom = _h };
         AdjustForFrame(&rc);
+        int createX = CW_USEDEFAULT, createY = CW_USEDEFAULT, createW = rc.right - rc.left, createH = rc.bottom - rc.top;
+        uint createStyle = _style;
+
+        // A RESTORED placement (WindowDesc.InitialBoundsPx): the window is created AT the resolved normal rect, on the monitor
+        // it lies on (so it is born at that monitor's DPI), and maximized there through WS_MAXIMIZE with that rect as its
+        // restore rect. CreateWindowEx applies the maximize while the window is still hidden, so the host's first layout, its
+        // swapchain and the first frame are already at the final size: nothing moves or resizes once it is shown.
+        bool restore = desc.InitialBoundsPx.W > 1f && desc.InitialBoundsPx.H > 1f;
+        WindowRestorePlan plan = default;
+        if (restore)
+        {
+            plan = Win32Placement.Resolve(desc.InitialBoundsPx, desc.InitialMaximized && desc.Resizable, desc.CustomFrame, desc.Resizable, desc.ToolWindow);
+            createX = (int)plan.BoundsPx.X; createY = (int)plan.BoundsPx.Y;
+            createW = (int)plan.BoundsPx.W; createH = (int)plan.BoundsPx.H;
+            if (plan.Maximized) createStyle |= WsMaximize;
+        }
 
         s_constructing = this;
         fixed (char* cn = ClassName)
         fixed (char* title = desc.Title)
         {
             _hwnd = CreateWindowExW(
-                _exStyle, cn, title, _style,
-                CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
+                _exStyle, cn, title, createStyle,
+                createX, createY, createW, createH,
                 HWND.NULL, HMENU.NULL, hinst, (void*)GCHandle.ToIntPtr(_self));
         }
         s_constructing = null;
+        _windowThreadId = GetCurrentThreadId();
         if (InstanceIdentity.Current is { Length: > 0 } instanceId)
             SetInstanceProp((nint)_hwnd.Value, InstanceIdentity.WindowPropertyName, (nint)InstanceIdentity.TagOf(instanceId));
         _textInput = new Win32TextInput(_hwnd);
@@ -795,8 +915,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         {
             SetWindowPos(_hwnd, HWND.NULL, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-            _wasZoomed = IsZoomed(_hwnd);
         }
+        _wasZoomed = IsZoomed(_hwnd);
 
         uint dpi = GetDpiForWindow(_hwnd);
         _rawDpiScale = dpi == 0 ? 1f : dpi / 96f;
@@ -805,9 +925,18 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         // The physical window size is seeded from the RAW DPI scale only — deliberately NOT the effective scale: a
         // persisted zoom must not grow (or shrink) the physical window at startup. Browser behavior: the window stays
         // put and the DIP viewport shrinks/grows instead (ClientSizePx / _scale — the host's EnsureSize re-lays-out).
-        ResizeClientPhysical((int)MathF.Round(requestedW * _rawDpiScale), (int)MathF.Round(requestedH * _rawDpiScale));
+        // A restored placement is already the outer rect the user left: it is not resized to SizePx.
+        if (!restore)
+            ResizeClientPhysical((int)MathF.Round(requestedW * _rawDpiScale), (int)MathF.Round(requestedH * _rawDpiScale));
 
         RefreshClientSize();
+        if (restore)
+        {
+            var outer = OuterBoundsPx;
+            Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"[window.placement] created rect={outer.X:0},{outer.Y:0},{outer.W:0},{outer.H:0} normal={plan.BoundsPx.X:0},{plan.BoundsPx.Y:0},{plan.BoundsPx.W:0},{plan.BoundsPx.H:0} " +
+                $"max={(IsZoomed(_hwnd) ? 1 : 0)} client={_w}x{_h} predicted={plan.ClientSizeDip.Width * plan.DpiScale:0}x{plan.ClientSizeDip.Height * plan.DpiScale:0} dpi={dpi} clamped={(plan.Clamped ? 1 : 0)}"));
+        }
         // Seed the true per-monitor refresh so a caller reading DisplayRefreshPeriodQpc before the first
         // WM_DISPLAYCHANGE/WM_EXITSIZEMOVE still gets a real value instead of the "unknown" 0. _compositorClock is
         // still null here, so OnDisplayChanged's Reprobe call is a harmless no-op at this point.
@@ -908,6 +1037,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     public bool IsClosed => _closed;
     public bool InModalLoop => _inMoveSizeLoop;   // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE — host suppresses redundant keep-alive paints
     public bool Composited => _composited;
+    public bool LiveResize => _liveResize;
+    public bool PaintingAheadOfSize => _paintingAhead;
     public bool SizedInModalLoop => _sizedInMoveSizeLoop;
     public Action? PaintRequested { get; set; }
     /// <summary>Raised on every keep-alive beat of THIS window's modal move/size loop (see <see cref="IPlatformWindow.ModalLoopTick"/>):
@@ -953,6 +1084,23 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// <summary><c>SW_HIDE</c>: the window leaves the screen, the taskbar and Alt+Tab, and keeps its HWND, swapchain and
     /// scene. The host parks on the next frame (<see cref="WindowStatus.Parked"/>); <see cref="Show"/> brings it back.</summary>
     public void Hide() => ShowWindow(_hwnd, SW_HIDE);
+
+    /// <inheritdoc cref="IPlatformWindow.CaptionWhereInert"/>
+    public Func<Point2, bool>? CaptionWhereInert { get; set; }
+
+    /// <inheritdoc cref="IPlatformWindow.ShowNoActivate"/>
+    public void ShowNoActivate()
+    {
+        ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
+        UpdateWindow(_hwnd);
+    }
+
+    /// <inheritdoc cref="IPlatformWindow.SetMaterial"/>
+    public void SetMaterial(WindowMaterial material, bool dark)
+    {
+        Win32Theme.ApplyWindowMaterial((nint)_hwnd, dark, material, _composited, _customFrame);
+        Win32Theme.ApplyRoundCorners((nint)_hwnd);
+    }
 
     /// <summary>The live <c>WS_VISIBLE</c> style — not a field mirrored from <see cref="Show"/>/<see cref="Hide"/>, so a
     /// window an app shows through its own <c>ShowWindow</c> call is never left parked.</summary>
@@ -1027,6 +1175,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     /// <inheritdoc cref="IPlatformWindow.MinClientSizeDip"/>
     public Size2 MinClientSizeDip => _minClientDip;
+    public Size2 MaxClientSizeDip => _maxClientDip;
 
     /// <inheritdoc cref="IPlatformWindow.UserResizeEpoch"/>
     public long UserResizeEpoch => _userResizeEpoch;
@@ -1050,10 +1199,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     private void ResizeClientPhysical(int w, int h)
     {
+        if (_boundsPending) ApplyPendingBounds("flush");   // a held full-screen change first: this resize frames the window it leaves
         RECT rc = new() { left = 0, top = 0, right = w, bottom = h };
         AdjustForFrame(&rc);
         _hostResizing = true;   // the WM_SIZE this raises (synchronously) is the engine's, not the user's — see _fitTargetW
-        try { SetWindowPos(_hwnd, HWND.NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE); }
+        try { SetOwnWindowPos(0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE); }
         finally { _hostResizing = false; }
         RefreshClientSize();
     }
@@ -1138,7 +1288,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     public void SetFullscreen(bool fullscreen)
     {
+        // A change still held for its first frame is applied first: the request below samples the window it left (a rapid
+        // on→off must restore from the real borderless state, and off→on must sample the real windowed one).
+        if (_boundsPending) ApplyPendingBounds("flush");
         if (_fullscreen == fullscreen) return;
+        bool wasIconic = IsIconic(_hwnd);
         if (fullscreen)
         {
             // A minimized window has no usable geometry: GetWindowRect reads its (-32000,-32000) parking spot (the "windowed"
@@ -1157,28 +1311,116 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             mi.cbSize = (uint)sizeof(MONITORINFO);
             HMONITOR monitor = MonitorFromWindow(_hwnd, MONITOR_DEFAULTTONEAREST);
             if (!GetMonitorInfoW(monitor, &mi)) return;
+            _windowedClientW = _w; _windowedClientH = _h;
 
             _fullscreen = true;
-            SetWindowLongPtrW(_hwnd, GWL_STYLE, _windowedStyle & ~(nint)WS_OVERLAPPEDWINDOW);
             RECT r = mi.rcMonitor;
-            SetWindowPos(_hwnd, HWND.NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
-                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            nint style = _windowedStyle & ~(nint)WS_OVERLAPPEDWINDOW;
+            if (!TryDeferBounds(true, style, r, r.right - r.left, r.bottom - r.top, wasIconic))
+                ApplyFullscreenBounds(true, style, r, "immediate", 0);
         }
         else
         {
             _fullscreen = false;
-            SetWindowLongPtrW(_hwnd, GWL_STYLE, _windowedStyle);
             RECT r = _windowedRect;
-            SetWindowPos(_hwnd, HWND.NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
-                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-            // Entering fullscreen never un-maximized the window (only its STYLE and rect changed), so in the common case
-            // it is still WS_MAXIMIZE-flagged and _windowedRect already IS the maximized geometry — the restore above is
-            // the whole job and a second SW_MAXIMIZE is a redundant geometry change (another WM_NCCALCSIZE +
-            // WM_WINDOWPOSCHANGED + swapchain resize, i.e. a guaranteed RepaintFullReason.TargetInvalidated frame).
-            // Only re-maximize when the zoomed state was genuinely lost while fullscreen.
-            if (_windowedWasZoomed && !IsZoomed(_hwnd)) ShowWindow(_hwnd, SW_MAXIMIZE);
+            // The re-maximize edge case (see ApplyFullscreenBounds) needs its ShowWindow right after the restore: immediate.
+            bool immediate = _windowedClientW <= 0 || _windowedClientH <= 0 || (_windowedWasZoomed && !IsZoomed(_hwnd));
+            if (immediate || !TryDeferBounds(false, _windowedStyle, r, _windowedClientW, _windowedClientH, wasIconic))
+                ApplyFullscreenBounds(false, _windowedStyle, r, "immediate", 0);
         }
         _queue.Enqueue(new InputEvent(InputKind.WindowStateChanged, default, 0, 0, TimestampMs: Now()));
+    }
+
+    /// <summary>The full-screen window change itself (style + rect), both paths: at the request (immediate) or when the held
+    /// change is applied (<see cref="ApplyPendingBounds"/>).</summary>
+    private void ApplyFullscreenBounds(bool on, nint style, RECT r, string sync, double heldMs)
+    {
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        SetWindowLongPtrW(_hwnd, GWL_STYLE, style);
+        SetOwnWindowPos(r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        NoteFullscreenEdge(on, t0, r, sync, heldMs);
+        // Entering fullscreen never un-maximized the window (only its STYLE and rect changed), so in the common case
+        // it is still WS_MAXIMIZE-flagged and _windowedRect already IS the maximized geometry — the restore above is
+        // the whole job and a second SW_MAXIMIZE is a redundant geometry change (another WM_NCCALCSIZE +
+        // WM_WINDOWPOSCHANGED + swapchain resize, i.e. a guaranteed RepaintFullReason.TargetInvalidated frame).
+        // Only re-maximize when the zoomed state was genuinely lost while fullscreen.
+        if (!on && _windowedWasZoomed && !IsZoomed(_hwnd)) ShowWindow(_hwnd, SW_MAXIMIZE);
+    }
+
+    /// <summary>Hold the full-screen window change for the first frame presented at its client size (EngineSwitches.WindowSizeSync):
+    /// the client size is reported at once (<see cref="ClientSizePx"/>), so the host resizes the swapchain, lays out and renders at
+    /// the new size as it would after the change, and its presenting thread commits the change right before that frame's present
+    /// (<see cref="CommitPendingBounds"/>): DWM gets the new rect and the frame drawn for it in the same refresh. False = change at once.</summary>
+    private bool TryDeferBounds(bool on, nint style, RECT r, int clientW, int clientH, bool wasIconic)
+    {
+        if (!FluentGpu.Hosting.EngineSwitches.WindowSizeSync || !SyncBoundsWithPresent || _pinnedSurface || _closed) return false;
+        if (wasIconic || IsIconic(_hwnd) || IsWindowVisible(_hwnd) == 0) return false;
+        if (clientW <= 0 || clientH <= 0 || (clientW == _w && clientH == _h)) return false;
+        if (_boundsAppliedEvent == HANDLE.NULL) _boundsAppliedEvent = CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null);
+        if (_boundsAppliedEvent == HANDLE.NULL) return false;
+        _pendingOn = on;
+        _pendingRect = r;
+        _pendingStyle = style;
+        _pendingClientW = clientW; _pendingClientH = clientH;
+        _w = clientW; _h = clientH;   // ClientSizePx: the host's EnsureSize sees the new size on its next frame
+        _pendingSinceQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        _pendingGen++;
+        _boundsPending = true;        // last: the presenting thread reads the record only after this
+        SetTimer(_hwnd, PendingBoundsTimerId, PendingBoundsTimeoutMs, null);
+        // The synchronous WM_SIZE inside SetWindowPos used to ask for this frame: keep starting the new-size frame as early.
+        PaintRequested?.Invoke();
+        return true;
+    }
+
+    /// <summary>Window thread: apply the held full-screen change now (<paramref name="how"/>: present / timer / flush). No-op when
+    /// nothing is pending. Clears the pending flag only after SetWindowPos returned, then releases a presenting thread waiting
+    /// in <see cref="CommitPendingBounds"/>.</summary>
+    private void ApplyPendingBounds(string how)
+    {
+        if (!_boundsPending || _hwnd == HWND.NULL || _closed) return;
+        KillTimer(_hwnd, PendingBoundsTimerId);
+        double heldMs = (System.Diagnostics.Stopwatch.GetTimestamp() - _pendingSinceQpc) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        _applyingPending = true;
+        _hostResizing = true;   // the engine's change, never the user's resize (UserResizeEpoch), even if the OS clamps it
+        try { ApplyFullscreenBounds(_pendingOn, _pendingStyle, _pendingRect, how, heldMs); }
+        finally { _applyingPending = false; _hostResizing = false; }
+        _boundsPending = false;
+        if (_boundsAppliedEvent != HANDLE.NULL) SetEvent(_boundsAppliedEvent);
+    }
+
+    public bool SyncBoundsWithPresent { get; set; }
+    public bool HasPendingBounds => _boundsPending;
+    public Size2 PendingBoundsClientPx => new(_pendingClientW, _pendingClientH);
+
+    /// <summary>Apply the held full-screen change now (<see cref="IPlatformWindow.CommitPendingBounds"/>). On the window's thread it
+    /// applies directly; from the presenting thread it posts to the window's thread and waits ONCE, at most
+    /// <see cref="CommitWaitMs"/>: a stalled UI thread never hangs presentation (the present goes ahead and the posted message
+    /// still applies the change when the UI thread runs). A change already posted for is not waited on again.</summary>
+    public void CommitPendingBounds()
+    {
+        if (!_boundsPending || _closed) return;
+        if (GetCurrentThreadId() == _windowThreadId) { ApplyPendingBounds("present"); return; }
+        int gen = _pendingGen;
+        if (_commitPostedGen == gen) return;   // already posted (and timed out) for this change: present straight through
+        HANDLE ev = _boundsAppliedEvent;
+        if (ev == HANDLE.NULL) return;
+        _commitPostedGen = gen;
+        ResetEvent(ev);
+        if (!_boundsPending || _pendingGen != gen) return;   // applied (or replaced) meanwhile: nothing to wait for
+        if (!PostMessageW(_hwnd, WM_FG_COMMITBOUNDS, (WPARAM)(nuint)(uint)gen, 0)) return;
+        if (WaitForSingleObject(ev, CommitWaitMs) == WAIT_TIMEOUT)
+            FluentGpu.Foundation.Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"[window.fullscreen] commit wait timed out after {CommitWaitMs} ms: presenting; the window change follows when the UI thread runs"));
+    }
+
+    // The always-on [window.fullscreen] line (one per edge): how long the style change + SetWindowPos took on this thread (it
+    // dispatches WM_NCCALCSIZE / WM_SIZE synchronously, so it includes whatever those run) and the client size it left; sync =
+    // how the change was applied (immediate at the request, or held and applied by the present / the timer / a later request).
+    private void NoteFullscreenEdge(bool on, long t0, RECT outer, string sync, double heldMs)
+    {
+        double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        FluentGpu.Foundation.Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[window.fullscreen] on={(on ? 1 : 0)} setWindowPosMs={ms:F2} outer={outer.right - outer.left}x{outer.bottom - outer.top} client={_w}x{_h} sync={sync} heldMs={heldMs:F2}"));
     }
 
     public void Minimize() => PostMessageW(_hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
@@ -1189,6 +1431,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     public void CloseWindow() => PostMessageW(_hwnd, WM_CLOSE, 0, 0);
 
     // ── detached-window seam (the pop-out video mini-player) ──────────────────────────────────────────────────────────
+
+    public void SetSystemTransitions(bool enabled) => Win32Theme.SetTransitionsDisabled((nint)_hwnd.Value, !enabled);
 
     public void SetTopmost(bool topmost)
     {
@@ -1205,9 +1449,64 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // exact for x ≥ 1, but for 0 < x < 1 the OLD (int) cast still produced 0 after truncation — MoveToPx below never
     // touches size at all, so this fix is scoped to the one call site that can request a degenerate size.
     public void SetBoundsPx(RectF outerBoundsPx)
-        => SetWindowPos(_hwnd, HWND.NULL, (int)MathF.Round(outerBoundsPx.X), (int)MathF.Round(outerBoundsPx.Y),
+        => SetOwnWindowPos((int)MathF.Round(outerBoundsPx.X), (int)MathF.Round(outerBoundsPx.Y),
             (int)MathF.Max(1f, MathF.Round(outerBoundsPx.W)), (int)MathF.Max(1f, MathF.Round(outerBoundsPx.H)),
             SWP_NOZORDER | SWP_NOACTIVATE);
+
+    /// <summary>The engine's own sizing <c>SetWindowPos</c>: the host asked for this size and lays it out on its own frame, so no
+    /// frame is painted ahead of it (<see cref="PaintAheadOfSize"/>) from inside the call.</summary>
+    private void SetOwnWindowPos(int x, int y, int cx, int cy, uint flags)
+    {
+        _engineWindowPos++;
+        try { SetWindowPos(_hwnd, HWND.NULL, x, y, cx, cy, flags); }
+        finally { _engineWindowPos--; }
+    }
+
+    /// <summary>WM_WINDOWPOSCHANGING of a <see cref="LiveResize"/> window (after USER32's min/max clamp): when the window is about
+    /// to take a client size the engine did not ask for (an edge drag of the modal loop, Snap, another program's
+    /// <c>SetWindowPos</c>), report that size now and paint it (<see cref="PaintingAheadOfSize"/>): the host lays it out and presents
+    /// it with its GPU work done, and only then does the window take the rect. A frame painted at the WM_SIZE, after the rect change,
+    /// reached DWM a composition after the rect on most steps (the mini player's filmed drags: 26-69 % of the drag frames showed the
+    /// previous step's frame in the new rect, the still edges a step short of the window's).</summary>
+    private void PaintAheadOfSize(HWND hWnd, WINDOWPOS* wp)
+    {
+        if ((wp->flags & SWP_NOSIZE) != 0 || _engineWindowPos > 0 || _fullscreen || _pinnedSurface || _closed) return;
+        if (_paintingAhead)
+        {
+            // A newer step arrived while the previous one is being painted (a message pumped inside the paint dispatched another
+            // program's queued SetWindowPos). The previous rect is applied when that paint returns and would land OVER this newer one
+            // (the window stepping back a frame later, after a frame of the old content in the newer rect): hold this step instead
+            // and apply it once the previous one completed (WM_FG_APPLYHELDSTEP). A later one held meanwhile replaces it.
+            _heldStep = *wp;
+            if (!_heldStepPending) _heldStepPending = PostMessageW(hWnd, WM_FG_APPLYHELDSTEP, 0, 0);
+            if (_heldStepPending) wp->flags |= SWP_NOSIZE | SWP_NOMOVE;
+            return;
+        }
+        if (IsIconic(hWnd) || IsWindowVisible(hWnd) == 0) return;
+        RECT wr, cr;
+        if (GetWindowRect(hWnd, &wr) == 0 || GetClientRect(hWnd, &cr) == 0) return;
+        // The frame's share of the outer size is the window's current one (a size step keeps the style and DPI; a WM_SIZE at another
+        // client size than this one paints as usual).
+        int nw = wp->cx - (wr.right - wr.left - cr.right), nh = wp->cy - (wr.bottom - wr.top - cr.bottom);
+        if (nw <= 0 || nh <= 0 || (nw == _w && nh == _h)) return;
+        _aheadFromW = _w; _aheadFromH = _h;
+        _w = nw; _h = nh;   // ClientSizePx: the host's EnsureSize sees the coming size
+        _aheadW = nw; _aheadH = nh;
+        if (_inMoveSizeLoop) { _lastModalPaintMs = Environment.TickCount64; _moveLoopPaints++; }
+        _paintingAhead = true;
+        try { PaintRequested?.Invoke(); }
+        finally { _paintingAhead = false; }
+    }
+
+    /// <summary>WM_FG_APPLYHELDSTEP: the step held while the previous one was painting (<see cref="PaintAheadOfSize"/>), applied now,
+    /// through the same paint-ahead path.</summary>
+    private void ApplyHeldStep(HWND hWnd)
+    {
+        if (!_heldStepPending) return;
+        _heldStepPending = false;
+        WINDOWPOS h = _heldStep;
+        SetWindowPos(hWnd, HWND.NULL, h.x, h.y, h.cx, h.cy, (h.flags & SWP_NOMOVE) | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
 
     /// <summary>Pure move (outer origin only, physical virtual-screen px) — <see cref="SetBoundsPx"/>'s sibling that
     /// never touches size: <c>SWP_NOSIZE</c> so a caller restoring a remembered POSITION (the detached mini-player
@@ -1242,6 +1541,66 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private volatile bool _hasLiveVideo;
 
     public void SetHasLiveVideo(bool hasLiveVideo) => _hasLiveVideo = hasLiveVideo;
+
+    // The window style a WindowDesc creates (the ctor's own rule), so a placement resolved before the window exists
+    // (Win32Placement.Resolve) frames it exactly as the ctor will.
+    private static uint StyleFor(bool resizable, bool toolWindow, bool customFrame)
+    {
+        uint style = resizable ? WS_OVERLAPPEDWINDOW : WS_OVERLAPPEDWINDOW & ~WsMaximizeBox;
+        if (toolWindow && customFrame) style &= ~WsSysMenu;
+        return style;
+    }
+
+    /// <summary>The frame a window of this shape adds around its client at <paramref name="dpi"/> (physical px per edge):
+    /// <c>AdjustWindowRectExForDpi</c> for a standard frame; a custom frame reclaims the caption (top 0), keeping the L/R/B
+    /// thin frame — the same arithmetic as <see cref="ClientToWindowPx"/>. For a window that does not exist yet.</summary>
+    internal static void FrameInsets(bool customFrame, bool resizable, bool toolWindow, uint dpi,
+        out int left, out int top, out int right, out int bottom)
+    {
+        if (dpi == 0) dpi = 96u;
+        if (!customFrame)
+        {
+            RECT rc = default;
+            AdjustWindowRectExForDpi(&rc, StyleFor(resizable, toolWindow, false), false, toolWindow ? WsExToolWindow : 0u, dpi);
+            left = -rc.left; top = -rc.top; right = rc.right; bottom = rc.bottom;
+            return;
+        }
+        int padded = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+        left = right = padded + GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi);
+        bottom = padded + GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi);
+        top = 0;
+    }
+
+    /// <summary>Raised on the window's thread when its placement may have changed: the end of an OS move/size loop, and a
+    /// move, resize, maximize, minimize, restore, show or hide that happened outside one (a keyboard snap, code, a DPI hop,
+    /// full screen). Never inside the loop, so a drag is one call. Keep it cheap: it runs inside the window procedure.</summary>
+    public Action? PlacementChanged { get; set; }
+
+    /// <summary>The window's normal (restore) placement as it is now — see <see cref="WindowPlacement"/>. While full screen it
+    /// is the placement full screen returns to. Window thread only.</summary>
+    public WindowPlacement Placement
+    {
+        get
+        {
+            if (_closed) return default;
+            bool visible = IsWindowVisible(_hwnd) != 0;
+            bool iconic = IsIconic(_hwnd);
+            bool tool = (_exStyle & WsExToolWindow) != 0;
+            if (_fullscreen)
+            {
+                if (_windowedWasZoomed)
+                    return new WindowPlacement(Win32Placement.NormalRectScreenPx(_hwnd, tool, out _), true, iconic, visible, true);
+                RECT r = _windowedRect;
+                return new WindowPlacement(new RectF(r.left, r.top, r.right - r.left, r.bottom - r.top), false, iconic, visible, true);
+            }
+            if (IsZoomed(_hwnd) || iconic)
+            {
+                var normal = Win32Placement.NormalRectScreenPx(_hwnd, tool, out bool toMax);
+                return new WindowPlacement(normal, !iconic || toMax, iconic, visible, false);
+            }
+            return new WindowPlacement(OuterBoundsPx, false, false, visible, false);
+        }
+    }
 
     // client (physical px) → window (outer) size, adding the current frame for this window's style/exstyle/DPI. Standard
     // frame ⇒ AdjustWindowRectExForDpi; a custom frame reclaims the caption as client (WM_NCCALCSIZE keeps the top inset
@@ -1332,7 +1691,25 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         POINT pt = new() { x = (short)(lp & 0xFFFF), y = (short)((lp >> 16) & 0xFFFF) };
         ScreenToClient(hWnd, &pt);
         if (IsZoomed(hWnd) && pt.y < 0) pt.y = 0;   // maximized: the caption row sits at negative client y — fold to row 0
-        return NcHitFromCode(HitTestRegions(pt.x, pt.y, buttonsOnly: false));
+        return NcHitFromCode(RegionOrInertHit(pt.x, pt.y));
+    }
+
+    /// <summary>The client-pixel answer WM_NCHITTEST gives below its caption buttons and top resize band, and the one the NC
+    /// pointer stream classifies its messages with: the engine regions first (first match wins), then, on a drag-anywhere
+    /// window (<see cref="CaptionWhereInert"/>), HTCAPTION over an inert pixel; 0 when neither claims it. One test for both
+    /// sides: when the NC stream re-derived from the regions alone, a drag-anywhere pixel answered HTCAPTION to the OS but
+    /// read as Client here, so its hover was parked offscreen instead of moved to the real point (the mini player's hover
+    /// chrome showed only after the pointer crossed a button).</summary>
+    private int RegionOrInertHit(int px, int py)
+    {
+        int hit = HitTestRegions(px, py, buttonsOnly: false);
+        if (hit != 0) return hit;
+        if (CaptionWhereInert is { } inert && px >= 0 && py >= 0 && px < _w && py < _h)
+        {
+            float sc = _scale <= 0f ? 1f : _scale;
+            if (inert(new Point2(px / sc, py / sc))) return HTCAPTION;
+        }
+        return 0;
     }
 
     /// <summary>An NC message's SCREEN position (lParam) as client DIP — the real point a caption-region hover is
@@ -1370,11 +1747,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         if (ncHit != _ncHover) { _ncHover = ncHit; changed = true; }
         if (ncHit == TitleBarHit.Caption)
         {
+            NoteHoverIn(NcSyntheticPointerId, PointerKind.Mouse, caption: true);
             _queue.Enqueue(new InputEvent(InputKind.PointerMove, ScreenLpToDip(lp), 0, 0,
                 Mods: Mods(), TimestampMs: Now(), PointerId: NcSyntheticPointerId));
             PaintRequested?.Invoke();
             return false;   // DefWindowProc keeps its own caption tracking (the press → the move loop, double-click)
         }
+        if (ncHit != TitleBarHit.Client) NoteHoverIn(NcSyntheticPointerId, PointerKind.Mouse, caption: true);   // a caption button is in the window
         if (changed)
         {
             _queue.Enqueue(new InputEvent(InputKind.PointerMove,
@@ -1980,12 +2359,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _dm?.Dispose();   // DManip: Stop/RemoveEventHandler/Disable/Abandon/Deactivate + Release all + free the sink CCW (needs a live HWND for Deactivate)
         _dm = null;
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
-        if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); KillTimer(_hwnd, LiftTimerId); DestroyWindow(_hwnd); }
+        _boundsPending = false;   // a held full-screen change dies with the window: nothing to apply
+        if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); KillTimer(_hwnd, LiftTimerId); KillTimer(_hwnd, PendingBoundsTimerId); KillTimer(_hwnd, PresenceTimerId); DestroyWindow(_hwnd); }
         // Stop the vblank waiter BEFORE the events it and the render thread signal are closed.
         _compositorClock?.Dispose();
         _compositorClock = null;
         if (_preciseWaitTimer != HANDLE.NULL) { CloseHandle(_preciseWaitTimer); _preciseWaitTimer = HANDLE.NULL; }
         if (_presentAckEvent != HANDLE.NULL) { CloseHandle(_presentAckEvent); _presentAckEvent = HANDLE.NULL; }
+        if (_boundsAppliedEvent != HANDLE.NULL) { CloseHandle(_boundsAppliedEvent); _boundsAppliedEvent = HANDLE.NULL; }
         // The UIA provider CCW is intentionally LEAKED (not freed): UIA may still hold a ref after the HWND dies and a
         // synchronous free would risk a use-after-free. A few bytes, one per window, reclaimed at process exit.
         if (_uiaProvider != null)
@@ -2062,7 +2443,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // windows retain the dynamic physical-px setter. No request keeps USER32's default for that axis.
                 bool clampW = _minClientPx.Width > 0f || _minClientDip.Width > 0f;
                 bool clampH = _minClientPx.Height > 0f || _minClientDip.Height > 0f;
-                if (clampW || clampH)
+                // WindowDesc.MaxClientSizeDip: the opt-in ceiling, per axis, with the same DIP-to-px and frame arithmetic.
+                bool capW = _maxClientDip.Width > 0f, capH = _maxClientDip.Height > 0f;
+                if (clampW || clampH || capW || capH)
                 {
                     // Preserve USER32's unrequested axis/limits, but explicitly replace opted-in axes: a responsive app
                     // may deliberately support a width below the generic top-level minimum.
@@ -2079,6 +2462,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     MINMAXINFO* mmi = (MINMAXINFO*)(nint)lParam;
                     if (clampW) mmi->ptMinTrackSize.x = minW;
                     if (clampH) mmi->ptMinTrackSize.y = minH;
+                    if (capW || capH)
+                    {
+                        ClientToWindowPx(hWnd, MinTrackSizing.DipToPx(_maxClientDip.Width, dpi),
+                            MinTrackSizing.DipToPx(_maxClientDip.Height, dpi), out int maxW, out int maxH);
+                        // Never below the minimum: USER32 resolves a crossed pair by the maximum, which would shrink the floor.
+                        if (capW) mmi->ptMaxTrackSize.x = Math.Max(maxW, mmi->ptMinTrackSize.x);
+                        if (capH) mmi->ptMaxTrackSize.y = Math.Max(maxH, mmi->ptMinTrackSize.y);
+                    }
                     return true;
                 }
                 return false;
@@ -2087,14 +2478,23 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // zoom edge-detect below would mis-fire on the maximized→minimize edge (IsZoomed false while iconic).
                 if ((nuint)wParam == SIZE_MINIMIZED) { _lastSizeKind = SIZE_MINIMIZED; return true; }
                 if (_inMoveSizeLoop) _sizedInMoveSizeLoop = true;
+                bool heldSizeArrived = false;   // ApplyPendingBounds's own WM_SIZE, at the size the host already rendered
                 {
                     int nw = (int)(lp & 0xFFFF), nh = (int)((lp >> 16) & 0xFFFF);
+                    // …and the window already reported it: an intermediate WM_SIZE in the held period (adopted by the host)
+                    // means this one paints as usual.
+                    heldSizeArrived = _applyingPending && nw == _pendingClientW && nh == _pendingClientH && _w == nw && _h == nh;
+                    // …or the size PaintAheadOfSize already presented (and nothing re-reported the client size since).
+                    bool aheadArrived = _aheadW > 0 && nw == _aheadW && nh == _aheadH && _w == nw && _h == nh;
+                    int fromW = aheadArrived ? _aheadFromW : _w, fromH = aheadArrived ? _aheadFromH : _h;
+                    _aheadW = _aheadH = 0;
+                    heldSizeArrived |= aheadArrived;
                     nuint kind = (nuint)wParam;
                     // IPlatformWindow.UserResizeEpoch, the no-modal-loop half (see _fitTargetW): a restored→restored size
                     // change the engine did not request, at an unchanged DPI, that is not the last size-to-content target.
                     if (!_inMoveSizeLoop && !_hostResizing && !_fullscreen && _fitTargetW > 0
                         && kind == 0 && _lastSizeKind == 0 && _rawDpiScale == _lastSizeDpi
-                        && (nw != _w || nh != _h) && (nw != _fitTargetW || nh != _fitTargetH))
+                        && (nw != fromW || nh != fromH) && (nw != _fitTargetW || nh != _fitTargetH))
                         _userResizeEpoch++;
                     _lastSizeKind = kind;
                     _lastSizeDpi = _rawDpiScale;
@@ -2113,16 +2513,24 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 }
                 if (_inMoveSizeLoop)
                 {
-                    // Live video is the ONE exemption from the composited full defer: with no frames the DComp child
+                    // Live video is the ONE exemption from the composited full defer: with no frames the video visual
                     // keeps its pre-resize rect while the frame moves under it, so the picture lags the window. Fall
                     // through to the throttled paint so the hole and the child are recomputed together.
-                    if (!(_composited && !_hasLiveVideo) && !ThrottleModalResizePaint()) PaintRequested?.Invoke();
+                    // A LiveResize window paints EVERY step, unthrottled: the host lays out and presents at this size before
+                    // returning (the newest size always wins: the loop sends the next WM_SIZE only after this one returned).
+                    // The stamp holds the keep-alive timer off while steps arrive (the step's frame already advanced motion).
+                    // A step painted ahead of its size (PaintAheadOfSize) is not painted again.
+                    if (_liveResize) { if (!heldSizeArrived) { _lastModalPaintMs = Environment.TickCount64; _moveLoopPaints++; PaintRequested?.Invoke(); } }
+                    else if (!(_composited && !_hasLiveVideo) && !ThrottleModalResizePaint()) PaintRequested?.Invoke();
                     // The peers beat even when this window defers its own paint (F093): the loop's timer can be starved by
                     // the mouse-input peeking, and the other windows must not freeze with it. The host throttles the round.
                     ModalLoopTick?.Invoke();
                     return true;
                 }
-                PaintRequested?.Invoke();
+                // A held full-screen change applied at its present: the host already laid out and rendered this size, and a
+                // paint here would run a whole host frame inside SetWindowPos while the presenting thread waits. A size the
+                // prediction missed (an OS clamp) paints as before and the normal resize path corrects it.
+                if (!heldSizeArrived) PaintRequested?.Invoke();
                 return true;
             case 0x02E0:   // WM_DPICHANGED (WinUser.h — not surfaced by the TerraFX static-import set)
             {
@@ -2140,7 +2548,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // USER32 dispatches WM_MOVE synchronously (SendMessage, not PostMessage) before SetWindowPos returns
                 // — so the WM_MOVE case's MonitorFromWindow recheck below already runs inline, on this same thread,
                 // before RefreshClientSize/PaintRequested fire.
-                SetWindowPos(_hwnd, HWND.NULL, suggested->left, suggested->top,
+                SetOwnWindowPos(suggested->left, suggested->top,
                     suggested->right - suggested->left, suggested->bottom - suggested->top,
                     SWP_NOZORDER | SWP_NOACTIVATE);
                 RefreshClientSize();
@@ -2152,6 +2560,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // TRUE per-monitor refresh this window is now on — the fix for the bug where the pacer's rate came
                 // from DwmGetCompositionTimingInfo(HWND.NULL), primary-monitor-global, and so never noticed the
                 // change. Don't consume: DefWindowProcW still runs (same posture as WM_SETTINGCHANGE above).
+                // The protected composition keeper leaves DWM's tree until the topology is quiet (ProtectedKeeperPolicy).
+                FluentGpu.Media.ProtectedKeeperPolicy.NoteDisplayChange();
                 OnDisplayChanged();
                 return false;
             case WM_PAINT:
@@ -2210,8 +2620,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     long loopMs = Environment.TickCount64 - _moveLoopStartMs;
                     string cost = $"ms={loopMs} ticks={_moveLoopTicks} paints={_moveLoopPaints} " +
                         $"fps={(loopMs > 0 ? _moveLoopPaints * 1000.0 / loopMs : 0):0.#} video={(_hasLiveVideo ? 1 : 0)}";
+                    if (_liveResize) cost += " live=1";
                     // `paints` counts keep-alive frames (chrome fades), never motion: a composited window's pixels follow the
-                    // move inside DWM without a repaint. `size` is any loop that resized (a snap preview latches it too).
+                    // move inside DWM without a repaint. A LiveResize window also counts each WM_SIZE step it painted (live=1).
+                    // `size` is any loop that resized (a snap preview latches it too).
                     Diag.Line(sized ? $"[window.size] end {cost}" : $"[window.move] end {cost}");
                 }
                 // A pure titlebar drag between two monitors fires no WM_DISPLAYCHANGE (the desktop topology didn't
@@ -2219,14 +2631,18 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // so this settle point is the one reliable place a cross-monitor drag ends. Re-derive here too.
                 OnDisplayChanged();
                 PaintRequested?.Invoke();   // one settle frame at the final position
+                PlacementChanged?.Invoke(); // the gesture's one placement edge (the loop's own moves were held back below)
                 return true;
             case WM_TIMER:
+                if ((nuint)wParam == PresenceTimerId) { CheckPointerPresence("watch"); return true; }
                 if ((nuint)wParam == MoveLoopTimerId)
                 {
-                    // Composited edge-resize: full defer (zero paints). Composited pure move + non-composited: throttled
-                    // keep-alives so ambient animation can advance without flooding the modal loop.
+                    // Composited edge-resize: full defer (zero paints), unless the window opted in to LiveResize. Composited
+                    // pure move + non-composited + LiveResize: throttled keep-alives so ambient animation can advance without
+                    // flooding the modal loop.
                     if (_inMoveSizeLoop) _moveLoopTicks++;
-                    if (!(_composited && _inMoveSizeLoop && _sizedInMoveSizeLoop && !_hasLiveVideo)
+                    // A LiveResize window keeps these ticks through an edge resize, as for a move (animations run mid-drag).
+                    if (!(_composited && _inMoveSizeLoop && _sizedInMoveSizeLoop && !_hasLiveVideo && !_liveResize)
                         && !(_inMoveSizeLoop && ThrottleModalTickPaint()))
                     {
                         if (_inMoveSizeLoop) _moveLoopPaints++;
@@ -2247,6 +2663,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     TryEmitFallbackLift();
                     return true;
                 }
+                if ((nuint)wParam == PendingBoundsTimerId)
+                {
+                    // No present committed the held full-screen change in time (no frame at its size reached a present):
+                    // apply it anyway. A tick left over from an earlier change (re-armed since) finds too little elapsed and waits.
+                    KillTimer(hWnd, PendingBoundsTimerId);
+                    if (_boundsPending && (System.Diagnostics.Stopwatch.GetTimestamp() - _pendingSinceQpc) * 1000
+                        < (long)PendingBoundsTimeoutMs / 2 * System.Diagnostics.Stopwatch.Frequency)
+                        SetTimer(hWnd, PendingBoundsTimerId, PendingBoundsTimeoutMs, null);
+                    else ApplyPendingBounds("timer");
+                    return true;
+                }
                 return false;
             case WM_MOVE:
                 // Composited window: the visible pixels are a DComp flip surface bound to the HWND, which DWM re-composites
@@ -2262,6 +2689,22 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 if (MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST) != _monitor) OnDisplayChanged();
                 if (!_composited) PaintRequested?.Invoke();
                 return true;
+            case WM_WINDOWPOSCHANGING when _liveResize:
+                result = DefWindowProcW(hWnd, msg, wParam, lParam);   // USER32's min/max track clamp first: the size the window takes
+                PaintAheadOfSize(hWnd, (WINDOWPOS*)(nint)lParam);
+                return true;
+            case WM_WINDOWPOSCHANGED:
+                // PlacementChanged outside the modal loop: a keyboard / Snap-layout snap, maximize, minimize, restore, show,
+                // hide, full screen, a DPI hop or code moved the window. Inside the loop every step is held back for the one
+                // WM_EXITSIZEMOVE edge. Not consumed: DefWindowProc still turns it into WM_SIZE / WM_MOVE.
+                if (!_inMoveSizeLoop && PlacementChanged is { } placementChanged)
+                {
+                    uint posFlags = ((WINDOWPOS*)(nint)lParam)->flags;
+                    if ((posFlags & (SWP_NOMOVE | SWP_NOSIZE)) != (SWP_NOMOVE | SWP_NOSIZE)
+                        || (posFlags & (SWP_SHOWWINDOW | SWP_HIDEWINDOW)) != 0)
+                        placementChanged();
+                }
+                return false;
             // ── pointer input (mouse-in-pointer: PT_MOUSE/PT_TOUCH/PT_PEN all arrive here) ──────────────────────────────
             // The client moved means we are no longer in the NC area: if a caption press was held and dragged into the
             // client (the NC path holds no capture), cancel it exactly like the NC-leave path, then let real pointer
@@ -2301,8 +2744,16 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // exists to close: unfixed, that sample reads as a real drag delta and the picture/thumb flings to the
                 // park point (the pop-out-fling bug).
                 uint leaveId = GET_POINTERID_WPARAM(wParam);
-                if (leaveId == _primaryDownId && _primaryDown) CancelPrimaryContact("pointer-leave");
-                else if (TryHandOverPointer(leaveId)) return true;   // onto one of our own popup windows: not a leave
+                LeaveProbe probe;
+                if (leaveId == _primaryDownId && _primaryDown)
+                {
+                    probe = ProbeLeave(leaveId, out _);
+                    LogPointerLeave(leaveId, in probe, "cancel");
+                    CancelPrimaryContact("pointer-leave");
+                }
+                else if (TryHandOverPointer(leaveId, out probe)) { LogPointerLeave(leaveId, in probe, "handover"); return true; }   // onto one of our own popup windows: not a leave
+                else LogPointerLeave(leaveId, in probe, "park");
+                NoteHoverOut();
                 _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
                     Pointer: PointerKindOf(leaveId), TimestampMs: Now(), PointerId: leaveId));
                 return true;
@@ -2374,6 +2825,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 return (int)(nuint)wParam != ' ';
             case WM_ACTIVATE:
                 _active = ((nuint)wParam & 0xFFFF) != 0;
+                if (!_active) NoteHoverOut();   // the blur is the leave (the dispatcher drops the pointer); the next move re-enters
                 _queue.Enqueue(new InputEvent(_active ? InputKind.WindowFocus : InputKind.WindowBlur, default, 0, 0, TimestampMs: Now()));
                 return true;
             case WM_COPYDATA:
@@ -2401,6 +2853,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 // — cheap reject first so those take DefWindowProc with zero alloc (no string, no delegate alloc).
                 if (((nuint)wParam >> 16) != THBN_CLICKED) return false;
                 Win32App.RaiseThumbButtonClicked(unchecked((int)((nuint)wParam & 0xFFFF)));
+                result = (LRESULT)0;
+                return true;
+            case 0x0312:   // WM_HOTKEY: a global hot key registered against this window (Win32App.TryRegisterHotKey)
+                if (!Win32App.RaiseHotKey(unchecked((int)(nint)wParam))) return false;
                 result = (LRESULT)0;
                 return true;
             case WM_APPCOMMAND:
@@ -2500,7 +2956,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                         return true;
                     }
                 }
-                int hit = HitTestRegions(pt.x, pt.y, buttonsOnly: false);
+                // The engine regions, then drag anywhere: an inert client pixel is the caption (the edges stay
+                // DefWindowProc's resize borders).
+                int hit = RegionOrInertHit(pt.x, pt.y);
                 if (hit != 0) { result = (LRESULT)hit; return true; }
                 if (_resizable) return false;
                 result = NoResizeHit(DefWindowProcW(hWnd, msg, wParam, lParam));
@@ -2522,10 +2980,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             // WM_NCHITTEST result; lParam = SCREEN px (the OS already drag/size-loops via DefWindowProc for HTCAPTION).
             case WM_NCPOINTERUPDATE when _customFrame:
                 _ncPointerSeen = true;
-                if (!_ncTracking)
+                if (!_ncTracking || !_ncInside)
                 {
                     // Arm NC leave-tracking so WM_NCMOUSELEAVE still tears the NC hover/press down when the contact leaves
-                    // the caption straight off-window (the pointer stream has no NC-specific leave of its own).
+                    // the caption straight off-window (the pointer stream has no NC-specific leave of its own). Re-armed on
+                    // every entry into the NC stream, not only after a WM_NCMOUSELEAVE cleared the flag: a client press's
+                    // SetCapture or a move loop can end the OS tracking with no leave, and the flag would then never re-arm
+                    // it (a drag-anywhere window like the mini player would lose its leave from an inert pixel for good).
                     TRACKMOUSEEVENT tme = new() { cbSize = (uint)sizeof(TRACKMOUSEEVENT), dwFlags = TME_LEAVE | TME_NONCLIENT, hwndTrack = hWnd };
                     TrackMouseEvent(&tme);
                     _ncTracking = true;
@@ -2562,6 +3023,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                 if (_ncInside)
                 {
                     _ncInside = false; _ncHover = TitleBarHit.Client;
+                    NoteHoverOut();   // off the window from a caption pixel (the client crossing clears _ncInside first)
+                    Diag.Line("[pointer] leave nc -> park");   // one per caption-stream leave (an edge): the evidence a drag-anywhere window's leave arrived
                     if (_ncPress != TitleBarHit.Client)
                     {
                         // NC presses have no capture: leaving the NC area cancels the press (offscreen up, no click) — on
@@ -2617,6 +3080,18 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
             case WM_FG_SHOWSYSMENU:   // IPlatformWindow.ShowSystemMenu (posted: runs from the pump, outside the frame)
                 ShowSystemMenuCore(hWnd, (short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
+                result = 0;
+                return true;
+
+            case WM_FG_APPLYHELDSTEP:
+                ApplyHeldStep(hWnd);
+                result = 0;
+                return true;
+
+            case WM_FG_COMMITBOUNDS:   // IPlatformWindow.CommitPendingBounds from the presenting thread (posted)
+                // Only the change it was posted for: a late message for an already applied one is a no-op, and never applies
+                // a newer request before ITS first frame is presented.
+                if (_boundsPending && (uint)(nuint)wParam == (uint)_pendingGen) ApplyPendingBounds("present");
                 result = 0;
                 return true;
 
@@ -2726,6 +3201,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
             if (!stillDown) CancelPrimaryContact("move-without-button");
         }
         var dipPos = ScreenPtToDip(pi.ptPixelLocation);
+        NoteHoverIn(pi.pointerId, kind);
         _queue.Enqueue(new InputEvent(InputKind.PointerMove, dipPos, 0, 0,
             Mods: Mods(), Pointer: kind, TimestampMs: time, PointerId: pi.pointerId, Pressure: pressure, QpcTicks: qpc));
     }
@@ -2833,7 +3309,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     internal void ForwardPopupPointerLeave(uint pointerId)
     {
         if (_primaryDown && pointerId == _primaryDownId) return;
-        if (TryHandOverPointer(pointerId)) return;
+        if (TryHandOverPointer(pointerId, out var probe)) { LogPointerLeave(pointerId, in probe, "handover", popup: true); return; }
+        LogPointerLeave(pointerId, in probe, "park", popup: true);
+        NoteHoverOut();
         _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
             Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId));
     }
@@ -2856,24 +3334,159 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// touch contact), or is over a window that is not ours, still parks. Any depth of nested popups works: every popup
     /// HWND is owned by this host's window, and the owner chain is walked, not one level.</para>
     /// </summary>
-    private bool TryHandOverPointer(uint pointerId)
+    private bool TryHandOverPointer(uint pointerId, out LeaveProbe probe)
     {
-        POINTER_INFO pi;
-        if (!GetPointerInfo(pointerId, &pi) || (pi.pointerFlags & POINTER_FLAG_INRANGE) == 0) return false;
-        HWND under = WindowFromPoint(pi.ptPixelLocation);
-        if (under == HWND.NULL) return false;
-        HWND root = GetAncestor(under, 2 /* GA_ROOT */);
-        if (!IsOwnWindow(root)) return false;
-        // Onto the owner it is a handover only over its CLIENT content: its caption, frame and resize borders are the
-        // non-client stream's (WM_NCPOINTER*, its own synthetic pointer), which the park hands them to as before.
+        probe = ProbeLeave(pointerId, out POINTER_INFO pi);
+        if (!probe.InRange || probe.Under != LeaveUnder.Own) return false;
+        HWND root = probe.Root;
+        // Onto the owner it is a handover over its CLIENT content and over a caption pixel (a drag band, or any inert pixel
+        // of a drag-anywhere window): the non-client stream hovers a caption pixel at its real point too (NcHover), so
+        // parking it would only undo that move when this leave lands after the NC stream's first update (the two arrive
+        // in either order), dropping the hover of a pointer that rests just past a button. Its caption buttons, frame and
+        // resize borders park as before: the NC stream hovers those at a button centre or not at all.
         if (root == _hwnd)
         {
             nint lp = (nint)(((pi.ptPixelLocation.y & 0xFFFF) << 16) | (pi.ptPixelLocation.x & 0xFFFF));
-            if ((nint)SendMessageW(_hwnd, WM_NCHITTEST, default, (LPARAM)lp) != HTCLIENT) return false;
+            nint ht = (nint)SendMessageW(_hwnd, WM_NCHITTEST, default, (LPARAM)lp);
+            probe.Ht = ht;
+            if (ht != HTCLIENT && ht != HTCAPTION) return false;
         }
         EmitPointerMove(in pi);
         PaintRequested?.Invoke();   // the handover can land while the frame loop idles
         return true;
+    }
+
+    // ── the pointer-presence watch: the leaves the OS never sends ─────────────────────────────────────────────────────
+    // The pointer-in-window edge (InputDispatcher.PointerInWindow) is built from messages: a move inside, then the park a
+    // WM_POINTERLEAVE / WM_NCMOUSELEAVE brings. Some leaves bring no message to anyone this window hears: a windowed popup
+    // of ours (a menu hanging past the window edge) hidden or destroyed under the pointer leaves the dispatcher holding the
+    // popup's last point, and a window shown over a resting pointer, or a window under it hidden or minimised, need not
+    // re-route a pointer that does not move. Controls that hide on a window leave (the media chrome's YouTube rule) then
+    // stayed up. Two checks close it, both ending in the same park a real leave makes: a popup that hides asks at once,
+    // and while a surface watches (SetPointerPresenceWatch) a 100 ms timer asks while the pointer rests in the window.
+    // The answer is the OS's: the window under the cursor (WindowFromPoint), ours (client, a drag band, a caption button) or
+    // one of our popups, else out. A held button or the move loop defers to the release, as the dispatcher does.
+    private bool _presenceWatch, _presenceTimer;
+    private bool _hoverIn;              // the last mouse/pen move put a pointer in this window or a popup of ours; no park since
+    private uint _hoverId;              // that pointer's id (the park carries it)
+    private PointerKind _hoverKind;
+
+    public void SetPointerPresenceWatch(bool on)
+    {
+        _presenceWatch = on;
+        UpdatePresenceTimer();
+    }
+
+    /// <summary>A mouse/pen move went into this window's stream (client, a popup of ours), or the caption stream hovered a
+    /// caption pixel (<paramref name="caption"/>: no real pointer id to remember).</summary>
+    private void NoteHoverIn(uint pointerId, PointerKind kind, bool caption = false)
+    {
+        if (kind == PointerKind.Touch) return;
+        if (!caption) { _hoverId = pointerId; _hoverKind = kind; }
+        if (_hoverIn) return;
+        _hoverIn = true;
+        UpdatePresenceTimer();
+    }
+
+    private void NoteHoverOut()
+    {
+        if (!_hoverIn) return;
+        _hoverIn = false;
+        UpdatePresenceTimer();
+    }
+
+    private void UpdatePresenceTimer()
+    {
+        bool want = _presenceWatch && _hoverIn && _hwnd != HWND.NULL;
+        if (want == _presenceTimer) return;
+        _presenceTimer = want;
+        if (want) SetTimer(_hwnd, PresenceTimerId, PresenceWatchMs, null);
+        else KillTimer(_hwnd, PresenceTimerId);
+    }
+
+    /// <summary>A windowed popup of this window was hidden or destroyed: if the pointer was on it and is now over nothing of
+    /// ours, that is a leave no window will ever report.</summary>
+    internal void RevalidatePointerAfterPopup() => CheckPointerPresence("popup-closed");
+
+    /// <summary>Ask the OS whether the pointer this window's stream last saw inside is still over this window or a popup of
+    /// ours; when it is not, park it (both streams) exactly as a real leave does, with one always-on line.</summary>
+    private void CheckPointerPresence(string why)
+    {
+        if (!_hoverIn) return;
+        if (_primaryDown || _inMoveSizeLoop || _ncPress != TitleBarHit.Client) return;   // a held button: its release decides
+        POINT pt;
+        if (!GetCursorPos(&pt)) return;
+        if (CursorOverOwn(pt, out string under)) return;
+        _hoverIn = false;
+        UpdatePresenceTimer();
+        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[pointer] leave id={_hoverId} kind={_hoverKind} screen={pt.x},{pt.y} under={under} -> {why}"));
+        if (_ncInside) { _ncInside = false; _ncHover = TitleBarHit.Client; }
+        _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
+            Pointer: _hoverKind, TimestampMs: Now(), PointerId: _hoverId));
+        _queue.Enqueue(new InputEvent(InputKind.PointerMove, OffscreenDip, 0, 0,
+            TimestampMs: Now(), PointerId: NcSyntheticPointerId));
+        PaintRequested?.Invoke();   // the loop may be idle: the park must be dispatched now
+    }
+
+    /// <summary>Is screen point <paramref name="pt"/> over this window's content (client, a caption band, a caption
+    /// button; its resize frame is outside, as for a WM_POINTERLEAVE) or over one of its windowed popups? Another
+    /// top-level window of the app (a pop-out or the mini player, owned or not) is not this window.</summary>
+    private bool CursorOverOwn(POINT pt, out string under)
+    {
+        HWND hit = WindowFromPoint(pt);
+        if (hit == HWND.NULL) { under = "none"; return false; }
+        HWND root = GetAncestor(hit, 2 /* GA_ROOT */);
+        if (root == _hwnd)
+        {
+            nint lp = (nint)(((pt.y & 0xFFFF) << 16) | (pt.x & 0xFFFF));
+            nint ht = (nint)SendMessageW(_hwnd, WM_NCHITTEST, default, (LPARAM)lp);
+            under = "self ht=" + ht.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return ht is HTCLIENT or HTCAPTION or HTMINBUTTON or HTMAXBUTTON or HTCLOSE;
+        }
+        if (IsOwnWindow(root) && Win32PopupWindow.IsPopupWindow(root)) { under = "popup"; return true; }
+        under = IsOwnWindow(root) ? "own" : "foreign";
+        return false;
+    }
+
+    private enum LeaveUnder : byte { None, Own, Foreign }
+
+    /// <summary>Where a leaving pointer stands (the leave log line and the handover decision): in range or not, its screen
+    /// pixel, the top-level window under it (ours, foreign, none) and, for the owner, its WM_NCHITTEST result.</summary>
+    private struct LeaveProbe
+    {
+        public bool InRange;
+        public int X, Y;
+        public LeaveUnder Under;
+        public HWND Root;
+        public nint Ht;   // -1: not asked (only the owner's own pixels are hit-tested)
+    }
+
+    private LeaveProbe ProbeLeave(uint pointerId, out POINTER_INFO pi)
+    {
+        var probe = new LeaveProbe { Ht = -1 };
+        POINTER_INFO info;
+        if (!GetPointerInfo(pointerId, &info)) { pi = default; return probe; }
+        pi = info;
+        probe.X = info.ptPixelLocation.x; probe.Y = info.ptPixelLocation.y;
+        if ((info.pointerFlags & POINTER_FLAG_INRANGE) == 0) return probe;
+        probe.InRange = true;
+        HWND under = WindowFromPoint(info.ptPixelLocation);
+        if (under == HWND.NULL) return probe;
+        probe.Root = GetAncestor(under, 2 /* GA_ROOT */);
+        probe.Under = IsOwnWindow(probe.Root) ? LeaveUnder.Own : LeaveUnder.Foreign;
+        return probe;
+    }
+
+    /// <summary>Always-on, one line per WM_POINTERLEAVE (an edge, never per frame): what the leaving pointer stands on and
+    /// what the platform made of it (park = the dispatcher's off-screen leave, handover = moved onto another window of
+    /// ours, cancel = a held contact torn down, then parked).</summary>
+    private void LogPointerLeave(uint pointerId, in LeaveProbe probe, string outcome, bool popup = false)
+    {
+        string under = probe.Under switch { LeaveUnder.Own => "own", LeaveUnder.Foreign => "foreign", _ => "none" };
+        string ht = probe.Ht == -1 ? "-" : probe.Ht.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[pointer] leave id={pointerId} kind={PointerKindOf(pointerId)}{(popup ? " from=popup" : "")} screen={probe.X},{probe.Y} under={under}{(probe.InRange ? "" : " range=out")} ht={ht} -> {outcome}"));
     }
 
     /// <summary>Is top-level <paramref name="hwnd"/> this host's window or a popup owned by it (directly or through other popups)?</summary>

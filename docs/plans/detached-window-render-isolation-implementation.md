@@ -131,7 +131,7 @@ removed structurally by Phase 1.
 | `SuppressLatencyWaitOnce`/`SuppressVsyncOnce`/`HintSettlePresent` D:5547-5554 | `ApplyPresentPacing` A:1021-1025 (render), A:4412 (UI), A:4481-4482 (UI-sole) | plain bools | n/a | OK today; **device-level, so a child's interactive present steals the main's vsync** → per-target in Phase 1 |
 | `BindDComp` D:1521, `EnsureDComp` D:1508, `CreateEngineTestSurfaceHandle` D:1560, `VideoPresenter.OnSwapchainRebound` D:1547 | render (`AssertSubmitThread`) | render | yes | OK |
 | `MemoryProbe*` (partial), `ProbeSmallTexturePlacement`, `GlyphCapacityProbeState` | standalone single-thread devices in `FluentGpu.WindowsApp/Probes` | probe owner | yes | OK |
-| `OnSwapchainRebound` (DCompVideoPresenter.cs:187) | `BindDComp` only | render | yes | OK |
+| `OnSwapchainRebound` (the DirectComposition video presenter (deleted 2026-11-11)) | `BindDComp` only | render | yes | OK |
 
 So exactly **two** paths are wrong, both on the detached child: create (A:2741) and dispose (A:5957).
 

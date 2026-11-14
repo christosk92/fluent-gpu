@@ -387,6 +387,9 @@ public sealed class ReactiveRuntime
     /// <summary>Set by the host: called (once-ish) when work becomes pending, so the host schedules a frame.</summary>
     public Action FrameRequested = static () => { };
 
+    /// <summary>True while <see cref="Flush"/> runs its queues.</summary>
+    internal bool IsFlushing => _flushing;
+
     /// <summary>True when effects are queued and waiting for the next <see cref="Flush"/>.</summary>
     public bool HasPending => _pending.Count > 0 || _pendingStructural.Count > 0
         || _normalCursor < _draining.Count || _structuralCursor < _drainingStructural.Count;

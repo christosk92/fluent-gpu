@@ -296,7 +296,7 @@ public sealed partial class AnimEngine
         if (!TryGetTransition(node, out var spec) || spec.Size != SizeMode.Reflow) return false;
         // From rest, critically damped: the row it continues has stopped, so the glide on starts slow instead of carrying most of a small residual
         // in its first frame (an eased tween of a short distance reads as a step).
-        ReflowSize(node, ch, landed, solved, spec with { Dynamics = TransitionDynamics.Spring(0.30f, 1f), ExitDynamics = null, DelayMs = 0f });
+        ReflowSize(node, ch, landed, solved, spec with { Dynamics = TransitionDynamics.Spring(0.30f, 1f), ExitDynamics = null, DelayMs = 0f }, slide: false);
         return Find(node, ch) >= 0;
     }
 
@@ -723,15 +723,21 @@ public sealed partial class AnimEngine
         _additiveBase[slot] = float.NaN;
     }
 
-    private static float RestDeltaFor(AnimChannel ch)
-        => ch is (AnimChannel.SizeW or AnimChannel.SizeH or AnimChannel.LayoutW or AnimChannel.LayoutH or AnimChannel.RevealExtent)
-           or (>= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3) ? 0.5f : Generators.RestDelta;
+    // Positions and extents in DIP (a bounds FLIP's translate, a Reflow / Relayout / Reveal size) rest in device pixels
+    // (Generators.DevicePxRestDelta / DevicePxRestSpeed): the 0.01/s speed floor kept the stage's Cinema <-> Theatre pane spring
+    // re-solving layout ~20 frames after its last visible pixel, and every such frame moved the video placement that follows it.
+    private float RestDeltaFor(AnimChannel ch)
+        => ch is AnimChannel.RevealExtent or (>= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3) ? 0.5f
+         : Generators.IsDipPositionChannel(ch) ? Generators.DipRest(Generators.DevicePxRestDelta, _scene.DeviceScale)
+         : Generators.RestDelta;
 
     // RevealExtent and the reveal bands are in DIP: rest once the edge is within RestDeltaFor (0.5 DIP) and slower than
     // 8 DIP/s (< 0.07 DIP per 120 Hz frame) — the normalized 0.01/s floor held a 90-DIP reveal ~0.75 s (and the Expander's
     // unmount with it), and a 494-DIP sidebar band ~0.2 s past where it visibly landed (its collapse commit with it).
-    private static float RestSpeedFor(AnimChannel ch)
-        => ch is AnimChannel.RevealExtent or (>= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3) ? 8f : Generators.RestSpeed;
+    private float RestSpeedFor(AnimChannel ch)
+        => ch is AnimChannel.RevealExtent or (>= AnimChannel.RevealBand0 and <= AnimChannel.RevealBand3) ? 8f
+         : Generators.IsDipPositionChannel(ch) ? Generators.DipRest(Generators.DevicePxRestSpeed, _scene.DeviceScale)
+         : Generators.RestSpeed;
 
     /// <summary>The node's current value on a channel (read from composited paint) — the fresh spring's start point.
     /// Ported from AnimEngine.CurrentValue.</summary>

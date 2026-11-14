@@ -77,8 +77,8 @@ public sealed partial class AnimEngine
         // opens with its fade instead of ahead of it.
         if (spec.Enter.DelayMs > 0f) spec = spec with { DelayMs = spec.DelayMs + spec.Enter.DelayMs };
         AnimChannel ch;
-        if (horizontal) { if (toW <= 0.5f) return; ch = AnimChannel.LayoutW; ReflowSize(node, ch, 0f, toW, spec); }
-        else { if (toH <= 0.5f) return; ch = AnimChannel.LayoutH; ReflowSize(node, ch, 0f, toH, spec); }
+        if (horizontal) { if (toW <= 0.5f) return; ch = AnimChannel.LayoutW; ReflowSize(node, ch, 0f, toW, spec, slide: false); }
+        else { if (toH <= 0.5f) return; ch = AnimChannel.LayoutH; ReflowSize(node, ch, 0f, toH, spec, slide: false); }
         // NOT set by SeedReflowResize (a container's EXIT reflow targets a solved WITHOUT-child size) and never by a
         // declared-height reflow row: a still-painted exit orphan retargeted from its child extent would fly back OPEN.
         int s = Find(node, ch);
@@ -89,13 +89,15 @@ public sealed partial class AnimEngine
     /// smooth-exit lever for an orphaning Reflow child's container). Shrink picks ExitDynamics.</summary>
     public void SeedReflowResize(NodeHandle node, bool horizontal, float from, float to, in LayoutTransition spec)
     {
-        if (horizontal) ReflowSize(node, AnimChannel.LayoutW, from, to, spec);
-        else ReflowSize(node, AnimChannel.LayoutH, from, to, spec);
+        if (horizontal) ReflowSize(node, AnimChannel.LayoutW, from, to, spec, slide: false);
+        else ReflowSize(node, AnimChannel.LayoutH, from, to, spec, slide: false);
     }
 
     // SizeMode.Reflow seed/retarget with the two feedback guards (the track writes the layout size, so each commit's
     // projection diff re-sees "old ≠ new" — only a genuinely new destination passes both guards). Ported from AnimEngine.
-    internal void ReflowSize(NodeHandle node, AnimChannel ch, float from, float to, in LayoutTransition spec)
+    /// <param name="slide">False for a row that is no slide of a container others live in (an enter's reveal, a container's exit, a natural-target
+    /// continuation): it never asks the host for a destination probe (<see cref="DestinationStale"/>).</param>
+    internal void ReflowSize(NodeHandle node, AnimChannel ch, float from, float to, in LayoutTransition spec, bool slide = true)
     {
         TransitionDynamics dyn = Normalize(to < from && spec.ExitDynamics is { } ed ? ed : spec.Dynamics);
         int ex = Find(node, ch);
@@ -141,6 +143,81 @@ public sealed partial class AnimEngine
             Animate(node, ch, from, to, dyn.DurationMs, dyn.Easing, delayMs: spec.DelayMs);
 
         FinishReflowRow(node, ch, declared, in spec, hadRow, carried);
+        // A new or re-aimed width target of a SLIDE (a node in the tree, no exit orphan, no enter): the host probes where it lands.
+        if (slide && ch == AnimChannel.LayoutW && HasLiveWidthReflow(node)) DestinationStale = true;
+    }
+
+    /// <summary>Set when a width reflow row is seeded or re-aimed at a new target (a seed, a re-declaration mid-flight): the boxes it resizes
+    /// will land at widths no layout has solved yet, so the host lays the frame out once at the reflows' targets and records each box's width
+    /// there (<c>AppHost.ProbeReflowDestinations</c>, <see cref="SceneStore.StructureWidth"/>). The host clears it. A natural-target row the
+    /// host re-aims from its own solved content each tick does not set it: its target is what layout already solves.</summary>
+    public bool DestinationStale { get; set; }
+
+    /// <summary>A width (LayoutW) row that is a SLIDE: advancing (not done, not parked), not an enter's natural-target reveal, on a node that is no
+    /// exit orphan. Only these rows choose structure at their destination; an exit reflow of a leaf, a disclosure, an enter are not slides.</summary>
+    bool IsSlideWidthRow(in AnimValue r)
+        => r.Channel == AnimChannel.LayoutW && !r.Has(AnimFlags.Done) && !r.Has(AnimFlags.Parked) && !r.Has(AnimFlags.NaturalTarget)
+           && _scene.IsLive(r.Node) && (_scene.Flags(r.Node) & NodeFlags.Exiting) == 0;
+
+    /// <summary>How many width (LayoutW) reflow rows are advancing. Walks the active rows; the host asks only on a frame that seeds one or
+    /// while destination widths are recorded. Allocation-free.</summary>
+    public int CountLiveWidthReflows()
+    {
+        int count = 0;
+        for (int n = _slab.FirstActiveNode; n >= 0; n = _slab.NextActiveNode(n))
+            for (int s = _slab.HeadOnNode(n); s >= 0; s = _slab.At(s).NextOnNode)
+            {
+                ref readonly AnimValue r = ref _slab.At(s);
+                if (IsSlideWidthRow(in r)) count++;
+            }
+        return count;
+    }
+
+    /// <summary>Collect into <paramref name="away"/> (cleared first) every node whose advancing width (LayoutW) reflow row, outside
+    /// <paramref name="except"/>, holds its layout input away from the declared width it lands at (it has ticked or been presented): a layout
+    /// solved now does not show where those land. The host asks once on a frame that seeds width reflows (<c>AppHost.RecordSeededDestinations</c>).
+    /// Allocation-free once the list has grown.</summary>
+    public void CollectWidthReflowsAwayFromDeclared(List<NodeHandle> except, List<NodeHandle> away)
+    {
+        away.Clear();
+        for (int n = _slab.FirstActiveNode; n >= 0; n = _slab.NextActiveNode(n))
+            for (int s = _slab.HeadOnNode(n); s >= 0; s = _slab.At(s).NextOnNode)
+            {
+                ref readonly AnimValue r = ref _slab.At(s);
+                if (!IsSlideWidthRow(in r) || except.Contains(r.Node)) continue;
+                float laid = _scene.Layout(r.Node).Width;
+                bool same = float.IsNaN(laid) ? float.IsNaN(r.RestoreTo) : MathF.Abs(laid - r.RestoreTo) < 0.5f;
+                if (!same) away.Add(r.Node);
+            }
+    }
+
+    /// <summary>True when <paramref name="node"/> has an advancing width (LayoutW) reflow row. O(1) for a node with no rows.</summary>
+    public bool HasLiveWidthReflow(NodeHandle node)
+    {
+        if (!_slab.NodeHasRows((int)node.Raw.Index)) return false;
+        int s = Find(node, AnimChannel.LayoutW);
+        return s >= 0 && IsSlideWidthRow(in _slab.At(s));
+    }
+
+    /// <summary>Write the width <paramref name="node"/>'s live width reflow row LANDS at into its layout input and dirty the parent, for the
+    /// host's destination probe (<see cref="PresentReflowStart"/> puts the row's current size back after it): the declared width the settle
+    /// restores (auto for a box its parent stretches or its content sizes, which the probe's solve then sizes at the destination), not the
+    /// row's aim, which a stretched row shifts with its parent's live size each tick. False when the node has no live width row. Allocates nothing.</summary>
+    internal bool PresentReflowTarget(NodeHandle node)
+    {
+        if (!HasLiveWidthReflow(node)) return false;
+        _scene.Layout(node).Width = _slab.At(Find(node, AnimChannel.LayoutW)).RestoreTo;
+        MarkReflowLayoutDirty(node);
+        return true;
+    }
+
+    /// <summary>Put back the width layout input the probe found on <paramref name="node"/> (<paramref name="width"/>, exactly as it was: NaN stays
+    /// NaN) and dirty it and its parent, so the next solve lays the frame out as if no probe had run. Allocates nothing.</summary>
+    internal void RestoreProbedWidth(NodeHandle node, float width)
+    {
+        if (!_scene.IsLive(node)) return;
+        _scene.Layout(node).Width = width;
+        MarkReflowLayoutDirty(node);
     }
 
     /// <summary>The reflow-OWNED flag bits — the ones <see cref="Animate"/>/<see cref="Spring"/> would silently drop
@@ -277,6 +354,7 @@ public sealed partial class AnimEngine
             RetargetReflow(node, ch, declared);
             int ns = Find(node, ch);                        // the reseed may have landed on a different slot
             if (ns >= 0) _slab.At(ns).Flags &= ~AnimFlags.NaturalTarget;
+            if (ch == AnimChannel.LayoutW) DestinationStale = true;   // re-aimed mid-flight: the host probes the new destination
         }
         return true;
     }
@@ -315,8 +393,10 @@ public sealed partial class AnimEngine
     /// adds each node ONCE even when both axes reflow. Walks the slab's active-node chain (O(active nodes), the same
     /// structure the tick passes use) and allocates nothing: the caller owns the list, so a pre-sized one keeps the
     /// whole path inside the phase 6–13 zero-alloc budget. Settled (Done, awaiting PASS3) and Parked rows are skipped
-    /// — retargeting either would resurrect an animation the engine has already decided is over or quiesced.</summary>
-    public void CollectLiveReflowNodes(List<NodeHandle> dst)
+    /// — retargeting either would resurrect an animation the engine has already decided is over or quiesced.
+    /// <para><paramref name="tickedOnly"/> leaves out a row that has not advanced since it was seeded (no elapsed time: its layout still holds its
+    /// start): it has moved nothing yet, so no change a commit lays out is its shove (the projection's shove map).</para></summary>
+    public void CollectLiveReflowNodes(List<NodeHandle> dst, bool tickedOnly = false)
     {
         dst.Clear();
         for (int n = _slab.FirstActiveNode; n >= 0; n = _slab.NextActiveNode(n))
@@ -325,6 +405,7 @@ public sealed partial class AnimEngine
                 ref readonly AnimValue r = ref _slab.At(s);
                 if (r.Channel is not (AnimChannel.LayoutW or AnimChannel.LayoutH)) continue;
                 if (r.Has(AnimFlags.Done) || r.Has(AnimFlags.Parked)) continue;
+                if (tickedOnly && r.ElapsedMs <= 0f) continue;
                 dst.Add(r.Node);
                 break;   // one entry per node — the caller re-solves the node, not the axis
             }
@@ -475,6 +556,32 @@ public sealed partial class AnimEngine
         return true;
     }
 
+    /// <summary>Re-aim a live reflow row at <paramref name="to"/>, departing from where its interp is, over the time it has LEFT (its remaining
+    /// start delay kept, no seed-frame hold): a box whose auto size its content changed while the row flies (a card whose title re-sets at the
+    /// widths a docking panel's slide passes through) lands on that size by the row's own deadline instead of landing on the stale target and
+    /// gliding on in a second motion (<see cref="SettledToAuto"/>). The interp does not move this frame, so nothing is written into the layout.
+    /// False when no row is in flight or the target has not moved. Allocates only the re-seed's keyframes, as every retarget.</summary>
+    internal bool ReaimReflow(NodeHandle node, AnimChannel ch, float to)
+    {
+        int ex = Find(node, ch);
+        if (ex < 0) return false;
+        AnimValue cur = _slab.At(ex);          // copy: Animate/Spring may grow the slab's backing array
+        if (cur.Has(AnimFlags.Done) || cur.Has(AnimFlags.Parked) || MathF.Abs(cur.To - to) < 0.5f) return false;
+        AnimFlags carried = cur.Flags & ReflowOwnedFlags;
+        if (!TryGetTransition(node, out LayoutTransition spec)) spec = default;
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if (cur.Kind == GenKind.Spring)
+            Spring(node, ch, to, SpringParams.FromResponse(dyn.Kind == DynamicsKind.Spring ? dyn.Response : 0.30f,
+                dyn.Kind == DynamicsKind.Spring ? dyn.DampingRatio : 1f), initial: cur.Position);
+        else if ((cur.Kind is GenKind.Eased or GenKind.Keyframes) && !cur.Has(AnimFlags.Driven))
+            Animate(node, ch, cur.Position, to, MathF.Max(1f, cur.Gen.DurationMs - cur.ElapsedMs), dyn.Easing, delayMs: cur.DelayRemainingMs);
+        else return false;
+        int s = FinishReflowRow(node, ch, cur.RestoreTo, in spec, hadRow: true, carried);
+        if (s < 0) return false;
+        _slab.At(s).Flags &= ~AnimFlags.JustSeeded;   // a re-aim keeps moving (the row was presented already)
+        return true;
+    }
+
     /// <summary>Write the START of <paramref name="node"/>'s reflow rows (a seed that has not ticked: its from) into its layout input and dirty
     /// the parent, as the seed frame's tick would: the host re-solves the commit at it before measuring the other projections
     /// (AppHost.SeedReflowsFirst). False when the node has no reflow row. Allocates nothing.</summary>
@@ -541,6 +648,8 @@ public sealed partial class AnimEngine
 
         if (ch is AnimChannel.LayoutW or AnimChannel.LayoutH)
         {
+            // A closing exit orphan is closed now: it gives its parent's space up before the declared size goes back below.
+            if ((_scene.Flags(node) & NodeFlags.Exiting) != 0) _scene.ReleaseOrphanSpace(node);
             ref LayoutInput rli = ref _scene.Layout(node);
             if (ch == AnimChannel.LayoutW) rli.Width = r.RestoreTo; else rli.Height = r.RestoreTo;
             ref NodePaint rp = ref _scene.Paint(node);

@@ -47,6 +47,9 @@ public enum WakeReasons
                                   // was canceled / refused by Begin while a node still holds it) is owed its sweep
                                   // restart in the next Pump — a pending-but-future one sets NO bit (it only shapes
                                   // RecommendedWaitMs, like Timer), so an idle page still wakes for it without input
+    AnimatedImage = 1 << 30,      // an animated image (ImageEl.Animate) in view has its next frame decoded and due: one UI turn
+                                  // per animation frame; a future frame only shapes RecommendedWaitMs (like Timer), and a frame
+                                  // still decoding wakes the host itself when it lands
 }
 
 /// <summary>
@@ -81,14 +84,14 @@ internal sealed class WakeDiagnostics
     // it was 26 entries while the enum had 28 (scrollProducer and textRepaintPending never printed), and later bit 25
     // was printed as "budgetDeferredVirtuals" (a retired term) while it meant FrameClockPaceable, and bit 29
     // (FeedbackSettle) was never counted at all. WakeDiagnosticsTests pins the table to the enum, bit by bit.
-    internal const int ReasonCount = 30;
+    internal const int ReasonCount = 31;
     private static readonly string[] s_reasonNames =
     [
         "frameNeeded", "runtimePending", "dynamicText", "anim", "retired4", "scrollAnim", "repeat", "caret",
         "brushAnims", "imagesPending", "imageCrossfades", "orphans", "dragDropWork", "dragActive", "gestureHold",
         "popupAnim", "touchPress", "videoPresenting", "timer", "warmCadence", "imageReady", "bakedBlurPending",
         "frameClockPoller", "videoPumpPending", "warmingVirtuals", "frameClockPaceable",
-        "scrollProducer", "textRepaintPending", "imageLeftoverDue", "feedbackSettle",
+        "scrollProducer", "textRepaintPending", "imageLeftoverDue", "feedbackSettle", "animatedImage",
     ];
 
     /// <summary>The census name of wake bit <paramref name="bit"/> (its position in <see cref="WakeReasons"/>).</summary>

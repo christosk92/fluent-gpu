@@ -21,7 +21,7 @@ namespace FluentGpu;
 /// <c>CreateSurfaceFromHandle</c> → <c>SetContent</c>), positions the video child z-BELOW the UI in a transparent hole,
 /// runs until frames present, and screen-captures the DWM composite to a PNG.
 ///
-/// Same "screen capture, not back buffer" reason as M0: the video is a sibling DComp visual composited by DWM, never in
+/// Same "screen capture, not back buffer" reason as M0: the video is a sibling composition visual composited by DWM, never in
 /// our swapchain back buffer. No PlayReady / no protected content — this is the exact path a CDM will later reuse.
 /// </summary>
 static class VideoReal
@@ -157,9 +157,9 @@ static class VideoReal
             Console.Error.WriteLine($"VideoReal: state flags={se.Flags} readyState={se.ReadyState} clockAdvanced={sawTick} pos={se.PositionSeconds:0.00}");
         }
 
-        // Bring our window to the foreground + topmost so the screen BitBlt captures IT (the DComp video child is
+        // Bring our window to the foreground + topmost so the screen BitBlt captures IT (the video visual is
         // DWM-composited on screen; a screen capture of the window rect grabs whatever is on top, so the window must be
-        // frontmost). Then capture the DWM composite (includes the DComp video child).
+        // frontmost). Then capture the DWM composite (includes the video visual).
         BringToFront(window.Handle.Value);
         for (int i = 0; i < 8; i++) { host.RunFrame(); window.WaitForWork(16); engine.Commands.Post(VideoCommandKind.Repaint); presenter.Commit(); }
         bool ok = VideoM0.CaptureWindowToPng(window.Handle.Value, pngPath);

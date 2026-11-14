@@ -121,16 +121,11 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     private ProtectedVideoPhase _phase = ProtectedVideoPhase.Idle;
     private long _positionQpc;
     private bool _hasSurface;
-    // The swap-chain handle the last pump's snapshot reported for the attached source (0 = none): what Bind hands to a
-    // presenting element's binding. Written by the state pump, read by Bind (both UI thread).
+    // The swap-chain handle the last pump's snapshot reported for the attached source (0 = none) and its native generation: what
+    // Bind hands to a presenting element's binding. Written by the state pump, read by Bind (both UI thread). The runtime keeps ONE
+    // handle per swap chain for every program of its source, so the next video's session reports the same value and generation.
     private nuint _surfaceHandle;
-    // F198: the attach epoch _surfaceHandle belongs to, and the (epoch, binding token) Bind last handed a handle to. The native
-    // runtime now closes a retired swap-chain handle, so the kernel may reuse its VALUE for the next attach's handle: the
-    // registry's value gate would drop that bind and the presenter would keep the surface wrapped from the old handle. The first
-    // bind of each attach (and of each new binding) is therefore forced, once. Both are UI-thread fields.
-    private int _surfaceEpoch;
-    private int _boundEpoch;
-    private int _boundToken;
+    private int _surfaceGeneration;
     private string? _activeRepresentationId;
     private string? _downloadingRepresentationId;
     // Native reports the OPENING representation as -1 (it never learns that index). Once a switch's picture has been shown,
@@ -138,10 +133,10 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     private readonly string? _openingRepresentationId;
     private bool _leftOpeningRepresentation;
     private int _streamW = -1, _streamH = -1;
-    // The stream size native reports as applied, from the last pump's snapshot (UI thread; empty while detached).
-    private SizeI _appliedStream;
     // The native renderer's frame counters from the last pump's snapshot (UI thread; F066).
     private long _framesRendered, _framesDropped;
+    // The native feed reached the end of every track, as of the last pump's snapshot (written on the UI thread, read on any).
+    private volatile bool _feedComplete;
     // The OPM window placement native last ACCEPTED (host 0 = none): value-gates PlaceOutputProtectionWindow, and is cleared at
     // every attach because another session (the other window's) may have moved the one shared window since.
     private nuint _opmHost;
@@ -264,6 +259,11 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         session._s = handle;
         runtime.RegisterSession(handle, session);
         session._censusToken = MediaCensus.Register(MediaCensusKind.ProtectedSession, session.DescribeCensus);
+        // The freeze trail: a live protected session arms the DWM probe until it is disposed (plus the linger). Paired with the
+        // census token, so the ExitSession in Dispose runs exactly once per EnterSession here.
+        DwmStallProbe.EnsureStarted();
+        ProtectedVideoTrace.EnterSession();
+        ProtectedVideoTrace.Stamp("session.create", handle);
         runtime.Log($"session.create s={handle} key={session._logKey} startMs={session._nativeStartMs} " +
                     $"kid={session._kid ?? "(from init)"} license={runtime.LicenseStateFor(session._kid)}");
         return session;
@@ -334,6 +334,19 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         running = n.State == PrNative.StatePlaying && n.Seeking == 0 && !waiting && Volatile.Read(ref _attached) != 0;
         return true;
     }
+    /// <inheritdoc/>
+    public bool TryReadFrameCounters(out MediaFrameCounters counters)
+    {
+        counters = default;
+        ulong s = _s;
+        if (_disposed || s == 0 || _startupError is not null) return false;
+        PrNative.Snapshot n = default;
+        if (_native.SessionSnapshot(_rt.Handle, s, ref n) < 0 || n.FramesSampledQpc == 0) return false;
+        counters = new MediaFrameCounters(Math.Max(0, n.FramesRendered), Math.Max(0, n.FramesDropped), n.FramesSampledQpc);
+        return true;
+    }
+    /// <inheritdoc/>
+    public bool FeedComplete => _feedComplete;
     /// <inheritdoc/>
     public bool IsSeeking => Volatile.Read(ref _seekPending) != 0;
     /// <inheritdoc/>
@@ -492,7 +505,7 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
             int opening = OpeningRepresentationIndex();
             if (opening >= 0) PrefetchNeighbourInits(opening);
         }
-        _streamW = -1; _streamH = -1;   // a fresh SetSource: the stream size must be re-asserted
+        _streamW = -1; _streamH = -1;   // a fresh attach asserts its stream size again (native skips a size the engine already holds)
         _opmHost = 0;                    // ... and so must the OPM window's placement
 
         if (!request.StartPaused)
@@ -669,9 +682,6 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     }
 
     /// <inheritdoc/>
-    public SizeI AppliedStreamSize => _appliedStream;
-
-    /// <inheritdoc/>
     public long FramesRendered => _framesRendered;
     /// <inheritdoc/>
     public long FramesDropped => _framesDropped;
@@ -680,6 +690,7 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
     public void PlaceOutputProtectionWindow(nuint hostWindow, int left, int top, int right, int bottom)
     {
         if (_disposed || _s == 0 || hostWindow == 0 || Volatile.Read(ref _attached) == 0) return;
+        OutputProtection.NoteVideoWindow(hostWindow);   // the window the protected picture is in: where its HDCP is checked
         if (hostWindow == _opmHost && left == _opmLeft && top == _opmTop && right == _opmRight && bottom == _opmBottom) return;
         int hr = _native.SessionPlaceOpmWindow(_rt.Handle, _s, hostWindow, left, top, right, bottom);
         if (hr > 0) return;   // S_FALSE: native is not attached to this session yet (or has no window): asked again at the next pump
@@ -708,7 +719,13 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         if (_disposed) return;
         _disposed = true;
         PumpRequested = null;
+        bool traced = _censusToken != 0;
         if (_censusToken != 0) { MediaCensus.Unregister(_censusToken); _censusToken = 0; }
+        if (traced)
+        {
+            ProtectedVideoTrace.Stamp("session.destroy", _s);
+            ProtectedVideoTrace.ExitSession();
+        }
         if (_s != 0)
         {
             ulong s = _s;
@@ -813,17 +830,12 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         if (n.Width > 0 && n.Height > 0)
         {
             var size = new Size2(n.Width, n.Height);
-            if (!_naturalSize.Peek().Equals(size))
-            {
-                _naturalSize.Value = size;
-                // The stream size is derived FROM the natural size (a rung switch changes it), so it is re-asserted: the
-                // next SetStreamSize reaches native even when the derived size equals the one sent before.
-                _streamW = -1; _streamH = -1;
-            }
+            // The stream is pinned to the natural size, so a new natural size is a new request by itself (ProtectedMediaSession).
+            if (!_naturalSize.Peek().Equals(size)) _naturalSize.Value = size;
         }
-        _appliedStream = n.StreamWidth > 0 && n.StreamHeight > 0 ? new SizeI(n.StreamWidth, n.StreamHeight) : SizeI.Zero;
         _framesRendered = Math.Max(0, n.FramesRendered);
         _framesDropped = Math.Max(0, n.FramesDropped);
+        _feedComplete = n.FeedComplete != 0;
         Volatile.Write(ref _forwardBufferedMs, Math.Max(0, n.BufferedAheadMs));
         Volatile.Write(ref _retainedBehindMs, Math.Max(0, n.RetainedBehindMs));
         if (n.ActiveRepresentation >= 0 && _videoTrack is { } track && n.ActiveRepresentation < track.Representations.Count)
@@ -844,13 +856,13 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
 
         // 6. The surface, as the snapshot saw it (Bind hands it to an element, if one is presenting). The snapshot's handle is
         //    the truth, so a native detach (another session's attach replaced this one) drops the surface here too: native
-        //    zeroes the handle at detach, and a re-attach publishes a fresh one. Reading it, not a Detached event, means a
-        //    late event of an old attach can never clear a newer one. No binding is touched here: this pump runs with no
-        //    element mounted.
+        //    zeroes the session's handle at detach, and a re-attach publishes the runtime's again (the same value while the swap
+        //    chain is the same). Reading it, not a Detached event, means a late event of an old attach can never clear a newer one.
+        //    No binding is touched here: this pump runs with no element mounted.
         if (n.Handle != 0 && attached)
         {
             _surfaceHandle = (nuint)n.Handle;
-            _surfaceEpoch = epoch;
+            _surfaceGeneration = n.HandleGeneration;
             _hasSurface = true;
         }
         else
@@ -869,12 +881,11 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         // the state pump has not yet seen detached is never handed to a new slot.
         nuint handle = _surfaceHandle;
         if (handle == 0 || Volatile.Read(ref _attached) == 0) return;
-        // F198: forced once per attach epoch and binding token, never on an unchanged repeat (a forced re-bind re-wraps the surface).
-        int epoch = _surfaceEpoch;
-        bool force = epoch != _boundEpoch || binding.Token != _boundToken;
+        // F198: a forced re-bind re-wraps the surface (a "wuc.attach"), so it happens only when the slot shows this handle VALUE
+        // from another generation (a new swap chain the kernel gave a reused value, or RESOURCELOST), or a slot this runtime has not
+        // bound yet - never at a program switch, whose session binds the same handle and generation into the same slot.
+        bool force = _rt.BindNeedsForce(binding.HostOrdinal, binding.Token, handle, _surfaceGeneration);
         binding.Bind(handle, force);
-        _boundEpoch = epoch;
-        _boundToken = binding.Token;
     }
 
     /// <summary>The managed lifecycle state for a native <c>FgPrState</c> and the facts the events established. Pure.
@@ -946,8 +957,6 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
             ErrorHr = n.ErrorHr,
             FirstFrameTimestamp = firstFrame ? n.FirstFrameQpc : 0,
             BufferedAheadMs = n.BufferedAheadMs,
-            StreamW = (uint)Math.Max(0, n.StreamWidth),
-            StreamH = (uint)Math.Max(0, n.StreamHeight),
             FramesRendered = Math.Max(0, n.FramesRendered),
             FramesDropped = Math.Max(0, n.FramesDropped),
         };
@@ -1073,6 +1082,22 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
                 LogVideo($"ended key={_logKey}");
                 break;
 
+            case PrNative.EvProgramSwitch:
+            {
+                // The always-on line of every attach's first frame: which video the engine played before, and whether this one
+                // came in without a SetSource (silent=1: the decoder kept its pool too).
+                string mode = a switch
+                {
+                    PrNative.ProgramSilent => "silent",
+                    PrNative.ProgramAnnounced => "announced",
+                    PrNative.ProgramRebuild => "rebuild",
+                    _ => "open",
+                };
+                LogVideo($"program.switch from={_rt.SwapLastProgramKey(_logKey)} to={_logKey} silent={(a == PrNative.ProgramSilent ? 1 : 0)} " +
+                         $"ms={b} mode={mode}");
+                return;   // a line, never a pump trigger: the FirstFrame event before it asked for the pump
+            }
+
             case PrNative.EvDetached:
             case PrNative.EvHandle:
             case PrNative.EvSeeking:
@@ -1124,6 +1149,10 @@ public sealed class ProtectedVideoSession : IProtectedVideoPlayer
         if (_rt.LicenseHandleFor(_kid) != licenseHandle) return;
         Volatile.Write(ref _licenseRestriction, status);
         LogVideo($"license.restricted key={_logKey} status={status}");
+        // OUTPUT_RESTRICTED: the key decrypts but the licence's output protection is not met on the display (HDCP), so the picture is
+        // withheld. OUTPUT_DOWNSCALED is a constriction the picture survives: not a failure.
+        if (status == OutputProtection.KeyOutputRestricted)
+            OutputProtection.Raise(new OutputProtectionNotice(OutputProtectionCause.KeyOutputRestricted, status, 0));
         RequestPump();
     }
 

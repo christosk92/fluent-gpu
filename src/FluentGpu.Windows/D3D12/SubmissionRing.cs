@@ -25,6 +25,9 @@ internal sealed unsafe class SubmissionRing
     internal readonly D3D12Swapchain?[] Owner = new D3D12Swapchain?[Depth];   // timestamp attribution (replaces _gpuExecutionTsOwner/_gpuTsOwner)
     internal readonly ulong[] OwnerSubmit = new ulong[Depth];         // replaces _gpuExecutionTsOwnerSubmit
     internal readonly bool[] ExecTsPending = new bool[Depth];
+    // QPC when the submit that last used slot k was stamped (just after ExecuteCommandLists): the frame-fence wait note's
+    // "submitted ago" and the start of its GPU queue time (D3D12Device.NoteFrameFenceWait). Diagnostics only.
+    internal readonly long[] SubmitQpc = new long[Depth];
     // Pass-granular GPU timeline (D3D12Device.GpuPassTimingEnabled): the per-interval tags recorded at record time — a
     // CPU-written bank exactly like the allocator/upload-arena banks above, so it keys off the submission slot too and
     // is read back only after that slot's fence wait proves the resolved timestamps retired. PassOwner is kept apart
@@ -43,6 +46,7 @@ internal sealed unsafe class SubmissionRing
         Fence[slot] = fence;
         Owner[slot] = owner;
         OwnerSubmit[slot] = ownerSubmit;
+        SubmitQpc[slot] = System.Diagnostics.Stopwatch.GetTimestamp();
         SubmitCounter++;
     }
 

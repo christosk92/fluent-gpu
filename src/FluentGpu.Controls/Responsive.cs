@@ -232,6 +232,8 @@ public sealed class FormBox<TForm> : Component
 
     readonly Signal<int> _edge = Signal.AlwaysNotify(0);
     readonly Action<RectF> _onBounds;
+    readonly Action<NodeHandle> _onRealized;
+    NodeHandle _node;
     Props? _p;
     float _w;
     bool _seeded;
@@ -243,10 +245,14 @@ public sealed class FormBox<TForm> : Component
         _onBounds = r =>
         {
             if (_memKey is not null && r.W > 0f) MeasureMemory.Capture(_memKey, new Size2(r.W, r.H));
-            if (r.W <= 0f || MathF.Abs(r.W - _w) <= 0.5f) return;
-            _w = r.W;
+            // The form is chosen at the structure width: the width the box lands at while a width reflow resizes it, so a docking panel's
+            // slide changes the form once, on its first frame, never in the middle.
+            float w = Context.Scene is { } scene ? scene.StructureWidth(_node, r.W) : r.W;
+            if (w <= 0f || MathF.Abs(w - _w) <= 0.5f) return;
+            _w = w;
             if (_p is { } p && !EqualityComparer<TForm>.Default.Equals(p.FormOf(_w), _rendered)) _edge.Value = 0;
         };
+        _onRealized = h => _node = h;
     }
 
     public override Element Render()
@@ -265,14 +271,15 @@ public sealed class FormBox<TForm> : Component
         return new BoxEl
         {
             Direction = 1, Grow = props.Grow,   // as ResponsiveBox: the parent sizes this box, the child cross-stretches to it
-            OnBoundsChanged = _onBounds,
+            OnBoundsChanged = _onBounds, OnRealized = _onRealized,
             Children = [props.Build(form)],
         };
     }
 }
 
 /// <summary>The tier-gated <see cref="Responsive.Of(string,TierLadder,Func{float},Func{int,Element},float)"/> component. It
-/// measures its own slot width (a private signal written from <c>OnBoundsChanged</c>) but never reads it in render: the
+/// measures its own slot width (a private signal written from <c>OnBoundsChanged</c>; the structure width while a width reflow resizes
+/// it, as <see cref="FormBox{TForm}"/>) but never reads it in render: the
 /// width feeds <c>UseTier</c> through <see cref="TierSource.Measured"/> (seeded by the estimate until the first measure), so
 /// the box re-renders ONLY when the tier crosses. The estimate thunk is re-pointed each render, so the newest closure seeds
 /// a late first measure.</summary>
@@ -300,11 +307,19 @@ public sealed class TierBox : Component
     Func<float> _estimate = static () => 0f;
     readonly Func<float> _estimateProxy;
     readonly Action<RectF> _onBounds;
+    readonly Action<NodeHandle> _onRealized;
+    NodeHandle _node;
 
     public TierBox()
     {
         _estimateProxy = () => _estimate();
-        _onBounds = r => { if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f) _w.Value = r.W; };
+        // The tier is chosen at the structure width (the width the box lands at while a width reflow resizes it), as FormBox's form.
+        _onBounds = r =>
+        {
+            float w = Context.Scene is { } scene ? scene.StructureWidth(_node, r.W) : r.W;
+            if (w > 0f && MathF.Abs(w - _w.Peek()) > 0.5f) _w.Value = w;
+        };
+        _onRealized = h => _node = h;
     }
 
     public override Element Render()
@@ -316,7 +331,7 @@ public sealed class TierBox : Component
         {
             // Direction=1 so the built child CROSS-STRETCHES to the measured slot (as ResponsiveBox); no explicit Width.
             Direction = 1, Grow = props.Grow,
-            OnBoundsChanged = _onBounds,
+            OnBoundsChanged = _onBounds, OnRealized = _onRealized,
             Children = [ props.Build(tier.Value) ],   // tier.Value subscribes: a rebuild happens on a crossing only
         };
     }

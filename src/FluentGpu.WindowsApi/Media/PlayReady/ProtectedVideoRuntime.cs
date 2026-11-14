@@ -267,6 +267,10 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
         PlayReadyCdmPrewarm.Start(softwareOnly: FluentGpu.Hosting.EngineSwitches.ForcePlayReadySl2000);
     }
 
+    /// <summary>Start the DWM freeze probe's thread (<c>DwmStallProbe</c>; idempotent). The host installs it as
+    /// <see cref="ProtectedVideoTrace.ProbeStarter"/>, so a protected step outside this runtime (the composition keeper) is measured.</summary>
+    public static void StartFreezeProbe() => DwmStallProbe.EnsureStarted();
+
     /// <summary>The native runtime handle, 0 when bring-up has not run or failed.</summary>
     internal ulong Handle => Volatile.Read(ref _rt);
 
@@ -366,6 +370,9 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                 // FgPrRuntimeCreateOnAdapter is non-blocking by contract (it returns once the runtime thread is up; bring-up completion
                 // is an event), so creating under the gate cannot stall a caller for the CDM's bring-up time.
                 long t0 = Stopwatch.GetTimestamp();
+                // The bring-up (D3D11 video device, the hardware CDM, the media engine) is a freeze-trail step: arm the DWM probe.
+                DwmStallProbe.EnsureStarted();
+                ProtectedVideoTrace.Stamp("runtime.create");
                 int hr;
                 ulong rt;
                 try
@@ -504,9 +511,11 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
     private void DestroyNativeTimed(ulong rt, ulong[] licenses)
     {
         long t0 = Stopwatch.GetTimestamp();
+        ProtectedVideoTrace.Stamp("runtime.destroy.begin");
         Volatile.Write(ref _destroying, 1);
         try { DestroyNative(rt, licenses); }
         finally { Volatile.Write(ref _destroying, 0); }
+        ProtectedVideoTrace.Stamp("runtime.destroy.end", 0, 0, Stopwatch.GetTimestamp() - t0);
         Log($"runtime.destroy done ms={Stopwatch.GetElapsedTime(t0).TotalMilliseconds:F0} " +
             $"racingAcquires={Interlocked.Exchange(ref _racingAcquires, 0)}");
     }
@@ -977,6 +986,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
             // Only the license and log events need the text as a string; every other event passes the pointer through.
             string? line = text != null && ev is PrNative.EvLicenseUsable or PrNative.EvLicenseFailed
                                                   or PrNative.EvLicenseExpired or PrNative.EvLicenseRevoked or PrNative.EvLog
+                                                  or PrNative.EvPhase
                 ? new string(text) : null;
             self.OnNativeEvent(session, ev, a, b, line);
         }
@@ -1008,6 +1018,7 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
             case PrNative.EvRuntimeReady:
                 Volatile.Write(ref _readyTimestamp, Stopwatch.GetTimestamp());
                 Log($"runtime.ready ms={a}");
+                if (ReferenceEquals(s_shared, this)) OutputProtection.RaiseRuntimeReady();
                 return;
 
             case PrNative.EvRuntimeFailed:
@@ -1040,11 +1051,29 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
                 // session: replace the runtime (Chromium restarts its pipeline on the same HRESULTs).
                 if (ProtectedRuntimeFaults.IsRuntimeReset(unchecked((int)b)))
                     PoisonRuntime(unchecked((int)b), "session error", bringUpFailure: false);
+                // MF_E_POLICY_UNSUPPORTED: the licence's output protection (HDCP) cannot be met on the video's display.
+                if (unchecked((int)b) == OutputProtection.PolicyUnsupported)
+                    OutputProtection.Raise(new OutputProtectionNotice(OutputProtectionCause.PolicyUnsupported, a, b));
                 return;
             }
 
+            case PrNative.EvOutputProtection:
+                Log($"s={session} output.protection cause=opminfo p1={a} p2=0x{unchecked((uint)b):X8}");
+                OutputProtection.Raise(new OutputProtectionNotice(OutputProtectionCause.OpmInfo, a, b));
+                return;
+
             case PrNative.EvLog:
                 if (text is not null) Log($"s={session} {text}");
+                return;
+
+            case PrNative.EvPhase:
+                // The freeze trail: stamped at native's own QPC (a), whenever the ring delivered it.
+                if (text is not null)
+                {
+                    ProtectedVideoTrace.Stamp(text, session, a, b);
+                    // Hardware DRM on this adapter: arm the protected composition keeper now, before the first protected frame.
+                    if (text.StartsWith("cdm.create.end sl=3000", StringComparison.Ordinal)) ProtectedKeeperPolicy.NoteHardwareDrm();
+                }
                 return;
         }
 
@@ -1454,6 +1483,34 @@ public sealed unsafe class ProtectedVideoRuntime : IDisposable
         }
     }
 
+    // ── the persistent pipeline's surface and programs ─────────────────────────────────────────────────────────────
+
+    // The (handle, generation) each presenting slot - (host ordinal, binding token) - was last handed by a session of this
+    // runtime. Native keeps ONE handle per swap chain for every program of its source, so the next video's session binds the
+    // same value into the same slot: a per-session "first bind" would force a re-wrap (wuc.attach) at every switch. UI thread
+    // (Bind runs in the pump); the lock only guards a runtime two windows' pumps may share.
+    private readonly Dictionary<(int Host, int Token), (nuint Handle, int Generation)> _boundSurfaces = new();
+    private string _lastProgramKey = "none";
+
+    /// <summary>Whether binding <paramref name="handle"/> of native generation <paramref name="generation"/> into the slot must
+    /// be FORCED (re-wrapped although the registry may already hold that value), and records it as the slot's: when the slot
+    /// shows the same value from another generation (a new swap chain the kernel gave a reused value, or RESOURCELOST), or this
+    /// runtime has not bound the slot yet (the value may be a closed handle of an earlier runtime). Alloc-free.</summary>
+    internal bool BindNeedsForce(int host, int token, nuint handle, int generation)
+    {
+        lock (_boundSurfaces)
+        {
+            bool known = _boundSurfaces.TryGetValue((host, token), out var last);
+            if (known && last.Handle == handle && last.Generation == generation) return false;
+            _boundSurfaces[(host, token)] = (handle, generation);
+            return !known || last.Handle == handle;
+        }
+    }
+
+    /// <summary>The key of the video the engine played before <paramref name="next"/>, which becomes the one it plays now: the
+    /// <c>from=</c> of the <c>[video] program.switch</c> line.</summary>
+    internal string SwapLastProgramKey(string next) => Interlocked.Exchange(ref _lastProgramKey, next);
+
     // ── logging ────────────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>One always-on <c>[video.native]</c> line. Lifecycle only; never per frame, never per high-rate event.</summary>
@@ -1501,6 +1558,15 @@ internal static class ProtectedRuntimeFaults
     /// <summary>True for an HRESULT after which the runtime must be rebuilt, not retried.</summary>
     internal static bool IsRuntimeReset(int hr)
         => hr is TeeInvalidHwDrmState or AsdActiveDisplayFail or DxgiDeviceRemoved or DxgiDeviceReset or MfShutdown or NoRenderedFrame;
+
+    /// <summary>AUDCLNT_E_NOT_INITIALIZED - what the native runtime reports when its mfcore guard (MfAudioGuard.h) failed a
+    /// protected session start: Media Foundation's policy engine read the audio sink's trusted output before the sink's
+    /// asynchronous audio-client set-up had finished (a Windows race that used to be an access violation in mfcore).</summary>
+    internal const int AudioOutputNotReady = unchecked((int)0x88890001);
+
+    /// <summary>True for a protected start that failed on a transient race: the engine, the CDM and the source are fine, so the
+    /// owner re-opens the video in place (once) instead of rebuilding the runtime or reporting a licence failure.</summary>
+    internal static bool IsTransientStart(int hr) => hr == AudioOutputNotReady;
 }
 
 /// <summary>Where a license relay's answer goes: the native <c>FgPrLicenseDeliver</c> in production, a recorder in the
@@ -1549,7 +1615,7 @@ internal sealed unsafe class PrRuntimeNative : IPrRuntimeNative
     /// protected open, so it is reported as unavailable up front instead.</summary>
     internal static readonly string[] RequiredExports =
     [
-        "FgPrRuntimeCreateOnAdapter", "FgPrRuntimeDestroy", "FgPrRuntimeUptimeMs", "FgPrRuntimeSetSecurityPolicy",
+        "FgPrRuntimeCreateOnAdapter", "FgPrRuntimeDestroy", "FgPrRuntimeUptimeMs", "FgPrRuntimeSetSecurityPolicy", "FgPrRuntimeQueryHdcp",
         "FgPrLicenseAcquire", "FgPrLicenseState", "FgPrLicenseRelease",
         "FgPrSessionCreate", "FgPrSessionPrefetch", "FgPrSessionAttach", "FgPrSessionDetach", "FgPrSessionDestroy",
         "FgPrSessionPlay", "FgPrSessionPause", "FgPrSessionSeek", "FgPrSessionSetVolume", "FgPrSessionSetRate",

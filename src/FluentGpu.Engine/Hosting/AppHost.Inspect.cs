@@ -11,13 +11,14 @@ public sealed partial class AppHost
     /// <see cref="TextOverflowQuery"/>; layout owns it, so call it on the UI thread between frames.</summary>
     public IFontSystem FontSystem => _fonts;
 
-    /// <summary>Whether text node <paramref name="node"/> shows all of its content: <see cref="TextOverflow.Trimmed"/> when its
-    /// width or line budget cut it (<see cref="TextOverflowQuery.Query"/> over this host's scene and font system). UI thread,
-    /// between frames.</summary>
+    /// <summary>Whether text node <paramref name="node"/> shows all of its content (<see cref="TextOverflowQuery.Query"/> over this
+    /// host's scene and font system): <see cref="TextOverflow.Trimmed"/> when its uncut run does not fit its box, and, when the
+    /// font system can say, what the draw's own layout cut (<see cref="TextOverflow.DrawnCut"/>, <see cref="TextOverflow.DrawnEllipsis"/>).
+    /// UI thread, between frames.</summary>
     public TextOverflow QueryTextOverflow(NodeHandle node) => TextOverflowQuery.Query(_scene, _fonts, node);
 
-    /// <summary>True when text node <paramref name="node"/> was trimmed (see <see cref="QueryTextOverflow"/>); false for a
-    /// non-text node.</summary>
+    /// <summary>True when the uncut run of text node <paramref name="node"/> does not fit its box (see <see cref="QueryTextOverflow"/>);
+    /// false for a non-text node.</summary>
     public bool IsTextTrimmed(NodeHandle node) => QueryTextOverflow(node).Trimmed;
 
     /// <summary>The glyph ink of text node <paramref name="node"/> as drawn, relative to its box (<see cref="TextOverflowQuery.TryInk"/>

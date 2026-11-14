@@ -215,7 +215,25 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// solves avoided. Equal to RootRelayoutEscapes ⇒ every escape was absorbed and no root solve ran.</summary>
     public int LocalRelayoutResolves { get; init; }
     public double AnimMs { get; init; }
+    // AnimMs sub-split (hitch attribution): a 58 ms anim phase could not be told apart between the engine tick and the
+    // video pump that rides the same span. AnimMs still covers the whole segment; these two carve out its big parts.
+    /// <summary>Of <see cref="AnimMs"/>: the <c>_anim.Tick(dtMs)</c> call alone. Always-on.</summary>
+    public double AnimTickMs { get; init; }
+    /// <summary>Of <see cref="AnimMs"/>: the phase-7.2 video pump (<c>RequestGeometryPumps</c> + <c>PumpPending</c>). Always-on.</summary>
+    public double VideoPumpMs { get; init; }
     public double RecordMs { get; init; }
+    /// <summary>ALWAYS-ON: the frame-turn tail after the submit stamp (single-thread video drain + settle present, passive
+    /// effects, settle/transaction judging, string reclaim) up to the frame-timing update. Before this field it was the
+    /// slow-frame line's "unaccounted" remainder.</summary>
+    public double PostSubmitMs { get; init; }
+    /// <summary>Of <see cref="PostSubmitMs"/>: the <c>DrainPassiveEffects()</c> call alone. Always-on.</summary>
+    public double PassiveEffectsMs { get; init; }
+    /// <summary>The longest single context's pending passive effects in this frame's drain (ms). Always-on.</summary>
+    public double SlowestEffectMs { get; init; }
+    /// <summary>The type of the <c>RenderContext.Owner</c> component of the context <see cref="SlowestEffectMs"/> timed; null
+    /// when it was a context without an owner (the reconciler's attachment context) or no context ran. A type, never the
+    /// instance: kept FrameStats copies must not retain an unmounted component.</summary>
+    public Type? SlowestEffectOwnerType { get; init; }
     /// <summary>Renderer-owned recording duration from the latest imported successful presentation (not current UI work).</summary>
     public double RenderRecordMs { get; init; }
     /// <summary>Longest UI-thread wait inside the render thread's park rendezvous (<c>RenderThread.Quiesce</c>: window resize,
@@ -268,6 +286,10 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// submit). This is the ONLY per-frame identity that survives the UI→render-thread boundary; see
     /// <see cref="AppHost.LastPresentPublishSeq"/> for the ack side and the join contract.</summary>
     public ulong PublishSeq { get; init; }
+    /// <summary>The newest publish seq this host had PRESENTED when the frame ended (<see cref="AppHost.LastPresentPublishSeq"/>
+    /// read then). <c>PresentedPublishSeq &gt;= PublishSeq</c> means this frame reached the screen before its Paint returned, as a
+    /// live-resize step does (<see cref="FluentGpu.Pal.IPlatformWindow.LiveResize"/>); under async it usually trails.</summary>
+    public ulong PresentedPublishSeq { get; init; }
     // Hitch attribution: GC collection deltas since the previous painted frame (ALWAYS-ON — a slow-frame log line
     // needs "a gen-2 landed here" without a flag).
     public int Gc0Delta { get; init; }
@@ -361,6 +383,18 @@ public sealed class PopupWindowSlot
     {
         if (Interlocked.Exchange(ref _windowDisposed, 1) == 0) Window.Dispose();
     }
+    /// <summary>The window went to the host's popup pool with its parked swapchain: this slot must never dispose it.</summary>
+    internal void ReleaseWindowOwnership() => Interlocked.Exchange(ref _windowDisposed, 1);
+    /// <summary>The popup pool key this slot's window and swapchain were made for (AppHost.PopupPoolKeyFor).</summary>
+    internal PopupPoolKey PoolKey;
+    /// <summary>The close parks this popup's window and swapchain for the next popup instead of releasing them.</summary>
+    internal bool ParkOnClose;
+    /// <summary>Where this popup's window and swapchain came from: built for it, the idle prewarm's pair, or a closed popup's.
+    /// A pooled swapchain that could no longer serve (a lost device) is rebuilt on the pooled window and still reads its pool
+    /// origin here; the <c>[overlay.popup]</c> line's <c>reused=</c> says whether the swapchain itself was reused.</summary>
+    public PopupOrigin Origin { get; internal set; }
+    /// <summary>The render thread parked this closed popup's swapchain (ISwapchain.ParkPopup); the UI pools it with the window.</summary>
+    internal ISwapchain? ParkedSwapchain;
     /// <summary>The popup's own command stream, re-recorded each frame via <c>SceneRecorder.RecordSubtree</c>.</summary>
     public DrawList DrawList { get; } = new();
     internal SceneRecordingContext Recording { get; } = new();
@@ -368,6 +402,14 @@ public sealed class PopupWindowSlot
     /// <summary>This popup's cost, for the always-on <c>[overlay.popup]</c> line written at close.</summary>
     internal PopupLifecycle Lifecycle { get; } = new();
 }
+
+/// <summary>Where a leased popup window and its swapchain came from (<see cref="PopupWindowSlot.Origin"/>).</summary>
+public enum PopupOrigin : byte { Built, Prewarmed, Reused }
+
+/// <summary>What a pooled popup window and its swapchain were made for: a parked pair serves only a popup with the same key, so
+/// a theme switch (material tint, dark frame), a DPI or zoom change (corner radius, scale) or a move of the owner to another
+/// monitor (its work area) drops the pair instead of reusing it.</summary>
+internal readonly record struct PopupPoolKey(PopupWindowMaterial Material, bool Dark, ColorF Tint, float CornerRadiusPx, float Scale, RectF WorkAreaPx);
 
 /// <summary>Which branch of <see cref="AppHost.RecommendedWaitMs"/> produced the last wait — the diagnostic that
 /// distinguishes per-source cadence pacing, measured adaptive-GPU pacing, and display-rate free-run. <c>Cadence</c>
@@ -448,12 +490,20 @@ public sealed partial class AppHost : IDisposable
     private RectF _lastBoundsPx;
     private int _boundsSettleFrames;
     private bool _boundsDirty;
+    private bool _boundsGestureEnded;   // an OS move/size loop ended since the last sample (SampleDetachedBounds)
 
     // E4 windowed out-of-bounds popups: one slot per leased popup window (see PopupWindowSlot).
     private readonly List<PopupWindowSlot> _popupWindows = new(2);
     // Popups closed while a render thread existed: out of _popupWindows already, but their swapchain is still owned by the
     // render thread until it runs the queued Dispose, and their HWND is destroyed only after (UI thread). UI-thread only.
     private readonly List<PopupWindowSlot> _retiringPopups = new(2);
+    // The popup pool: closed popups' windows, each with its parked swapchain (ISwapchain.ParkPopup), handed to the next popup
+    // instead of building a window, a swapchain and a composition backdrop per open. UI thread. Sized to what is up at once: a
+    // context menu, its cascade, and the sibling cascade that opens while the previous one still fades out (Wavee's menus nest
+    // one level: every Actions.Menu submenu holds plain items). Nothing is built to fill it: it holds what was used, at most this.
+    private readonly List<(IPlatformPopupWindow Window, ISwapchain Swapchain, PopupPoolKey Key, bool Prewarmed)> _popupPool = new(PopupPoolCap);
+    private const int PopupPoolCap = 3;
+    private int _popupParking;   // parks and prewarms the render thread has not handed back yet (count toward the cap)
     private readonly List<NodeHandle> _popupSkipRoots = new(2);
     private readonly List<NodeHandle> _reuseBlockRoots = new(4);   // W5: connected-anim fly anchors whose span-reuse ancestor chains the recorder blocks (spatial scoping)
     private int _popupTokenSeq;
@@ -687,6 +737,36 @@ public sealed partial class AppHost : IDisposable
         return w < 0 ? dueIn : Math.Min(w, dueIn);
     }
 
+    /// <summary>Milliseconds until an animated image's next frame is due (<see cref="ImageCache.AnimationDueMs"/>, already less its
+    /// slack), extrapolated on the image clock exactly as <see cref="ImageLeftoverDueInMs"/>: +∞ when nothing plays or every
+    /// playing image waits on its decode (whose landing wakes the loop), ≤ 0 when a frame is due now.</summary>
+    private double AnimatedImageDueInMs()
+    {
+        float due = _images.AnimationDueMs;
+        if (float.IsPositiveInfinity(due)) return double.PositiveInfinity;
+        double clock = _images.ClockMs;
+        double sampledAt = _images.ClockCapturedAtMs;
+        if (_frameTime is StopwatchFrameTimeSource && !double.IsNaN(sampledAt))
+            clock += Math.Max(0.0, Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency - sampledAt);
+        // Fixed headless time moves the image clock only inside a painted frame, by one step, before the animations tick: a frame
+        // due within that step is due now (otherwise an idle headless loop never paints and its clock never reaches the frame).
+        else if (_frameTime is FixedFrameTimeSource fixedTime)
+            clock += fixedTime.StepMs;
+        return due - clock;
+    }
+
+    /// <summary>Shorten the wait so the loop wakes when an animated image's next frame falls due: the
+    /// <see cref="ClampWaitToImageLeftovers"/> contract (a display-rate wait already runs the frame, a parked host paints
+    /// nothing, the floor is 1 ms; a frame due now is the <see cref="WakeReasons.AnimatedImage"/> bit's job).</summary>
+    private int ClampWaitToAnimatedImages(int w, HostWaitKind kind)
+    {
+        if (IsDisplayRateWait(kind, w) || IsParked || !PumpsSharedImages) return w;
+        double dueInMs = AnimatedImageDueInMs();
+        if (double.IsPositiveInfinity(dueInMs)) return w;
+        int dueIn = dueInMs >= int.MaxValue ? int.MaxValue : (int)Math.Ceiling(Math.Max(1.0, dueInMs));
+        return w < 0 ? dueIn : Math.Min(w, dueIn);
+    }
+
     /// <summary>E1 (design-engine-images.md): describe every currently-revealing image as its owning node(s)' repaint
     /// rect instead of the caller forcing a full frame for <c>HasActiveCrossfades</c>. Returns false — leaving
     /// <paramref name="repaint"/> untouched beyond whatever it already had — the moment the crossfade set cannot be
@@ -725,12 +805,24 @@ public sealed partial class AppHost : IDisposable
 
     private bool HasRenderMotion()
     {
-        if (HasOwnRenderMotion()) return true;
+        if (HasOwnRenderMotion() || HoldsVideoPlates || _presentationMoving) return true;
         // A child whose present slot was busy this turn left its publication pending (DrainChildRenderSources), and one whose
         // non-blocking present was refused owes that frame: keep the loop ticking so the next turn probes the slot / re-presents
         // instead of sleeping until some unrelated wake.
-        foreach (var child in Volatile.Read(ref _childRenderSources)) if (child.HasOwnRenderMotion() || child._slotDeferred || child._presentOwed) return true;
+        foreach (var child in Volatile.Read(ref _childRenderSources))
+            if (child.HasOwnRenderMotion() || child._slotDeferred || child._presentOwed || child.HoldsVideoPlates || child._presentationMoving) return true;
         return false;
+    }
+
+    // Render thread: frosted plates over a video wait for the flip that drops their veil (VideoPlacementApplier.NoteGpuProgress). Holding
+    // ticks the loop at the display clock with no present of its own (it is not this host's motion), so each turn's drain
+    // (DrainChildRenderSources) lets them go as the GPU retires frames, even when the UI publishes nothing more.
+    private bool HoldsVideoPlates => _videoApplier is { HoldsPlates: true };
+
+    private void RetireHeldVideoPlates()
+    {
+        if (!HoldsVideoPlates || _device.GetVideoPresenter(_swapchain) is not { } vp) return;
+        if (_videoApplier!.RetireHeldPlates(vp, _device.CompletedSubmitSerial)) _device.CommitVideoComposition();
     }
 
     // Render-thread-owned (set/cleared only in DrainChildRenderSources; read by HasRenderMotion on the same thread): this
@@ -1458,6 +1550,15 @@ public sealed partial class AppHost : IDisposable
     private readonly List<NodeHandle> _reflowOwnedRoots = new(4);                   // SuppressDescendantTransitions containers a live sibling reflow resizes this commit: they land, they suppress nothing
     private readonly List<int> _positionScratch = new(64);                          // nodes with a position transition (RunReflowLayout's wrap watch)
     private readonly List<NodeHandle> _enterReflowsSeeded = new(8);                 // this frame's Reflow ENTERS (SeedReflowsFirst lays them out at 0)
+    private readonly List<NodeHandle> _widthSeeds = new(8);                         // the width reflows SeedReflowsFirst starts this pass (their destination is the commit's layout)
+    private readonly List<NodeHandle> _widthSeedsCommit = new(8);                   // every width reflow this commit's SeedReflowsFirst passes started (none of them is "away" from this commit)
+    private readonly List<NodeHandle> _destProbeNodes = new(8);                     // the live reflows a destination probe presents at their targets
+    private readonly List<(NodeHandle Node, float Width)> _destProbeSaved = new(8);  // the width inputs the probe found, put back exactly after its solve
+    private bool _destProbedThisFrame;                                                // a target solve recorded the tree this frame (RecordSeededDestinations)
+    private bool _recordStaleProbe;                                                   // the record no longer describes a part of the tree: re-record it (ProbeRecordScopes)
+    private readonly List<NodeHandle> _recordScopes = new(8);                        // the boxes ProbeRecordScopes solves and records again
+    private readonly List<NodeHandle> _recordRoots = new(8);                         // the parents of the live width reflows: what a probe records
+    private Size2 _destLayoutSize;                                                  // the window size the recorded destination widths were solved at
     private readonly List<(NodeHandle Node, RectF Was)> _wrapMovers = new(16);     // children of wrapping boxes and where they stood before a reflow re-solve
     private readonly List<(NodeHandle Node, float H)> _revealHeights = new(16);    // flow-reveal boxes and their height before a reflow re-solve
     private readonly List<RenderContext> _pendingLayoutEffectContexts = new();
@@ -1897,8 +1998,11 @@ public sealed partial class AppHost : IDisposable
         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
         _device.SubmitComposite(in frame, _swapchain);
         if (_device.HeapReleaseDue) _renderThread?.RequestIdleTrimThisTurn();   // freed tile heaps above the cap: release after this present
+        long spE = SplitSpans.Now();
         slices.EndComposite(tiles, in frame);
+        SplitSpans.Add(SplitSpans.EndComposite, ref spE);
         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (EngineSwitches.SubmitSplit) SplitSpans.Ticks[SplitSpans.Build] += t1 - t0;
         _evBuildTicks = t1 - t0; _evSubmitTicks = t2 - t1;
         NoteTileCensus(slices, tiles);
         _ledgerTurnTiles += slices.LastRasteredTiles;
@@ -2039,10 +2143,13 @@ public sealed partial class AppHost : IDisposable
     // ops are applied in order, and the swapchain is resolved when each one runs. A detached child's OWN swapchain resize is
     // not in the list at all: it is ONE latest-wins slot (_ownResizePending, F093), because a live resize posts one per WM_SIZE
     // and only the newest size is ever worth a ResizeBuffers.
-    private enum PopupRenderOp : byte { ResizeAndChrome, AnimateClose, Create, Dispose }
+    // The popup pool adds four: Reuse (a pooled swapchain serves a new popup), Park (a closed popup's swapchain is kept),
+    // Prewarm (the idle build of one pooled popup) and DropParked (a pooled pair released for good).
+    private enum PopupRenderOp : byte { ResizeAndChrome, AnimateClose, Create, Dispose, Reuse, Park, Prewarm, DropParked }
 
     private readonly record struct PopupRenderAction(PopupRenderOp Op, PopupWindowSlot? Slot, Size2 Size, PopupChromeMetrics Chrome,
-                                                     SwapchainDesc Desc = default);
+                                                     SwapchainDesc Desc = default, ISwapchain? Pooled = null,
+                                                     IPlatformPopupWindow? Window = null, PopupPoolKey Key = default);
 
     private readonly object _popupActionLock = new();
     private List<PopupRenderAction> _popupActionsIn = new(4);
@@ -2052,6 +2159,10 @@ public sealed partial class AppHost : IDisposable
     private bool _ownResizePending;
     private Size2 _ownResizeSize;
     private int _ownResizesApplied;
+    private long _ownResizePostedQpc;   // when the first still-pending resize was posted (guarded by _popupActionLock)
+    private int _ownResizeCollapsed;    // posts that replaced a pending one since the last apply (guarded by _popupActionLock)
+    private long _renderResizeLogQpc;   // the render-side [window.resize] rate limit (render thread)
+    private int _renderResizeLogSuppressed;
 
     private void PostPopupRenderAction(in PopupRenderAction action)
     {
@@ -2059,7 +2170,7 @@ public sealed partial class AppHost : IDisposable
         // Ops that change what EXISTS (a swapchain built or released) must not wait for a publication that may never come:
         // wake the render loop, whose per-turn callback (DrainChildRenderSources) applies them. A popup's Resize / fade stays
         // unwoken - it is ordered behind the publication that carries the matching placement.
-        if (action.Op is PopupRenderOp.Create or PopupRenderOp.Dispose) OwningRenderThread?.WakeAsync();
+        if (action.Op is not (PopupRenderOp.ResizeAndChrome or PopupRenderOp.AnimateClose)) OwningRenderThread?.WakeAsync();
     }
 
     /// <summary>UI thread: ask the render thread to resize THIS host's own swapchain (a detached child's). Latest wins: a request
@@ -2067,29 +2178,44 @@ public sealed partial class AppHost : IDisposable
     /// thread one ResizeBuffers per turn, not one per message. Wakes the loop: the resize must not wait for a publication.</summary>
     private void PostOwnResize(Size2 size)
     {
-        lock (_popupActionLock) { _ownResizePending = true; _ownResizeSize = size; }
+        long now = Stopwatch.GetTimestamp();
+        lock (_popupActionLock)
+        {
+            if (!_ownResizePending) _ownResizePostedQpc = now;   // the oldest unapplied post: how long the newest size waited at most
+            else _ownResizeCollapsed++;
+            _ownResizePending = true;
+            _ownResizeSize = size;
+        }
         OwningRenderThread?.WakeAsync();
     }
 
     /// <summary>Render thread: apply every popup swapchain mutation the UI posted since the last turn, in order.</summary>
     private void DrainPopupRenderActions()
     {
+        DrainPresentationMotion();
         bool ownResize;
         Size2 ownSize;
+        long ownPostedQpc;
+        int ownCollapsed;
         lock (_popupActionLock)
         {
             ownResize = _ownResizePending;
             ownSize = _ownResizeSize;
+            ownPostedQpc = _ownResizePostedQpc;
+            ownCollapsed = _ownResizeCollapsed;
+            _ownResizeCollapsed = 0;
             _ownResizePending = false;
             if (_popupActionsIn.Count == 0 && !ownResize) return;
             if (_popupActionsIn.Count != 0) (_popupActionsIn, _popupActionsOut) = (_popupActionsOut, _popupActionsIn);
         }
         if (ownResize)
         {
-            // This host's OWN swapchain (a detached child's: the primary parks for its resize instead), once, at the newest size.
+            // This host's OWN swapchain (the primary's or a detached child's), once, at the newest size.
             _ownResizesApplied++;
+            long r0 = Stopwatch.GetTimestamp();
             try { _swapchain.Resize(ownSize); }
             catch (Exception) when (_device.NoteIfDeviceLost()) { }
+            NoteRenderResize(ownSize, ToMs(r0 - ownPostedQpc), ToMs(Stopwatch.GetTimestamp() - r0), ownCollapsed);
         }
         for (int i = 0; i < _popupActionsOut.Count; i++)
         {
@@ -2113,11 +2239,38 @@ public sealed partial class AppHost : IDisposable
                     a.Slot!.Swapchain?.AnimatePopupClose();
                     break;
                 case PopupRenderOp.Dispose:
-                    RetirePopupSlotOnRender(a.Slot!);
+                    RetirePopupSlotOnRender(a.Slot!, park: false);
+                    break;
+                case PopupRenderOp.Park:
+                    RetirePopupSlotOnRender(a.Slot!, park: true);
+                    break;
+                case PopupRenderOp.Reuse:
+                    ReusePooledSwapchainOnRender(a.Slot!, a.Pooled!, a.Desc);   // even for a slot closed meanwhile: its Park op follows
+                    break;
+                case PopupRenderOp.Prewarm:
+                    PrewarmPopupOnRender(a.Window!, a.Desc, a.Key);
+                    break;
+                case PopupRenderOp.DropParked:
+                    DropParkedOnRender(a.Pooled!, a.Window!);
                     break;
             }
         }
         _popupActionsOut.Clear();   // retains capacity
+    }
+
+    /// <summary>The <c>[window.resize]</c> line of a resize applied on the render thread (the mailbox path): <c>quiesceMs</c> is 0 (no
+    /// park), <c>postedMs</c> is how long the size waited in the mailbox, <c>collapsed</c> how many later posts replaced it. Rate-limited
+    /// like the UI side's line. Render thread.</summary>
+    private void NoteRenderResize(Size2 px, double postedMs, double resizeMs, int collapsed)
+    {
+        long now = Stopwatch.GetTimestamp();
+        if (_renderResizeLogQpc != 0 && now - _renderResizeLogQpc < Stopwatch.Frequency / 10) { _renderResizeLogSuppressed++; return; }
+        _renderResizeLogQpc = now;
+        int suppressed = _renderResizeLogSuppressed;
+        _renderResizeLogSuppressed = 0;
+        var (waitGpuMs, buffersMs) = _swapchain.LastResizeSplit;
+        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[window.resize] px={px.Width:F0}x{px.Height:F0} path={(_isDetachedChild ? "render-child" : "render")} quiesceMs=0.00 waitGpuMs={waitGpuMs:F2} buffersMs={buffersMs:F2} resizeMs={resizeMs:F2} postedMs={postedMs:F2} collapsed={collapsed} suppressed={suppressed}"));
     }
 
     /// <summary>Render thread: build a leased popup's swapchain. A failure must not escape (this runs outside the submit's
@@ -2138,31 +2291,154 @@ public sealed partial class AppHost : IDisposable
         }
     }
 
-    /// <summary>Render thread: release a closed popup's swapchain, then hand its HWND back to the UI thread to destroy.
-    /// The window must outlive its composition swapchain (destroying it first gives DirectComposition errors), and
-    /// <c>DestroyWindow</c> belongs to the thread that created it.</summary>
-    private void RetirePopupSlotOnRender(PopupWindowSlot slot)
+    /// <summary>Render thread: park (<paramref name="park"/>: the pool has room) or release a closed popup's swapchain, then hand
+    /// its HWND back to the UI thread: to the popup pool with the parked swapchain, or to be destroyed. The window must outlive its
+    /// composition swapchain (destroying it first gives DirectComposition errors), and <c>DestroyWindow</c> belongs to the thread
+    /// that created it. Neither path waits on the popup's fence (D3D12Device.PopupPool.cs).</summary>
+    private void RetirePopupSlotOnRender(PopupWindowSlot slot, bool park)
     {
         var sc = slot.Swapchain;
-        slot.Swapchain = null;   // first: nothing recorded after this reaches the swapchain being released
-        sc?.Dispose();
+        slot.Swapchain = null;   // first: nothing recorded after this reaches the swapchain being parked or released
+        long t0 = Stopwatch.GetTimestamp();
+        bool parked = park && sc is not null && sc.ParkPopup();
+        if (!parked) sc?.Dispose();
+        slot.Lifecycle.RetireMs = ToMs(Stopwatch.GetTimestamp() - t0);
+        slot.Lifecycle.Parked = parked;
         // In mailbox order: after this slot's last pass, so its per-pass fields are settled. The one [overlay.popup] line it leaves behind.
         Diag.Line(slot.Lifecycle.Line(slot.Material, Stopwatch.GetTimestamp()));
-        Post(() => ReleaseRetiredPopupWindow(slot));
+        if (parked) { slot.ParkedSwapchain = sc; Post(() => ReturnParkedPopup(slot)); }
+        else Post(() => ReleaseRetiredPopupWindow(slot));
+    }
+
+    /// <summary>Render thread: a pooled swapchain serves a new popup on its own (pooled) window. One that can no longer serve
+    /// (released with a lost device) is disposed and a new one built on the same window.</summary>
+    private void ReusePooledSwapchainOnRender(PopupWindowSlot slot, ISwapchain pooled, in SwapchainDesc desc)
+    {
+        long t0 = Stopwatch.GetTimestamp();
+        if (pooled.UnparkPopup())
+        {
+            slot.Swapchain = pooled;
+            slot.Lifecycle.RenderCreateMs = ToMs(Stopwatch.GetTimestamp() - t0);
+            return;
+        }
+        pooled.Dispose();
+        slot.Lifecycle.Reused = false;
+        if (!slot.Retired) CreatePopupSwapchainOnRender(slot, desc);
+    }
+
+    /// <summary>Render thread: the idle prewarm's half: create one popup swapchain on a hidden window and park it at once
+    /// (D3D12Device.ParkPopup builds a never-built one after the owner's next present or on a turn that presents nothing, never
+    /// inside the owner's frame), so the first menu of the process finds the backdrop and the swapchain built.</summary>
+    private void PrewarmPopupOnRender(IPlatformPopupWindow window, in SwapchainDesc desc, PopupPoolKey key)
+    {
+        long t0 = Stopwatch.GetTimestamp();
+        ISwapchain? sc = null;
+        bool threw = false;
+        try { sc = _device.CreateSwapchain(in desc); }
+        catch (Exception ex) { threw = true; Diag.Line($"[overlay.popup] prewarm failed on the render thread: {ex.Message}"); }
+        bool parked = sc is not null && sc.ParkPopup();
+        if (!parked) sc?.Dispose();
+        else _prewarmSwapchainInFlight = sc;   // a teardown before the hand-back releases it (PurgePopupRenderActions)
+        double ms = ToMs(Stopwatch.GetTimestamp() - t0);
+        Post(() => ReturnPrewarmedPopup(window, parked ? sc : null, key, ms, threw));
+    }
+
+    /// <summary>Render thread: a pooled pair released for good (stale key, pool full): the swapchain now (its backdrop at once,
+    /// its buffers once they retired), the window back on the UI thread right after.</summary>
+    private void DropParkedOnRender(ISwapchain pooled, IPlatformPopupWindow window)
+    {
+        pooled.Dispose();
+        Post(() => { if (_droppingPairs.Remove((window, pooled))) window.Dispose(); });
     }
 
     /// <summary>UI thread: the render thread released this popup's swapchain; destroy its window.</summary>
     private void ReleaseRetiredPopupWindow(PopupWindowSlot slot)
     {
-        _retiringPopups.Remove(slot);
+        if (_retiringPopups.Remove(slot) && slot.ParkOnClose) _popupParking--;   // a park the render thread could not make
         slot.DisposeWindow();
+    }
+
+    /// <summary>UI thread: the render thread parked this closed popup's swapchain; pool it with the window.</summary>
+    private void ReturnParkedPopup(PopupWindowSlot slot)
+    {
+        if (!_retiringPopups.Remove(slot)) return;   // torn down meanwhile: the teardown sweep released both
+        _popupParking--;
+        var sc = slot.ParkedSwapchain!;
+        slot.ParkedSwapchain = null;
+        slot.ReleaseWindowOwnership();
+        PoolOrDropParked(slot.Window, sc, slot.PoolKey, prewarmed: false);
+    }
+
+    /// <summary>UI thread: the idle prewarm's swapchain is created and parked (or failed: <paramref name="sc"/> null).</summary>
+    private void ReturnPrewarmedPopup(IPlatformPopupWindow window, ISwapchain? sc, PopupPoolKey key, double renderMs, bool threw)
+    {
+        if (!ReferenceEquals(_prewarmWindowInFlight, window)) return;   // torn down meanwhile: the teardown released both
+        _prewarmWindowInFlight = null;
+        _prewarmSwapchainInFlight = null;
+        _popupParking--;
+        // parkCall= is the render thread's create + park call; the swap chain itself is built on a turn the owner presents nothing
+        // (or right after its present): its cost is the "[d3d12.present] popup create ... lazy=1" line.
+        Diag.Line(string.Create(CultureInfo.InvariantCulture,
+            $"[overlay.popup] prewarm parked={(sc is null ? 0 : 1)} prepare={_prewarmPrepareMs:F1}ms window={_prewarmWindowMs:F1}ms parkCall={renderMs:F1}ms"));
+        if (sc is null)
+        {
+            window.Dispose();
+            // A create that threw (a device lost at that moment, an out-of-memory) is transient: try again later, and keep pooling
+            // closed popups meanwhile. A park refused on a live swap chain is the backend's answer for good: nothing to keep warm.
+            if (threw) _prewarmRetryAtMs = ColdMaintenanceNowMs + PopupPrewarmRetryMs;
+            else _popupPoolClosed = true;
+            return;
+        }
+        PoolOrDropParked(window, sc, key, prewarmed: true);
+    }
+
+    /// <summary>UI thread: keep a parked pair for the next popup when it still fits (the pool has room and its key is still the
+    /// current one), else release it.</summary>
+    private void PoolOrDropParked(IPlatformPopupWindow window, ISwapchain sc, PopupPoolKey key, bool prewarmed)
+    {
+        string? why = _popupPoolClosed ? "closed" : _popupPool.Count >= PopupPoolCap ? "full" : key != PopupPoolKeyFor(key.Material) ? "stale" : null;
+        if (why is null)
+        {
+            _popupPool.Add((window, sc, key, prewarmed));
+            return;
+        }
+        DropParked(window, sc, why);
+    }
+
+    /// <summary>Release a pooled pair for good, logged with why (<c>stale</c>: its key is no longer the current one - a theme,
+    /// DPI, zoom or monitor change; <c>full</c>, <c>closed</c>).</summary>
+    private void DropParked(IPlatformPopupWindow window, ISwapchain sc, string why)
+    {
+        Diag.Line("[overlay.popup] pool drop reason=" + why + " pooled=" + _popupPool.Count.ToString(CultureInfo.InvariantCulture));
+        if (OwningRenderThread is null) { sc.Dispose(); window.Dispose(); return; }
+        _droppingPairs.Add((window, sc));   // until the render thread released the swap chain and handed the window back
+        PostPopupRenderAction(new PopupRenderAction(PopupRenderOp.DropParked, null, default, default, Pooled: sc, Window: window));
     }
 
     /// <summary>UI thread, with the render loop PARKED (or absent): drop every queued action. Teardown only: the popups it
     /// named are released directly by <see cref="Dispose"/> (the slots in <c>_popupWindows</c> and <c>_retiringPopups</c>).</summary>
     private void PurgePopupRenderActions()
     {
-        lock (_popupActionLock) { _popupActionsIn.Clear(); _ownResizePending = false; }
+        lock (_popupActionLock)
+        {
+            // The pool's ops hold what they carry only in the action: release it here (the loop is parked or gone, so this thread is
+            // the device's owner). A Reuse's pooled swap chain, a Prewarm's window (its swap chain was never made); a DropParked's
+            // pair is also in _droppingPairs, released below.
+            foreach (var a in _popupActionsIn)
+            {
+                if (a.Op == PopupRenderOp.Reuse) a.Pooled?.Dispose();
+                else if (a.Op == PopupRenderOp.Prewarm && ReferenceEquals(a.Window, _prewarmWindowInFlight)) { a.Window?.Dispose(); _prewarmWindowInFlight = null; }
+            }
+            _popupActionsIn.Clear();
+            _ownResizePending = false;
+        }
+        // The prewarm made its swap chain but its hand-back post never ran; the dropped pairs whose window never came back.
+        _prewarmSwapchainInFlight?.Dispose();
+        _prewarmSwapchainInFlight = null;
+        _prewarmWindowInFlight?.Dispose();
+        _prewarmWindowInFlight = null;
+        foreach (var (w, sc) in _droppingPairs) { sc.Dispose(); w.Dispose(); }
+        _droppingPairs.Clear();
     }
 
     /// <summary>Test-only (F093): the own-swapchain resize seam — post, drain, and how many ResizeBuffers actually ran.</summary>
@@ -2261,7 +2537,7 @@ public sealed partial class AppHost : IDisposable
                     _renderAnimations.Adopt(sceneFrame.Animations, sceneFrame.Scene, nowMs);
                     _lastSettledPoseCount = 0;
                 }
-                else _renderAnimations.Tick(sceneFrame.Scene, nowMs);
+                else { long spA = SplitSpans.Now(); _renderAnimations.Tick(sceneFrame.Scene, nowMs); SplitSpans.Add(SplitSpans.AnimTick, ref spA); }
                 bool scrollPosed = TickRenderScroll(sceneFrame, fresh, presentSec);
                 bool scrollNeedsRecord = _renderSink.RecordRequired;
                 _activeRenderFrame = rf;
@@ -2329,6 +2605,8 @@ public sealed partial class AppHost : IDisposable
                     if (!fresh) sceneFrame.Scene.ConsumeUiDirt();
                     stats = sceneFrame.Record(_renderCommands, _renderSpans, direct ? null : _renderSlices, publicationGap);
                     _lastRecordedScene = rf.PublishSeq;
+                    _renderAnimations.NoteRecorded();   // the slices now hold every pose of this tick
+                    _renderSink.NoteRecorded();
                 }
                 splitRecorded = Stopwatch.GetTimestamp();
                 double recordMs = ToMs(splitRecorded - recordStart);
@@ -2450,6 +2728,9 @@ public sealed partial class AppHost : IDisposable
             // its record - and a whole glyph atlas, judged after it).
             bool hold = presented && DecideHold(in rf, gateImageGaps);
             if (presented && !hold) ArmGeometryMotionPresent(in rf);
+            // A live-resize step's frame (a settle present of a LiveResize window: a new size) flips only once its GPU work is done, so the
+            // flip is ready for the composition that takes the window's new rect (see the liveResizeStep wait in Paint).
+            if (presented && !hold && !motionRepresent && rf.SettlePresent && _window.LiveResize) _swapchain.HintGeometryMotionPresent();
             bool landed = !presented || PresentFrame(in rf, composited, hold);
             long splitPresented = Stopwatch.GetTimestamp();
             _ledgerTurnPresented = presented && landed && !hold;
@@ -2560,7 +2841,11 @@ public sealed partial class AppHost : IDisposable
         // E2: the freeze directive acts here so the owed-present retry (which passes no hold) carries it too.
         if (rf.Freeze != Threading.FreezeKind.None || _frozenSnapshot is not null) FreezeBeforePresent(in rf, ref hold, renderClock: true);
         if (hold) _swapchain.HoldNextPresent();   // one-shot, consumed by the present below
-        else if (!_isDetachedChild) RunBeforePresentWork(rf.PublishSeq);   // EP9: queued DWM writes land right before the present that shows their pixels
+        else if (!_isDetachedChild)
+        {
+            RunBeforePresentWork(rf.PublishSeq);   // EP9: queued DWM writes land right before the present that shows their pixels
+            CommitWindowBoundsBeforePresent();
+        }
         if (UsesNonBlockingPresent(_isDetachedChild, _parentRenderThread is not null, EngineSwitches.NonBlockingSecondaryPresent))
         {
             if (!_swapchain.PresentNoWait())
@@ -2620,6 +2905,9 @@ public sealed partial class AppHost : IDisposable
             var scope = !placement ? FluentGpu.Media.VideoApplyScope.ReleasesOnly
                 : elided ? FluentGpu.Media.VideoApplyScope.ContentOnly : FluentGpu.Media.VideoApplyScope.Full;
             var applier = VideoApplier;
+            // The frame this turn delivers and how far the GPU got: a frosted plate retreats only once the flip that drops its veil has
+            // retired (the render loop lets held plates go, RetireHeldVideoPlates). Without a render loop nothing would, so nothing holds.
+            applier.NoteGpuProgress(deferCommit ? _swapchain.LastSubmitSerial : 0UL, deferCommit ? _device.CompletedSubmitSerial : ulong.MaxValue);
             bool edge = applier.ApplyTurn(vp, _renderSeam.VideoIntents(rf), VideoPosedHoles(in rf), rf.Submit.Scale, scope, deferCommit);
             if (deferCommit && applier.LastTurnMovedGeometry)
             {
@@ -2730,6 +3018,8 @@ public sealed partial class AppHost : IDisposable
         var list = Volatile.Read(ref _childRenderSources);
         bool any = HasEarlyVideoWork;
         for (int i = 0; !any && i < list.Length; i++) any = !list[i]._renderFailed && list[i].HasEarlyVideoWork;
+        // A display change drops the protected composition keeper on this turn's commit, even with no UI frame (a parked window).
+        any |= FluentGpu.Media.ProtectedKeeperPolicy.DisplayChangePending;
         if (!any) return;
         // Popup swapchain work first: its visual edits ride the same device commit as the video's (DrainChildRenderSources runs it
         // again later in the turn, a cheap no-op by then).
@@ -2986,6 +3276,7 @@ public sealed partial class AppHost : IDisposable
     // says the hide is deliberate, so the handle reports IsParked and Unpark knows the host is reusable. Cleared by Unpark.
     private bool _warmParked;
     private bool _revealTopmost;          // the always-on-top state to apply when the window is shown (kept current by the handle's SetTopmost)
+    private bool _revealNoActivate;       // detached child: reveal with ShowNoActivate (the request's NoActivate), never stealing the focus
     private long _revealDeadlineQpc;
     private long _openStartQpc;           // the QPC the open began (OpenDetachedWindow entry): FirstPresentMs counts from here
     private double _openFirstFrameMs = -1;   // the child's first RunFrame, timed once (-1 = not run yet)
@@ -3209,6 +3500,8 @@ public sealed partial class AppHost : IDisposable
         WakeReasons.Timer |
         // …and a due pinned-leftover image restart (T10) is the same kind of deadline.
         WakeReasons.ImageLeftoverDue |
+        // …and so is an animated image's due frame (a window drag must not freeze it).
+        WakeReasons.AnimatedImage |
         // A KeepAlive unpark replay still in flight is essential so the modal bail cannot starve it.
         WakeReasons.WarmingVirtuals;
     private static bool NoEssentialModalWakeReasons(WakeReasons reasons) => (reasons & ModalLoopEssentialWake) == 0;
@@ -3261,7 +3554,12 @@ public sealed partial class AppHost : IDisposable
         // always creates WS_OVERLAPPEDWINDOW and the OS caption (icon/title/min/max/close) shows on top of the video.
         var desc = new WindowDesc(request.Title,
             new Size2(request.InitialSizeDip.Width * scale, request.InitialSizeDip.Height * scale), scale,
-            Composited: true, CustomFrame: true, SkipDropAndTouchpad: true);   // a video pop-out takes no file drop (F110)
+            Composited: true, CustomFrame: true, SkipDropAndTouchpad: true,   // a video pop-out takes no file drop (F110)
+            // Born topmost when asked (WS_EX_TOPMOST at creation), not only after the reveal's SetWindowPos: the window is in the
+            // topmost band from its first z-order placement, whatever activation happens around the reveal.
+            Topmost: request.AlwaysOnTop, ToolWindow: request.ToolWindow,
+            // An opted-in pop-out follows an edge drag live; the ceiling is resolved by the platform at the live DPI.
+            LiveResize: request.LiveResize, MaxClientSizeDip: request.MaxClientSizeDip);
         var win = _app.CreateWindow(desc);
 
         // A 16:9-ish client floor so the mini-player can never be dragged down to an unusable sliver (caller-overridable).
@@ -3277,20 +3575,9 @@ public sealed partial class AppHost : IDisposable
         // (headless / query failure → RectF.Infinite).
         var restored = request.InitialBoundsPx;
         bool haveRestored = restored.W > 1f && restored.H > 1f;
-        var work = _app.GetWorkArea(haveRestored
-            ? new Point2(restored.X + restored.W * 0.5f, restored.Y + restored.H * 0.5f)
-            : OwnerMonitorAnchorPx());
-        if (haveRestored)
-        {
-            if (!work.IsInfinite)
-            {
-                float w = MathF.Min(restored.W, work.W), h = MathF.Min(restored.H, work.H);
-                float x = MathF.Min(MathF.Max(restored.X, work.X), work.X + work.W - w);
-                float y = MathF.Min(MathF.Max(restored.Y, work.Y), work.Y + work.H - h);
-                win.SetBoundsPx(new RectF(x, y, w, h));
-            }
-            else win.SetBoundsPx(restored);
-        }
+        // The clamp is WindowPlacementRules', shared with the main window's restore (AppOptions.InitialBoundsPx).
+        var work = _app.GetWorkArea(haveRestored ? WindowPlacementRules.Anchor(restored) : OwnerMonitorAnchorPx());
+        if (haveRestored) win.SetBoundsPx(WindowPlacementRules.ClampIntoWorkArea(restored, work));
         else if (!work.IsInfinite)
         {
             float wPx = request.InitialSizeDip.Width * scale;
@@ -3334,7 +3621,11 @@ public sealed partial class AppHost : IDisposable
         // TryRevealDetached shows the window after its first present (or the timeout).
         child.BeginDetachedReveal(request.AlwaysOnTop, openStartQpc,
             QpcToMs(ctorStartQpc - openStartQpc), QpcToMs(ctorEndQpc - ctorStartQpc));
+        child._revealNoActivate = request.NoActivate;
         AdoptDetachedChild(child);
+        // AFTER the adoption (it copies the parent's Mica flag): a window with its own material owns its ground.
+        if (request.Material is { } material) child.SetDetachedMaterial(material, request.MaterialDark);
+        if (request.DragAnywhere) win.CaptionWhereInert = child.IsInertAt;
         // Register the child as a render source for the parent's render loop (a no-op reader when there is no render thread —
         // the pure single-thread parent leaves the child on the inline present path). A copy-on-write publish: no park, and
         // an in-flight DrainChildRenderSources keeps the snapshot it took.
@@ -3375,7 +3666,7 @@ public sealed partial class AppHost : IDisposable
         bool presented = _swapchain.HasPresentedContent;
         if (!DetachedRevealGate.Due(presented, now, _revealDeadlineQpc)) return false;
         _revealPending = false;
-        _window.Show();
+        if (_revealNoActivate) _window.ShowNoActivate(); else _window.Show();
         if (_revealTopmost) _window.SetTopmost(true);
         // Only the FIRST composited present is exempt from the IsHwndCovered stand-down, so a motion present, or the frame
         // published between that first present and this Show, was dropped while the window was hidden. Re-present now that it
@@ -3483,17 +3774,7 @@ public sealed partial class AppHost : IDisposable
         var w = child._window;
         var restored = request.InitialBoundsPx;
         if (restored.W > 1f && restored.H > 1f)
-        {
-            var work = _app.GetWorkArea(new Point2(restored.X + restored.W * 0.5f, restored.Y + restored.H * 0.5f));
-            if (!work.IsInfinite)
-            {
-                float rw = MathF.Min(restored.W, work.W), rh = MathF.Min(restored.H, work.H);
-                float rx = MathF.Min(MathF.Max(restored.X, work.X), work.X + work.W - rw);
-                float ry = MathF.Min(MathF.Max(restored.Y, work.Y), work.Y + work.H - rh);
-                w.SetBoundsPx(new RectF(rx, ry, rw, rh));
-            }
-            else w.SetBoundsPx(restored);
-        }
+            w.SetBoundsPx(WindowPlacementRules.ClampIntoWorkArea(restored, _app.GetWorkArea(WindowPlacementRules.Anchor(restored))));
         w.SetTitle(child._strings.Intern(request.Title));
         // The reveal re-applies _revealTopmost (TryRevealDetached): it must be THIS open's value, or a window parked while
         // always-on-top came back topmost after the preference was turned off.
@@ -3524,6 +3805,32 @@ public sealed partial class AppHost : IDisposable
         // A pop-out opened while this window is hidden shares the cache: what it requests must land and stay, not be parked for a
         // restore of a window it is not part of.
         if (_images.HiddenStage != HiddenStage.Visible && ReferenceEquals(child._images, _images)) _images.HiddenKeepLandings = true;
+    }
+
+    /// <summary>Detached CHILD, UI thread: give the window its own backdrop. The ground follows: a backdrop on a composited window clears
+    /// transparent while active and to the theme's solid ground while inactive (the main window's Mica parity), and
+    /// <see cref="WindowMaterial.None"/> clears to the theme's opaque ground, so a secondary window is never see-through.</summary>
+    internal void SetDetachedMaterial(WindowMaterial material, bool dark)
+    {
+        if (!_isDetachedChild) return;
+        _window.SetMaterial(material, dark);
+        _micaWindow = _window.Composited && material != WindowMaterial.None;
+        _childWindowBackground = _micaWindow && _window.IsActive ? ColorF.Transparent : Tok.T.WindowBackground;
+        _lastPresentedDrawListHash = 0;
+        RequestFullRepaintOnce();
+    }
+
+    /// <summary>UI thread (WM_NCHITTEST, between frames): true when nothing interactive is under <paramref name="pointDip"/> (client
+    /// DIP): no click target or pointer-down handler on the hit node or its ancestors. The drag-anywhere probe.</summary>
+    internal bool IsInertAt(Point2 pointDip)
+    {
+        var node = _dispatcher.HitTest(pointDip);
+        for (int guard = 0; !node.IsNull && guard < 64; guard++)
+        {
+            if (_scene.GetClickHandler(node) is not null || _scene.GetPointerDown(node) is not null) return false;
+            node = _scene.Parent(node);
+        }
+        return true;
     }
 
     /// <summary>The frame clear colour (test seam for the host-local Mica backdrop).</summary>
@@ -3619,10 +3926,18 @@ public sealed partial class AppHost : IDisposable
         child.FinishDispose();   // the window and the process-wide seams: UI work, after the render thread is running again
     }
 
+    private void OnWindowMoveSizeEnded()
+    {
+        _boundsGestureEnded = true;
+        _inputHooks.NotifyWindowMoveSizeEnded();
+    }
+
     // Detached CHILD host, UI thread: sample the window rect and raise BoundsChanged once it has SETTLED. Only runs while
     // a detached window is open, and only when someone is listening — one cheap GetWindowRect per frame in that case.
     private void SampleDetachedBounds()
     {
+        bool gestureEnded = _boundsGestureEnded;
+        _boundsGestureEnded = false;
         if (BoundsChanged is null) return;
         var now = _window.OuterBoundsPx;
         if (now.W <= 1f || now.H <= 1f) return;   // backend cannot report bounds → nothing to settle
@@ -3631,12 +3946,18 @@ public sealed partial class AppHost : IDisposable
             _lastBoundsPx = now;
             _boundsSettleFrames = 0;
             _boundsDirty = true;
-            return;
+            if (!gestureEnded) return;
         }
         if (!_boundsDirty) return;
-        // ~10 frames of stillness = the gesture is over. Anything shorter fires mid-drag; anything much longer loses the
-        // last position if the app exits immediately after a move.
-        if (++_boundsSettleFrames < 10) return;
+        // Inside an OS move/size loop nothing has settled, however long the pointer rests: a report here would let the
+        // listener move the window under the user's hand.
+        if (_window.InModalLoop) return;
+        // The end of that loop (WM_EXITSIZEMOVE) IS the settle: report at once. A window that draws few frames (a resting
+        // mini player, a video pop-out) would otherwise wait on ten frames that may never come, and its listener would
+        // never learn the drag is over. Any other change (a keyboard snap, SetBoundsPx) has no such edge:
+        // ~10 frames of stillness = it is over. Anything much longer loses the last position if the app exits
+        // immediately after a move.
+        if (!gestureEnded && ++_boundsSettleFrames < 10) return;
         _boundsDirty = false;
         _boundsSettleFrames = 0;
         BoundsChanged?.Invoke(now);
@@ -3717,7 +4038,18 @@ public sealed partial class AppHost : IDisposable
         // This host's OWN queued swapchain work (a popup's create / release) is applied on every turn, not only on a turn that
         // has a publication to present: the loop runs this callback even on a bare wake, which is what PostPopupRenderAction sends.
         DrainPopupRenderActions();
+        RetireHeldVideoPlates();
+        // The popup pool's deferred device work (the prewarm's build, released popups' resources) runs on a turn in which this,
+        // the primary, presents nothing - else the device runs it right after the primary's present. Never ahead of that present,
+        // and never from a child's turn.
+        if (!_isDetachedChild && !_renderSeam.HasPendingFrame && !HasOwnRenderMotion() && !_presentOwed) _device.ServicePopupWork();
         var list = Volatile.Read(ref _childRenderSources);
+        // The child's slot probe races its own flip: this turn starts on the compositor tick, the very moment DWM latches the child's
+        // last present, and the child's latency waitable signals just after - a 0 ms probe found the slot busy on about every other
+        // tick and the pop-out presented at half the display rate (the mini window's lyrics and settle at 60 on a 120 Hz panel). When
+        // this host has nothing of its own to present this turn (the main window hidden behind the mini player, or at rest) nothing
+        // waits behind the child, so its probe may wait out that flip (ChildSlotGraceMs); otherwise it stays a 0 ms probe (F090).
+        int childGraceMs = _renderSeam.HasPendingFrame || HasOwnRenderMotion() || _presentOwed ? 0 : ChildSlotGraceMs;
         for (int i = 0; i < list.Length; i++)
         {
             var child = list[i];
@@ -3731,6 +4063,7 @@ public sealed partial class AppHost : IDisposable
             // The child's queued swapchain work (its own resize, its popups' create / dispose) rides this turn even when it has
             // no frame to present: those ops are why the UI no longer parks this thread for them.
             child.DrainPopupRenderActions();
+            child.RetireHeldVideoPlates();
             // An owed present (a refused non-blocking one) whose target was since invalidated (resize / recovery) is stale: the back
             // buffer it described is gone, and the next publication draws a whole new frame.
             if (child._presentOwed && !child._renderSeam.IsCurrentTarget(child._owedFrame)) child._presentOwed = false;
@@ -3743,7 +4076,7 @@ public sealed partial class AppHost : IDisposable
             // (a busy slot skips, never waits), so a child needs no SlotCatchUp policy of its own.
             var pace = child._childPace;
             long probeStart = Stopwatch.GetTimestamp();
-            bool slotOpen = _device.TryTakePresentSlot(child._swapchain, 0);
+            bool slotOpen = _device.TryTakePresentSlot(child._swapchain, childGraceMs);
             long slotAt = Stopwatch.GetTimestamp();
             pace?.NoteSlotTake(slotAt - probeStart, slotOpen);
             if (!slotOpen)
@@ -3914,11 +4247,13 @@ public sealed partial class AppHost : IDisposable
         // A pop-out still waiting for its reveal (F115) applies the LATEST always-on-top choice when it is shown, so a toggle made
         // while it was hidden is not overwritten by the open request's value.
         public void SetTopmost(bool topmost) { _child._revealTopmost = topmost; _window.SetTopmost(topmost); }
+        public void SetMaterial(WindowMaterial material, bool dark) { if (!_window.IsClosed) _child.SetDetachedMaterial(material, dark); }
         public DetachedOpenTiming OpenTiming => _child.OpenTiming;
         public Action<DetachedOpenTiming>? OnRevealed { get => _child.OnRevealed; set => _child.OnRevealed = value; }
         public double FirstVideoBindMs => _child.FirstVideoBindMs;
         public Action<double>? OnFirstVideoBound { get => _child.OnFirstVideoBound; set => _child.OnFirstVideoBound = value; }
         public void SetBounds(RectF outerBoundsPx) => _window.SetBoundsPx(outerBoundsPx);
+        public void AnimatePresentation(in FluentGpu.Pal.WindowPresentationMotion motion) => _child.AnimatePresentation(in motion);
         // Overrides IDetachedVideoWindow.MoveTo's SetBounds(current-size)-based default: the PAL window has its own
         // pure-move primitive (IPlatformWindow.MoveToPx), so route to it directly and skip the BoundsPx read-back.
         public void MoveTo(Point2 outerOriginPx) => _window.MoveToPx(outerOriginPx);
@@ -3951,6 +4286,13 @@ public sealed partial class AppHost : IDisposable
         public bool Unpark(DetachedWindowRequest request) => _parent.UnparkDetachedChild(_child, request);
         public Action? OnRenderFailed { get => _renderFailedCallback; set { _child.OnRenderFailed -= _renderFailedCallback; _renderFailedCallback = value; if (value != null) _child.OnRenderFailed += value; } }
         private Action? _renderFailedCallback;
+        // The child host's own per-frame event (one subscriber: the owner's), so an app can tick its frame-driven work off this window.
+        public Action<FrameStats>? FrameCompleted
+        {
+            get => _frameCallback;
+            set { if (_frameCallback is not null) _child.FrameCompleted -= _frameCallback; _frameCallback = value; if (value is not null) _child.FrameCompleted += value; }
+        }
+        private Action<FrameStats>? _frameCallback;
     }
 
     /// <summary>Probe/diagnostic only: a live shared-element (connected-animation) key, so a harness can trigger a REAL Hero fly.</summary>
@@ -4194,7 +4536,9 @@ public sealed partial class AppHost : IDisposable
         w = ClampWaitToSettle(w);                          // E17c: a settle waiting for fonts/images looks again on time
         w = ClampWaitToTransaction(w);                     // E5: a theme transaction's prewarm polls its fonts
         w = ClampWaitToImageLeftovers(w, _lastWaitKind);   // T10: an idle page still wakes for a pinned canceled leftover
+        w = ClampWaitToAnimatedImages(w, _lastWaitKind);   // ImageEl.Animate: wake exactly for the next animation frame
         w = ClampWaitToColdMaintenance(w);
+        w = ClampWaitToPopupPool(w);                       // the popup pool's idle prewarm / stale drop wakes itself (TickPopupPool)
         // Render-owned exits normally wake us through completion feedback. Keep their wall-clock
         // reclaim backstop reachable even when no UI timer or input will ever arrive.
         if (!IsParked && _anim.RenderOwnsCompositor && _scene.OrphanCount > 0)
@@ -4876,6 +5220,8 @@ public sealed partial class AppHost : IDisposable
             // T10: a pinned canceled leftover whose retry is DUE forces the frame whose Pump restarts it; a future one sets no
             // bit (ClampWaitToImageLeftovers shapes the idle wait to reach it). Nothing listed = one float read.
             if (ImageLeftoverDueInMs() <= 0.0) r |= WakeReasons.ImageLeftoverDue;
+            // ImageEl.Animate: an in-view animation's next frame is decoded and due; a future one only shapes the wait.
+            if (AnimatedImageDueInMs() <= 0.0) r |= WakeReasons.AnimatedImage;
         }
         // E5 (design-engine-images.md): HasPendingUploads is an unsubmitted UPLOAD/activation, not a retire backlog —
         // a queued retire is fence-only maintenance (ReclaimCompletedUploads), never a reason to keep the loop awake on
@@ -4899,7 +5245,7 @@ public sealed partial class AppHost : IDisposable
         // A feedback trail (visualizer F6) still settling: the backend advances it on frames with no scene change.
         if (HasOwnLiveFeedback) r |= WakeReasons.FeedbackSettle;
         // Native engines / geometry changes request one coalesced post-layout video pump. It is deliberately distinct
-        // from playback state: a playing DComp video must not turn every host frame into a repaint.
+        // from playback state: a playing video must not turn every host frame into a repaint.
         if (_videoSurfaces.HasPendingPumps) r |= WakeReasons.VideoPumpPending;
         // A windowed popup's desktop-acrylic open reveal is driven per-frame on Present (CompositionBackdrop.TickAnimation),
         // so it needs the loop to keep presenting until it settles — otherwise (no engine animation active for windowed
@@ -5015,6 +5361,10 @@ public sealed partial class AppHost : IDisposable
 
     /// <summary>Live out-of-bounds popup windows (E4) — for headless checks (decode each slot's DrawList).</summary>
     public IReadOnlyList<PopupWindowSlot> PopupWindows => _popupWindows;
+    /// <summary>Popup windows parked with their swapchains for the next popup (the pool), and how many of them the idle prewarm
+    /// built (never used yet). Diagnostics and benches: a bench waits for the prewarm before it measures a first open. UI thread.</summary>
+    public int PooledPopupWindows => _popupPool.Count;
+    public int PrewarmedPopupWindows { get { int n = 0; foreach (var p in _popupPool) if (p.Prewarmed) n++; return n; } }
 
     /// <param name="initialSceneCapacity">Item E: the <see cref="SceneStore"/>'s (and the render seam's snapshot
     /// slots') starting node capacity, and the floor <see cref="SceneStore.TrimExcessCapacity"/> will never cut below.
@@ -5050,6 +5400,7 @@ public sealed partial class AppHost : IDisposable
         _app = app;
         _fonts = fonts;
         _isDetachedChild = isDetachedChild;
+        window.SyncBoundsWithPresent = !isDetachedChild;   // CommitWindowBoundsBeforePresent runs on the main host's presents only
         int sliceSurfaceCap = SliceSurfaceCapFor(window);
         int sliceTileCap = Math.Max(SliceTileCap, sliceSurfaceCap);   // one slice may hold the whole resident set
         _uiTiles = new(SliceTableCap, sliceTileCap, sliceSurfaceCap);
@@ -5167,6 +5518,11 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.FirstFocusableIn = _dispatcher.FirstFocusableIn; // focus-trap initial focus (first tab stop / default button)
         _dispatcher.OnCursorChanged = _window.SetCursor;                        // hover-resolved cursor (hand/I-beam/resize)
         _dispatcher.OnWindowBlur = _inputHooks.NotifyWindowBlur;                // deactivation → light-dismiss overlays close
+        _dispatcher.OnPointerWindowEdge = _inputHooks.NotifyPointerWindowEdge;  // the pointer left / re-entered the window (edges only)
+        _inputHooks.IsPointerInWindow = () => _dispatcher.PointerInWindow;
+        _dispatcher.OnPointerHeldEdge = _inputHooks.NotifyPointerHeld;          // a mouse/pen button held / released (edges only)
+        _inputHooks.IsPointerHeld = () => _dispatcher.PointerHeld;
+        _inputHooks.SetPointerPresenceWatch = _window.SetPointerPresenceWatch;  // the leave the OS never sends (a window shown over a resting pointer)
         _dispatcher.OnPointerDownObserved = _inputHooks.NotifyPointerDown;
         _dispatcher.OnScrollGestureStarted = _inputHooks.NotifyScrollStarted;   // "a scroll started" (SwipeControl auto-dismiss)
         _inputHooks.RedispatchContextAt = _dispatcher.RequestContextAt;         // scrim right-click → close top + reopen the node's menu (one gesture)
@@ -5178,10 +5534,10 @@ public sealed partial class AppHost : IDisposable
         _inputHooks.IsWindowActive = () => _window.IsActive;
         _inputHooks.WindowMinimize = _window.Minimize;
         _inputHooks.WindowToggleMaximize = _window.ToggleMaximize;
-        _inputHooks.IsWindowFullscreen = () => _window.IsFullscreen;
-        _inputHooks.WindowSetFullscreen = _window.SetFullscreen;
+        _inputHooks.IsWindowFullscreen = () => _pendingFullscreen >= 0 ? _pendingFullscreen == 1 : _window.IsFullscreen;
+        _inputHooks.WindowSetFullscreen = RequestFullscreen;
         _dispatcher.OnWindowMoveSizeBegan = _inputHooks.NotifyWindowMoveSizeBegan; // …learns when an OS move/size loop begins
-        _dispatcher.OnWindowMoveSizeEnded = _inputHooks.NotifyWindowMoveSizeEnded; // …learns when an OS move/size loop is over
+        _dispatcher.OnWindowMoveSizeEnded = OnWindowMoveSizeEnded; // …learns when an OS move/size loop is over
         _inputHooks.WindowClose = _window.CloseWindow;
         _inputHooks.OpenDetachedWindow = OpenDetachedWindow;   // pop-out video window (guarded: a child host / async / headless returns null)
         // The same guard, askable in advance, so an affordance can offer or withhold the option instead of dead-clicking.
@@ -5495,6 +5851,7 @@ public sealed partial class AppHost : IDisposable
             _renderThread = BuildRenderThread(_asyncActive, _window.CreateRenderDisplayClock());
             _device.MarkRenderConfined();
             _videoSurfaces.StructuralWake = _renderThread.WakeForVideo;   // a handle arriving wakes the loop: no UI publication needed (F208)
+            FluentGpu.Media.ProtectedKeeperPolicy.Wake = _renderThread.WakeForVideo;   // the keeper attaches on this loop's turns (main window)
         }
         else if (_isDetachedChild && parentRenderThread is not null)
             _videoSurfaces.StructuralWake = parentRenderThread.WakeForVideo;   // a pop-out's handle wakes the PARENT's loop, which drains it
@@ -5543,6 +5900,30 @@ public sealed partial class AppHost : IDisposable
         _sbFamName = icon;
         SceneRecorder.ConfigureScrollbarArrowGlyphs(_scene, _sbUp, _sbDown, _sbLeft, _sbRight, family);
         _strings.Release(previous);
+    }
+
+    // The main window's full-screen request, applied at the top of the next Paint (-1 = none; 0 / 1 = leave / enter).
+    private int _pendingFullscreen = -1;
+
+    /// <summary>The app's <c>WindowSetFullscreen</c> (UI thread). The request is applied at the top of the next <see cref="Paint"/>,
+    /// BEFORE that frame's size check (<see cref="ApplyPendingFullscreen"/>), never where it was asked: app code asks from a layout
+    /// effect or an unmount cleanup, mid-frame, and a window resized there showed the previous frame's swapchain in the new window for
+    /// a whole frame (and parked the render thread a frame later for the swapchain). Applied first, the window, the swapchain and
+    /// the layout change in ONE frame. Latest wins; <c>IsWindowFullscreen</c> answers the pending value meanwhile.</summary>
+    private void RequestFullscreen(bool fullscreen)
+    {
+        _pendingFullscreen = fullscreen ? 1 : 0;
+        WakeFrame();
+    }
+
+    /// <summary>Apply a pending full-screen request (UI thread): the top of <see cref="Paint"/>, before <see cref="EnsureSize"/>, and
+    /// a parked frame (a minimized window never paints; entering full screen restores it, which un-parks the next frame).</summary>
+    private void ApplyPendingFullscreen()
+    {
+        int pending = _pendingFullscreen;
+        if (pending < 0) return;
+        _pendingFullscreen = -1;
+        if (!_window.IsClosed) _window.SetFullscreen(pending == 1);
     }
 
     private void WakeFrame()
@@ -5845,6 +6226,7 @@ public sealed partial class AppHost : IDisposable
         // is still intact (posts/reactive flush have not run); this never requests a frame or touches GPU owners.
         gapT = Stopwatch.GetTimestamp();
         RunColdMaintenance();
+        TickPopupPool(inputKindMask);   // the popup pool's idle prewarm / stale drop (cheap until its check is due)
         GapSegment(ref _gapColdTicks, gapT);
 
         // ── Cross-thread UI posts (HostDispatch.Post / UsePost) ──────────────────────────────────────────────────────
@@ -5972,6 +6354,7 @@ public sealed partial class AppHost : IDisposable
             // the scene) instead of piling up until the restore frame. Same intent as the minimize-EDGE flush above, now
             // per drained minimized frame; a frame with nothing drained costs nothing.
             if (drainedPosts || _runtime.HasPending) FlushToQuiescence();
+            ApplyPendingFullscreen();   // never painted while parked: a full-screen request made now is applied here
             _ledgerExit = LedgerFrameExit.Parked;
             LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
             // Nothing presented this frame (minimized: Paint never runs) — the next present must not be charged for
@@ -6033,7 +6416,7 @@ public sealed partial class AppHost : IDisposable
                     // which Paint's step-up guard reads as display-rate and never resyncs, so an unconsumed delta handed
                     // the next input's Paint the whole gap since the last painted frame (clamped to 34 ms) and every
                     // animation that input started lurched on frame 1.
-                    float warmDtMs = _frameTime.NextDeltaMs();
+                    float warmDtMs = _frameTime.NextDeltaMs() * EngineSwitches.AnimScale;   // `--fg anim-scale` (a capture tool; default 1)
                     if (_isHeadless) _frameClockMs += warmDtMs;
                 }
                 else if (_isHeadless && _timers.Count > 0)
@@ -6351,7 +6734,9 @@ public sealed partial class AppHost : IDisposable
             long shapeCountAtFrameStart = _fonts.ShapeCount;   // P0: FrameStats.TextShapes reads the delta across this Paint
             _reconciler.BeginRenderCensus();
             bool inModalLoop = _window.InModalLoop;
-            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, inModalLoop);
+            // A size step painted ahead of the window's rect (IPlatformWindow.PaintingAheadOfSize: Snap, another program's SetWindowPos)
+            // lands on its laid-out bounds as a modal-loop step does: the frame must match the rect it is presented for.
+            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, inModalLoop || _window.PaintingAheadOfSize);
             if (inModalLoop != _lastInModalLoop)
             {
                 _lastInModalLoop = inModalLoop;
@@ -6362,6 +6747,7 @@ public sealed partial class AppHost : IDisposable
             bool diagTick = keepAlive && s_resizeDiag;
             double ensureMs = 0, layoutMs0 = 0;
             long segStart = diagTick ? Stopwatch.GetTimestamp() : 0;
+            ApplyPendingFullscreen();   // first: its SetWindowPos resizes the window, and THIS frame's EnsureSize + layout follow it
             bool resized = EnsureSize(keepAlive);
             _tiers.FrameResized = resized;   // a measured crossing stored during this frame's layout waits one more layout (TierRegistry.Store)
             if (_fzPhase != FreezePhase.None) FreezeFrameStart(resized);   // E2: a resize / DPI change or the watchdog cuts the freeze (and ends its snap scope) before this frame flushes
@@ -6393,11 +6779,13 @@ public sealed partial class AppHost : IDisposable
             //      essential wake bit still paint — NoEssentialModalWakeReasons masks them off so a seek ticker cannot
             //      starve mid-drag refill.
             // Only a keep-alive repaint asks: the mask is computed for it alone, never on the ordinary RunFrame path.
+            // A LiveResize window's content is live through an edge drag, so its keep-alive ticks follow the MOVE rule (case 1
+            // only): ambient motion keeps advancing at the timer's rate while the user holds the edge still.
             if (keepAlive && !resized && _everLaidOut && !_needFullLayout
                 && _uiPosts.IsEmpty && !_scene.AnyLayoutDirty
                 && ComputeWakeReasons() is var wakeReasons
                 && (wakeReasons == WakeReasons.None
-                    || (_window.SizedInModalLoop && _anim.NextDueMs(_timers.NowMs) > 0f
+                    || (_window.SizedInModalLoop && !_window.LiveResize && _anim.NextDueMs(_timers.NowMs) > 0f
                         && NoEssentialModalWakeReasons(wakeReasons))))
             {
                 // Modal-loop keep-alive idle skip: the whole pipeline (record/submit/present) was skipped, not just
@@ -6438,7 +6826,7 @@ public sealed partial class AppHost : IDisposable
             // wait, so latch it resolved. Otherwise every tick after an Idle wait resynced and NextDeltaMs returned 0 for the
             // whole drag. RecommendedWaitMs re-latches the flag before the loop's next frame.
             if (keepAlive) _lastWaitWasDisplayRate = true;
-            float dtMs = _frameTime.NextDeltaMs();
+            float dtMs = _frameTime.NextDeltaMs() * EngineSwitches.AnimScale;   // `--fg anim-scale` slows every animation for a capture (default 1)
             AdvanceImagePresentationClock(); // reconcile-time image swaps must also start from current wall time
             _frameClockMs += dtMs;                             // frame-clock timer base (headless: the deterministic FixedFrameTimeSource step; ignored by the real-window wall clock)
             _scene.AnimClockMs = _frameClockMs;                // publish the ANIMATION timebase for orphan deadlines (same clamped delta the animator advances on)
@@ -6650,7 +7038,7 @@ public sealed partial class AppHost : IDisposable
             double reactiveFlushMs = 0, virtualRealizeMs = 0;
             try
             {
-                _anim.DrainSettledCallbacks();                                  // 3− reveal settle callbacks the last frame queued (an Expander unmounting its
+                _anim.DrainSettledCallbacks();                                 // 3− reveal settle callbacks the last frame queued (an Expander unmounting its
                                                                                 // panel, a band's collapse commit) — app code, so never inside phases 6–13
                 long tRx0 = Stopwatch.GetTimestamp();
                 MountProf.Enter(MountProf.Flush);
@@ -6675,6 +7063,9 @@ public sealed partial class AppHost : IDisposable
             // The capture window closes before layout; a node that gained a transition in the flush counts as captured.
             if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
+            // A commit that answers the record in place while a width reflow flies (SceneStore.ConsumeRecordAnswered: a page that takes the sizes
+            // of the tier it lands at) re-probes its destination: the record describes the form it left.
+            bool answered = _scene.ConsumeRecordAnswered() && reconciled;
             long tFlush = Stopwatch.GetTimestamp();   // always-on segment timing (FrameStats.*Ms) — see below
             if (FrameLedger.Enabled) _ledgerAlloc.Flush = GC.GetAllocatedBytesForCurrentThread();
             // Spike-gated type roster (RenderCensus): one line when the flush alone exceeded the panel's refresh interval
@@ -6695,7 +7086,24 @@ public sealed partial class AppHost : IDisposable
             // down instead of jumping in its commit frame). Reset after the 7.05 pass.
             bool flowRevealFrame = _anim.HasFlowRevealWork || (capturedProjections && CapturedFlowReveal());
             _layout.DeferOffsetClamp = flowRevealFrame;
+            // Runs break at their landing width from the frame after a width reflow's destination was recorded (FlexLayout.BreakTextAtLanding).
+            // (A run that leaves as an exit orphan has no record: SceneStore.Orphan.)
+            _layout.BreakTextAtLanding = _scene.HasDestinationWidths;
             MountProf.Enter(MountProf.Layout);
+            // A width reflow re-aimed by this frame's commit (the panel toggled back mid-slide) or a window resize while one flies: solve the
+            // targets once before the frame's own layout, which then lays the frame out where the slide is, at the new record. A commit that answered
+            // the record in place (its forms stand in the sizes of the tier they land at, and the record describes the form they left) records
+            // again only the parts it changed (ProbeRecordScopes).
+            if (answered && _scene.HasDestinationWidths) _recordStaleProbe = true;
+            _destProbedThisFrame = false;
+            if (_everLaidOut && !_needFullLayout && !_scene.Root.IsNull)
+            {
+                if (_anim.DestinationStale || (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)))
+                {
+                    if (SolveReflowTargets(layoutSize, "before layout")) layoutNeeded = true;
+                }
+                else if (_recordStaleProbe && ProbeRecordScopes(layoutSize, "before layout")) layoutNeeded = true;
+            }
             if (layoutNeeded && !_scene.Root.IsNull)
             {
                 if (_needFullLayout || !_everLaidOut)
@@ -6808,7 +7216,16 @@ public sealed partial class AppHost : IDisposable
             if (FrameLedger.Enabled) _ledgerAlloc.Layout = GC.GetAllocatedBytesForCurrentThread();
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
+            // A layout that solved a structure reader the record does not cover (a page that swaps its form for the width it lands at, a row that
+            // mounts mid-slide: SceneStore.ConsumeUnrecordedReader) chose its structure at its live width, and a box it built is chosen at the
+            // landing width only once it is recorded there. Record those parts again (in the projection pass before anything is seeded from this
+            // layout, else just below). A commit that only moves bound values, re-pushes equal props or builds what reads no structure (most frames
+            // of a slide) keeps the record: two more solves a frame for nothing.
+            if (_scene.ConsumeUnrecordedReader() && _scene.HasDestinationWidths) _recordStaleProbe = true;
             if (capturedProjections) ApplyProjections(layoutSize, keepAliveSuppressed);   // FLIP "Last+Invert+Play"
+            // A width reflow seeded or re-aimed on a frame with no projection pass, or a window resize while one flies: probe its destination here.
+            if (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)) _anim.DestinationStale = true;
+            if (_anim.DestinationStale || _recordStaleProbe) ProbeReflowDestinations(layoutSize);
             _reconciler.RunEntranceCascades();                 // 6.7 staggered entrances requested this commit: their units are what this layout shows
             _enterReflowsSeeded.Clear();                       // read by ApplyProjections' SeedReflowsFirst (this frame's only)
             _anim.PendingEnterReveal.Clear();                  // seeded at 6.3, read by ApplyProjections as shove carriers
@@ -6818,7 +7235,9 @@ public sealed partial class AppHost : IDisposable
             bool entranceHeld = EntrancesUnseen();
             _anim.HoldPendingStarts = entranceHeld;
             MountProf.Enter(MountProf.Anim);
+            long tAnimTick0 = Stopwatch.GetTimestamp();
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
+            long tAnimTick1 = Stopwatch.GetTimestamp();
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
             _reconciler.SettleEntranceCascades();               // 7 a cascade unit whose entrance settled stops compositing
             _reconciler.SettlePersistWaiters();                 // 7 E7: a Flow.Persist slot still waiting for a live owner has a duplicate key
@@ -6860,12 +7279,14 @@ public sealed partial class AppHost : IDisposable
             // intents, with fullscreen single-writer ownership enforced by the registry.
             // A surface's on-screen rect can move with NO layout change — a compositor-only Transform translation (a
             // draggable mini-player), a page transition, a FLIP projection. Those move the punched hole but fire no
-            // bounds-changed edge, so nothing requested a pump and the DComp child stayed at its last-pumped offset
+            // bounds-changed edge, so nothing requested a pump and the video visual stayed at its last-pumped offset
             // (the video trailing the card during a drag). This compares each tracked surface's absolute rect and
             // requests a pump only when it actually moved — so it observes a frame already being produced and never
             // becomes a wake reason of its own. Must precede PumpPending so the placement drains this same frame turn.
+            long tVideoPump0 = Stopwatch.GetTimestamp();
             _videoSurfaces.RequestGeometryPumps(_scene);
             _videoSurfaces.PumpPending(_scene.DeviceScale);
+            long tVideoPump1 = Stopwatch.GetTimestamp();
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
             _connected.Settle();                               // 7 retire landed shared-element flies (reveal dest, unpin, free overlay)
             _connected.SyncDetached();                         // 7 flag-gated rebuild: mirror the engine-animated fly into its DetachedNode snapshot (RecordDetached draws it)
@@ -6931,6 +7352,9 @@ public sealed partial class AppHost : IDisposable
                 }
             }
             if (_frameTime is not StopwatchFrameTimeSource && PumpsSharedImages) _images.Tick(dtMs); // fixed/manual headless time stays deterministic
+            // ImageEl.Animate: name the animated images in view this frame (this frame's layout) and show each one's due frame;
+            // a shown frame lands in ContentChangedIds, so the sweep below repaints its nodes' rects only.
+            if (PumpsSharedImages) _reconciler.TickAnimatedImages(Motion.ReducedMotion);
             // E1 (design-engine-images.md): every id whose CONTENT changed this pump (LQIP→full, baked-blur replace,
             // a fresh decode landing) marks its owning node(s) paint-dirty, so the recorder's §13.1 block describes the
             // landing as a per-node band instead of the host having to force a full frame for it. Idempotent for ids an
@@ -7267,7 +7691,19 @@ public sealed partial class AppHost : IDisposable
                     suppressVsync: keepAlive, settlePresent: settlePresent, video: _videoSurfaces, presentHeld: presentHeld,
                     freeze: freezeKind, dissolveT: dissolveT,
                     dissolveMs: freezeKind == Threading.FreezeKind.Dissolve ? _fzDissolveMs : 0f, dissolveId: _fzDissolveId);
-                if (_renderThread is not null)
+                // A live-resize step (IPlatformWindow.LiveResize: a resized keep-alive frame painted ahead of the window's new size, or
+                // inside the modal size loop) waits until THIS frame was presented (WaitLiveResizePresent), its GPU work done first (the
+                // render turn's geometry-motion wait): the WM_WINDOWPOSCHANGING that asked for it returns, and the window takes the rect,
+                // only once the buffer at the new size went to DWM, so the rect and the frame drawn for it reach the same composition,
+                // and the loop's next step reads the newest size (never a queue of stale ones). Every other frame keeps the async
+                // fire-and-return.
+                bool liveResizeStep = settlePresent && _window.LiveResize && (_window.InModalLoop || _window.PaintingAheadOfSize);
+                if (liveResizeStep && OwningRenderThread is { } liveRt)
+                {
+                    WaitLiveResizePresent(liveRt);
+                    tSubmitDone = Stopwatch.GetTimestamp();
+                }
+                else if (_renderThread is not null)
                 {
                     // A freeze CAPTURE frame waits for its turn even under async: the render side adopts only the newest publication, so the
                     // hold frame that follows must not be published until this one was consumed (else the snapshot is never taken).
@@ -7312,7 +7748,11 @@ public sealed partial class AppHost : IDisposable
                         }
                         tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
                         if (heldInline) _swapchain.HoldNextPresent();
-                        else if (!_isDetachedChild) RunBeforePresentWork(rf.PublishSeq);   // EP9: ordered DWM writes (see QueueBeforePresent)
+                        else if (!_isDetachedChild)
+                        {
+                            RunBeforePresentWork(rf.PublishSeq);   // EP9: ordered DWM writes (see QueueBeforePresent)
+                            CommitWindowBoundsBeforePresent();
+                        }
                         _swapchain.Present();                       // 11 present (UI thread)
                         if (heldInline && _swapchain.LastPresentHeld) _framesHeld++;
                         else
@@ -7367,7 +7807,7 @@ public sealed partial class AppHost : IDisposable
             // this UI-side drain must skip it too, or GetVideoPresenter's AssertSubmitThread trips on the UI thread.
             if (_renderThread is null && _parentRenderThread is null)
             {
-                if (_device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, _window.Scale);
+                if (_device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, _window.Scale, _scene.Recording.PosedVideoHoles);
                 // F101: the settle sync runs only now, AFTER the placement commit above — a flush between the present and that
                 // commit composed the new hole one frame ahead of the new video geometry. The UI thread is the presenting
                 // thread here, so blocking one vblank starves no other target.
@@ -7378,12 +7818,15 @@ public sealed partial class AppHost : IDisposable
             // under it. Telling the window it carries live video lets it keep a throttled keep-alive instead.
             _window.SetHasLiveVideo(_videoSurfaces.HasLiveSurface);
 
+            long tEffects0 = Stopwatch.GetTimestamp();
             DrainPassiveEffects();                             // 12 passive effects
+            long tEffects1 = Stopwatch.GetTimestamp();
             if (_stTcs is not null) SettleAfterPass();         // E17c: judge the settle pass (quiet? capped?) now that every effect has run
             if (_tx is not null) TxAfterPass();                // E5: a settled transaction thaws; a rolled-back one thaws with a cut
             _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
             if (s_allocDiag) { db = Probe(SegEffects, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
+            long tPostSubmit = Stopwatch.GetTimestamp();       // the post-submit tail ends here (no phase reported it before)
             UpdateFrameTiming(frameStart);
             int componentsRendered = _reconciler.ConsumeRenderCount();
             // Always-on: a frame-over-budget log needs "did a GC land inside this frame" without a flag (three
@@ -7466,6 +7909,7 @@ public sealed partial class AppHost : IDisposable
                 Fps = _fps,
                 PresentFps = _presentFps,
                 PresentedSequence = this.PresentedSequence,
+                PresentedPublishSeq = RenderPresentSeq,
                 FrameMs = _frameMs,
                 ComponentsRendered = componentsRendered,
                 FlushMs = ToMs(tFlush - frameStart),   // incl. flip/FLIP-capture + reactive flush + reconcile
@@ -7480,7 +7924,13 @@ public sealed partial class AppHost : IDisposable
                 ReflowSeedMs = ToMs(tLayout - tConnected),             // of which: enter/exit reflow seeding (+ scene dump)
                 LocalRelayoutResolves = _invalidator.LocalResolvesThisFrame,
                 AnimMs = ToMs(tAnim - tLayout),         // phase-7 ticks + projections
+                AnimTickMs = ToMs(tAnimTick1 - tAnimTick0),            // of which: _anim.Tick
+                VideoPumpMs = ToMs(tVideoPump1 - tVideoPump0),         // of which: phase-7.2 video geometry pump + PumpPending
                 RecordMs = ToMs(tRecord - tAnim),       // image pump + SceneRecorder (+ text shaping) + dyntext
+                PostSubmitMs = ToMs(tPostSubmit - tSubmit),            // video drain + settle present, passive effects, settle/tx, string reclaim
+                PassiveEffectsMs = ToMs(tEffects1 - tEffects0),        // of which: DrainPassiveEffects
+                SlowestEffectMs = ToMs(_slowestEffectTicks),           // of which: the longest single context's effects
+                SlowestEffectOwnerType = _slowestEffectOwnerType,
                 RenderRecordMs = recordOnRender ? _lastRenderRecordMs : 0,
                 QuiesceWaitMsMax = OwningRenderThread?.QuiesceWaitMsMax ?? 0,
                 RecordedSceneSequence = recordOnRender ? _lastRecordedFeedbackScene : 0,
@@ -7657,25 +8107,40 @@ public sealed partial class AppHost : IDisposable
         if (!PopupWindowsEnabled || subtreeRoot.IsNull || _fzPhase == FreezePhase.Frozen) return -1;   // E2: no popup window opens against a frozen tree
         // NO render-thread park (F207): the HWND is the UI thread's own, and the swapchain is built by the render thread (below).
         long leaseStart = Stopwatch.GetTimestamp();
-        var palWindow = _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default, material, Tok.Theme == ThemeKind.Dark));
+        var key = PopupPoolKeyFor(material);
+        // A pooled window with its parked swapchain (a closed popup's, or the idle prewarm's) serves this popup: no window, no
+        // swapchain and no composition backdrop to build. Only a pair made for this key fits; stale ones are released.
+        IPlatformPopupWindow? pooledWindow = null;
+        ISwapchain? pooled = null;
+        var origin = PopupOrigin.Built;
+        for (int i = _popupPool.Count - 1; i >= 0; i--)
+        {
+            var p = _popupPool[i];
+            _popupPool.RemoveAt(i);
+            if (pooled is null && p.Key == key) { pooledWindow = p.Window; pooled = p.Swapchain; origin = p.Prewarmed ? PopupOrigin.Prewarmed : PopupOrigin.Reused; }
+            else DropParked(p.Window, p.Swapchain, "stale");
+            if (pooled is not null) break;
+        }
+        var palWindow = pooledWindow ?? _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default, material, key.Dark));
         if (palWindow is null) return -1;
         long windowDone = Stopwatch.GetTimestamp();
-        bool acrylic = material == PopupWindowMaterial.TransientAcrylic;
-        // Flat tint over the host-backdrop (blurred desktop): the dark MenuFlyout fallback color at ~0.5 so the desktop
-        // reads through as a frosted grey (WinUI DesktopAcrylicBackdrop look). Tunable.
-        ColorF tint = acrylic ? Tok.AcrylicFlyout.Fallback with { A = 0.5f } : default;
-        // Round the composition acrylic to the flyout corner radius (WinUI OverlayCornerRadius = 8 DIP) so it matches
-        // the engine-drawn rounded plate/border in the swapchain content.
-        float cornerPx = acrylic ? 8f * (_window.Scale <= 0f ? 1f : _window.Scale) : 0f;
-        var slot = new PopupWindowSlot(++_popupTokenSeq, palWindow, subtreeRoot, material);
-        var desc = new SwapchainDesc(palWindow.Handle, new Size2(1, 1),
-            Composited: true, DesktopAcrylic: acrylic, AcrylicTint: tint, CornerRadiusPx: cornerPx);
+        var slot = new PopupWindowSlot(++_popupTokenSeq, palWindow, subtreeRoot, material) { PoolKey = key, Origin = origin };
+        var desc = PopupSwapchainDesc(palWindow.Handle, in key);
         // Under a render thread the CREATE rides the mailbox: that thread is the sole ComPtr owner, so the swapchain is built
         // where the INCIDENT 2026-09 race (a create under a recording in flight) cannot occur, and the UI never waits for a
         // render turn to open a flyout. Until it lands slot.Swapchain is null: the recorder skips the slot, the wake reasons
         // keep frames coming, and the reveal gate waits for HasPresentedContent (so the window stays hidden meanwhile).
         // The thread-affine part of the create (the D3D12 backend's composition compositor for an acrylic popup) stays here.
-        if (OwningRenderThread is null) slot.Swapchain = _device.CreateSwapchain(in desc);
+        // A pooled swapchain is un-parked the same way (its reveal latch re-armed, so the window shows the NEW menu's first frame).
+        slot.Lifecycle.Reused = pooled is not null;
+        slot.Lifecycle.Origin = origin;
+        if (OwningRenderThread is null)
+        {
+            if (pooled is not null && pooled.UnparkPopup()) slot.Swapchain = pooled;
+            else { pooled?.Dispose(); slot.Lifecycle.Reused = false; slot.Swapchain = _device.CreateSwapchain(in desc); }
+        }
+        else if (pooled is not null)
+            PostPopupRenderAction(new PopupRenderAction(PopupRenderOp.Reuse, slot, default, default, desc, Pooled: pooled));
         else
         {
             _device.PrepareSwapchainCreate(in desc);
@@ -7767,24 +8232,206 @@ public sealed partial class AppHost : IDisposable
             slot.Retired = true;
             _popupWindows.RemoveAt(i);
             Volatile.Write(ref _popupWindowCount, _popupWindows.Count);
+            // The pool keeps this popup's window and swapchain for the next one while it has room (the parks still in flight count).
+            slot.ParkOnClose = !slot.CreateFailed && !_popupPoolClosed && _device.CanParkPopups && _popupPool.Count + _popupParking < PopupPoolCap;
             if (inline)
             {
                 // No render thread: every pass ran on this thread, so the per-pass fields are settled. The one line this popup leaves behind.
-                Diag.Line(slot.Lifecycle.Line(slot.Material, Stopwatch.GetTimestamp()));
-                slot.Swapchain?.Dispose();
+                var sc = slot.Swapchain;
                 slot.Swapchain = null;
-                slot.DisposeWindow();
+                bool parked = slot.ParkOnClose && sc is not null && sc.ParkPopup();
+                slot.Lifecycle.Parked = parked;
+                Diag.Line(slot.Lifecycle.Line(slot.Material, Stopwatch.GetTimestamp()));
+                if (parked) { slot.ReleaseWindowOwnership(); PoolOrDropParked(slot.Window, sc!, slot.PoolKey, prewarmed: false); }
+                else { sc?.Dispose(); slot.DisposeWindow(); }
             }
             else
             {
-                // NO park (F207): the render thread releases the swapchain in mailbox order - after every Resize / fade already
-                // queued for this slot - and posts the HWND back for the UI thread to destroy. A frame published before this
-                // call may still name the slot; the recorder resolves slot.Swapchain when it records, finds null and skips it.
+                // NO park (F207): the render thread parks or releases the swapchain in mailbox order - after every Resize / fade
+                // already queued for this slot - and posts the HWND back to the pool or to be destroyed. A frame published before
+                // this call may still name the slot; the recorder resolves slot.Swapchain when it records, finds null and skips it.
                 _retiringPopups.Add(slot);
-                PostPopupRenderAction(new PopupRenderAction(PopupRenderOp.Dispose, slot, default, default));
+                if (slot.ParkOnClose) _popupParking++;
+                PostPopupRenderAction(new PopupRenderAction(slot.ParkOnClose ? PopupRenderOp.Park : PopupRenderOp.Dispose, slot, default, default));
             }
             WakeFrame();
             return;
+        }
+    }
+
+    /// <summary>The pool key of a popup leased now: its material, the theme's frame and tint, the owner's scale and the owner's
+    /// monitor (its work area, physical px). UI thread.</summary>
+    private PopupPoolKey PopupPoolKeyFor(PopupWindowMaterial material)
+    {
+        bool acrylic = material == PopupWindowMaterial.TransientAcrylic;
+        float s = _window.Scale <= 0f ? 1f : _window.Scale;
+        // Flat tint over the host-backdrop (blurred desktop): the dark MenuFlyout fallback color at ~0.5 so the desktop
+        // reads through as a frosted grey (WinUI DesktopAcrylicBackdrop look). Tunable.
+        ColorF tint = acrylic ? Tok.AcrylicFlyout.Fallback with { A = 0.5f } : default;
+        // Round the composition acrylic to the flyout corner radius (WinUI OverlayCornerRadius = 8 DIP) so it matches
+        // the engine-drawn rounded plate/border in the swapchain content.
+        float cornerPx = acrylic ? 8f * s : 0f;
+        var origin = _window.ClientOriginPx;
+        return new PopupPoolKey(material, Tok.Theme == ThemeKind.Dark, tint, cornerPx, s, _app.GetWorkArea(origin));
+    }
+
+    private static SwapchainDesc PopupSwapchainDesc(NativeHandle window, in PopupPoolKey key)
+    {
+        bool acrylic = key.Material == PopupWindowMaterial.TransientAcrylic;
+        return new SwapchainDesc(window, new Size2(1, 1), Composited: true, DesktopAcrylic: acrylic, AcrylicTint: key.Tint, CornerRadiusPx: key.CornerRadiusPx);
+    }
+
+    // ── the popup pool's idle upkeep (prewarm, stale drop) ──
+    private const long PopupPoolCheckMs = 250;          // how often an idle turn looks at the pool
+    private const long PopupPrewarmAfterFirstMs = 1000; // startup's first frames (the reveal, the first page) are left alone
+    private const long PopupPrewarmQuietMs = 1000;      // no input of any kind (a pointer move included) for this long
+    private const long PopupPoolDisabledDrainMs = 10_000;   // windowed popups switched off this long: the parked pairs are released
+    private const long PopupPrewarmRetryMs = 30_000;    // a prewarm whose create threw tries again this much later
+    private const WakeReasons PrewarmHeldWake = WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold | WakeReasons.TouchPress;
+    private long _popupPoolNextCheckMs;
+    private long _popupPrewarmFromMs;
+    private bool _popupPrewarmPrepared;                 // the thread-affine half (the composition compositor) ran on an earlier turn
+    private bool _popupPoolClosed;                      // teardown, or a backend that cannot park: nothing is pooled any more
+    private double _prewarmPrepareMs, _prewarmWindowMs;
+    private int _prewarmVideoVersion;
+    private long _prewarmVideoQuietFromMs, _prewarmVideoSeenMs;
+    private const long PopupPrewarmVideoBringUpMs = 10_000;   // the longest a reserved-but-unbound video surface holds the prewarm
+    private PopupPoolKey _prewarmKeySeen;
+    private long _prewarmKeyQuietFromMs;
+    private long _popupDisabledSinceMs;
+    private long _prewarmRetryAtMs;
+    private long _lastPrewarmInputMs = long.MinValue;    // the last input of any kind, a pointer move included (NotePrewarmInput)
+    private int _poolDeviceRecoveries;                  // the device recoveries the pool has accounted for (a loss kills every parked pair)
+    private string? _prewarmWaitLogged;
+    // The pool's work the render thread holds in flight, so a teardown that purges the mailbox releases it (PurgePopupRenderActions):
+    // the prewarm's window (and, once the render thread made it, its swap chain) until ReturnPrewarmedPopup runs, and every pair a
+    // DropParked handed the render thread until its window comes back to be destroyed.
+    private IPlatformPopupWindow? _prewarmWindowInFlight;
+    private volatile ISwapchain? _prewarmSwapchainInFlight;
+    private readonly List<(IPlatformPopupWindow Window, ISwapchain Swapchain)> _droppingPairs = new(2);
+
+    /// <summary>Why the idle prewarm is holding off, logged once per change of reason (a first menu that still paid the build
+    /// is then attributable from the log). UI thread.</summary>
+    private void NotePrewarmWait(string reason)
+    {
+        if (_popupPool.Count != 0 || ReferenceEquals(_prewarmWaitLogged, reason)) return;
+        _prewarmWaitLogged = reason;
+        Diag.Line("[overlay.popup] prewarm waits: " + reason);
+    }
+
+    /// <summary>The pool's own wake: while there is upkeep it could do (a prewarm to build, a stale, dead or disabled pool to release),
+    /// an otherwise idle loop wakes at its next due check instead of waiting for someone's input, so in an app at rest the prewarm
+    /// runs at idle, not on the first hover turn. A warm pair that fits, a menu up, or a closed pool: no clamp.</summary>
+    private int ClampWaitToPopupPool(int wait)
+    {
+        if (_isDetachedChild || _popupPoolClosed || !_device.CanParkPopups || !_swapchain.HasPresentedContent) return wait;
+        if (_popupWindows.Count != 0 || _popupParking != 0) return wait;   // a menu is up or closing: its close parks a pair
+        bool warm = _popupPool.Count != 0 && _poolDeviceRecoveries == _deviceLostRecoveryCount && _popupDisabledSinceMs == 0
+                    && PopupWindowsEnabled && _popupPool[0].Key == _prewarmKeySeen;
+        if (warm) return wait;
+        long due = Math.Max(_popupPoolNextCheckMs, _prewarmRetryAtMs);
+        if (_lastPrewarmInputMs != long.MinValue) due = Math.Max(due, _lastPrewarmInputMs + PopupPrewarmQuietMs);
+        long ms = Math.Max(1, due - ColdMaintenanceNowMs);
+        return wait < 0 ? (int)Math.Min(ms, int.MaxValue) : (int)Math.Min(wait, ms);
+    }
+
+    /// <summary>UI thread, every turn (cheap until its quarter-second check is due), and woken by <see cref="ClampWaitToPopupPool"/>:
+    /// keep ONE popup window with its swapchain warm for the next menu. At idle - after startup's first frames, nothing in flight (no
+    /// menu open or closing), no input of any kind for a second (a pointer move included), no drag or held gesture, no video starting
+    /// (a player asking for a surface or binding one in the last second), and the key not just changed (the window moved to another
+    /// monitor, a DPI, zoom or theme change: the relayout settles first) - a pooled pair whose key went stale or that died with the
+    /// device is released, and when none fits the current key one is built: the compositor's thread-affine bring-up on one turn, the
+    /// hidden window and the render thread's create on a later one, so neither lands in the same UI turn as the other; the render
+    /// thread builds it on a turn the owner presents nothing, or right after the owner's present. The first menu then costs what every
+    /// later one does. Windowed popups switched off for <see cref="PopupPoolDisabledDrainMs"/> release the pool. A backend that cannot
+    /// park never starts any of it.</summary>
+    private void TickPopupPool(uint inputKindMask)
+    {
+        if (_isDetachedChild || _popupPoolClosed || !_device.CanParkPopups) return;
+        long now = ColdMaintenanceNowMs;
+        if (inputKindMask != 0) _lastPrewarmInputMs = now;
+        if (OwningRenderThread is null) _device.ServicePopupWork();   // no render thread: this is the device's thread, no present in flight
+        if (now < _popupPoolNextCheckMs) return;
+        _popupPoolNextCheckMs = now + PopupPoolCheckMs;
+        if (!PopupWindowsEnabled)
+        {
+            if (_popupDisabledSinceMs == 0) _popupDisabledSinceMs = now;
+            else if (now - _popupDisabledSinceMs >= PopupPoolDisabledDrainMs && _popupPool.Count != 0) DrainPopupPool("disabled");
+            return;
+        }
+        _popupDisabledSinceMs = 0;
+        // A device loss released every parked swap chain (D3D12 RecoverDeviceCore): the pairs no longer fit, whatever their key.
+        if (_poolDeviceRecoveries != _deviceLostRecoveryCount)
+        {
+            _poolDeviceRecoveries = _deviceLostRecoveryCount;
+            DrainPopupPool("device-lost");
+        }
+        if (_fzPhase == FreezePhase.Frozen || _hidden.Stage != HiddenStage.Visible || !_swapchain.HasPresentedContent) { NotePrewarmWait("hidden"); return; }
+        if (_popupPrewarmFromMs == 0) { _popupPrewarmFromMs = now + PopupPrewarmAfterFirstMs; return; }
+        if (now < _popupPrewarmFromMs) { NotePrewarmWait("startup"); return; }
+        if (_popupWindows.Count != 0 || _popupParking != 0) { NotePrewarmWait("menu"); return; }
+        if (now < _prewarmRetryAtMs) { NotePrewarmWait("retry"); return; }
+        if ((ComputeWakeReasons() & PrewarmHeldWake) != 0
+            || (_lastPrewarmInputMs != long.MinValue && now - _lastPrewarmInputMs < PopupPrewarmQuietMs)) { NotePrewarmWait("interaction"); return; }
+        // A video is starting: a player asked for a surface (an acquire) or a surface handle was bound or re-bound in the last
+        // PopupPrewarmQuietMs, or the registry holds intents not yet published, or a pump is owed. A video merely on screen does not
+        // hold it: a playing video never stops being one.
+        int videoVersion = _videoSurfaces.StructuralVersion + _videoSurfaces.AcquireCount;   // a bind, or a player asking for a surface
+        if (videoVersion != _prewarmVideoVersion) { _prewarmVideoVersion = videoVersion; _prewarmVideoQuietFromMs = now + PopupPrewarmQuietMs; _prewarmVideoSeenMs = now; }
+        // A player that asked for a surface and has no handle yet is still bringing up (a protected stream: seconds): hold until its
+        // first bind, at most PopupPrewarmVideoBringUpMs after the change (a slot reserved for a video that never starts cannot hold
+        // the prewarm off for the session).
+        if (_videoSurfaces.HasUnboundSurface && now - _prewarmVideoSeenMs < PopupPrewarmVideoBringUpMs) _prewarmVideoQuietFromMs = Math.Max(_prewarmVideoQuietFromMs, now + 1);
+        if (_videoSurfaces.HasUnpublishedChanges) _prewarmVideoQuietFromMs = now + PopupPrewarmQuietMs;
+        if (now < _prewarmVideoQuietFromMs || _videoSurfaces.HasPendingPumps) { NotePrewarmWait("video"); return; }
+        var key = PopupPoolKeyFor(PopupWindowMaterial.TransientAcrylic);
+        if (key != _prewarmKeySeen) { _prewarmKeySeen = key; _prewarmKeyQuietFromMs = now + PopupPrewarmQuietMs; }
+        if (now < _prewarmKeyQuietFromMs) { NotePrewarmWait("relayout"); return; }
+        bool fits = false;
+        for (int i = _popupPool.Count - 1; i >= 0; i--)
+        {
+            if (_popupPool[i].Key == key) { fits = true; continue; }
+            var stale = _popupPool[i];
+            _popupPool.RemoveAt(i);
+            DropParked(stale.Window, stale.Swapchain, "stale");
+        }
+        if (fits) return;
+        long t0 = Stopwatch.GetTimestamp();
+        if (!_popupPrewarmPrepared)
+        {
+            _device.PrepareSwapchainCreate(PopupSwapchainDesc(default, in key));   // the first-in-process compositor bring-up
+            _popupPrewarmPrepared = true;
+            _prewarmPrepareMs = ToMs(Stopwatch.GetTimestamp() - t0);
+            return;
+        }
+        var window = _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default, key.Material, key.Dark));
+        _prewarmWindowMs = ToMs(Stopwatch.GetTimestamp() - t0);
+        if (window is null) { _popupPoolClosed = true; return; }   // the platform has no popup windows: nothing to keep warm
+        var desc = PopupSwapchainDesc(window.Handle, in key);
+        _popupParking++;
+        _prewarmWindowInFlight = window;
+        if (OwningRenderThread is null)
+        {
+            long r0 = Stopwatch.GetTimestamp();
+            ISwapchain? sc = null;
+            bool threw = false;
+            try { sc = _device.CreateSwapchain(in desc); }
+            catch (Exception ex) { threw = true; Diag.Line($"[overlay.popup] prewarm failed: {ex.Message}"); }
+            bool parked = sc is not null && sc.ParkPopup();
+            if (!parked) sc?.Dispose();
+            ReturnPrewarmedPopup(window, parked ? sc : null, key, ToMs(Stopwatch.GetTimestamp() - r0), threw);
+        }
+        else PostPopupRenderAction(new PopupRenderAction(PopupRenderOp.Prewarm, null, default, default, desc, Window: window, Key: key));
+    }
+
+    /// <summary>Release every parked pair, logged with <paramref name="why"/>. UI thread.</summary>
+    private void DrainPopupPool(string why)
+    {
+        for (int i = _popupPool.Count - 1; i >= 0; i--)
+        {
+            var p = _popupPool[i];
+            _popupPool.RemoveAt(i);
+            DropParked(p.Window, p.Swapchain, why);
         }
     }
 
@@ -7998,7 +8645,7 @@ public sealed partial class AppHost : IDisposable
         // per-node loop below can tell a shove apart from an independent move.
         // Cleared FIRST (not just at the tail) so an early-out on any path can never leave a stale frame map behind.
         _reflowShoveFrames.Clear();
-        _anim.CollectLiveReflowNodes(_liveReflowScratch);   // clears the list itself
+        _anim.CollectLiveReflowNodes(_liveReflowScratch, tickedOnly: true);   // clears the list itself; a row not yet ticked has shoved nothing
         for (int i = 0; i < _liveReflowScratch.Count; i++)
         {
             NodeHandle carrier = _liveReflowScratch[i];
@@ -8036,8 +8683,13 @@ public sealed partial class AppHost : IDisposable
         // collapse) owns nothing, and the parts under it project their own moves.
         _projectionSuppressionRoots.Clear();
         _reflowOwnedRoots.Clear();
+        _widthSeedsCommit.Clear();
         if (!suppressed)
         {
+            // A layout that built a structure reader the record does not cover (Paint marks it stale) broke those runs at their live widths:
+            // probe before anything is seeded from it, so a reflow this commit starts (a chapter easing to the height of its new form) aims at
+            // the structure the slide shows, not at one the probe takes back.
+            if (_anim.DestinationStale || _recordStaleProbe) ProbeReflowDestinations(layoutSize);
             DiscoverProjectionRoots(PosEps, SizeEps);
             // Again while a pass started any: a reflow below a root that the previous pass's starts took back (the page column beside the
             // title bar's and the play bar's reflows at 3200: the detail page's columns under it) was skipped as below a root; seeded in the
@@ -8045,6 +8697,9 @@ public sealed partial class AppHost : IDisposable
             // A seeded node is laid out at its start by then, so a later pass finds it unchanged and seeds only what became free.
             for (int pass = 0; pass < SeedReflowPasses && SeedReflowsFirst(layoutSize, reduced, PosEps, SizeEps); pass++)
                 DiscoverProjectionRoots(PosEps, SizeEps);
+            // A width reflow this commit re-aimed (the panel toggled back mid-slide) or seeded beside another one in flight lands where no layout
+            // has solved yet: probe it before any FLIP is measured, so a structure that re-decides for the new destination glides there.
+            if (_anim.DestinationStale && ProbeReflowDestinations(layoutSize)) DiscoverProjectionRoots(PosEps, SizeEps);
         }
 
         foreach (var kv in _projectBefore)
@@ -8215,6 +8870,8 @@ public sealed partial class AppHost : IDisposable
     {
         if (reduced) return false;
         bool started = false;
+        bool destStale = _anim.DestinationStale;   // this pass's own width seeds are recorded below, from the commit's layout
+        _widthSeeds.Clear();
         foreach (var kv in _projectBefore)
         {
             NodeHandle n = kv.Key;
@@ -8227,6 +8884,7 @@ public sealed partial class AppHost : IDisposable
             // Size only: the main pass FLIPs the node's own move against the re-solved layout, and finds this row aimed already (its guards).
             _anim.AnimateBounds(n, from, to, spec with { Channels = TransitionChannels.Size });
             started |= _anim.PresentReflowStart(n);
+            if (_anim.HasLiveWidthReflow(n)) { _widthSeeds.Add(n); _widthSeedsCommit.Add(n); }
         }
         // A node that MOUNTED with a Reflow enter this commit (seeded after the layout as 0 -> its natural size, so it was never captured) is a
         // reflow this commit starts too: laid out at its target, it made every sibling's FLIP count the room it opens, which the reflow then
@@ -8238,15 +8896,17 @@ public sealed partial class AppHost : IDisposable
             if (!_scene.IsLive(n) || IsBelowProjectionSuppressionRoot(n)) continue;
             if (s_motionDiag) LogMotionNode(n.Raw.Index, "enter-reflow-first", default, _scene.Bounds(n));
             started |= _anim.PresentReflowStart(n);
+            if (_anim.HasLiveWidthReflow(n)) { _widthSeeds.Add(n); _widthSeedsCommit.Add(n); }
         }
         _enterReflowsSeeded.Clear();
+        _anim.DestinationStale = destStale;
+        RecordSeededDestinations(layoutSize);   // from the commit's layout, or one target solve (the re-solve below then lays out the start)
         if (!started || !_scene.AnyLayoutDirty) return false;
         NoteFlowRevealHeights();
-        // The commit's own pass arranged these subtrees at their targets: the ring's slots for the start (the frame before) would answer without
-        // descending and leave the children at the targets' Bounds (FlexLayout.BypassMeasureRing).
-        _layout.BypassMeasureRing = true;
-        try { _invalidator.RunDirty(layoutSize); }
-        finally { _layout.BypassMeasureRing = false; }
+        // The commit's own pass arranged these subtrees at their targets; the start is the frame before, so a subtree nothing marked since
+        // answers from the measure ring's slot for it (the record above marked every box that reads where the reflows land), and an arrange
+        // whose measure did not descend re-measures its children first (MeasureMemo.KidsGen): none keeps the Bounds its target arrange left.
+        _invalidator.RunDirty(layoutSize);
         _scene.ClearLayoutDirty();
         FollowFlowRevealHeights();
         return true;
@@ -8271,6 +8931,436 @@ public sealed partial class AppHost : IDisposable
             if (kept && _reflowShoveFrames.Count > 0 && ReflowRelationOf(n) != ReflowRelation.None) _reflowOwnedRoots.Add(n);
             else _projectionSuppressionRoots.Add(n);
         }
+    }
+
+    /// <summary>The destination widths of the width reflows <see cref="SeedReflowsFirst"/> starts: the commit's layout IS their target (each row
+    /// was presented at its start, but nothing has been re-solved yet), so each box under a seeded row's parent is recorded at the width it has
+    /// there (<see cref="SceneStore.StructureWidth"/>). When another width reflow in flight holds its box away from where it lands (it has
+    /// ticked), that layout does not show its destination: the frame is probed instead (<see cref="ProbeReflowDestinations"/>).</summary>
+    private string DestDiagPath(NodeHandle n)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0, keyed = 0; i < 24 && keyed < 2 && !n.IsNull; i++, n = _scene.Parent(n)) { if (_scene.DebugKeyOf(n) is not null) keyed++; sb.Append(_scene.DebugKeyOf(n) ?? "#" + n.Raw.Index).Append('<'); }
+        return sb.ToString();
+    }
+
+    private void RecordSeededDestinations(Size2 layoutSize)
+    {
+        if (_widthSeeds.Count == 0) return;
+        bool laterPass = _widthSeedsCommit.Count > _widthSeeds.Count;   // an earlier pass laid its seeds out at their start since the commit's pass
+        // A probe this frame recorded the tree as it stands, every width reflow at its target and every box this commit re-sized at its declared
+        // width (the target its new seed aims at): a seed it recorded, under a parent it recorded, lands where the record already says. A form that
+        // answers the record in place re-sizes its parts this way on the slide's first frame (the daylist's columns), so its probe serves its seeds.
+        if (_destProbedThisFrame)
+        {
+            int seeds = _widthSeeds.Count;
+            for (int i = _widthSeeds.Count - 1; i >= 0; i--) if (SeedRecorded(_widthSeeds[i])) _widthSeeds.RemoveAt(i);
+            if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] {seeds - _widthSeeds.Count} seed(s) recorded by this frame's probe");
+            if (_widthSeeds.Count == 0) return;
+        }
+        // Only a width reflow that was already flying before this commit can hold a box away from where it lands (this commit's own seeds, every
+        // pass's, were laid out at their targets by the commit's pass), and only where its width reaches a seed's box: a layer of a stack whose
+        // width comes from above (the video's glide presenter over the page) lands where the commit laid it out whatever the page's slide does.
+        _anim.CollectWidthReflowsAwayFromDeclared(_widthSeedsCommit, _awayScratch);
+        NodeHandle away = FirstAwayReachingSeeds();
+        _awayScratch.Clear();
+        if (!away.IsNull)
+        {
+            // A width reflow seeded on an earlier frame has ticked: this commit's layout does not show where it lands. Solve the targets once here;
+            // the seed pass's own re-solve then lays the frame out at the rows' start.
+            if (s_motionDiag)
+            {
+                System.Console.Error.WriteLine($"[dest-width] seeded beside a flying width reflow node={away.Raw.Index} at={DestDiagPath(away)}");
+                for (int i = 0; i < _widthSeeds.Count; i++) System.Console.Error.WriteLine($"[dest-width]   seed node={_widthSeeds[i].Raw.Index} at={DestDiagPath(_widthSeeds[i])} declared={_scene.Bounds(_widthSeeds[i]).W:0.0}");
+            }
+            _widthSeeds.Clear();
+            SolveReflowTargets(layoutSize, "seed beside a flying reflow");
+            return;
+        }
+        if (!_scene.HasDestinationWidths) _destLayoutSize = layoutSize;   // a later pass adds to this frame's record, first width kept
+        else if (!_destLayoutSize.Equals(layoutSize)) { _scene.ClearDestinationWidths(markChanged: false); _destLayoutSize = layoutSize; }
+        for (int i = 0; i < _widthSeeds.Count; i++)
+        {
+            NodeHandle n = _widthSeeds[i], p = _scene.Parent(n);
+            NodeHandle root = p.IsNull ? n : p;
+            // A later pass's seed whose box the first pass did not record stands in a layout re-solved at the earlier seeds' start: probe instead.
+            if (laterPass && !_scene.HasDestinationWidth(root))
+            {
+                if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] a later seed pass's node={n.Raw.Index} at={DestDiagPath(n)} is outside the first record");
+                _widthSeeds.Clear();
+                SolveReflowTargets(layoutSize, "later seed pass");
+                return;
+            }
+            _scene.RecordDestinationWidths(root, announce: true);
+        }
+        if (s_motionDiag)
+            for (int i = 0; i < _widthSeeds.Count; i++) System.Console.Error.WriteLine($"[dest-width] recorded seed node={_widthSeeds[i].Raw.Index} at={DestDiagPath(_widthSeeds[i])} from the commit's layout");
+        _widthSeeds.Clear();
+    }
+
+    /// <summary>The destination probe: lay the frame out once with every live width reflow at its TARGET, record the width each box under each
+    /// reflow's parent has there (<see cref="SceneStore.StructureWidth"/>: what column counts, wrap breaks and forms are chosen for while the
+    /// reflows fly), then put the rows' current sizes back and solve again, so this frame still shows where the slide is. Runs on a frame that
+    /// re-aims a width reflow, seeds one beside another in flight, or resizes the window during one; a fresh slide records the commit's own
+    /// layout instead (<see cref="RecordSeededDestinations"/>), and a layout that built a reader the record does not cover records again only
+    /// the parts that changed (<see cref="ProbeRecordScopes"/>). Two solves of the dirty scopes, once per slide direction. True when it probed.</summary>
+    private bool ProbeReflowDestinations(Size2 layoutSize)
+    {
+        NoteFlowRevealHeights();
+        if (!(_anim.DestinationStale ? SolveReflowTargets(layoutSize, "after layout") : ProbeRecordScopes(layoutSize, "after layout"))) return false;
+        _invalidator.RunDirty(layoutSize);
+        _scene.ClearLayoutDirty();
+        FollowFlowRevealHeights();
+        return true;
+    }
+
+    /// <summary>Are width seed <paramref name="n"/> and the parent whose subtree its record covers both in the record?</summary>
+    private bool SeedRecorded(NodeHandle n)
+    {
+        NodeHandle p = _scene.Parent(n);
+        return _scene.HasDestinationWidth(n) && (p.IsNull || _scene.HasDestinationWidth(p));
+    }
+
+    private readonly List<NodeHandle> _awayScratch = new(8);
+
+    /// <summary>The first node of <see cref="_awayScratch"/> (width reflows held away from where they land) whose width can reach the box a seed of
+    /// <see cref="_widthSeeds"/> records (the seed's parent), else Null. A row reaches a box unless the two meet at a z-stack whose width comes
+    /// from above (<see cref="SizeImposed"/>): each layer there is the stack's width or its own, never another layer's.</summary>
+    private NodeHandle FirstAwayReachingSeeds()
+    {
+        for (int a = 0; a < _awayScratch.Count; a++)
+            for (int i = 0; i < _widthSeeds.Count; i++)
+            {
+                NodeHandle n = _widthSeeds[i], p = _scene.Parent(n);
+                NodeHandle meet = CommonAncestor(_awayScratch[a], p.IsNull ? n : p);
+                if (meet.IsNull || (_scene.Flags(meet) & NodeFlags.ZStack) == 0 || !SizeImposed(meet, horizontal: true)) return _awayScratch[a];
+            }
+        return NodeHandle.Null;
+    }
+
+    /// <summary>The deepest box that is <paramref name="a"/> or an ancestor of it and <paramref name="b"/> or an ancestor of it; Null in two trees.</summary>
+    private NodeHandle CommonAncestor(NodeHandle a, NodeHandle b)
+    {
+        int da = 0, db = 0;
+        for (NodeHandle n = a; !n.IsNull; n = _scene.Parent(n)) da++;
+        for (NodeHandle n = b; !n.IsNull; n = _scene.Parent(n)) db++;
+        for (; da > db; da--) a = _scene.Parent(a);
+        for (; db > da; db--) b = _scene.Parent(b);
+        while (a != b) { a = _scene.Parent(a); b = _scene.Parent(b); }
+        return a;
+    }
+
+    /// <summary>The destination probe's ONE target solve: present every live width reflow at the width it lands at, solve the dirty scopes, record
+    /// the width each box under each reflow's parent has there (<see cref="SceneStore.StructureWidth"/>), and present the rows back at their
+    /// current sizes (dirtying their parents). The caller's next solve puts the frame back where the slide is: the frame's own layout (the
+    /// pre-layout probe), the seed pass's re-solve at the rows' start (<see cref="SeedReflowsFirst"/>), or one restore solve
+    /// (<see cref="ProbeReflowDestinations"/>). Allocation-free once the lists have grown. True when a live width reflow was solved.</summary>
+    private bool SolveReflowTargets(Size2 layoutSize, string where)
+    {
+        _anim.DestinationStale = false;
+        _recordStaleProbe = false;   // the whole record is solved again
+        _anim.CollectLiveReflowNodes(_destProbeNodes);
+        bool width = false;
+        for (int i = 0; i < _destProbeNodes.Count && !width; i++) width = _anim.HasLiveWidthReflow(_destProbeNodes[i]);
+        if (!width)
+        {
+            // No width reflow flies any more (a window resize snapped it): structure is chosen from the live width again, from the next solve on.
+            _scene.ClearDestinationWidths(markChanged: true);
+            _destProbeNodes.Clear();
+            return false;
+        }
+        _scene.ClearDestinationWidths(markChanged: false);   // the target solve chooses structure at its own (target) widths
+        // THE PROBE IS AN OBSERVATION: every width input it writes is saved first and put back exactly after (NaN stays NaN: an auto-width box
+        // stays auto), only a slide's rows are presented (HasLiveWidthReflow: no exit orphan, no enter), and nothing it arranges is delivered.
+        _destProbeSaved.Clear();
+        for (int i = 0; i < _destProbeNodes.Count; i++)
+        {
+            NodeHandle n = _destProbeNodes[i];
+            if (!_anim.HasLiveWidthReflow(n)) continue;
+            _destProbeSaved.Add((n, _scene.Layout(n).Width));
+            _anim.PresentReflowTarget(n);
+        }
+        if (_destProbeSaved.Count == 0) { _destProbeNodes.Clear(); return false; }
+        if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] target solve ({where}) at {layoutSize.Width:0}x{layoutSize.Height:0}");
+        // Nothing it arranges is shown: no OnBoundsChanged or measured-bounds hook hears it (FlexLayout.SuppressBoundsDelivery).
+        _layout.SuppressBoundsDelivery = true;
+        try
+        {
+            _invalidator.RunDirty(layoutSize);
+            _scene.ClearLayoutDirty();
+        }
+        finally { _layout.SuppressBoundsDelivery = false; }
+        for (int i = 0; i < _destProbeSaved.Count; i++)
+        {
+            NodeHandle n = _destProbeSaved[i].Node, p = _scene.Parent(n);
+            _scene.RecordDestinationWidths(p.IsNull ? n : p, announce: false);
+        }
+        _layout.RestoreLandedCards();   // the fill-row cards the solve stood at their cells' landing widths (FlexLayout.LandCellCard)
+        for (int i = 0; i < _destProbeSaved.Count; i++) _anim.RestoreProbedWidth(_destProbeSaved[i].Node, _destProbeSaved[i].Width);
+        _destProbeSaved.Clear();
+        _destLayoutSize = layoutSize;
+        _destProbeNodes.Clear();
+        _destProbedThisFrame = true;
+        return true;
+    }
+
+    /// <summary>The scoped destination probe: a commit that answered the record in place, or a layout that built a structure reader the record does
+    /// not cover, changed only some parts of the tree under the flying width reflows (<see cref="SceneStore.RecordStaleBoxes"/>: the daylist that
+    /// swaps its form for the tier it lands at, a tile keyed anew, a bound card's width). For each, the nearest recorded box above it whose width
+    /// comes from above (<see cref="WidthFromAbove"/>) is solved alone at its recorded width, the width reflows inside it at their targets and its
+    /// fill-row cards at their cells' landing widths, and recorded again over its entries (a record otherwise keeps a box's first width); the
+    /// rest of the record already describes where the tree lands, but for a box that has left the flying reflows' parents (a pooled virtual
+    /// cell), which is no longer recorded. Then its rows and cards are put back and the box that places it is marked, so the caller's next
+    /// solve lays the frame out where the slide is. The record it leaves is the one <see cref="SolveReflowTargets"/> leaves, at the cost of the
+    /// changed parts. A stale part under a recorded box that no box above it bounds probes the whole frame. True when it probed.</summary>
+    private bool ProbeRecordScopes(Size2 layoutSize, string where)
+    {
+        _recordStaleProbe = false;
+        _anim.CollectLiveReflowNodes(_destProbeNodes);
+        _recordRoots.Clear();
+        bool unrecordedRoot = false;
+        for (int i = 0; i < _destProbeNodes.Count; i++)
+        {
+            NodeHandle n = _destProbeNodes[i], p = _scene.Parent(n);
+            if (!_anim.HasLiveWidthReflow(n)) continue;
+            NodeHandle root = p.IsNull ? n : p;
+            _recordRoots.Add(root);
+            unrecordedRoot |= !_scene.HasDestinationWidth(root);
+        }
+        // No width reflow flies any more (the whole probe clears the record), one flies whose parent the record has not met (a reflow started since
+        // the record: its subtree lands at no width recorded yet), a stale part no recorded box bounds, or parts that hold half the record or more
+        // (a tier answered across the page: solved apart they cost more than one solve of the whole): the whole frame.
+        if (_recordRoots.Count == 0 || unrecordedRoot || !CollectRecordScopes())
+        {
+            _recordRoots.Clear();
+            _destProbeNodes.Clear();
+            return SolveReflowTargets(layoutSize, where);
+        }
+        // A probe records the subtrees of the flying width reflows' parents, nothing else: a box that left them since (a virtual cell
+        // its strip pooled, the parent of a reflow that landed) is no longer recorded.
+        bool dropped = _scene.KeepDestinationWidthsUnder(_recordRoots);
+        _recordRoots.Clear();
+        if (_recordScopes.Count == 0)
+        {
+            _destProbeNodes.Clear();
+            _scene.FinishScopedRecord();
+            return dropped;
+        }
+        _destProbeSaved.Clear();
+        for (int i = 0; i < _destProbeNodes.Count; i++)
+        {
+            NodeHandle n = _destProbeNodes[i];
+            if (!_anim.HasLiveWidthReflow(n) || !InRecordScope(n)) continue;
+            _destProbeSaved.Add((n, _scene.Layout(n).Width));
+            _anim.PresentReflowTarget(n);
+        }
+        _destProbeNodes.Clear();
+        if (s_motionDiag) System.Console.Error.WriteLine($"[dest-width] scoped target solve ({where}) of {_recordScopes.Count} box(es)");
+        _layout.SuppressBoundsDelivery = true;   // nothing it arranges is shown (FlexLayout.SuppressBoundsDelivery)
+        try
+        {
+            for (int i = 0; i < _recordScopes.Count; i++)
+            {
+                NodeHandle r = _recordScopes[i];
+                float w = _scene.StructureWidth(r, float.NaN);
+                _scene.ForgetDestinationSubtree(r);
+                _layout.RunSubtreeAt(r, w);
+            }
+        }
+        finally { _layout.SuppressBoundsDelivery = false; }
+        for (int i = 0; i < _recordScopes.Count; i++) _scene.RerecordDestinationWidths(_recordScopes[i]);
+        _layout.RestoreLandedCards();
+        for (int i = 0; i < _destProbeSaved.Count; i++) _anim.RestoreProbedWidth(_destProbeSaved[i].Node, _destProbeSaved[i].Width);
+        _destProbeSaved.Clear();
+        // Last: the box that places each scope re-solves it at the width the slide gives it, after anything inside it the next solve meets first.
+        for (int i = 0; i < _recordScopes.Count; i++) _scene.Mark(_scene.Parent(_recordScopes[i]), NodeFlags.LayoutDirty);
+        _recordScopes.Clear();
+        _scene.FinishScopedRecord();
+        _destProbedThisFrame = true;
+        return true;
+    }
+
+    /// <summary>The boxes <see cref="ProbeRecordScopes"/> records again, outermost only, from the record's stale boxes, the recorded boxes whose
+    /// children are no longer the ones they were recorded with, and every recorded fill-row strip a target solve would stand a card of at its
+    /// cell's landing (<see cref="FlexLayout.HoldsCardAway"/>). False when one has no recorded box above it whose width comes from above, short of
+    /// the window, a box the record starts at changed itself (<see cref="SceneStore.RecordUnscoped"/>), or the scopes would hold half the record
+    /// or more (<see cref="_scopeBudget"/>): the whole frame is probed instead.</summary>
+    private bool CollectRecordScopes()
+    {
+        _recordScopes.Clear();
+        _scopeBudget = _scene.DestinationCount / 2;
+        if (++_scopePass == int.MaxValue) { Array.Clear(_scopeCovered); Array.Clear(_aboveStamp); _scopePass = 1; }
+        if (_scene.RecordUnscoped) return false;
+        var stale = _scene.RecordStaleBoxes;
+        for (int i = 0; i < stale.Count; i++)
+            if (_scene.IsLive(stale[i]) && !AddRecordScope(stale[i])) return false;
+        var rewired = _scene.RecordRewiredBoxes;
+        for (int i = 0; i < rewired.Count; i++)
+            if (_scene.IsLive(rewired[i]) && !_scene.ChildrenAsRecorded(rewired[i]) && !AddRecordScope(rewired[i])) return false;
+        for (int i = 0, n = _scene.DestinationCount; i < n; i++)
+        {
+            NodeHandle v = _scene.DestinationAt(i);
+            if (!v.IsNull && _scene.HasScroll(v) && _scene.IsLive(v) && _layout.HoldsCardAway(v) && !AddRecordScope(v)) return false;
+        }
+        // Outermost only: a scope's solve and record cover every box under it.
+        int keep = 0;
+        for (int i = 0; i < _recordScopes.Count; i++)
+        {
+            NodeHandle r = _recordScopes[i];
+            bool nested = false;
+            for (NodeHandle a = _scene.Parent(r); !a.IsNull && !nested; a = _scene.Parent(a)) nested = _recordScopes.Contains(a);
+            if (!nested) _recordScopes[keep++] = r;
+        }
+        _recordScopes.RemoveRange(keep, _recordScopes.Count - keep);
+        return true;
+    }
+
+    // The boxes the scopes may hold before the whole frame is the cheaper probe: half the record. Measured on the three themes' docking slides
+    // (Debug, commit frame): scopes of 16 % of the record (Zune 1440's daylist, quick strip and wide shelf) took the frame from 24.1 to 21.5 ms;
+    // scopes of 70 to 99 % (a tier that re-sizes most zones: Zune 1280, Classic, WinUI) cost up to 1 ms more than one solve of the whole frame, as
+    // each is solved alone and then again where the slide is. Counted down as scopes are found, so a large one ends the search at once.
+    private int _scopeBudget;
+
+    private int CountDownSubtree(NodeHandle n, int budget)
+    {
+        budget--;
+        for (NodeHandle c = _scene.FirstChild(n); !c.IsNull && budget > 0; c = _scene.NextSibling(c)) budget = CountDownSubtree(c, budget);
+        return budget;
+    }
+
+    /// <summary>Add the scope of stale box <paramref name="box"/>: the nearest recorded box at or above it whose width comes from above. True when
+    /// it found one below the window and the scopes still hold less than half the record (<see cref="_scopeBudget"/>), or when no recorded box
+    /// stands above it (it lies outside the record: an exit orphan's part).</summary>
+    private bool AddRecordScope(NodeHandle box)
+    {
+        bool recordedAbove = false;
+        _scopeWalk.Clear();
+        for (NodeHandle n = box; !n.IsNull; n = _scene.Parent(n))
+        {
+            int idx = (int)n.Raw.Index;
+            if (idx < _scopeCovered.Length && _scopeCovered[idx] == _scopePass) { CoverWalk(); return true; }   // under a scope this pass added
+            _scopeWalk.Add(idx);
+            if (!_scene.HasDestinationWidth(n)) continue;
+            recordedAbove = true;
+            if (!WidthFromAbove(n)) continue;
+            if (_scene.Parent(n).IsNull) return false;
+            _recordScopes.Add(n);
+            CoverWalk();
+            _scopeBudget = CountDownSubtree(n, _scopeBudget);
+            return _scopeBudget > 0;
+        }
+        return !recordedAbove;
+    }
+
+    // Per node, this CollectRecordScopes pass (_scopePass): a walk from a stale box crossed it on its way to a scope it added (_scopeCovered), and
+    // WidthFromAbove's answer for it (_aboveStamp, _aboveVal). Every stale box shares its ancestors with the others: each is walked once a pass.
+    private int[] _scopeCovered = [], _aboveStamp = [];
+    private bool[] _aboveVal = [];
+    private int _scopePass;
+    private readonly List<int> _scopeWalk = new(64);
+
+    private void CoverWalk()
+    {
+        for (int i = 0; i < _scopeWalk.Count; i++)
+        {
+            int idx = _scopeWalk[i];
+            if (idx >= _scopeCovered.Length) Array.Resize(ref _scopeCovered, Math.Max(idx + 1, Math.Max(1024, _scopeCovered.Length * 2)));
+            _scopeCovered[idx] = _scopePass;
+        }
+    }
+
+    /// <summary>Is <paramref name="n"/> one of <see cref="_recordScopes"/> or under one?</summary>
+    private bool InRecordScope(NodeHandle n)
+    {
+        for (; !n.IsNull; n = _scene.Parent(n))
+            if (_recordScopes.Contains(n)) return true;
+        return false;
+    }
+
+    /// <summary>Is <paramref name="n"/>'s width decided above it whatever its subtree holds: declared, the window's, stretched across a column, filled
+    /// into a z-stack, spanning a vertical scroller or list, or the room a row's siblings leave its only flexible child, each above a box whose own
+    /// width is decided above in turn? A box its content sizes, one of several to share a row's room, a grid track or a horizontal list's item is
+    /// not: a change inside it can move its width, so a solve of its subtree alone could not stand it where the frame lands it.</summary>
+    private bool WidthFromAbove(NodeHandle n)
+    {
+        // Each step either decides or hands the question to the box above, so every box the walk crossed shares the answer (kept for this pass).
+        _aboveWalk.Clear();
+        bool above = WidthFromAboveWalk(n);
+        for (int i = 0; i < _aboveWalk.Count; i++)
+        {
+            int idx = _aboveWalk[i];
+            if (idx >= _aboveStamp.Length)
+            {
+                int len = Math.Max(idx + 1, Math.Max(1024, _aboveStamp.Length * 2));
+                Array.Resize(ref _aboveStamp, len);
+                Array.Resize(ref _aboveVal, len);
+            }
+            _aboveStamp[idx] = _scopePass;
+            _aboveVal[idx] = above;
+        }
+        return above;
+    }
+    private readonly List<int> _aboveWalk = new(64);
+
+    private bool WidthFromAboveWalk(NodeHandle n)
+    {
+        while (true)
+        {
+            int idx = (int)n.Raw.Index;
+            if (idx < _aboveStamp.Length && _aboveStamp[idx] == _scopePass) return _aboveVal[idx];
+            _aboveWalk.Add(idx);
+            ref LayoutInput li = ref _scene.Layout(n);
+            if (!float.IsNaN(li.Width)) return true;
+            NodeHandle p = _scene.Parent(n);
+            if (p.IsNull) return true;   // the root: the window's width
+            if (IsVirtualContent(p))
+            {
+                NodeHandle vp = _scene.Parent(p);
+                if (_scene.ScrollRef(vp).Orientation == 1) return false;   // a horizontal list: its item's width is its main axis
+                n = vp;   // a vertical list's row spans the viewport
+                continue;
+            }
+            if (_scene.TryGetScroll(p, out var sc))
+            {
+                if (sc.Orientation == 1 || sc.ContentNode != n) return false;
+                n = p;   // a vertical scroller's content spans the viewport (FlexLayout.ArrangePlainScroll)
+                continue;
+            }
+            if ((_scene.Flags(p) & NodeFlags.ZStack) != 0)
+            {
+                // A layer fills the stack's width unless aligned Center or End there, or measured at its natural width (FlexLayout.ArrangeZStack).
+                ref LayoutInput zl = ref _scene.Layout(p);
+                FlexAlign za = li.JustifySelf != FlexAlign.Auto ? li.JustifySelf
+                    : zl.Justify == FlexJustify.Center ? FlexAlign.Center : zl.Justify == FlexJustify.End ? FlexAlign.End : FlexAlign.Start;
+                if (za is FlexAlign.Center or FlexAlign.End || li.MeasureUnboundedWidth) return false;
+                n = p;
+                continue;
+            }
+            ref LayoutInput pl = ref _scene.Layout(p);
+            if (pl.Wrap || _scene.HasGrid(p) || _scene.HasStackFallback(p)) return false;
+            if (pl.Direction == 0)
+            {
+                // A row's only flexible child takes the room its siblings leave (FlexLayout's distribution: its base plus the row's free space), whatever
+                // it holds: grown from a zero basis, or grown and shrunk from its content's.
+                if (li.FlexGrow <= 0f || !(li.FlexBasis == 0f || li.FlexShrink > 0f) || !OnlyFlexibleChild(p, n)) return false;
+                n = p;
+                continue;
+            }
+            if ((li.AlignSelf == FlexAlign.Auto ? pl.AlignItems : li.AlignSelf) != FlexAlign.Stretch) return false;
+            n = p;   // stretched across a column
+        }
+    }
+
+    /// <summary>Does no child of <paramref name="row"/> but <paramref name="child"/> grow or shrink?</summary>
+    private bool OnlyFlexibleChild(NodeHandle row, NodeHandle child)
+    {
+        for (NodeHandle c = _scene.FirstChild(row); !c.IsNull; c = _scene.NextSibling(c))
+        {
+            if (c == child) continue;
+            ref LayoutInput cl = ref _scene.Layout(c);
+            if (cl.FlexGrow != 0f || cl.FlexShrink != 0f) return false;
+        }
+        return true;
     }
 
     /// <summary>Note the height of every live flow-reveal box before a re-solve that is no commit (<see cref="FollowFlowRevealHeights"/>).</summary>
@@ -8328,6 +9418,86 @@ public sealed partial class AppHost : IDisposable
         return shifted;
     }
 
+    private readonly List<NodeHandle> _contentReflowScratch = new(16);
+
+    /// <summary>The content follow of <see cref="RunReflowLayout"/>: each reflow node this tick wrote whose HEIGHT row eases toward an auto height its
+    /// own content sets (declared NaN, no share of a column's free space, not stretched across a row, not filling a z-stack) is re-aimed at the
+    /// height its content measures now (<see cref="FlexLayout.MeasureNatural"/>, a pure query, at the width the row's box is laid out at), over
+    /// the time the row has left (<see cref="AnimEngine.ReaimReflow"/>). The row pins the box's height, so no layout ever shows that height
+    /// while it flies: without this it landed on the height of the commit that seeded it and the settle's continuation glided on to the real
+    /// one in a second motion. An enter reflow is re-aimed from its child extent instead (the natural-extent retarget below). A box with a live
+    /// height row under it measures with that row at its target: the content it lands on (a daylist host re-aimed by its form's swap mid-slide
+    /// took its zone with it only at the settle's continuation, after easing to the height the seeding commit measured).</summary>
+    private void FollowContentReflows(List<NodeHandle> roots)
+    {
+        bool collected = false;
+        for (int i = 0; i < roots.Count; i++)
+        {
+            NodeHandle r = roots[i];
+            if (!_scene.IsLive(r) || (_scene.Flags(r) & NodeFlags.Exiting) != 0) continue;
+            if (!_anim.TryGetLiveReflow(r, AnimChannel.LayoutH, out float to, out bool natural, out float declared) || natural || !float.IsNaN(declared)) continue;
+            if (!HeightFromContent(r)) continue;
+            if (!collected) { _anim.CollectLiveReflowNodes(_contentReflowScratch); collected = true; }
+            ref LayoutInput li = ref _scene.Layout(r);
+            float pinned = li.Height;
+            li.Height = float.NaN;
+            // A height row flying under it stands at its TARGET for the measure, not at its interp: the content this box lands on is the content
+            // those rows land on (a form that swapped mid-slide re-aimed its own row, and this box must follow it there, not to the height the
+            // seeding commit measured).
+            PresentHeightTargetsBelow(r);
+            float wants;
+            try { wants = _layout.MeasureNatural(r, float.IsNaN(li.Width) ? _scene.Bounds(r).W : li.Width).Height; }
+            finally { li.Height = pinned; RestoreHeightsBelow(); }
+            if (wants <= 0.5f || MathF.Abs(wants - to) < 0.5f) continue;
+            if (s_motionDiag) System.Console.Error.WriteLine($"[motion-diag]   content-reflow node={r.Raw.Index} key={_scene.DebugKeyOf(r)} to={to:0.0} wants={wants:0.0}");
+            _anim.ReaimReflow(r, AnimChannel.LayoutH, wants);
+        }
+        _contentReflowScratch.Clear();
+    }
+
+    /// <summary>Does <paramref name="n"/>'s height come from its own content in its parent: no share of a column's free space, not stretched across
+    /// a row, not a layer that fills a z-stack, not a realized virtual row? (Its declared height is the caller's to check.)</summary>
+    private bool HeightFromContent(NodeHandle n)
+    {
+        NodeHandle p = _scene.Parent(n);
+        if (p.IsNull || IsVirtualContent(p)) return false;
+        ref LayoutInput li = ref _scene.Layout(n);
+        ref LayoutInput pl = ref _scene.Layout(p);
+        FlexAlign align = li.AlignSelf == FlexAlign.Auto ? pl.AlignItems : li.AlignSelf;
+        if ((_scene.Flags(p) & NodeFlags.ZStack) != 0) return align is FlexAlign.Center or FlexAlign.End;
+        if (pl.Direction == 1) return li.FlexGrow <= 0f && li.FlexShrink <= 0f;
+        return align != FlexAlign.Stretch;
+    }
+
+    private readonly List<(NodeHandle Node, float Height)> _heightsBelowSaved = new(8);
+
+    /// <summary>Write each live height row under <paramref name="n"/> (of <see cref="_contentReflowScratch"/>) at the height it lands at (its declared
+    /// height, else its aim) into its layout input, saving what stood there for <see cref="RestoreHeightsBelow"/>. A pure query's setup: nothing is
+    /// marked (so each written row and the boxes up to <paramref name="n"/> are named to the probe, <see cref="FlexLayout.ProbeWrote"/>: an
+    /// unmarked box between them answered from its ring with the height the row's interp laid it at), and the restore puts every input back.</summary>
+    private void PresentHeightTargetsBelow(NodeHandle n)
+    {
+        _heightsBelowSaved.Clear();
+        for (int i = 0; i < _contentReflowScratch.Count; i++)
+        {
+            NodeHandle c = _contentReflowScratch[i];
+            if (c == n || !_scene.IsLive(c) || !_anim.TryGetLiveReflow(c, AnimChannel.LayoutH, out float to, out _, out float declared)) continue;
+            bool below = false;
+            for (NodeHandle p = _scene.Parent(c); !p.IsNull && !below; p = _scene.Parent(p)) below = p == n;
+            if (!below) continue;
+            ref LayoutInput cl = ref _scene.Layout(c);
+            _heightsBelowSaved.Add((c, cl.Height));
+            cl.Height = float.IsNaN(declared) ? to : declared;
+            _layout.ProbeWrote(c, n);
+        }
+    }
+
+    private void RestoreHeightsBelow()
+    {
+        for (int i = 0; i < _heightsBelowSaved.Count; i++) _scene.Layout(_heightsBelowSaved[i].Node).Height = _heightsBelowSaved[i].Height;
+        _heightsBelowSaved.Clear();
+    }
+
     private readonly List<AnimEngine.LiveRelayout> _liveRelayoutScratch = new(16);
 
     /// <summary>Re-aim every live SizeMode.Relayout row toward an AUTO size (declared NaN) on its parent's CROSS axis, where the parent stretches it and
@@ -8345,9 +9515,16 @@ public sealed partial class AppHost : IDisposable
             if (!float.IsNaN(declared) || !_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.Exiting) != 0) continue;
             NodeHandle par = _scene.Parent(n);
             if (par.IsNull || (_scene.Flags(par) & NodeFlags.ZStack) != 0) continue;
+            bool horizontal = ch == AnimChannel.SizeW;
+            if (_scene.HasGrid(par))
+            {
+                // A grid cell is stretched to its column track (FlexLayout.ArrangeGrid), never to the grid's inner box: a Recently played tile
+                // easing to its new column's width while a docking panel's slide resizes the grid follows that track, not the whole row.
+                if (horizontal && _layout.TryGetGridCellWidth(n, out float cell) && MathF.Abs(cell - to) >= 0.5f) _anim.RetargetRelayout(n, ch, cell);
+                continue;
+            }
             ref LayoutInput pl = ref _scene.Layout(par);
             ref LayoutInput nl = ref _scene.Layout(n);
-            bool horizontal = ch == AnimChannel.SizeW;
             if ((pl.Direction == 1) != horizontal) continue;   // only the parent's cross axis stretches
             if ((nl.AlignSelf == FlexAlign.Auto ? pl.AlignItems : nl.AlignSelf) != FlexAlign.Stretch || !SizeImposed(par, horizontal)) continue;
             ref readonly RectF pb = ref _scene.Bounds(par);
@@ -8380,7 +9557,20 @@ public sealed partial class AppHost : IDisposable
             NodeHandle p = _scene.Parent(n);
             if (p.IsNull) return true;   // the root: the window's size
             if (IsVirtualContent(p)) return true;   // a realized virtual row: its viewport's item layout sizes it (ArrangeVirtual)
-            if ((_scene.Flags(p) & NodeFlags.ZStack) != 0) return false;
+            if ((_scene.Flags(p) & NodeFlags.ZStack) != 0)
+            {
+                // A z-stack layer FILLS the stack on an axis unless it is aligned Center or End there, or measures at its natural width
+                // (FlexLayout.ArrangeZStack: vertical = AlignSelf, else the stack's AlignItems; horizontal = JustifySelf, else the
+                // stack's Justify read as an alignment). A filling layer's size is the stack's: go on up with the stack itself. A page's
+                // skeleton region over its content is such a layer, so a card under it follows a docking panel's live width too.
+                ref LayoutInput zl = ref _scene.Layout(p);
+                FlexAlign za = horizontal
+                    ? (li.JustifySelf != FlexAlign.Auto ? li.JustifySelf
+                        : zl.Justify == FlexJustify.Center ? FlexAlign.Center : zl.Justify == FlexJustify.End ? FlexAlign.End : FlexAlign.Start)
+                    : (li.AlignSelf != FlexAlign.Auto ? li.AlignSelf : zl.AlignItems);
+                if (za is FlexAlign.Center or FlexAlign.End || (horizontal && li.MeasureUnboundedWidth)) return false;
+                continue;
+            }
             ref LayoutInput pl = ref _scene.Layout(p);
             if ((pl.Direction == 0) == horizontal) return li.FlexGrow > 0f || li.FlexShrink > 0f;   // its parent's main axis: a share of the free space
             if ((li.AlignSelf == FlexAlign.Auto ? pl.AlignItems : li.AlignSelf) != FlexAlign.Stretch) return false;
@@ -8523,6 +9713,8 @@ public sealed partial class AppHost : IDisposable
     private void RunReflowLayout(Size2 layoutSize)
     {
         var roots = _anim.ReflowRoots;
+        // The last width reflow landed (or was cancelled): structure is chosen from the live width again, from this re-solve on.
+        if (_scene.HasDestinationWidths && _anim.CountLiveWidthReflows() == 0) _scene.ClearDestinationWidths(markChanged: true);
         if (!_anim.ConsumeReflowWrites()) { roots.Clear(); _anim.SettledToAuto.Clear(); return; }
         // A WRAPPING box the re-solve narrows or widens re-breaks its lines without a commit, so no projection sees its children move: a group
         // that drops to the next line (a quickplay strip beside a docking panel) would jump there in one tick. Note where every child of a wrapping
@@ -8576,6 +9768,10 @@ public sealed partial class AppHost : IDisposable
             _invalidator.RunDirty(layoutSize);
             _scene.ClearLayoutDirty();
         }
+        // A reflow toward an AUTO height its content sets was aimed at the height the commit that seeded it measured. Its content can re-set
+        // under the row (a card's title re-wraps, or re-renders larger, at the widths a docking panel's slide passes through): re-aim the row
+        // at the height the content wants now, over the time it has left, so it lands there in the one motion.
+        FollowContentReflows(roots);
         // A reflow toward an AUTO size that landed this tick on a size its content has since left (it re-wrapped under the row: a hero whose title
         // re-sets at the widths a docked panel's slide passes through) would show the difference as a one-frame snap now that the restore solved
         // the real size. Glide on from the landed size instead: re-seed the row there and lay this frame out at it.
@@ -8592,8 +9788,11 @@ public sealed partial class AppHost : IDisposable
                 if (MathF.Abs(solved - landed) < 0.5f || !_anim.ReflowContinue(node, ch, landed, solved)) continue;
                 ref LayoutInput li = ref _scene.Layout(node);
                 if (ch == AnimChannel.LayoutW) li.Width = landed; else li.Height = landed;
+                // The node's own input moved, not only its place in the parent: marked, so its arrange cannot early-out on the size it had
+                // (a Zune detail hero's info column re-seeded at the 0 it landed on kept its children laid out at the restore's width).
+                _scene.Mark(node, NodeFlags.LayoutDirty);
                 var parent = _scene.Parent(node);
-                _scene.Mark(parent.IsNull ? node : parent, NodeFlags.LayoutDirty);
+                if (!parent.IsNull) _scene.Mark(parent, NodeFlags.LayoutDirty);
                 reseeded = true;
             }
             settled.Clear();
@@ -9058,8 +10257,27 @@ public sealed partial class AppHost : IDisposable
         _afterFrameLayoutDrain.Clear();
     }
 
+    // The passive drain's slowest context this turn (FrameStats.SlowestEffectMs/Owner): reset per drain, read by the frame turn.
+    private long _slowestEffectTicks;
+    private Type? _slowestEffectOwnerType;
+
+    // Same iteration as DrainPendingEffectContexts (index loop re-reading Count: an effect may register a context), plus a
+    // timestamp pair per context so a slow-frame line can name the component whose effects ate the post-submit tail.
     private void DrainPassiveEffects()
-        => DrainPendingEffectContexts(_pendingPassiveEffectContexts, layout: false);
+    {
+        _slowestEffectTicks = 0;
+        _slowestEffectOwnerType = null;
+        List<RenderContext> contexts = _pendingPassiveEffectContexts;
+        for (int i = 0; i < contexts.Count; i++)
+        {
+            RenderContext ctx = contexts[i];
+            long t0 = Stopwatch.GetTimestamp();
+            Drain(ctx.PendingEffects);
+            long dt = Stopwatch.GetTimestamp() - t0;
+            if (dt > _slowestEffectTicks) { _slowestEffectTicks = dt; _slowestEffectOwnerType = ctx.Owner?.GetType(); }
+        }
+        contexts.Clear();
+    }
 
     private void RegisterPendingEffectContext(RenderContext ctx, bool layout)
         => (layout ? _pendingLayoutEffectContexts : _pendingPassiveEffectContexts).Add(ctx);
@@ -9117,9 +10335,28 @@ public sealed partial class AppHost : IDisposable
             DumpNode(c, depth + 1);
     }
 
-    /// <summary>True during a composited modal edge-drag: HWND size advances but GPU resize + relayout wait for mouse-up.</summary>
+    /// <summary>UI thread, a live-resize step (<see cref="IPlatformWindow.LiveResize"/>): run render turns until the publication this
+    /// Paint just made was presented on this host's swapchain. One turn is not always enough: a pop-out's turn only PROBES its
+    /// present slot (F090: the shared thread never waits on a secondary swapchain), so while its previous present is still queued
+    /// (at most until the next composition) the frame stays pending and the next turn presents it. Bounded by three refresh periods
+    /// so a window whose presents stand down (hidden, covered) or a refused present can never hold the modal loop; the frame is
+    /// then presented by a later turn as usual. Between turns it yields rather than sleeps (a sleep rounds up to the timer quantum).</summary>
+    private void WaitLiveResizePresent(Threading.RenderThread rt)
+    {
+        ulong seq = _framePublishSeq;
+        long deadline = Stopwatch.GetTimestamp() + 3 * RefreshPeriodQpcOrDefault();
+        while (true)
+        {
+            rt.DrainSync();
+            if (RenderPresentSeq >= seq || _renderFailed || Stopwatch.GetTimestamp() >= deadline) return;
+            System.Threading.Thread.Yield();
+        }
+    }
+
+    /// <summary>True during a composited modal edge-drag: HWND size advances but GPU resize + relayout wait for mouse-up. A
+    /// window that opted in to <see cref="IPlatformWindow.LiveResize"/> never defers: each step resizes and relayouts.</summary>
     private bool DeferModalResize(bool keepAlive)
-        => keepAlive && _window.InModalLoop && _window.Composited;
+        => keepAlive && _window.InModalLoop && _window.Composited && !_window.LiveResize;
 
     /// <summary>Layout/submit viewport in DIP while a modal resize is deferred — keep the last presented size until
     /// WM_EXITSIZEMOVE.</summary>
@@ -9170,30 +10407,48 @@ public sealed partial class AppHost : IDisposable
         // rebuilds the swapchain wholesale, and one stale-size frame until the recovery frame lands is invisible next to
         // a crash); anything else is a genuine bug and rethrows. The exception FILTER runs before the finally, so the
         // render loop is still Resumed on both outcomes.
-        if (_isDetachedChild && _parentRenderThread is not null)
+        if (OwningRenderThread is not null)
         {
-            // A pop-out's OWN swapchain resize rides its mailbox (F207), applied on the shared render thread at the top of this
-            // child's next turn - dragging the pop-out's edge never parks the parent's loop, nor the main window's presents.
-            // Latest wins (F093): the several resizes a live drag posts between two turns collapse into one ResizeBuffers.
-            // Invalidate FIRST, then post: the turn that applies the op sees the new epoch, so a frame this host published at the
-            // old size is dropped there and can never be presented against the resized swapchain.
+            // The swapchain resize rides this host's mailbox (F207), applied on the render thread - the swapchain's sole owner - at
+            // the top of its next turn: a bare wake runs it at once (DrainChildRenderSources), so it overlaps this frame's layout, and
+            // the turn that presents this frame's publication drains it again first (SubmitPresentOnRenderThread), so that
+            // publication can never meet the old buffers. The UI never parks the loop for it: the park (Quiesce) waited for the
+            // render thread to finish its turn, present slot included, and stalled every present for that long (40-55 ms at a
+            // full-screen exit). Latest wins (F093): the resizes a live drag posts between two turns collapse into one ResizeBuffers.
+            // Invalidate FIRST, then post: the turn that applies the op sees the new epoch, so a frame published at the old size is
+            // dropped there and can never be presented against the resized swapchain. A pop-out (its parent's thread) is the same.
             _renderSeam.InvalidateTarget();
             PostOwnResize(s);
         }
-        else if (OwningRenderThread is { } rt)
-        {
-            rt.Quiesce();
-            try { _renderSeam.InvalidateTarget(); _swapchain.Resize(s); }
-            catch (Exception) when (_device.NoteIfDeviceLost()) { }
-            finally { rt.Resume(); }
-        }
         else
         {
+            long r0 = Stopwatch.GetTimestamp();
             try { _swapchain.Resize(s); }
             catch (Exception) when (_device.NoteIfDeviceLost()) { }
+            NoteWindowResize(s, "inline", 0, ToMs(Stopwatch.GetTimestamp() - r0));
         }
         _needFullLayout = true;
         return true;
+    }
+
+    // [window.resize] rate limit (UI thread): at most one line per 100 ms, the lines it stood in for counted on the next.
+    private long _resizeLogQpc;
+    private int _resizeLogSuppressed;
+
+    /// <summary>The always-on <c>[window.resize]</c> line of one swapchain resize of THIS host's window (UI thread): the size, the
+    /// path (<c>parked</c>: the UI parked the render thread for it; <c>inline</c>: no render thread), how long the park took to
+    /// reach (<c>quiesceMs</c>, the render thread finishing its turn), the backend's fence wait and buffer rebuild, and the whole
+    /// resize. A resize is an edge (a window size change), never per frame; a burst is rate-limited.</summary>
+    private void NoteWindowResize(Size2 px, string path, double quiesceMs, double resizeMs)
+    {
+        long now = Stopwatch.GetTimestamp();
+        if (_resizeLogQpc != 0 && now - _resizeLogQpc < Stopwatch.Frequency / 10) { _resizeLogSuppressed++; return; }
+        _resizeLogQpc = now;
+        int suppressed = _resizeLogSuppressed;
+        _resizeLogSuppressed = 0;
+        var (waitGpuMs, buffersMs) = _swapchain.LastResizeSplit;
+        Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[window.resize] px={px.Width:F0}x{px.Height:F0} path={path} quiesceMs={quiesceMs:F2} waitGpuMs={waitGpuMs:F2} buffersMs={buffersMs:F2} resizeMs={resizeMs:F2} suppressed={suppressed}"));
     }
 
     private Size2 ClientSizeDip()
@@ -9275,9 +10530,19 @@ public sealed partial class AppHost : IDisposable
             var retiring = _retiringPopups[i];
             retiring.Swapchain?.Dispose();
             retiring.Swapchain = null;
+            retiring.ParkedSwapchain?.Dispose();   // parked by the render thread, its hand-back post not run yet
+            retiring.ParkedSwapchain = null;
             retiring.DisposeWindow();
         }
         _retiringPopups.Clear();
+        // The popup pool: each parked swapchain, then its window (the window outlives its composition swapchain).
+        _popupPoolClosed = true;
+        for (int i = _popupPool.Count - 1; i >= 0; i--)
+        {
+            _popupPool[i].Swapchain.Dispose();
+            _popupPool[i].Window.Dispose();
+        }
+        _popupPool.Clear();
         // INSIDE the park (INCIDENT 2026-09 §1.3): for a detached child the owning thread is the parent's LIVE render
         // thread and DisposeSwapchain's fence wait / ReleaseStencilDsv must not race its recorder.
         _swapchain.Dispose();

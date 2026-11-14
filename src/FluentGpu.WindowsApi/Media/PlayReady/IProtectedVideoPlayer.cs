@@ -84,6 +84,17 @@ public interface IProtectedVideoPlayer : IDisposable
     /// <summary>F066: frames the native renderer DROPPED for the attached source (FRAMES_DROPPED, same accumulation as
     /// <see cref="FramesRendered"/>), as of the last <see cref="Pump()"/>. Counts only the renderer's own drops.</summary>
     long FramesDropped => 0;
+    /// <summary>The native renderer's frame counters as the runtime last READ them (rendered, dropped, and the QPC of that read),
+    /// now rather than as of the last <see cref="Pump()"/>. Any thread, never blocks, never allocates. False while there is no
+    /// sample. Default false: a player with no native engine.</summary>
+    bool TryReadFrameCounters(out MediaFrameCounters counters)
+    {
+        counters = default;
+        return false;
+    }
+    /// <summary>True once every track's feed reached the end of the track (nothing more will be fetched, so no buffer event will
+    /// pump the session again), as of the last <see cref="Pump()"/>. Default false.</summary>
+    bool FeedComplete => false;
     /// <summary>True while a seek is in flight (a JOINING state: the previous frame stays on screen).</summary>
     bool IsSeeking { get; }
     /// <summary>The last seek's landed position in ms, or -1 while none has landed since the last seek was issued.</summary>
@@ -148,18 +159,14 @@ public interface IProtectedVideoPlayer : IDisposable
     void SetVolume(float volume);
     /// <summary>Set the playback rate.</summary>
     void SetRate(float rate);
-    /// <summary>Size the engine's video stream to what the destination can show (device px); empty restores natural.</summary>
+    /// <summary>Size the engine's video stream (device px); empty restores natural. The session pins it to the natural size and
+    /// asks again only when that changes: every real resize rebuilds Media Foundation's protected frame-buffer pool.</summary>
     void SetStreamSize(SizeI size);
     /// <summary>The attributed form of <see cref="SetStreamSize(SizeI)"/>: the same request, tagged with the registry
     /// <paramref name="token"/> of the slot asking and the <paramref name="host"/> ordinal of its window (0 main, 1.. a pop-out) so the
     /// <c>[video] stream.size</c> line names which window and slot wrote it (F235; no native ABI change: the tag only rides the
     /// managed log). The default drops the tag.</summary>
     void SetStreamSize(SizeI size, int token, int host) => SetStreamSize(size);
-    /// <summary>The stream size (device px) the native engine has APPLIED, as of the last <see cref="Pump()"/>: the echo of
-    /// <see cref="SetStreamSize"/> (or the size the swap chain was created at), empty while none has been applied or the
-    /// session is detached. The owner keeps the compositor's content size at the previous value until this equals the size it
-    /// asked for, so DirectComposition never scales a buffer still at the old size by the new size's factor.</summary>
-    SizeI AppliedStreamSize { get; }
     /// <summary>Keep the protected runtime's hidden output-protection (OPM) window over this source's video, so HDCP and image
     /// constriction are attested against the monitor the picture is really on. <paramref name="hostWindow"/> is the presenting
     /// window's native handle (an HWND: the main window or a pop-out) and the rect the video's client-area rect in device

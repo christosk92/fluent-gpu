@@ -516,7 +516,16 @@ public interface IPlatformPopupWindow : IDisposable
 /// The overlay shape (a desktop widget): <paramref name="Topmost"/> = created above every non-topmost window (re-settable through
 /// <see cref="IPlatformWindow.SetTopmost"/>); <paramref name="ToolWindow"/> = no taskbar button and no Alt+Tab entry;
 /// <paramref name="Resizable"/> false = the user cannot drag the frame or maximize (code still sizes it), while the frame, the
-/// shadow and the rounded corners stay. The defaults keep the ordinary app window.</summary>
+/// shadow and the rounded corners stay. The defaults keep the ordinary app window.
+/// A restored placement: <paramref name="InitialBoundsPx"/> (the NORMAL outer rect, physical virtual-screen px; empty = none)
+/// creates the window directly at that rect, clamped by <see cref="WindowPlacementRules.ClampIntoWorkArea"/> into the work area
+/// of the monitor nearest it, and <see cref="SizePx"/> is then ignored; <paramref name="InitialMaximized"/> creates it maximized
+/// on that monitor with that rect as its restore rect. Nothing moves or resizes after creation.
+/// <paramref name="LiveResize"/> = a <paramref name="Composited"/> window lays out, renders and presents every step of an OS
+/// edge-resize loop at the new client size (<see cref="IPlatformWindow.LiveResize"/>), instead of the default defer that keeps
+/// the content at its pre-drag size until mouse-up. For a small window whose layout is a function of its size (a mini player);
+/// the main window keeps the defer. <paramref name="MaxClientSizeDip"/> is the opt-in maximum tracking size in logical DIP,
+/// resolved like <paramref name="MinClientSizeDip"/> (live DPI plus the frame); an empty axis keeps USER32's default.</summary>
 public readonly record struct WindowDesc(
     string Title,
     Size2 SizePx,
@@ -528,7 +537,11 @@ public readonly record struct WindowDesc(
     bool SkipDropAndTouchpad = false,
     bool Topmost = false,
     bool ToolWindow = false,
-    bool Resizable = true);
+    bool Resizable = true,
+    RectF InitialBoundsPx = default,
+    bool InitialMaximized = false,
+    bool LiveResize = false,
+    Size2 MaxClientSizeDip = default);
 
 /// <summary>How native input should affect a bounded platform wait.</summary>
 public enum PlatformInputWakePolicy : byte
@@ -719,8 +732,22 @@ public interface IPlatformWindow : IDisposable
     bool InModalLoop => false;
 
     /// <summary>True when the window's pixels are a DComp flip surface (WS_EX_NOREDIRECTIONBITMAP). Composited windows
-    /// defer GPU resize + relayout to mouse-up during a modal edge-drag; non-composited windows live-paint (throttled).</summary>
+    /// defer GPU resize + relayout to mouse-up during a modal edge-drag (unless <see cref="LiveResize"/>); non-composited
+    /// windows live-paint (throttled).</summary>
     bool Composited => false;
+
+    /// <summary>The descriptor's <see cref="WindowDesc.LiveResize"/>: a composited window that does NOT defer during an edge
+    /// drag. Each size step paints at once (no throttle) BEFORE the window takes the new size (<see cref="PaintingAheadOfSize"/>):
+    /// the host resizes the swapchain, lays out at the new size and presents that frame, so the window's new rect and the frame
+    /// drawn for it reach the same DWM composition. Default false.</summary>
+    bool LiveResize => false;
+
+    /// <summary>True while a <see cref="LiveResize"/> window paints the frame for a size it is about to take (inside
+    /// <c>WM_WINDOWPOSCHANGING</c>, from an edge drag or another program's <c>SetWindowPos</c>): <see cref="ClientSizePx"/> already
+    /// reports that size, and the host lays it out as a resize step and returns only once the frame was presented with its GPU work
+    /// done. The window applies the rect right after, so the flip and the rect land in the same composition: a frame drawn for the
+    /// old size is never shown in the new rect (its far edges a step short of the window's, the stale-frame wobble). Default false.</summary>
+    bool PaintingAheadOfSize => false;
 
     /// <summary>True once the current modal loop has delivered WM_SIZE (edge resize, not pure titlebar move).</summary>
     bool SizedInModalLoop => false;
@@ -728,6 +755,17 @@ public interface IPlatformWindow : IDisposable
     void SetCursor(CursorId id);                                   // L10 cursor seam
     void SetTitle(StringId title);
     void Show();
+    /// <summary>Show the window WITHOUT activating it (Win32 <c>SW_SHOWNOACTIVATE</c>): a window that appears on its own (a mini
+    /// player's reveal) must not take the keyboard focus from the app the user is typing in. A click on it still activates it.
+    /// Default: <see cref="Show"/>.</summary>
+    void ShowNoActivate() => Show();
+    /// <summary>Give this window its own system backdrop (<paramref name="material"/>) and dark attribute, and ask for the rounded
+    /// window corners: a secondary window has none of the main window's startup material. Default: no-op (headless).</summary>
+    void SetMaterial(WindowMaterial material, bool dark) { }
+    /// <summary>Drag anywhere (a custom-frame window with no caption band, such as the mini player): a client point where no titlebar
+    /// region matched and this probe answers true (no click target, pointer handler or focusable element under it; client DIP) is
+    /// reported as the caption, so the OS move loop, Aero Snap and monitor hops own the press. Null (the default) = off.</summary>
+    Func<Point2, bool>? CaptionWhereInert { get => null; set { } }
 
     /// <summary>Hide the window without destroying it (Win32 <c>SW_HIDE</c>: no taskbar button, no Alt+Tab entry, the
     /// HWND and every engine resource stay alive). <see cref="Show"/> brings it back in the placement it had. While
@@ -788,6 +826,13 @@ public interface IPlatformWindow : IDisposable
     /// <see cref="InputKind.WindowFocus"/>/<see cref="InputKind.WindowBlur"/> events; this property is the pull side.</summary>
     bool IsActive => true;
 
+    /// <summary>While on, confirm with the OS that a hovering mouse/pen pointer the input stream last placed in this window is
+    /// still over it (or over one of its popups), and park it (the leave the OS never sent) when it is not: a window shown
+    /// over a resting pointer, a window under it hidden or minimised. Win32 checks the cursor's window every 100 ms while the
+    /// pointer rests in the window and nothing holds it. The host turns it on while something that hides on a window leave
+    /// is showing (<c>InputHooks.WatchPointerPresence</c>). No-op where the platform has no such question (headless).</summary>
+    void SetPointerPresenceWatch(bool on) { }
+
     /// <summary>Engine caption-button commands (Win32: WM_SYSCOMMAND SC_MINIMIZE / SC_MAXIMIZE↔SC_RESTORE / WM_CLOSE).</summary>
     void Minimize() { }
     void ToggleMaximize() { }
@@ -799,6 +844,17 @@ public interface IPlatformWindow : IDisposable
     FluentGpu.Media.SizeI MonitorSizePx => default;
     /// <summary>Enter/leave borderless monitor fullscreen, restoring the exact prior window placement on exit.</summary>
     void SetFullscreen(bool fullscreen) { }
+    /// <summary>The host opts in to <see cref="HasPendingBounds"/>: it commits a held window change right before the first present
+    /// at its client size (<see cref="CommitPendingBounds"/>). Off (the default), <see cref="SetFullscreen"/> changes the window at once.</summary>
+    bool SyncBoundsWithPresent { get => false; set { } }
+    /// <summary>True while a window change (full screen on/off) is held for the first frame at its client size. Read from the
+    /// presenting thread.</summary>
+    bool HasPendingBounds => false;
+    /// <summary>The client size, physical px, the held change (<see cref="HasPendingBounds"/>) will produce.</summary>
+    Size2 PendingBoundsClientPx => default;
+    /// <summary>Apply the held window change now. Any thread: on the window's own thread it applies directly; on another thread it
+    /// posts to the window's thread and waits (bounded) until that thread has applied it. A no-op when nothing is pending.</summary>
+    void CommitPendingBounds() { }
     void CloseWindow() { }
 
     /// <summary>Asked before the window closes (Win32 <c>WM_CLOSE</c>: the caption close button, Alt+F4, the system
@@ -820,6 +876,12 @@ public interface IPlatformWindow : IDisposable
     /// SWP_NOACTIVATE)</c>) — persistent, unlike a one-shot bring-to-front. Used by the pop-out video window's
     /// always-on-top toggle. State-aware callers assert it only while there is video worth watching.</summary>
     void SetTopmost(bool topmost) { }
+
+    /// <summary>Let the system play its own show and hide transitions for this window (true, the default) or not (false: Win32
+    /// <c>DWMWA_TRANSITIONS_FORCEDISABLED</c>). Off while the window's own presentation motion owns its arrival and departure
+    /// (<see cref="WindowPresentationMotion"/>): the system's hide transition draws the window's ground ABOVE the windows around it,
+    /// ignoring the motion that already faded its content. Default: no-op.</summary>
+    void SetSystemTransitions(bool enabled) { }
 
     /// <summary>Programmatically move/resize the window in physical virtual-screen px (restore saved geometry, fit to
     /// content). Win32 <c>SetWindowPos(SWP_NOZORDER|SWP_NOACTIVATE)</c>. The rect is the OUTER window rect.</summary>
@@ -847,6 +909,10 @@ public interface IPlatformWindow : IDisposable
     /// <summary>The descriptor's opt-in minimum client size (<see cref="WindowDesc.MinClientSizeDip"/>, logical DIP at the
     /// raw OS DPI scale; an empty axis = no floor). The size-to-content phase clamps its target to it. Default: none.</summary>
     Size2 MinClientSizeDip => default;
+
+    /// <summary>The descriptor's opt-in maximum client size (<see cref="WindowDesc.MaxClientSizeDip"/>, logical DIP at the raw OS
+    /// DPI scale; an empty axis = no ceiling beyond the platform's). Default: none.</summary>
+    Size2 MaxClientSizeDip => default;
 
     /// <summary>A counter the backend bumps each time the USER resized the window (Win32: a <c>WM_EXITSIZEMOVE</c> whose
     /// modal loop changed the client size, or a restored-to-restored <c>WM_SIZE</c> outside that loop at an unchanged DPI

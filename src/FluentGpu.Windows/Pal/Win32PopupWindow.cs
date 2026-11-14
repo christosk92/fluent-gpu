@@ -39,7 +39,7 @@ public sealed unsafe class Win32PopupWindow : IPlatformPopupWindow
     private const uint WS_POPUP = 0x80000000;
     private const uint WS_EX_TOOLWINDOW = 0x00000080, WS_EX_NOACTIVATE = 0x08000000, WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
     private const int SW_HIDE = 0, SW_SHOWNOACTIVATE = 4;
-    private const uint SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+    private const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
     private const int GWLP_USERDATA = -21;
     private const int IDC_ARROW = 32512;
 
@@ -103,24 +103,35 @@ public sealed unsafe class Win32PopupWindow : IPlatformPopupWindow
 
     public void Show()
     {
+        // On top of every other popup window of the owner: a pooled window can be older than the popup it must cover (a cascade
+        // shown after its root, on a window the pool handed out before the root's), and owned windows keep their own z-order.
+        // A popup shown later is above one shown earlier, so a cascade is above its parent by construction, not by pool order.
+        SetWindowPos(_hwnd, HWND.HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         ShowWindow(_hwnd, SW_SHOWNOACTIVATE);   // never activates — focus stays on the owner (WS_EX_NOACTIVATE)
         _shown = true;
     }
 
     public void Hide()
     {
+        bool was = _shown;
         ShowWindow(_hwnd, SW_HIDE);
         _shown = false;
+        if (was) ResolveOwner()?.RevalidatePointerAfterPopup();   // the pointer may have been on it: a leave nobody reports
     }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        bool was = _shown;
         _shown = false;
         if (_hwnd != HWND.NULL) DestroyWindow(_hwnd);
         if (_self.IsAllocated) _self.Free();
+        if (was) ResolveOwner()?.RevalidatePointerAfterPopup();
     }
+
+    /// <summary>Is top-level <paramref name="hwnd"/> a popup window of this class (any owner)?</summary>
+    internal static bool IsPopupWindow(HWND hwnd) => s_atom != 0 && GetClassWord(hwnd, -32 /* GCW_ATOM */) == s_atom;
 
     [UnmanagedCallersOnly]
     private static LRESULT StaticWndProc(HWND hWnd, uint msg, WPARAM wParam, LPARAM lParam)
@@ -162,6 +173,7 @@ public sealed unsafe class Win32PopupWindow : IPlatformPopupWindow
                 return true;
             case WM_DESTROY:
                 return true;
+
             // Pointer stream → owner: the owner re-decodes from the shared OS pointer id (kind/pressure/timestamp) and
             // converts SCREEN px → OWNER DIP, so the single dispatcher hit-tests the popup subtree at its (out-of-window)
             // scene coordinates. The popup only routes by message type + pointer id; the owner owns the decode + convert.

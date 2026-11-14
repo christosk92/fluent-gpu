@@ -100,6 +100,20 @@ public sealed partial class AppHost
         }
     }
 
+    /// <summary>Presenting thread, immediately before a shown present: a window change the platform is holding for the first frame at
+    /// its client size (full screen on/off, <see cref="IPlatformWindow.HasPendingBounds"/>) is applied now, when the swap chain about
+    /// to be presented already has that size, so DWM gets the window's new rect and the frame drawn for it in the same refresh.
+    /// Frames published at the old size are dropped once the target is invalidated, so the first present that passes here after the
+    /// resize is one laid out for the pending size.</summary>
+    private void CommitWindowBoundsBeforePresent()
+    {
+        if (!_window.HasPendingBounds) return;
+        var want = _window.PendingBoundsClientPx;
+        var have = _swapchain.SizePx;
+        if (have.Width != want.Width || have.Height != want.Height) return;
+        _window.CommitPendingBounds();
+    }
+
     /// <summary>UI thread, frame start: run work no present has picked up for too long.</summary>
     private void DrainStalePresentWork()
     {

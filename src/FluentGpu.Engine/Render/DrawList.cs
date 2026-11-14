@@ -26,7 +26,7 @@ public enum DrawOp : int
                                // NOT the gpu-renderer.md §5 tessellation lane (same non-tessellation-sibling posture as
                                // DrawTabShape) — icons are tiny glyph-shaped workloads that ride the R8 atlas like text.
     DrawVideo = 17,            // the VIDEO HOLE PUNCH (gpu-renderer.md §7.3): ERASES the already-painted UI pixels under
-                               // Dst toward premultiplied zero (dst' = dst×(1−VideoReady×cov)) so the DComp video visual
+                               // Dst toward premultiplied zero (dst' = dst×(1−VideoReady×cov)) so the video visual
                                // z-BELOW the premultiplied UI swapchain shows through. Rides the RoundRect SDF shader on a
                                // third DestOut PSO (SrcBlend=ZERO, DestBlend=INV_SRC_ALPHA) — no new shader, and coverage
                                // AA, per-corner radii, and both clip tiers come free. Painter order only: later siblings
@@ -436,7 +436,7 @@ public readonly record struct DrawIconMaskCmd(RectF Rect, ColorF Tint, int PathI
 // The video hole punch (see DrawOp.DrawVideo). <see cref="Dst"/> is the node-local (DIP) video box with <see cref="Radii"/>
 // per-corner rounding, placed by the baked world <see cref="Transform"/> — the FillRoundRect shape contract exactly.
 // <see cref="SurfaceId"/> is the video registry's slot token: diagnostic at replay only, since the presenter positions the
-// DComp visual independently. <see cref="VideoReady"/> (0..1) is the ERASE STRENGTH — the backend writes premultiplied
+// video visual independently. <see cref="VideoReady"/> (0..1) is the ERASE STRENGTH — the backend writes premultiplied
 // (0,0,0,VideoReady·cov·Opacity) through a DestOut blend, so 1 fully clears the hole and 0 records nothing.
 public readonly record struct DrawVideoCmd(RectF Dst, CornerRadius4 Radii, int SurfaceId, float VideoReady, Affine2D Transform, float Opacity);
 // A general rounded-rect ERASE (DrawOp.EraseRoundRect): dst' = dst x (1 - Strength*coverage*Opacity), premultiplied.
@@ -549,8 +549,6 @@ public sealed class DrawList
     /// nested slice writes its own arena byte for byte again: the recorder then keeps that arena's scan.)</summary>
     public bool BytesEqualPrior() => _len == _priorLen && _buf.AsSpan(0, _len).SequenceEqual(_priorBuf.AsSpan(0, _priorLen));
 
-    /// <summary>Diagnostics (<c>--fg rewalk-validate</c>): the first op whose bytes differ between the current buffer and the
-    /// prior one — its offset and opcode in each (−1 when past that buffer's end).</summary>
     /// <summary>Diagnostics (<c>--fg rewalk-validate</c>): do the current and prior buffers differ ONLY by float drift — the same
     /// length, and every differing 4-byte word a finite, normal float (never a small integer, which reads as a denormal) within
     /// <paramref name="eps"/> of the prior one? (A world recomputed through another float path: the same pixels.)</summary>
@@ -569,19 +567,27 @@ public sealed class DrawList
         return true;
     }
 
-    internal void FirstOpDifferingFromPrior(out int offset, out int curOp, out int priorOp)
+    /// <summary>Diagnostics (<c>--fg rewalk-validate</c>): the first BYTE that differs between the current buffer and the prior
+    /// one (<paramref name="offset"/>), the start of the op holding it (<paramref name="opStart"/>, its opcode word: the same in
+    /// both, which share every byte before the difference; −1 when neither holds one), and its opcode in each (−1 past that
+    /// buffer's end, −2 an op of unknown size on the way).</summary>
+    internal void FirstOpDifferingFromPrior(out int offset, out int opStart, out int curOp, out int priorOp)
     {
         int n = Math.Min(_len, _priorLen), d = _buf.AsSpan(0, n).CommonPrefixLength(_priorBuf.AsSpan(0, n));
-        offset = d; curOp = OpAt(_buf, _len, d); priorOp = OpAt(_priorBuf, _priorLen, d);
+        offset = d;
+        curOp = OpAt(_buf, _len, d, out int curStart);
+        priorOp = OpAt(_priorBuf, _priorLen, d, out int priorStart);
+        opStart = priorStart >= 0 ? priorStart : curStart;
 
-        static int OpAt(byte[] b, int len, int at)
+        static int OpAt(byte[] b, int len, int at, out int start)
         {
             int pos = 0;
+            start = -1;
             while (pos + sizeof(int) <= len)
             {
                 var op = (DrawOp)System.Runtime.InteropServices.MemoryMarshal.Read<int>(b.AsSpan(pos));
                 if (!FluentGpu.Rhi.RepaintStreamSafety.TryBodySize(op, out int body)) return -2;
-                if (at < pos + sizeof(int) + body) return (int)op;
+                if (at < pos + sizeof(int) + body) { start = pos; return (int)op; }
                 pos += sizeof(int) + body;
             }
             return -1;
@@ -930,7 +936,7 @@ public sealed class DrawList
     }
 
     /// <summary>The video hole punch (see <see cref="DrawVideoCmd"/>): ERASE the already-painted UI pixels under
-    /// <paramref name="dst"/> toward premultiplied zero at strength <paramref name="videoReady"/>, so the DComp video
+    /// <paramref name="dst"/> toward premultiplied zero at strength <paramref name="videoReady"/>, so the video
     /// visual composited BELOW the UI swapchain shows through. Emit it AFTER everything it must erase and BEFORE the
     /// chrome that must sit over the video — the hole is painter-ordered like any other primitive.</summary>
     public void DrawVideo(in RectF dst, in CornerRadius4 radii, int surfaceId, float videoReady, in Affine2D transform, float opacity, ulong sortKey = 0)

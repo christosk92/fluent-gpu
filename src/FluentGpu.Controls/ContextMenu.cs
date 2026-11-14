@@ -226,12 +226,15 @@ public static class ContextMenu
         }
         if (strip is not null) children.Add(strip.Value);
         children.Add(menu);
-        return new BoxEl
+        // Capped at the placement's room (PopupRoom): in a short window the header and the strip keep their size and the
+        // menu's list scrolls (MenuFlyoutPresenter's scroller gives way), instead of the column running past the window.
+        var column = new BoxEl
         {
             Direction = 1,
             MinWidth = minWidth,
             Children = children.ToArray(),
         };
+        return Embed.Comp(column, () => new PopupRoomColumn());
     }
 
     private static Element Header(in ContextMenuHeader header, bool touch)

@@ -435,8 +435,14 @@ internal sealed class MenuFlyoutPresenter : Component
     public ControlSize Size = ControlSize.Medium;
 
     // WinUI MenuFlyoutPresenter ScrollViewer max before internal scroll (mirrors the flyout's content cap; AutoSuggest
-    // uses 374 — menus share the same overlay sizing). Content shorter than this never scrolls.
+    // uses 374 — menus share the same overlay sizing). Content shorter than this never scrolls. A placement with less room
+    // caps it lower (PopupRoom).
     const float MaxHeight = 468f;
+
+    /// <summary>The height this level's list may take: <see cref="MaxHeight"/>, or the room its placement has
+    /// (<see cref="PopupRoom.Height"/>) when that is less.</summary>
+    static float ListCap(IOverlayService svc, Signal<OverlayPlacementInfo>? placement)
+        => MathF.Min(MaxHeight, PopupRoom.Height(svc, placement, MenuFlyout.DefaultStyle.Plate));
 
     MenuCascade? _cascade;
     NodeHandle[] _rowNodes = [];
@@ -448,6 +454,16 @@ internal sealed class MenuFlyoutPresenter : Component
         var hooks = UseContext(InputHooks.Current);
         var timers = UseContext(HostTimers.Current);
         var highlight = UseSignal(-1);                            // keyboard cursor index; -1 = none (pointer-only)
+        // The list's cap: the room this level's placement has (PopupRoom), re-read whenever the overlay places it (a
+        // window resize, the first measured placement that decides window or not) and re-rendered only when it changes.
+        var placement = UseContext(Overlay.Placement);
+        var listCap = UseSignal(ListCap(svc, placement));
+        UseEffect(() =>
+        {
+            _ = placement?.Value;
+            float cap = ListCap(svc, placement);
+            if (MathF.Abs(cap - listCap.Peek()) >= 0.5f) listCap.Value = cap;
+        });
         if (_rowNodes.Length != Items.Count) _rowNodes = new NodeHandle[Items.Count];
 
         // This level's cascade, wired once (the items and the parent are mount-time fields of this presenter).
@@ -497,7 +513,9 @@ internal sealed class MenuFlyoutPresenter : Component
             if (!IsSelectable(i)) return;
             highlight.Value = i;
             var node = _rowNodes[i];
-            if (!node.IsNull) hooks.MoveFocusVisual?.Invoke(node);
+            if (node.IsNull) return;
+            hooks.MoveFocusVisual?.Invoke(node);
+            ScrollReveal.Row(Context.Scene, node);   // a row past the capped list's viewport scrolls into view
         }
 
         void Move(int delta)
@@ -558,7 +576,12 @@ internal sealed class MenuFlyoutPresenter : Component
             }
             else if (a.KeyCode == Keys.Left)
             {
-                if (ParentCascade is { } parent) { parent.CloseChild(); a.Handled = true; }
+                // Left closes the innermost open level. Focus on THIS level while a cascade of it is open (hover opened it, so
+                // focus never moved into it): close that cascade and stay on this row, as WinUI's Left does from inside the
+                // submenu (close it, focus back on its parent row). Only with no cascade of its own does a submenu level close
+                // itself (and a root level hand Left to the MenuBar).
+                if (cascade.OpenIndex.Peek() >= 0) { cascade.CloseChild(); a.Handled = true; }
+                else if (ParentCascade is { } parent) { parent.CloseChild(); a.Handled = true; }
                 else if (OnNavigate is { } nav) { nav(-1); a.Handled = true; }
             }
         }
@@ -610,15 +633,18 @@ internal sealed class MenuFlyoutPresenter : Component
             Children = rows,
         };
 
-        // Size to content (the common case) and cap at MaxHeight with internal scroll, matching
-        // MenuFlyoutPresenterScrollViewer. The layout engine content-sizes auto scroll viewports, then clamps by MaxHeight.
+        // Size to content (the common case) and cap at the room the placement has (at most MaxHeight) with internal scroll,
+        // matching MenuFlyoutPresenterScrollViewer. The layout engine content-sizes auto scroll viewports, then clamps by
+        // MaxHeight; a clipped list feathers the edge it overflows (the scroll edge cue), so the rows below read as more.
         var parentCascade = ParentCascade;
         return new ScrollEl
         {
             Content = column,
             ContentSized = true,
             MinWidth = MinWidth,
-            MaxHeight = MaxHeight,
+            MaxHeight = listCap.Value,
+            Shrink = 1f, MinHeight = 0f,                          // gives way inside a capped column (ContextMenu's header + strip)
+            EdgeCues = ScrollEdgeCues.Auto,
             // This level's rect: its own "pointer left the menu" test, and for a cascaded level the level that opened it
             // (the aim triangle's far edge, the chain test).
             OnRealized = h =>

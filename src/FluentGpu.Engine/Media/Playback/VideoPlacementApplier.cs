@@ -28,7 +28,7 @@ internal struct VideoPresentIntent
     public RectF RectDip;           // desired content rect in DIP
     public RectF ViewportDip;        // visible container; smaller than RectDip for center-crop
     public float RadiusDip;
-    public uint ContentW, ContentH;
+    public VideoAlphaRamp Ramp;      // the picture's alpha ramp in window DIP, as published (none = opaque)
     public int Z;
 }
 
@@ -48,11 +48,61 @@ internal struct VideoPosedHole
     /// video would show through.</summary>
     public RectF RoundRect;
     public float RoundR;
-    /// <summary>F087 occlusion verdict of this turn's composite: nothing paints over the visible part of the hole after the video's own
-    /// <c>DrawVideo</c> (not a later op of its segment, not a later segment, slice, backdrop or hole in painter order). False is the
-    /// conservative answer - anything the recorder cannot prove clear (a hole inside an inline group layer, a fully clipped hole, a
-    /// default value) - and keeps the video an underlay. Judged on the painted bounds of whole segments, so it can only err towards "covered".</summary>
-    public bool Unoccluded;
+    /// <summary>The frosted plates the composite placed over this hole after it in painter order (window DIP), at most
+    /// <see cref="VideoHoleBackdrops.Max"/>: the presenter shows the video blurred beneath each (<see cref="IVideoPresenter.SetBackdrops"/>).</summary>
+    public VideoHoleBackdrops Backdrops;
+    public int BackdropCount;
+}
+
+/// <summary>One frosted plate over a video hole (<see cref="VideoPosedHole.Backdrops"/>), window DIP: the plate's rect cut to its
+/// composite clip, its corner radii, the acrylic's blur sigma, its tint and luminosity opacity (the compositor's luminosity step) and the
+/// plate's composite opacity.</summary>
+internal struct VideoHoleBackdrop
+{
+    public RectF Rect;
+    public CornerRadius4 Radii;
+    public float Sigma;
+    public ColorF Tint;
+    public float Luminosity;
+    public float Opacity;
+
+    public readonly bool Same(in VideoHoleBackdrop o)
+        => Rect == o.Rect && Radii == o.Radii && Sigma == o.Sigma && Tint == o.Tint && Luminosity == o.Luminosity
+           && MathF.Abs(Opacity - o.Opacity) < 0.002f;
+}
+
+/// <summary>The fixed inline set of plates one hole carries (no allocation: the posed holes are copied by value every turn).</summary>
+[System.Runtime.CompilerServices.InlineArray(Max)]
+internal struct VideoHoleBackdrops
+{
+    /// <summary>Plates per hole: the full-screen stage's transport card, Up next column and its tab, the pivot bar, a now-playing card, a menu.</summary>
+    public const int Max = 8;
+    private VideoHoleBackdrop _e0;
+}
+
+/// <summary>The plates one hole carries as the presenter was given them (device px, <see cref="VideoBackdropPx"/>).</summary>
+[System.Runtime.CompilerServices.InlineArray(VideoHoleBackdrops.Max)]
+internal struct VideoBackdropPxs
+{
+    private VideoBackdropPx _e0;
+}
+
+/// <summary>The plates one surface was given for ONE presented frame (device px), with the device submit serial of that frame, whose
+/// veils they back (<see cref="FluentGpu.Rhi.ISwapchain.LastSubmitSerial"/>).</summary>
+internal struct VideoPlateFrame
+{
+    public ulong Serial;
+    public int Count;
+    public VideoBackdropPxs Plates;
+}
+
+/// <summary>The plates of a surface's last presented frames, newest first: the history a plate's retreat waits on (a frame's GPU work
+/// retires in submit order, and the swap chain bounds how many are in flight).</summary>
+[System.Runtime.CompilerServices.InlineArray(Depth)]
+internal struct VideoPlateFrames
+{
+    public const int Depth = 4;
+    private VideoPlateFrame _e0;
 }
 
 /// <summary>A rect under a uniform ROUNDED clip (a rounded box <c>roundRect</c> of radius <c>r</c>, the recorder's tier-2 clip: its SDF box
@@ -136,47 +186,106 @@ internal sealed class VideoPlacementApplier
         public RectF AppliedClip;           // the composite clip the placement was last cut by (Infinite = none)
         public RectF AppliedRound;          // the rounded clip that cut a corner of the hole at the last placement (window DIP)
         public float AppliedRoundR;         // its radius (0 = none)
-        public VideoOverlayGate Overlay;    // F087: the promotion state the next placement applies (above the UI plane or below it)
-        public bool AppliedOverlay;         // the z-order the presenter was last given
+        public VideoHoleBackdrops AppliedBackdrops;   // the frosted plates over the hole the presenter was last given (window DIP)
+        public int AppliedBackdropCount;
+        public PlacementPx AppliedPx;       // the placement the presenter was last given, in device px (what the glass shows)
+        public VideoBackdropPxs AppliedPlatesPx;   // the plates it was last given, in device px
+        // What the presenter SHOWS (ShowPlates): the newest frame's plates, plus what an older frame still on the glass needs (a plate
+        // retreats only once the flip that drops its veil has retired); the frames it is taken from, newest first; whether it is more
+        // than the newest list right now, since when, and for how many turns.
+        public VideoBackdropPxs ShownPlatesPx;
+        public int ShownPlateCount;
+        public VideoPlateFrames PlateFrames;
+        public int PlateFrameCount;
+        public bool PlatesHeld;
+        public long HeldSinceQpc;
+        public int HeldTurns;
+    }
+
+    /// <summary>One surface's placement exactly as <see cref="PlaceSlot"/> hands it to the presenter: device pixels, snapped the way
+    /// the presenter composes them (<see cref="VideoSurfaceRegistry.SnapToDevicePixels"/>), plus the pose it was cut by (DIP), which is
+    /// bookkeeping for the next turn's change pre-filter and not part of what the glass shows.</summary>
+    private struct PlacementPx
+    {
+        public RectF Dev, Viewport;
+        public bool ViewportEmpty, Visible;
+        public CornerRadius4 Radii;
+        public VideoAlphaRamp Ramp;          // device px from Dev's leading edge (none = opaque)
+        public int Z;
+        public float Dx, Dy;
+        public RectF Clip, Round;
+        public float RoundR;
+
+        /// <summary>Would the presenter show the same thing? A hidden surface shows nothing, so two hidden placements are the same.</summary>
+        public readonly bool SameOnGlass(in PlacementPx o)
+            => Visible == o.Visible
+               && (!Visible || (Dev == o.Dev && ViewportEmpty == o.ViewportEmpty && (ViewportEmpty || Viewport == o.Viewport)
+                                && Radii == o.Radii && Ramp.Equals(o.Ramp) && Z == o.Z));
+    }
+
+    // A plate is the same on the glass when its device-px rect, corners, blur and recipe are, and its opacity is within half an
+    // 8-bit step (the tolerance the DIP pre-filter, VideoHoleBackdrop.Same, has always used).
+    private static bool SamePlate(in VideoBackdropPx a, in VideoBackdropPx b)
+        => a.Rect == b.Rect && a.Radii == b.Radii && a.Sigma == b.Sigma && a.Tint == b.Tint && a.Luminosity == b.Luminosity
+           && MathF.Abs(a.Opacity - b.Opacity) < 0.002f;
+
+    private readonly VideoBackdropPx[] _backdropScratch = new VideoBackdropPx[VideoHoleBackdrops.Max];
+    private readonly VideoBackdropPx[] _shownScratch = new VideoBackdropPx[VideoHoleBackdrops.Max];
+    // The submit serial of the frame the presenting turn delivers (0 = unknown: its plates count as retired at once) and the device's
+    // newest retired one (NoteGpuProgress, RetireHeldPlates).
+    private ulong _turnSerial;
+    private ulong _completedSerial = ulong.MaxValue;
+    // A hold at least this long is the GPU queue keeping a flip back (a healthy retreat retires within a refresh or two): logged.
+    private const double HoldNoteMs = 25.0;
+
+    private static bool SameBackdrops(in Slot s, ReadOnlySpan<VideoPosedHole> posed)
+    {
+        int at = BackdropHole(posed, s.Intent.Token);
+        int n = at < 0 ? 0 : posed[at].BackdropCount;
+        if (s.AppliedBackdropCount != n) return false;
+        for (int k = 0; k < n; k++)
+            if (!s.AppliedBackdrops[k].Same(in posed[at].Backdrops[k])) return false;
+        return true;
+    }
+
+    // The plates' rects and opacities for the change line (cold: only when a plate comes or goes).
+    private static string PlateList(ReadOnlySpan<VideoPosedHole> posed, int at, int n)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int k = 0; k < n; k++)
+        {
+            ref readonly VideoHoleBackdrop b = ref posed[at].Backdrops[k];
+            sb.Append($" [{b.Rect.X:0},{b.Rect.Y:0},{b.Rect.W:0}x{b.Rect.H:0} a={b.Opacity:0.##}]");
+        }
+        return sb.ToString();
+    }
+
+    // The hole of this token that carries frosted plates (-1: none). By token alone, never through the pose lookup: a UniformToFill surface
+    // (the stage's canvas) places a rect larger than its hole node, so it has no hole origin and no pose, yet its hole has plates. Two holes
+    // sharing a token (the fullscreen hand-off) list their plates on whichever was painted under them; the first that has any wins.
+    private static int BackdropHole(ReadOnlySpan<VideoPosedHole> posed, int token)
+    {
+        for (int k = 0; k < posed.Length; k++)
+            if (posed[k].Token == token && posed[k].BackdropCount > 0) return k;
+        return -1;
     }
 
     private readonly VideoSurfaceRegistry _registry;
     private readonly Slot[] _slots = new Slot[MaxSurfaces];
     private readonly long[] _freedGen = new long[MaxSurfaces];   // the newest incarnation of each slot this side finished with
     private readonly VideoPresentIntent[] _mail = new VideoPresentIntent[MaxSurfaces];
-    private IVideoPresenter? _drainedBy;   // the presenter the last apply targeted; a different instance means the old one's DComp objects are gone
+    private IVideoPresenter? _drainedBy;   // the presenter the last apply targeted; a different instance means the old one's composition objects are gone
     private uint _drainSeq;                // applies that did work; the clock the failed-bind backoff counts in
     private int _boundBits;                // slots with a bound, committed surface (render-owned; the UI sees it through PostResult)
     private bool _boundChanged;            // this apply changed _boundBits
+    private int _censusLive, _censusPlates;   // this applier's share last published to MediaCensus (bound+shown surfaces, plates over them)
     private bool _publishDue;              // changes were applied with the device Commit deferred: readiness waits for PublishCommitted
     private bool _anyDirty;
     private bool _structuralPending;       // a live slot still needs its surface created or its handle bound
     private int _seenStructuralVersion;    // the registry's structural version this side has adopted
     private bool _lastTurnMoved;
-    private bool? _overlaySwitch;          // a test's stand-in for EngineSwitches.VideoOverlay (null = read the switch)
 
     internal VideoPlacementApplier(VideoSurfaceRegistry registry) { _registry = registry; }
-
-    /// <summary>F087: whether overlay promotion is on for this applier. Reads <see cref="FluentGpu.Hosting.EngineSwitches.VideoOverlay"/>
-    /// (default off) unless a test pinned it; a surface is promoted only when this holds AND the presenter reports
-    /// <see cref="IVideoPresenter.SupportsOverlay"/>.</summary>
-    internal bool OverlayEnabled
-    {
-        get => _overlaySwitch ?? FluentGpu.Hosting.EngineSwitches.VideoOverlay;
-        set => _overlaySwitch = value;
-    }
-
-    // Promotion needs the switch and a presenter that says its output can take a plane; _drainedBy is the presenter of the last apply
-    // (null before the first one: nothing is promoted until a presenter has been seen).
-    private bool OverlayEligible() => OverlayEnabled && _drainedBy is { SupportsOverlay: true };
-
-    // Why a surface is where it is, for the change line only (cold): the gate's inputs in the order they are checked.
-    private string OverlayReason(in Slot s, IVideoPresenter presenter)
-        => s.Overlay.Above ? "clear"
-         : !OverlayEnabled ? "switch-off"
-         : !presenter.SupportsOverlay ? "no-plane"
-         : s.Intent.RadiusDip > 0f || s.AppliedRoundR > 0f ? "rounded"
-         : "covered-or-hold";
 
     /// <summary>Counter (render thread writes): applies that moved an already-placed surface.</summary>
     internal long MotionTurns { get; private set; }
@@ -256,14 +365,14 @@ internal sealed class VideoPlacementApplier
     }
 
     private static bool GeometryChanged(in VideoPresentIntent a, in VideoPresentIntent b)
-        => a.RectDip != b.RectDip || a.ViewportDip != b.ViewportDip || a.RadiusDip != b.RadiusDip
-           || a.ContentW != b.ContentW || a.ContentH != b.ContentH || a.Visible != b.Visible || a.Z != b.Z
+        => a.RectDip != b.RectDip || a.ViewportDip != b.ViewportDip || a.RadiusDip != b.RadiusDip || !a.Ramp.Equals(b.Ramp)
+           || a.Visible != b.Visible || a.Z != b.Z
            || a.HasHoleOrigin != b.HasHoleOrigin || a.HoleX != b.HoleX || a.HoleY != b.HoleY || a.HoleW != b.HoleW || a.HoleH != b.HoleH;
 
     private static void CopyGeometry(ref VideoPresentIntent dst, in VideoPresentIntent src)
     {
-        dst.RectDip = src.RectDip; dst.ViewportDip = src.ViewportDip; dst.RadiusDip = src.RadiusDip;
-        dst.ContentW = src.ContentW; dst.ContentH = src.ContentH; dst.Visible = src.Visible; dst.Z = src.Z;
+        dst.RectDip = src.RectDip; dst.ViewportDip = src.ViewportDip; dst.RadiusDip = src.RadiusDip; dst.Ramp = src.Ramp;
+        dst.Visible = src.Visible; dst.Z = src.Z;
         dst.HasHoleOrigin = src.HasHoleOrigin; dst.HoleX = src.HoleX; dst.HoleY = src.HoleY; dst.HoleW = src.HoleW; dst.HoleH = src.HoleH;
         dst.HasGeometry = true;
     }
@@ -298,10 +407,6 @@ internal sealed class VideoPlacementApplier
     // read off THIS turn's composite, so a composite-only scroll turn or a compositor-animation turn moves the video with the hole.
     private void MarkPosedDirty(ReadOnlySpan<VideoPosedHole> posed, float scale)
     {
-        // F087: the overlay verdict rides the same per-turn pose read. The gate is idempotent for one turn's inputs, so the second
-        // read of the same turn (PrepareGeometry, then ApplyTurn) changes nothing; a z-order change dirties the slot but is not a move.
-        bool overlayEligible = OverlayEligible();
-        long now = overlayEligible ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         for (int i = 0; i < MaxSurfaces; i++)
         {
             ref Slot s = ref _slots[i];
@@ -309,25 +414,138 @@ internal sealed class VideoPlacementApplier
             float dx = 0f, dy = 0f;
             RectF clip = RectF.Infinite, round = default;
             float roundR = 0f;
-            bool unoccluded = false;
+            bool backdropsSame = SameBackdrops(in s, posed);
             if (s.Intent.HasHoleOrigin && TryGetPosed(posed, in s.Intent, out VideoPosedHole ph))
             {
                 dx = ph.Hole.X - s.Intent.HoleX;
                 dy = ph.Hole.Y - s.Intent.HoleY;
                 clip = ph.EffClip;
                 round = ph.RoundRect; roundR = ph.RoundR;
-                unoccluded = ph.Unoccluded;
             }
-            // A rounded surface stays an underlay: DWM cannot put a rounded-clipped visual on a hardware plane, so promoting it would only
-            // move it above the UI to be composed all the same (the fallback is composition either way; the reason is logged on change).
-            bool overlayChanged = s.Overlay.Update(overlayEligible && s.Intent.RadiusDip <= 0f && roundR <= 0f, unoccluded, now) != s.AppliedOverlay;
+            // A frosted plate that moved, resized or faded over the hole is a geometry move too: its blurred copy must land with the
+            // flip that carries the plate's veil (Stage B), or the blur trails the card it sits under by a frame.
             bool poseSame = MathF.Abs(dx - s.AppliedDx) <= PoseEpsilonDip && MathF.Abs(dy - s.AppliedDy) <= PoseEpsilonDip
-                && s.AppliedScale == scale && clip == s.AppliedClip && round == s.AppliedRound && roundR == s.AppliedRoundR;
-            if (poseSame && !overlayChanged) continue;
+                && s.AppliedScale == scale && clip == s.AppliedClip && round == s.AppliedRound && roundR == s.AppliedRoundR
+                && backdropsSame;
+            if (poseSame) continue;
             s.Dirty = true;
-            if (!poseSame) s.GeomDirty = true;
+            s.GeomDirty = true;
             _anyDirty = true;
         }
+    }
+
+    /// <summary>F070 Stage B on what the glass can show. Adopt and <see cref="MarkPosedDirty"/> flag a geometry change on the DIP floats
+    /// (a rect, a pose, a clip, a plate); a flagged slot whose placement, snapped to device pixels exactly as <see cref="PlaceSlot"/>
+    /// hands it over, equals the one the presenter already has is no move - a spring's sub-pixel tail, a pose that jitters in the last
+    /// digits - so it neither arms the fence-waited present nor re-places nor commits. The slot stays dirty only for what it still owes
+    /// (a bind). Idempotent for one turn's inputs (PrepareGeometry, then ApplyTurn).</summary>
+    private void DropUnmovedPlacements(ReadOnlySpan<VideoPosedHole> posed, float scale)
+    {
+        bool any = false;
+        for (int i = 0; i < MaxSurfaces; i++)
+        {
+            ref Slot s = ref _slots[i];
+            if (s.InUse && s.Dirty && s.GeomDirty && s.Placed && s.HasGeometry && !s.SurfaceId.IsNone && !s.Intent.ReleasePending
+                && SameOnGlass(ref s, scale, posed))
+            {
+                s.GeomDirty = false;
+                s.Dirty = s.Intent.DesiredHandle != 0 && s.Intent.DesiredHandle != s.BoundHandle;
+            }
+            if (s.InUse && s.Dirty) any = true;
+        }
+        _anyDirty = any;
+    }
+
+    private bool SameOnGlass(ref Slot s, float scale, ReadOnlySpan<VideoPosedHole> posed)
+    {
+        ComputePlacement(in s.Intent, scale, posed, VideoApplyScope.Full, out PlacementPx p);
+        if (!p.SameOnGlass(in s.AppliedPx)) return false;
+        if (!p.Visible) return true;
+        int n = FillPlates(posed, s.Intent.Token, scale, out _);
+        if (n != s.AppliedBackdropCount) return false;
+        for (int k = 0; k < n; k++)
+            if (!SamePlate(in s.AppliedPlatesPx[k], in _backdropScratch[k])) return false;
+        return true;
+    }
+
+    // The placement the presenter is given for this intent: the published rect moved by the hole's posed travel (a presenting turn
+    // only; the early drain places at the published rect), its viewport cut by the posed composite clip, both in whole device pixels,
+    // and its corners.
+    private static void ComputePlacement(in VideoPresentIntent it, float scale, ReadOnlySpan<VideoPosedHole> posed, VideoApplyScope scope,
+        out PlacementPx p)
+    {
+        p = default;
+        p.Clip = RectF.Infinite;
+        bool posedHole = false;
+        if (scope == VideoApplyScope.Full && it.HasHoleOrigin && TryGetPosed(posed, in it, out VideoPosedHole ph))
+        {
+            p.Dx = ph.Hole.X - it.HoleX;
+            p.Dy = ph.Hole.Y - it.HoleY;
+            p.Clip = ph.EffClip;
+            p.Round = ph.RoundRect; p.RoundR = ph.RoundR;
+            posedHole = true;
+        }
+        RectF rectDip = it.RectDip;
+        RectF viewportDip = it.ViewportDip.W > 0f && it.ViewportDip.H > 0f ? it.ViewportDip : it.RectDip;
+        if (p.Dx != 0f || p.Dy != 0f)
+        {
+            rectDip = new RectF(rectDip.X + p.Dx, rectDip.Y + p.Dy, rectDip.W, rectDip.H);
+            viewportDip = new RectF(viewportDip.X + p.Dx, viewportDip.Y + p.Dy, viewportDip.W, viewportDip.H);
+        }
+        p.Visible = it.Visible;
+        if (posedHole && !p.Clip.IsInfinite)
+        {
+            // The composite cut the hole to this clip; the video's own clip follows it (a hole scrolled under a header shows no video there).
+            viewportDip = viewportDip.Intersect(p.Clip);
+            p.ViewportEmpty = viewportDip.IsEmpty;
+            if (p.ViewportEmpty) p.Visible = false;
+        }
+
+        // Whole device pixels (rule R, SnapToDevicePixels): the presenter composites the frame and its clip on the pixel
+        // grid, so the video edge shares a boundary with the UI hole's snapped erase rect instead of landing on a
+        // fractional offset that DWM resamples into a one-pixel halo.
+        p.Dev = VideoSurfaceRegistry.SnapToDevicePixels(new RectF(rectDip.X * scale, rectDip.Y * scale, rectDip.W * scale, rectDip.H * scale));
+        p.Viewport = VideoSurfaceRegistry.SnapToDevicePixels(new RectF(viewportDip.X * scale, viewportDip.Y * scale, viewportDip.W * scale, viewportDip.H * scale));
+        // The corners: the element's own radius, and wherever a rounded clip over the hole cuts a corner of what the video shows (the clip the
+        // presenter applies: the viewport within the rect), that clip's arc - the erase spares the UI outside the arc, so a square visual
+        // would show through it where the UI is transparent (a Mica window's clear beyond a floating pane's rounded corner).
+        float own = it.RadiusDip * scale;
+        p.Radii = new CornerRadius4(own, own, own, own);
+        if (p.RoundR > 0f && !p.ViewportEmpty)
+        {
+            RectF shown = p.Viewport.Intersect(p.Dev);
+            CornerRadius4 arc = VideoRoundClip.CornerRadii(in shown,
+                new RectF(p.Round.X * scale, p.Round.Y * scale, p.Round.W * scale, p.Round.H * scale), p.RoundR * scale);
+            p.Radii = new CornerRadius4(MathF.Max(own, arc.TopLeft), MathF.Max(own, arc.TopRight),
+                MathF.Max(own, arc.BottomRight), MathF.Max(own, arc.BottomLeft));
+        }
+        // The alpha ramp (window DIP) moves with the hole's posed travel, as the rect does, and lands in device px from the snapped rect's
+        // own leading edge, so the fade sits where the UI drew its complement whatever the snap did to the rect's origin.
+        if (!it.Ramp.IsNone)
+        {
+            bool across = it.Ramp.Axis == VideoRampAxis.LeftToRight;
+            float devLead = across ? p.Dev.X : p.Dev.Y;
+            p.Ramp = it.Ramp.Mapped(across ? p.Dx : p.Dy, scale);
+            p.Ramp.From -= devLead;
+            p.Ramp.To -= devLead;
+        }
+        p.Z = it.Z;
+    }
+
+    // The frosted plates over this token's hole in device px, on the same grid as the hole, into _backdropScratch: the count.
+    private int FillPlates(ReadOnlySpan<VideoPosedHole> posed, int token, float scale, out int at)
+    {
+        at = BackdropHole(posed, token);
+        int n = at < 0 ? 0 : posed[at].BackdropCount;
+        for (int k = 0; k < n; k++)
+        {
+            ref readonly VideoHoleBackdrop b = ref posed[at].Backdrops[k];
+            _backdropScratch[k] = new VideoBackdropPx(
+                VideoSurfaceRegistry.SnapToDevicePixels(new RectF(b.Rect.X * scale, b.Rect.Y * scale, b.Rect.W * scale, b.Rect.H * scale)),
+                new CornerRadius4(b.Radii.TopLeft * scale, b.Radii.TopRight * scale, b.Radii.BottomRight * scale, b.Radii.BottomLeft * scale),
+                b.Sigma * scale, b.Tint, b.Luminosity, b.Opacity);
+        }
+        return n;
     }
 
     /// <summary>Before the present: adopt the frame's intents and work out whether the apply that follows will MOVE a surface that is
@@ -338,6 +556,7 @@ internal sealed class VideoPlacementApplier
         Adopt(intents);
         if (scale <= 0f) scale = 1f;
         MarkPosedDirty(posed, scale);
+        DropUnmovedPlacements(posed, scale);
         for (int i = 0; i < MaxSurfaces; i++)
         {
             ref Slot s = ref _slots[i];
@@ -400,7 +619,7 @@ internal sealed class VideoPlacementApplier
             _drainedBy = presenter;
         }
         if (scale <= 0f) scale = 1f;
-        if (scope == VideoApplyScope.Full) MarkPosedDirty(posed, scale);
+        if (scope == VideoApplyScope.Full) { MarkPosedDirty(posed, scale); DropUnmovedPlacements(posed, scale); }
         if (!_anyDirty)
         {
             if (scope == VideoApplyScope.Structural) _structuralPending = AnyNeedsStructural();
@@ -434,8 +653,8 @@ internal sealed class VideoPlacementApplier
                 s.SurfaceId = presenter.CreateSurface();
                 if (s.SurfaceId.IsNone)
                 {
-                    // The presenter's own native call failed (device-lost/removed, out of DComp resources, ...); it is non-throwing
-                    // (DCompVideoPresenter.Ok) and already logged once for this HRESULT. Leave the slot Dirty so THIS slot retries
+                    // The presenter's own native call failed (device-lost/removed, out of composition resources, ...); it is non-throwing
+                    // (CompositionVideoPresenter.Ok) and already logged once for this HRESULT. Leave the slot Dirty so THIS slot retries
                     // CreateSurface on the next apply instead of the surface silently never appearing.
                     continue;
                 }
@@ -449,7 +668,9 @@ internal sealed class VideoPlacementApplier
                 if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"CreateSurface -> id={s.SurfaceId.Value}");
             }
 
-            if (s.Intent.DesiredHandle != 0 && s.Intent.DesiredHandle != s.BoundHandle && _drainSeq >= s.NextBindDrain)
+            bool contentOnlyScope = scope is VideoApplyScope.Structural or VideoApplyScope.ContentOnly;
+            if (s.Intent.DesiredHandle != 0 && s.Intent.DesiredHandle != s.BoundHandle && _drainSeq >= s.NextBindDrain
+                && !(contentOnlyScope && ShowsPlacedPicture(in s)))
             {
                 // BoundHandle records only a bind the presenter reports as done: a transient CreateSurfaceFromHandle /
                 // SetContent failure leaves the slot dirty and retries with a growing backoff (2, 4 ... 64 applies), so
@@ -484,7 +705,6 @@ internal sealed class VideoPlacementApplier
             // glass already shows its hole the moment it is committed); a re-bound existing surface keeps its placement, and every
             // later move waits for the presenting turn. The slot stays dirty either way, so that turn still applies the authoritative
             // placement.
-            bool contentOnlyScope = scope is VideoApplyScope.Structural or VideoApplyScope.ContentOnly;
             if (contentOnlyScope && !created) continue;
             if (!s.HasGeometry)
             {
@@ -533,78 +753,163 @@ internal sealed class VideoPlacementApplier
     private void PlaceSlot(IVideoPresenter presenter, ref Slot s, int i, float scale, ReadOnlySpan<VideoPosedHole> posed,
         VideoApplyScope scope, bool announce)
     {
-        VideoPresentIntent it = s.Intent;
         // The posed travel of the hole this surface sits behind: the same slice pose the composite just applied, so the video moves
-        // exactly as far as the hole. Only a presenting turn poses (the early drain places at the published rect).
-        float dx = 0f, dy = 0f;
-        RectF clip = RectF.Infinite, round = default;
-        float roundR = 0f;
-        bool posedHole = false;
-        if (scope == VideoApplyScope.Full && it.HasHoleOrigin && TryGetPosed(posed, in it, out VideoPosedHole ph))
+        // exactly as far as the hole (ComputePlacement; only a presenting turn poses, the early drain places at the published rect).
+        ComputePlacement(in s.Intent, scale, posed, scope, out PlacementPx p);
+        presenter.Place(s.SurfaceId, p.Dev, 1f, p.Z);
+        if (!p.ViewportEmpty) presenter.SetViewport(s.SurfaceId, p.Viewport);
+        presenter.SetCornerRadii(s.SurfaceId, p.Radii);
+        presenter.SetAlphaRamp(s.SurfaceId, in p.Ramp);
+        // The frosted plates over the hole (an acrylic card the composite drew after it): the presenter blurs the video beneath each,
+        // in device px on the same grid as the hole. Only a presenting turn knows them (the early drain keeps what it has).
+        if (scope == VideoApplyScope.Full)
         {
-            dx = ph.Hole.X - it.HoleX;
-            dy = ph.Hole.Y - it.HoleY;
-            clip = ph.EffClip;
-            round = ph.RoundRect; roundR = ph.RoundR;
-            posedHole = true;
+            int n = FillPlates(posed, s.Intent.Token, scale, out int at);
+            if (n != s.AppliedBackdropCount) Diag.Line($"[video.surface] plates token={i + 1} n={n}" + PlateList(posed, at, n));   // cold: a plate comes or goes
+            for (int k = 0; k < n; k++)
+            {
+                s.AppliedBackdrops[k] = posed[at].Backdrops[k];
+                s.AppliedPlatesPx[k] = _backdropScratch[k];
+            }
+            s.AppliedBackdropCount = n;
+            PushPlateFrame(ref s, n);
+            ShowPlates(presenter, ref s, i);
         }
-        RectF rectDip = it.RectDip;
-        RectF viewportDip = it.ViewportDip.W > 0f && it.ViewportDip.H > 0f ? it.ViewportDip : it.RectDip;
-        if (dx != 0f || dy != 0f)
-        {
-            rectDip = new RectF(rectDip.X + dx, rectDip.Y + dy, rectDip.W, rectDip.H);
-            viewportDip = new RectF(viewportDip.X + dx, viewportDip.Y + dy, viewportDip.W, viewportDip.H);
-        }
-        bool visible = it.Visible;
-        bool viewportEmpty = false;
-        if (posedHole && !clip.IsInfinite)
-        {
-            // The composite cut the hole to this clip; the video's own clip follows it (a hole scrolled under a header shows no video there).
-            viewportDip = viewportDip.Intersect(clip);
-            viewportEmpty = viewportDip.IsEmpty;
-            if (viewportEmpty) visible = false;
-        }
-
-        // Whole device pixels (rule R, SnapToDevicePixels): the presenter composites the frame and its clip on the pixel
-        // grid, so the video edge shares a boundary with the UI hole's snapped erase rect instead of landing on a
-        // fractional offset that DWM resamples into a one-pixel halo.
-        var dev = VideoSurfaceRegistry.SnapToDevicePixels(new RectF(rectDip.X * scale, rectDip.Y * scale, rectDip.W * scale, rectDip.H * scale));
-        var viewportDev = VideoSurfaceRegistry.SnapToDevicePixels(new RectF(viewportDip.X * scale, viewportDip.Y * scale, viewportDip.W * scale, viewportDip.H * scale));
-        presenter.SetContentSize(s.SurfaceId, it.ContentW, it.ContentH);   // so it scales the frame to fill `dev` (not 1:1-cropped)
-        presenter.Place(s.SurfaceId, dev, 1f, it.Z);
-        if (!viewportEmpty) presenter.SetViewport(s.SurfaceId, viewportDev);
-        // The corners: the element's own radius, and wherever a rounded clip over the hole cuts a corner of what the video shows (the clip the
-        // presenter applies: the viewport within the rect), that clip's arc - the erase spares the UI outside the arc, so a square visual
-        // would show through it where the UI is transparent (a Mica window's clear beyond a floating pane's rounded corner).
-        float own = it.RadiusDip * scale;
-        CornerRadius4 radii = new(own, own, own, own);
-        if (roundR > 0f && !viewportEmpty)
-        {
-            RectF shown = viewportDev.Intersect(dev);
-            CornerRadius4 arc = VideoRoundClip.CornerRadii(in shown,
-                new RectF(round.X * scale, round.Y * scale, round.W * scale, round.H * scale), roundR * scale);
-            radii = new CornerRadius4(MathF.Max(own, arc.TopLeft), MathF.Max(own, arc.TopRight),
-                MathF.Max(own, arc.BottomRight), MathF.Max(own, arc.BottomLeft));
-        }
-        presenter.SetCornerRadii(s.SurfaceId, radii);
-        presenter.SetVisible(s.SurfaceId, visible);
-        // F087: the z-order the turn's verdict chose (above the UI plane only while nothing paints over the rect), given to the
-        // presenter on a change only, so a default-off run makes no extra presenter call at all.
-        if (s.Overlay.Above != s.AppliedOverlay)
-        {
-            presenter.SetOverlay(s.SurfaceId, s.Overlay.Above);
-            s.AppliedOverlay = s.Overlay.Above;
-            Diag.Line($"[video.surface] overlay token={i + 1} id={s.SurfaceId.Value} above={(s.AppliedOverlay ? "true" : "false")} reason={OverlayReason(in s, presenter)}");
-        }
+        presenter.SetVisible(s.SurfaceId, p.Visible);
 
         if (s.Placed && s.GeomDirty) _lastTurnMoved = true;
         s.Placed = true;
         s.GeomDirty = false;
-        s.AppliedDx = dx; s.AppliedDy = dy; s.AppliedScale = scale; s.AppliedClip = clip; s.AppliedRound = round; s.AppliedRoundR = roundR;
+        s.AppliedDx = p.Dx; s.AppliedDy = p.Dy; s.AppliedScale = scale; s.AppliedClip = p.Clip; s.AppliedRound = p.Round; s.AppliedRoundR = p.RoundR;
+        s.AppliedPx = p;
+        RectF dev = p.Dev;
         // Only on the apply that created/bound (a resize re-places every frame; that stays Debug-only below).
         if (announce)
-            Diag.Line($"[video.surface] place token={i + 1} id={s.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) content={it.ContentW}x{it.ContentH} visible={visible} scale={scale:0.##}");
-        if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"Place id={s.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) visible={visible} scale={scale:0.##} pose=({dx:0.##},{dy:0.##})");
+            Diag.Line($"[video.surface] place token={i + 1} id={s.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) visible={p.Visible} scale={scale:0.##}");
+        if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"Place id={s.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) visible={p.Visible} scale={scale:0.##} pose=({p.Dx:0.##},{p.Dy:0.##})");
+    }
+
+    // ── frosted plates: a retreat waits for its flip ──────────────────────────────────────────────────────────────
+
+    /// <summary>Render thread, before the <see cref="ApplyTurn"/> of a presenting turn: the submit serial of the frame it presents (whose
+    /// veils this turn's plates back) and the device's newest retired serial. A plate over a video and the veil the swap chain draws over it
+    /// reach the glass by two roads: the presenter's change with the next DWM composition after the commit, the flip only once its GPU
+    /// work has retired (F070 Stage B waits for that at most one refresh). A plate that came or grew may show early (a frost under no menu
+    /// yet), but one that shrank, faded or went ahead of its flip leaves the old veil and its text over the sharp picture: the
+    /// see-through menu, for as long as the GPU queue holds the flip back (30-500 ms measured on 2026-11-11 under DRM playback). So a
+    /// retreat is held until the frame that drops the veil has retired (<see cref="ShowPlates"/>, <see cref="RetireHeldPlates"/>). A host
+    /// that never calls this (no render thread) retires everything at once, as before.</summary>
+    internal void NoteGpuProgress(ulong turnSerial, ulong completedSerial)
+    {
+        _turnSerial = turnSerial;
+        _completedSerial = completedSerial;
+    }
+
+    /// <summary>Some surface shows more plates than its newest frame asks for (a retreat waits for its flip): the render loop keeps
+    /// turning until <see cref="RetireHeldPlates"/> lets them go. Render thread.</summary>
+    internal bool HoldsPlates
+    {
+        get
+        {
+            for (int i = 0; i < MaxSurfaces; i++)
+                if (_slots[i].InUse && _slots[i].PlatesHeld) return true;
+            return false;
+        }
+    }
+
+    /// <summary>Render thread, every render turn while <see cref="HoldsPlates"/>: hand each held surface the plates its frames still
+    /// on the glass need now that the GPU retired up to <paramref name="completedSerial"/>. True when the presenter was given new lists
+    /// (applied with the device commit deferred: the caller commits).</summary>
+    internal bool RetireHeldPlates(IVideoPresenter presenter, ulong completedSerial)
+    {
+        if (DeferAll) return false;   // a frozen frame (E2): the thaw frame's apply hands every list over
+        if (!ReferenceEquals(presenter, _drainedBy))
+        {
+            // Another presenter (a recovery is rebuilding): what the old one showed is gone with it, and the next apply resets the slots.
+            for (int i = 0; i < MaxSurfaces; i++) _slots[i].PlatesHeld = false;
+            return false;
+        }
+        _completedSerial = completedSerial;
+        bool wrote = false;
+        for (int i = 0; i < MaxSurfaces; i++)
+        {
+            ref Slot s = ref _slots[i];
+            if (!s.InUse || !s.PlatesHeld) continue;
+            if (s.SurfaceId.IsNone) { NoteHold(ref s, i, false); continue; }
+            wrote |= ShowPlates(presenter, ref s, i);
+        }
+        if (wrote) presenter.ApplyPending();
+        return wrote;
+    }
+
+    // This presenting turn's plates (device px, _backdropScratch[0..n]) become the slot's newest frame; a second apply for the same
+    // frame replaces it. Without a serial there is no history: the newest frame is all there is.
+    private void PushPlateFrame(ref Slot s, int n)
+    {
+        if (_turnSerial == 0) s.PlateFrameCount = 1;
+        else if (s.PlateFrameCount == 0 || s.PlateFrames[0].Serial != _turnSerial)
+        {
+            int keep = Math.Min(s.PlateFrameCount, VideoPlateFrames.Depth - 1);
+            for (int j = keep; j > 0; j--) s.PlateFrames[j] = s.PlateFrames[j - 1];
+            s.PlateFrameCount = keep + 1;
+        }
+        ref VideoPlateFrame f = ref s.PlateFrames[0];
+        f.Serial = _turnSerial;
+        f.Count = n;
+        for (int k = 0; k < n; k++) f.Plates[k] = _backdropScratch[k];
+    }
+
+    // What the presenter shows: the newest frame's plates, plus, from each older frame back to (not past) the newest one whose GPU
+    // work has retired - the flip DWM may still be composing - every plate the newest list no longer covers: a plate that went or
+    // moved stays where it was, a fading one keeps its higher opacity. Plates are matched by rect and corners (a fading card keeps
+    // both). The presenter is given the list only when it differs from what it shows. True when it was given one.
+    private bool ShowPlates(IVideoPresenter presenter, ref Slot s, int i)
+    {
+        ref VideoPlateFrame head = ref s.PlateFrames[0];
+        int n = head.Count;
+        for (int k = 0; k < n; k++) _shownScratch[k] = head.Plates[k];
+        bool held = false;
+        for (int j = 1; j < s.PlateFrameCount; j++)
+        {
+            if (s.PlateFrames[j - 1].Serial <= _completedSerial) break;   // that newer frame retired: nothing older is on the glass
+            ref VideoPlateFrame f = ref s.PlateFrames[j];
+            for (int k = 0; k < f.Count; k++)
+            {
+                VideoBackdropPx p = f.Plates[k];
+                int m = 0;
+                while (m < n && !(_shownScratch[m].Rect == p.Rect && _shownScratch[m].Radii == p.Radii)) m++;
+                if (m < n)
+                {
+                    if (p.Opacity > _shownScratch[m].Opacity + 0.002f) { _shownScratch[m] = _shownScratch[m] with { Opacity = p.Opacity }; held = true; }
+                }
+                else if (n < VideoHoleBackdrops.Max) { _shownScratch[n++] = p; held = true; }
+            }
+        }
+        bool same = n == s.ShownPlateCount;
+        for (int k = 0; same && k < n; k++) same = SamePlate(in _shownScratch[k], in s.ShownPlatesPx[k]);
+        if (!same)
+        {
+            presenter.SetBackdrops(s.SurfaceId, _shownScratch.AsSpan(0, n));
+            for (int k = 0; k < n; k++) s.ShownPlatesPx[k] = _shownScratch[k];
+            s.ShownPlateCount = n;
+        }
+        NoteHold(ref s, i, held);
+        return !same;
+    }
+
+    private static void NoteHold(ref Slot s, int i, bool held)
+    {
+        if (held)
+        {
+            if (!s.PlatesHeld) { s.PlatesHeld = true; s.HeldSinceQpc = System.Diagnostics.Stopwatch.GetTimestamp(); s.HeldTurns = 0; }
+            s.HeldTurns++;
+            return;
+        }
+        if (!s.PlatesHeld) return;
+        s.PlatesHeld = false;
+        double ms = System.Diagnostics.Stopwatch.GetElapsedTime(s.HeldSinceQpc).TotalMilliseconds;
+        // Cold: one line per hold that outlived a few refreshes (the GPU queue held the flip back), never per frame.
+        if (ms >= HoldNoteMs) Diag.Line($"[video.surface] plates held token={i + 1} ms={ms:F1} turns={s.HeldTurns} (the flip that drops their veil had not retired)");
     }
 
     /// <summary>Changes were applied with the device commit deferred and no commit has been published for them yet: the host
@@ -649,9 +954,17 @@ internal sealed class VideoPlacementApplier
 
     // ── shadow helpers ────────────────────────────────────────────────────────────────────────────────────────────
 
-    // The slot has a handle the presenter must still create a surface for or bind (the structural drain's work list).
+    // The slot has a handle the presenter must still create a surface for or bind (the structural drain's work list). A new handle
+    // for a surface that is placed and SHOWN is not structural work: it waits for the presenting turn (see ShowsPlacedPicture).
     private static bool NeedsStructural(in Slot s)
-        => s.InUse && !s.Intent.ReleasePending && s.Intent.DesiredHandle != 0 && (s.SurfaceId.IsNone || s.Intent.DesiredHandle != s.BoundHandle);
+        => s.InUse && !s.Intent.ReleasePending && s.Intent.DesiredHandle != 0
+           && (s.SurfaceId.IsNone || (s.Intent.DesiredHandle != s.BoundHandle && !ShowsPlacedPicture(in s)));
+
+    // A surface on the glass: placed and last given as visible. Its content changes hands (a re-bound handle: the next source's
+    // first frame after a held picture, a format change's new swap chain) only in a turn that also applies the placement and content
+    // size published with it. Rebound early (the structural drain, an elided turn), the new buffer would be composed at the OLD
+    // placement and content size until the presenting turn: a frame at the wrong scale. A hidden or new surface binds early as ever.
+    private static bool ShowsPlacedPicture(in Slot s) => s.Placed && s.AppliedPx.Visible && !s.SurfaceId.IsNone;
 
     private bool AnyNeedsStructural()
     {
@@ -677,8 +990,9 @@ internal sealed class VideoPlacementApplier
             s.BindFailures = 0;
             s.NextBindDrain = 0;
             s.Placed = false;
-            s.Overlay.Reset();        // the new presenter's visuals start below the UI plane
-            s.AppliedOverlay = false;
+            s.ShownPlateCount = 0;    // the new presenter shows no plates, and no frame of the old one is its history
+            s.PlateFrameCount = 0;
+            s.PlatesHeld = false;
             s.GeomDirty = s.HasGeometry;
             s.Dirty = true;
             ClearBound(i);
@@ -733,15 +1047,27 @@ internal sealed class VideoPlacementApplier
         _registry.PostResult(i, s.Intent.Gen, s.SurfaceId.Value, ((_boundBits >> i) & 1) != 0, releaseDone: false);
     }
 
-    // The live-surface flag the window reads (SetHasLiveVideo): created, bound, visible.
+    // The live-surface flag the window reads (SetHasLiveVideo): created, bound, visible. Also this applier's share of the process's
+    // bound-surface and plate counts (MediaCensus.BoundVideoSurfaces, shown or not, and PlatesOverVideo, over shown ones: what the
+    // device's untracked-memory sampler keys on), published as deltas: zero cost while nothing changes.
     private void PublishLive()
     {
-        int mask = 0;
+        int mask = 0, live = 0, plates = 0;
         for (int i = 0; i < MaxSurfaces; i++)
         {
             ref Slot s = ref _slots[i];
-            if (s.InUse && !s.Intent.ReleasePending && s.Intent.Visible && !s.SurfaceId.IsNone && s.BoundHandle != 0) mask |= 1 << i;
+            if (!s.InUse || s.Intent.ReleasePending || s.SurfaceId.IsNone || s.BoundHandle == 0) continue;
+            live++;
+            if (!s.Intent.Visible) continue;
+            mask |= 1 << i;
+            plates += s.AppliedBackdropCount;
         }
         _registry.SetLiveMask(mask);
+        if (live != _censusLive || plates != _censusPlates)
+        {
+            MediaCensus.NoteVideoSurfaces(live - _censusLive, plates - _censusPlates);
+            _censusLive = live;
+            _censusPlates = plates;
+        }
     }
 }

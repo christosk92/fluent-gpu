@@ -1325,7 +1325,7 @@ not conflict.
    2D; backdrop noise degrades to no-noise (the `Noise` recipe flag is ignored). No crash, documented
    downgrade.
 8. **Live Acrylic on a secondary swapchain** (a windowed popup / detached pop-out — the direct `SubmitDrawList`
-   route, which composites NO layers): the acrylic paints its opaque `FallbackColor` (WinUI's no-transparency answer)
+   route, whose opacity / blur / edge-fade layers render through scratch surfaces as the main window's do): the acrylic paints its opaque `FallbackColor` (WinUI's no-transparency answer)
    instead of a frost (`gpu-renderer.md` §13.1).
 9. **Device-lost during a bake:** the bake RTs are GPU realizations reconstructible from CPU state
    (`architecture-spec.md` §5.1 invariant) — recovery re-bakes from the retained `BackdropRecipe` + art

@@ -683,7 +683,14 @@ public sealed class RenderThread : IDisposable
     /// Allocation only here, on the 1 Hz path; the window resets when motion stops.</summary>
     private void ReportPace(long now, bool motionLive)
     {
-        if (!motionLive) { _paceWindowStartQpc = 0; return; }
+        if (!motionLive)
+        {
+            // A window shorter than a second ends with the motion (a half-second glide is ALL of one): its misses would otherwise
+            // never be reported. One short line when it missed a tick; a clean short window stays silent.
+            if (_paceWindowStartQpc != 0 && _missedMotionTicks - _paceMissed0 > 0) ReportShortPaceWindow(now);
+            _paceWindowStartQpc = 0;
+            return;
+        }
         long tickSeq = _displayClock?.TickSeq ?? 0;
         if (_paceWindowStartQpc == 0)
         {
@@ -736,6 +743,18 @@ public sealed class RenderThread : IDisposable
         FluentGpu.Foundation.Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
             $"[render.pace] tick={tickSeq}(+{tickSeq - _paceWindowTickSeq}) fresh={_freshPresents - _paceFresh0} motion={_motionPresents - _paceMotion0} skipped={_skippedTicks - _paceSkipped0} race={_raceHits - _paceRace0} missed={_missedMotionTicks - _paceMissed0} slotWaitAvg={slotAvg:F2} slotWaitMax={_slotWaitMaxQpc * toMs:F2} slotTimeouts={host.SlotLivenessTimeouts - _paceSlotTimeouts0} timeoutTarget={timeoutTarget} childWaitMax={host.NonPrimaryLatencyWaitMaxMs:F2} childTimeouts={childTimeouts} presentLagMax={_presentLagMaxQpc * toMs:F2} clockPeriod={(clock?.MeasuredPeriodQpc ?? 0) * toMs:F3} ignored={ignored - _paceIgnored0} slotDrops={slotDrops - _paceSlotDrops0} decimating={((clock?.Decimating ?? false) ? 1 : 0)} depth={host.PresentQueueDepth} governorEma={host.GovernorEmaMs:F2} governor={(host.GovernorEngaged ? 1 : 0)} wait={host.LastWaitKind} gpuMs={host.GpuExecutionMs:F2} worst(lag={_presentLagMaxQpc * toMs:F2} wake={_worstWakeQpc * toMs:F2} slot={_worstSlotQpc * toMs:F2} work={_worstWorkQpc * toMs:F2} run={(float.IsNaN(_worstRunMs) ? "?" : _worstRunMs.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))} {_worstSplit.Format(_worstSlotQpc * toMs, _worstWorkQpc * toMs)} tick={_worstTick} atMs={_worstDoneQpc * toMs:F1}) catchUp={_catchUpSkips - _paceCatchUp0} costEma={_catchUp.CostEmaMs:F2} backoff={(_catchUp.BackingOff(tickSeq) ? 1 : 0)} childDrain(avg={childDrainAvg:F2} max={_childDrainMaxQpc * toMs:F2} n={_childDrainCount}) quiet={quiet}{child}"));
         _paceWindowStartQpc = 0;   // next turn opens a fresh window
+    }
+
+    /// <summary>The <c>[render.pace] short</c> line: a motion window that ended before its second was up and missed at least one
+    /// motion tick (a glide, a full-screen edge). The window's own counters and its worst present, nothing more. Render thread; cold
+    /// (one line per such motion run).</summary>
+    private void ReportShortPaceWindow(long now)
+    {
+        double toMs = 1000.0 / Stopwatch.Frequency;
+        long tickSeq = _displayClock?.TickSeq ?? 0;
+        double slotAvg = _slotWaitCount == 0 ? 0 : _slotWaitSumQpc * toMs / _slotWaitCount;
+        FluentGpu.Foundation.Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[render.pace] short windowMs={(now - _paceWindowStartQpc) * toMs:F1} tick={tickSeq}(+{tickSeq - _paceWindowTickSeq}) fresh={_freshPresents - _paceFresh0} motion={_motionPresents - _paceMotion0} skipped={_skippedTicks - _paceSkipped0} missed={_missedMotionTicks - _paceMissed0} slotWaitAvg={slotAvg:F2} slotWaitMax={_slotWaitMaxQpc * toMs:F2} presentLagMax={_presentLagMaxQpc * toMs:F2} worst(lag={_presentLagMaxQpc * toMs:F2} wake={_worstWakeQpc * toMs:F2} slot={_worstSlotQpc * toMs:F2} work={_worstWorkQpc * toMs:F2} {_worstSplit.Format(_worstSlotQpc * toMs, _worstWorkQpc * toMs)} tick={_worstTick} atMs={_worstDoneQpc * toMs:F1})"));
     }
 
     private long _paceQuietWindows;   // quiet [render.pace] windows since the last printed line

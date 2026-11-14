@@ -94,53 +94,43 @@ public interface IMediaClockSource
     bool TryReadClock(out MediaClockSample sample);
 }
 
-/// <summary>How big a composited video stream should be. ONE owner for both Windows backends (the clear
-/// <c>MfMediaSession</c> and the protected <c>ProtectedMediaSession</c>), so the two can never disagree about the buffer
-/// a destination is worth. <see cref="ContentSizeFor"/> is the continuous ideal; the sessions size the stream with
-/// <see cref="BucketedSizeFor"/> through a <see cref="VideoStreamSizeGate"/> so layout never drives the swap chain.
+/// <summary>The renderer's frame counters as the engine last READ them (not as of the last state pump): rendered and dropped
+/// frames of the current source, and the <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> they were read at (0 = never).
+/// A reader differences two samples over the time between their <see cref="SampledTimestamp"/>s.</summary>
+public readonly record struct MediaFrameCounters(long Rendered, long Dropped, long SampledTimestamp);
+
+/// <summary>A session whose frame counters can be read between state pumps (the published <c>PlaybackStatistics</c> is the
+/// counters as of the last pump).</summary>
+public interface IMediaFrameCounterSource
+{
+    /// <summary>The engine's latest counter sample. Any thread; never blocks, never allocates. False while there is none.</summary>
+    bool TryReadFrameCounters(out MediaFrameCounters counters);
+}
+
+/// <summary>How big a composited video stream should be for the clear <c>MfMediaSession</c>: it sizes the stream with
+/// <see cref="BucketedSizeFor"/> through a <see cref="VideoStreamSizeGate"/> so layout never drives the swap chain. (The
+/// protected <c>ProtectedMediaSession</c> pins its stream to the natural size instead: see the gate's pinned mode.) The
+/// compositor stretches whatever buffer the swap chain holds to the placed rect, so the stream size decides quality and
+/// memory, never where or how big the picture is.
 /// <para>The stream follows the on-screen size in BOTH directions (F089): below the natural frame it is a bucket of it, above
-/// it the stream is upscaled by Media Foundation's video processor (filtered) instead of by DirectComposition's transform,
+/// it the stream is upscaled by Media Foundation's video processor (filtered) instead of by the compositor's stretch,
 /// up to <c>max(monitor, natural)</c>, and a fullscreen presentation asks for the monitor-fit size outright. Without a
 /// monitor size (<see cref="VideoDisplay.HasMonitor"/> false: headless, or a backend that cannot report one) the cap is the
 /// natural size and nothing is ever upscaled, the behaviour before F089.</para></summary>
 public static class VideoStreamSizing
 {
-    /// <summary>The size (device px) to render the decoded frame at inside the engine's own swap chain, which is ALSO
-    /// the content size handed to the compositor — the two must agree or DirectComposition scales by the wrong factor.
-    /// <para>It is the destination's size on screen, on both axes by one factor, so the frame's aspect ratio — the input
-    /// to the fit — survives exactly. The factor is chosen from the axis that is magnified MOST, so a Fill/UniformToFill
-    /// destination never samples a smaller buffer up again. Below 1 it keeps a frame far larger than its rect from
-    /// allocating buffers nobody can see (a 4K stream in a 480-px card); above 1 (the destination is bigger than the frame:
-    /// fullscreen, a large dock) the stream is upscaled by Media Foundation, capped at <c>max(monitor, natural)</c> so no
-    /// buffer is bigger than any screen can show. A fullscreen presentation asks for the monitor-fit size.</para>
-    /// <para>A natural size that is not known yet falls back to the destination rect, so the surface still presents
-    /// something during the pump or two before the engine answers.</para></summary>
-    public static SizeI ContentSizeFor(SizeI natural, RectF videoRect, float scale, VideoDisplay display = default)
-    {
-        // A rect that is not laid out (the element pumps with an empty one before its area exists) is not a destination:
-        // it is worth NO buffer, so it answers the natural size (or "unknown") rather than a 2x1 swap chain (F051).
-        if (!IsLaidOut(videoRect)) return natural;
-        float s = scale <= 0f ? 1f : scale;
-        int dw = Math.Max(1, (int)MathF.Round(videoRect.W * s));
-        int dh = Math.Max(1, (int)MathF.Round(videoRect.H * s));
-        if (natural.IsEmpty) return new SizeI(dw, dh);
-        float factor = NeedFactor(natural, dw, dh, display, out _);
-        if (!float.IsFinite(factor)) return natural;
-        return ScaledSize(natural, MathF.Min(factor, MaxFactor(natural, display)));
-    }
-
     // A destination within this fraction of the monitor-fit size, in a fullscreen window, IS the fullscreen video (rounding,
     // a sub-pixel margin). A window that is fullscreen while the video sits in a small dock is not: it keeps its own size.
     private const float FullscreenSnap = 0.95f;
     // An upscaled stream is kept while it stays within [need x 0.97, need x 1.15]: a few percent under is an imperceptible
-    // DirectComposition scale, a few percent over wastes nothing worth a swap-chain re-allocation (the hysteresis of the
+    // compositor stretch, a few percent over wastes nothing worth a swap-chain re-allocation (the hysteresis of the
     // downscale buckets, for the continuous range above the natural size).
     private const float UpscaleUnder = 0.97f;
     private const float UpscaleOver = 1.15f;
 
     /// <summary>The factor of the natural frame the destination asks for: the most magnified axis. In a fullscreen window,
     /// a destination that reaches the monitor-fit size is lifted to exactly it (<paramref name="exact"/>), so the stream
-    /// lands on the monitor size and DirectComposition's remaining scale is 1.</summary>
+    /// lands on the monitor size and the compositor's remaining stretch is 1.</summary>
     private static float NeedFactor(SizeI natural, int dw, int dh, VideoDisplay display, out bool exact)
     {
         float need = MathF.Max((float)dw / natural.Width, (float)dh / natural.Height);
@@ -169,8 +159,8 @@ public static class VideoStreamSizing
                         Math.Max(1, (int)MathF.Round(natural.Height * factor)));
 
     /// <summary>True when <paramref name="videoRect"/> is a real destination (both extents positive). The element pumps with
-    /// <c>default</c> for an area that is not laid out yet or has collapsed to zero; no session may size a stream, a content
-    /// size or a placement from that (F051).</summary>
+    /// <c>default</c> for an area that is not laid out yet or has collapsed to zero; no session may size a stream or a
+    /// placement from that (F051).</summary>
     public static bool IsLaidOut(RectF videoRect) => videoRect.W > 0f && videoRect.H > 0f;
 
     // The fractions of the natural frame the stream may be rendered at, largest first. A destination never asks for an
@@ -189,7 +179,8 @@ public static class VideoStreamSizing
     /// the destination's own size, upscaled by Media Foundation, capped at <c>max(monitor, natural)</c> and kept while it stays
     /// within a few percent of the destination. A fullscreen window whose video fills the monitor asks for exactly the
     /// monitor-fit size. A <paramref name="display"/> with no monitor size never upscales. A natural size that is not known
-    /// yet answers the destination itself. Pure.</summary>
+    /// yet answers the destination itself. A full-screen video begins a stay instead: the stay size (<see cref="TryStaySize"/>),
+    /// kept for any destination while the window is full screen and it is the size in use. Pure.</summary>
     public static SizeI BucketedSizeFor(SizeI natural, RectF videoRect, float scale, SizeI current, VideoDisplay display = default)
     {
         float s = scale <= 0f ? 1f : scale;
@@ -199,6 +190,11 @@ public static class VideoStreamSizing
         float need = NeedFactor(natural, dw, dh, display, out bool exact);
         if (!float.IsFinite(need)) return natural;
         float cap = MaxFactor(natural, display);
+        // The compositor stretches whatever buffer the swap chain holds, so a size change buys no correctness, only quality, and
+        // costs a decoder gap. A full-screen stay has ONE size: it begins where the destination is the full-screen video (exact),
+        // and while the window stays full screen the size in use (current) IS the memory, kept through a Theatre toggle, a pane
+        // or an aspect-mode change. The stay size is the cap, never below what any picture inside the stay would get otherwise.
+        if (TryStaySize(natural, display, out SizeI stay) && (exact || current == stay)) return stay;
         if (exact) return ScaledSize(natural, MathF.Min(need, cap));   // the monitor-fit size itself: no bucket, no hysteresis
         if (need > 1f + CoverEps && cap > 1f + CoverEps)
         {
@@ -222,17 +218,28 @@ public static class VideoStreamSizing
         return SizeAtFraction(natural, candidate);
     }
 
+    /// <summary>The one stream size of a full-screen stay: <c>natural x</c> the cap (the monitor's size on the
+    /// more magnified axis, never below the natural frame). False outside a full-screen window with a known monitor, or before
+    /// the natural size is known.</summary>
+    internal static bool TryStaySize(SizeI natural, VideoDisplay display, out SizeI stay)
+    {
+        stay = default;
+        if (!display.Fullscreen || !display.HasMonitor || natural.Width <= 0 || natural.Height <= 0) return false;
+        stay = ScaledSize(natural, MaxFactor(natural, display));
+        return true;
+    }
+
     private static SizeI SizeAtFraction(SizeI natural, float fraction)
         => fraction >= 1f
             ? natural
             : new SizeI(Math.Max(1, (int)MathF.Round(natural.Width * fraction)),
                         Math.Max(1, (int)MathF.Round(natural.Height * fraction)));
 
-    /// <summary>True when <paramref name="content"/> (the size a surface is currently sized to) is still the size
+    /// <summary>True when <paramref name="stream"/> (the size a surface's stream is currently sized to) is still the size
     /// <see cref="BucketedSizeFor"/> would keep for this destination: a geometry-only turn (a drag, a resize inside the
     /// bucket) needs no session pump then, because nothing about the stream would change. Pure.</summary>
-    public static bool Serves(SizeI content, SizeI natural, RectF videoRect, float scale, VideoDisplay display = default)
-        => !content.IsEmpty && BucketedSizeFor(natural, videoRect, scale, content, display) == content;
+    public static bool Serves(SizeI stream, SizeI natural, RectF videoRect, float scale, VideoDisplay display = default)
+        => !stream.IsEmpty && BucketedSizeFor(natural, videoRect, scale, stream, display) == stream;
 }
 
 /// <summary>What the stream sizing needs to know about the screen the video is shown on (F089): the full size of the monitor
@@ -264,77 +271,159 @@ public readonly struct VideoStreamStep
     /// at most once per decision (re-posted only when the natural size changed, because a backend that keeps its stream
     /// size per source must hear it again).</summary>
     public readonly SizeI Request;
-    /// <summary>The content size the compositor may scale from: the size the backend has CONFIRMED rendering, held at the
-    /// previous value while a new request is in flight. Empty only before the first laid-out decision.</summary>
-    public readonly SizeI Content;
-    /// <summary>When positive, nothing else is guaranteed to pump this session again (a settle window or an echo is still
-    /// pending): request one more pump after this many milliseconds.</summary>
+    /// <summary>The stream size in use: the last one asked of the backend (this decision's <see cref="Request"/> included). Empty
+    /// only before the first laid-out decision.</summary>
+    public readonly SizeI Size;
+    /// <summary>When positive, nothing else is guaranteed to pump this session again (a settle window is still pending): request one
+    /// more pump after this many milliseconds.</summary>
     public readonly int RetryInMs;
 
-    /// <summary>One decision: what to ask the backend, what the compositor may scale from, and when to look again.</summary>
-    public VideoStreamStep(SizeI request, SizeI content, int retryInMs)
+    /// <summary>The <c>stream.stay enter|exit ...</c> line when this decision began or ended a full-screen
+    /// stay, else null. The session writes it to the [video] timeline (once per edge, never per frame).</summary>
+    public string? StayLine { get; init; }
+    /// <summary>The <c>stream.hold want=WxH before=first-frame</c> line when this decision held a new
+    /// request until the attach's first frame, else null. The session writes it to the [video] timeline.</summary>
+    public string? HoldLine { get; init; }
+    /// <summary>A pinned gate's <c>stream.pin size=WxH why=natural|natural-changed</c> line when this decision is a request, else
+    /// null. The session writes it to the [video] timeline (once per request: once per attach and once per rung change).</summary>
+    public string? PinLine { get; init; }
+
+    /// <summary>One decision: what to ask the backend, the stream size in use, and when to look again.</summary>
+    public VideoStreamStep(SizeI request, SizeI size, int retryInMs)
     {
         Request = request;
-        Content = content;
+        Size = size;
         RetryInMs = retryInMs;
     }
 }
 
 /// <summary>The per-session policy that keeps the decoder's swap chain from following layout (F071), shared by both
-/// Windows backends so they can never disagree. It owns three decisions:
+/// Windows backends so they can never disagree. It owns two decisions:
 /// <list type="number">
 /// <item>WHAT size: <see cref="VideoStreamSizing.BucketedSizeFor"/> (natural x {1, 3/4, 1/2, 1/3} below the frame, the
 /// on-screen size up to max(monitor, natural) above it, with hysteresis).</item>
 /// <item>WHEN: the first size at once and a changed natural size at once; any other change only after the destination
-/// has held still for <see cref="SettleMs"/> (never mid-animation: DirectComposition's scale covers the gap).</item>
-/// <item>WHAT THE COMPOSITOR IS TOLD: the content size moves to a newly requested size only when the backend echoes
-/// that it APPLIED it, so DirectComposition never scales an old-size buffer by a new-size factor. A backend that
-/// cannot echo (or has not by <see cref="EchoTimeoutMs"/> while paused) is trusted after the timeout.</item>
+/// has held still for <see cref="SettleMs"/> (never mid-animation: the compositor stretches the old buffer meanwhile). The
+/// request that begins a full-screen stay also goes at once, and a request raised between an attach's first request and its
+/// first frame is held until that frame, then posted at once.</item>
 /// </list>
-/// A destination that is not laid out decides nothing. UI-thread only; the clock is passed in so it is testable.</summary>
+/// A destination that is not laid out decides nothing. UI-thread only; the clock is passed in so it is testable.
+/// <para><b>One stream, many bindings.</b> A session has ONE swap chain, and more than one element can present it at once (the
+/// Canvas hand-off from the style picker's card to the rail's picture, a docked video and its full-screen stage while one exits).
+/// Each binding that pumps CASTS a vote with its destination; the size is decided from the largest need among the votes that
+/// still count (the pumping binding's own, and every other binding whose slot is still live and shown: an exiting, hidden,
+/// parked or released host does not vote), so the last binding to pump is never the last word just because it pumped last.
+/// And the stream size is the session's, not a binding's: <see cref="PublishSizeToVoters"/> hands it to every binding that
+/// shows the picture, so no slot's geometry-only pump judges its rect against a size the session has left.</para>
+/// <para><b>Pinned (the protected path).</b> A gate built with <c>pinned: true</c> decides with <see cref="Pin"/> instead of
+/// <see cref="Step"/> and sizes the stream to the video's own natural size for the life of the attach: it requests the natural size once it is known and again only when it changes (a rung
+/// change). Geometry, votes, the display and full-screen edges never produce a request, there is no settle and no first-frame
+/// hold. Every <c>UpdateVideoStream(dst)</c> makes Media Foundation free and rebuild its whole pool of dst-sized frame buffers,
+/// and with protected content a large free or build stalls the desktop (100-350 ms at a full-screen edge), so a protected stream
+/// never follows layout; the compositor stretches the natural-size buffer to any placed rect. Votes are still recorded so
+/// <see cref="PublishSizeToVoters"/> hands the size to every binding that shows the picture.</para></summary>
 public sealed class VideoStreamSizeGate
 {
+    /// <summary>A gate that follows the destination (buckets, settle, full-screen stay): the clear path.</summary>
+    public VideoStreamSizeGate() { }
+
+    /// <summary>A gate that pins the stream to the natural size when <paramref name="pinned"/> (see the class remarks).</summary>
+    public VideoStreamSizeGate(bool pinned) => Pinned = pinned;
+
+    /// <summary>True when the stream is pinned to the natural size (the protected path): no destination ever resizes it.</summary>
+    public bool Pinned { get; }
+
+    /// <summary>How many bindings of one session can vote at once (a hand-off has two; a slot reused by a new element replaces its
+    /// predecessor's vote).</summary>
+    public const int MaxVotes = 4;
+
+    private struct Vote
+    {
+        public bool Used;
+        public VideoBinding Binding;
+        public long Incarnation;
+        public RectF Rect;
+        public float Scale;
+        public VideoDisplay Display;
+    }
+
+    private readonly Vote[] _votes = new Vote[MaxVotes];
+    private int _governingToken, _voteCount;
+
+    /// <summary>The token of the binding whose destination decided the size at the last step (0 for an anonymous caller).</summary>
+    public int GoverningToken => _governingToken;
+    /// <summary>How many bindings counted at the last step.</summary>
+    public int VoteCount => _voteCount;
     /// <summary>How long the destination must hold still before a stream-size change is requested.</summary>
     public const int SettleMs = 250;
-    /// <summary>How long a requested size may stay unconfirmed before a paused (or non-echoing) backend is trusted.</summary>
-    public const int EchoTimeoutMs = 500;
-    /// <summary>The pump cadence while an echo is awaited (the protected runtime raises no event for it).</summary>
-    public const int EchoPollMs = 40;
 
-    private SizeI _natural, _requested, _published;
+    private SizeI _natural, _requested;
     private VideoDisplay _display;
     private int _geomW, _geomH;
-    private long _geomSinceMs, _requestedAtMs;
+    private long _geomSinceMs;
+    // The full-screen stay in use (empty = none); whether this attach has posted its first request and presented its first frame;
+    // the request held until that frame (and whether it is a natural-size re-post).
+    private SizeI _stay, _heldWant;
+    private bool _attachRequested, _framePresented, _held, _heldRepost;
 
     /// <summary>The size last handed to the backend (empty before the first decision).</summary>
     public SizeI Requested => _requested;
-    /// <summary>The content size last handed to the compositor (empty before the first decision).</summary>
-    public SizeI Published => _published;
 
-    /// <summary>Decide one pump. <paramref name="applied"/> is the backend's echo of the stream size it last applied
-    /// (empty = none yet / not reported); <paramref name="playing"/> is whether frames are being presented right now.
-    /// <paramref name="display"/> is the monitor the video is on (default = unknown: the stream is never upscaled); a change of
-    /// it counts as a geometry change, so a fullscreen edge settles like a resize and is never applied mid-animation.</summary>
-    public VideoStreamStep Step(SizeI natural, RectF videoRect, float scale, SizeI applied, bool playing, long nowMs, VideoDisplay display = default)
+    /// <summary>Decide one pump of <paramref name="binding"/>: its destination is its vote, and the size is decided from the largest
+    /// need among the votes that count (see the class remarks); an inert binding is one anonymous voter.
+    /// <paramref name="framePresented"/> is whether this attach's first frame has been presented (a request raised between the
+    /// attach's first request and its first frame is held until then). <paramref name="display"/> is the monitor the video is on
+    /// (default = unknown: the stream is never upscaled); a change of it counts as a geometry change, so a fullscreen edge settles
+    /// like a resize and is never applied mid-animation.</summary>
+    public VideoStreamStep Step(in VideoBinding binding, SizeI natural, RectF videoRect, float scale, bool framePresented, long nowMs, VideoDisplay display = default)
     {
-        if (!VideoStreamSizing.IsLaidOut(videoRect)) return new VideoStreamStep(default, _published, 0);
-
-        float s = scale <= 0f ? 1f : scale;
-        int dw = Math.Max(1, (int)MathF.Round(videoRect.W * s));
-        int dh = Math.Max(1, (int)MathF.Round(videoRect.H * s));
-        bool displayChanged = display.MonitorPx != _display.MonitorPx || display.Fullscreen != _display.Fullscreen;
-        _display = display;
-        if (dw != _geomW || dh != _geomH || displayChanged) { _geomW = dw; _geomH = dh; _geomSinceMs = nowMs; }
+        if (Pinned) throw new InvalidOperationException("A pinned gate decides with Pin, not Step.");
+        if (!VideoStreamSizing.IsLaidOut(videoRect)) return new VideoStreamStep(default, _requested, 0);
 
         bool naturalChanged = natural != _natural;
         _natural = natural;
 
-        SizeI desired = VideoStreamSizing.BucketedSizeFor(natural, videoRect, scale, naturalChanged ? default : _requested, display);
+        // The caller's vote, then the size every counting vote needs: the largest wins. A natural-size re-post held for the first
+        // frame has nothing to keep either, as if it had been posted.
+        int own = Cast(binding, videoRect, scale, display);
+        SizeI current = naturalChanged || _heldRepost ? default : _requested;
+        SizeI desired = default;
+        int gov = own;
+        _voteCount = 0;
+        for (int i = 0; i < MaxVotes; i++)
+        {
+            ref Vote v = ref _votes[i];
+            if (!v.Used) continue;
+            if (i != own && v.Binding.IsValid && !v.Binding.IsShowing(v.Incarnation)) { v = default; continue; }   // left, hidden or reused: no vote
+            _voteCount++;
+            SizeI need = VideoStreamSizing.BucketedSizeFor(natural, v.Rect, v.Scale, current, v.Display);
+            if (desired.IsEmpty || (long)need.Width * need.Height > (long)desired.Width * desired.Height) { desired = need; gov = i; }
+        }
+        ref Vote g = ref _votes[gov];
+        _governingToken = g.Binding.Token;
+
+        // Settling follows the GOVERNING destination: a change of which binding governs, or of its size or screen, is a geometry change.
+        float s = g.Scale <= 0f ? 1f : g.Scale;
+        int dw = Math.Max(1, (int)MathF.Round(g.Rect.W * s));
+        int dh = Math.Max(1, (int)MathF.Round(g.Rect.H * s));
+        bool displayChanged = g.Display.MonitorPx != _display.MonitorPx || g.Display.Fullscreen != _display.Fullscreen;
+        _display = g.Display;
+        if (dw != _geomW || dh != _geomH || displayChanged) { _geomW = dw; _geomH = dh; _geomSinceMs = nowMs; }
+
+        // The size a full-screen stay keeps for the governing destination (empty outside a full-screen window).
+        SizeI stay = VideoStreamSizing.TryStaySize(natural, g.Display, out SizeI st) ? st : default;
+
         int retry = 0;
         SizeI request = default;
         if (_requested.IsEmpty || naturalChanged)
         {
             request = desired;   // the first size, or a new frame size: not a layout change, nothing to wait out
+        }
+        else if (desired != _requested && !stay.IsEmpty && desired == stay)
+        {
+            // The request that BEGINS a full-screen stay goes at once. It is a discrete edge, not a layout
+            // settling, and the compositor stretches the old buffer meanwhile, so nothing is drawn at a wrong scale.
+            request = desired;
         }
         else if (desired != _requested)
         {
@@ -342,32 +431,104 @@ public sealed class VideoStreamSizeGate
             if (stable >= SettleMs) request = desired;
             else retry = (int)(SettleMs - stable);
         }
-        if (!request.IsEmpty)
-        {
-            _requested = request;
-            _requestedAtMs = nowMs;
-        }
 
-        if (_published.IsEmpty)
+        string? holdLine = null, stayLine = null;
+        // A new attach (its first frame gone again on the same session) starts over: its first request goes at once.
+        if (_framePresented && !framePresented) _attachRequested = false;
+        _framePresented = framePresented;
+        if (!framePresented && _attachRequested)
         {
-            // Nothing to keep: the buffer the backend already holds (its echo) is what the compositor must scale from, else
-            // the size just requested (a backend with no buffer yet creates it at that size).
-            _published = !applied.IsEmpty ? applied : _requested;
-        }
-        // Also right after the first publish: a backend that already holds a buffer (the protected runtime's natural-size
-        // swap chain) is published at that buffer while a smaller bucket is requested, and it raises no event for the echo.
-        if (_published != _requested)
-        {
-            long waited = nowMs - _requestedAtMs;
-            bool echoed = applied == _requested;
-            bool trust = (!playing || applied.IsEmpty) && waited >= EchoTimeoutMs;
-            if (echoed || trust) _published = _requested;
-            else if (waited < EchoTimeoutMs)
+            // Between the attach's first request (the one Media Foundation builds its swap chain at) and its first frame, a
+            // further request costs one more swap-chain rebuild: hold what was raised, and post it with the first frame.
+            if (!request.IsEmpty)
             {
-                int poll = (int)Math.Min(EchoPollMs, EchoTimeoutMs - waited);
-                retry = retry > 0 ? Math.Min(retry, poll) : poll;
+                _heldRepost |= naturalChanged;
+                if (!_held || request != _heldWant) holdLine = $"stream.hold want={request.Width}x{request.Height} before=first-frame";
+                _held = true;
+                _heldWant = request;
+                request = default;
             }
         }
-        return new VideoStreamStep(request, _published, retry);
+        else if (_held && framePresented)
+        {
+            // The first frame is here: the held request goes at once (no settle), for the destination as it is now; a held
+            // natural-size re-post is posted even when it asks for the same size again, as it would have been.
+            if (desired != _requested || _heldRepost) request = desired;
+            _held = false;
+            _heldRepost = false;
+            _heldWant = default;
+        }
+        if (!request.IsEmpty) _attachRequested = true;
+
+        // The stay's edges, once each: it begins with the request for the stay size in a full-screen window (a new natural size
+        // inside one begins the next), and ends when the window leaves full screen or another size is asked for in it.
+        if (!request.IsEmpty && request == stay && request != _stay)
+        {
+            _stay = stay;
+            stayLine = $"stream.stay enter size={stay.Width}x{stay.Height} natural={natural.Width}x{natural.Height} monitor={g.Display.MonitorPx.Width}x{g.Display.MonitorPx.Height}";
+        }
+        else if (!_stay.IsEmpty && (stay.IsEmpty || (!request.IsEmpty && request != stay)))
+        {
+            stayLine = $"stream.stay exit size={_stay.Width}x{_stay.Height}";
+            _stay = default;
+        }
+        if (!request.IsEmpty) _requested = request;
+        return new VideoStreamStep(request, _requested, retry) { StayLine = stayLine, HoldLine = holdLine };
+    }
+
+    /// <summary>A pinned gate's decision for one pump of <paramref name="binding"/>: the natural size, asked for when it is first known
+    /// and again only when it changes (a rung change). The destination never asks: <paramref name="videoRect"/> only records the
+    /// binding's vote (a rect that is not laid out records none), so <see cref="PublishSizeToVoters"/> reaches every binding that
+    /// shows the picture. UI thread.</summary>
+    public VideoStreamStep Pin(in VideoBinding binding, SizeI natural, RectF videoRect)
+    {
+        if (!Pinned) throw new InvalidOperationException("Pin needs a pinned gate.");
+        if (!VideoStreamSizing.IsLaidOut(videoRect)) return new VideoStreamStep(default, _requested, 0);
+        int own = Cast(binding, videoRect, 1f, default);
+        _voteCount = 0;
+        for (int i = 0; i < MaxVotes; i++)
+        {
+            ref Vote v = ref _votes[i];
+            if (!v.Used) continue;
+            if (i != own && v.Binding.IsValid && !v.Binding.IsShowing(v.Incarnation)) { v = default; continue; }
+            _voteCount++;
+        }
+        _governingToken = binding.Token;
+        if (natural.IsEmpty || natural.Width <= 0 || natural.Height <= 0 || natural == _requested)
+            return new VideoStreamStep(default, _requested, 0);
+        string why = _requested.IsEmpty ? "natural" : "natural-changed";
+        _requested = natural;
+        return new VideoStreamStep(natural, natural, 0) { PinLine = $"stream.pin size={natural.Width}x{natural.Height} why={why}" };
+    }
+
+    /// <summary>Hand the session's stream size to every OTHER binding that votes (live and shown), so a binding that is not pumping
+    /// right now never judges its geometry-only turns against a size the session has left. <paramref name="pumping"/> writes its own.
+    /// UI thread.</summary>
+    public void PublishSizeToVoters(in VideoBinding pumping)
+    {
+        if (_requested.IsEmpty) return;
+        for (int i = 0; i < MaxVotes; i++)
+        {
+            ref Vote v = ref _votes[i];
+            if (!v.Used || !v.Binding.IsValid || v.Binding.SameSlot(pumping)) continue;
+            if (!v.Binding.IsShowing(v.Incarnation)) { v = default; continue; }
+            v.Binding.SetStreamSize(_requested, Pinned);
+        }
+    }
+
+    // Records the pumping binding's destination as its vote (replacing its slot's earlier one, or a predecessor's on a reused token)
+    // and returns its index. With every seat taken by live voters, the oldest-indexed other seat is given up.
+    private int Cast(in VideoBinding binding, RectF rect, float scale, VideoDisplay display)
+    {
+        long incarnation = binding.Incarnation;
+        int seat = -1, free = -1;
+        for (int i = 0; i < MaxVotes; i++)
+        {
+            if (!_votes[i].Used) { if (free < 0) free = i; continue; }
+            if (_votes[i].Binding.SameSlot(binding)) { seat = i; break; }
+        }
+        if (seat < 0) seat = free >= 0 ? free : 0;
+        _votes[seat] = new Vote { Used = true, Binding = binding, Incarnation = incarnation, Rect = rect, Scale = scale, Display = display };
+        return seat;
     }
 }

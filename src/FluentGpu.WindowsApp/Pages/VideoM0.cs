@@ -25,7 +25,7 @@ namespace FluentGpu;
 /// (<c>poster·(1−w) + testpattern·w</c> at <c>w = VideoReady = 0.5</c>); the ring shows the raw child; outside the
 /// child the transparent window reveals Mica.
 ///
-/// Why a SCREEN capture, not the back buffer: the video child is a sibling DComp visual composited by DWM — it is
+/// Why a SCREEN capture, not the back buffer: the video is a sibling composition visual composited by DWM — it is
 /// NOT in our swapchain back buffer, so <c>D3D12Device.CaptureBgra</c> (the normal <c>--screenshot</c> path) cannot
 /// see it. Only a screen-level GDI BitBlt of the window sees the true composited pixels.
 /// </summary>
@@ -111,7 +111,7 @@ static class VideoM0
         return ok ? 0 : 1;
     }
 
-    // ── GDI screen capture of the window's client area (captures the true DWM composite, incl. the DComp child) ──
+    // ── GDI screen capture of the window's client area (captures the true DWM composite, incl. the video visual) ──
     internal static bool CaptureWindowToPng(nint hwnd, string path)
     {
         if (!GetClientRect(hwnd, out RECT rc)) return false;

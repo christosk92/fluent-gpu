@@ -1591,7 +1591,7 @@ media gates there). Green.
 **M1 — the MF video backend on the working spine. Mostly PROVEN. ✅ LANDED.**
 `MfMediaPlayer`/`MfMediaSession` over `VideoMediaEngine`; `VideoSurface` signal → the real `MediaPlayerElement`
 hole-punch → `IVideoPresenter.Place/Commit` at phase 11. Replaced the chrome-only `MediaPlayerElement` with the
-§4.3 control; fixed the `DCompVideoPresenter` z-below/hole-punch regression. Depends on: the shipping spine
+§4.3 control; fixed the the DirectComposition video presenter (deleted 2026-11-11) z-below/hole-punch regression. Depends on: the shipping spine
 (proven) + M0. *Gate:* `--screenshot` shows a real decoded frame in the hole-punch rect; audio-only degrade
 renders chrome; transport never crashes across OS versions.
 

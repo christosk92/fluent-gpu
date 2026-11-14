@@ -1,13 +1,10 @@
-// HandoverPolicy.h — the two pieces of the session hand-over that need no Windows header, so they stay pure and
-// exercise them: the deferred unload of the engine's source, and the reaper that joins stopped feeder threads.
+// HandoverPolicy.h — the piece of the session hand-over that needs no Windows header: the reaper that joins stopped feeder
+// threads.
 //
-// WHY. One media engine is shared by every session. A source switch used to be Detach (Pause + an EMPTY SetSource, an
-// unload of the whole topology) immediately followed, a couple of UI frames later, by the successor's Attach (SetSource
-// of the real source): two loads back to back, the first one's asynchronous notifications landing after the second, and
-// the "an attach replaces the source" fast path never running. A detach now only pauses; the unload is armed here and
-// runs after kReleaseGraceMs unless an attach takes the engine over first, in which case the successor's own SetSource
-// is the only load. Destroy used to join the feeder thread on the runtime thread, so one slow GET stalled every engine
-// event queued behind it; the join now happens on a reaper thread, with a join point at runtime teardown.
+// WHY. Destroy used to join the feeder thread on the runtime thread, so one slow GET stalled every engine event queued behind
+// it; the join now happens on a reaper thread, with a join point at runtime teardown. (The deferred unload of the engine's
+// source that lived here is gone with the unload itself: the runtime keeps ONE source for its life and each video is a program
+// in it - PrSession.cpp "The pipeline".)
 #pragma once
 
 #include <condition_variable>
@@ -19,31 +16,6 @@
 #include <vector>
 
 namespace fgpr::handover {
-
-/// How long a detached session's paused source stays loaded, waiting for a successor's attach to replace it. The managed
-/// switch posts Detach, Destroy and the successor's Attach across at least two UI frames (about 33 ms), so a quarter of a
-/// second covers it with room for a slow frame, and an unload nobody takes over still happens promptly.
-constexpr int32_t kReleaseGraceMs = 250;
-
-/// The runtime thread's record of an armed unload. Every member is touched on the runtime thread only. `Arm` returns the
-/// token the timer item carries; `Cancel` (an attach took the engine over) and a later `Arm` both make an older token
-/// stale, so a timer item that fires after either does nothing.
-struct ReleaseGate
-{
-    uint64_t seq = 0;
-    bool pending = false;
-
-    uint64_t Arm() { pending = true; return ++seq; }
-    void Cancel() { pending = false; }
-
-    /// True exactly once per armed unload: when the item carrying `token` fires while it is still the armed one.
-    bool Fire(uint64_t token)
-    {
-        if (!pending || token != seq) return false;
-        pending = false;
-        return true;
-    }
-};
 
 /// Joins feeder threads OFF the runtime thread. `Reap` takes a thread that has already been told to stop (its stop flag
 /// set, its GET cancelled, its wake-up kicked) and returns at once; one background thread joins it and then runs `tail`,

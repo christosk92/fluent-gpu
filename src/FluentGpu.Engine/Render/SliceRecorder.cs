@@ -50,8 +50,9 @@ public enum SliceRole : byte
 /// <param name="PartialKeeps">Slices whose own arena was kept whole although something below them changed: the change lay only
 /// inside child slices, which were walked directly (<see cref="Reentered"/>) instead of re-walking this one.</param>
 /// <param name="Reentered">Dirty nested slices walked directly under a partially kept parent.</param>
+/// <param name="MarkerPatches">Child markers rewritten in place in a partially kept arena (an overflow cue's bands moved).</param>
 public readonly record struct SliceRecordStats(int Slices, int Walked, int Kept, int EffectSlices, int Folded, long BytesRecorded, bool KeptAll,
-    int AcrylicSlices = 0, int AcrylicFallbacks = 0, int FreeFades = 0, int SigMissWalks = 0, int PartialKeeps = 0, int Reentered = 0);
+    int AcrylicSlices = 0, int AcrylicFallbacks = 0, int FreeFades = 0, int SigMissWalks = 0, int PartialKeeps = 0, int Reentered = 0, int MarkerPatches = 0);
 
 /// <summary>
 /// The recorder partition of the retained tiled content layer (docs/plans/scroll-gpu-retained-tiles-implementation.md
@@ -247,7 +248,7 @@ public sealed partial class SliceRecorder
     private SceneRecordingContext.CutEntry[] _cuts = new SceneRecordingContext.CutEntry[32];
 
     private uint _frame;
-    private int _walked, _kept, _effects, _folded, _acrylics, _acrylicFallbacks, _freeFades, _partialKeeps, _reentered;
+    private int _walked, _kept, _effects, _folded, _acrylics, _acrylicFallbacks, _freeFades, _partialKeeps, _reentered, _markerPatches;
     private long _bytes;
     private bool _keptAll;
 
@@ -373,6 +374,21 @@ public sealed partial class SliceRecorder
     }
 
     internal DrawList Arena(int slot) => _arenas[slot]!;
+
+    /// <summary>A partial keep rewrote the marker of child slice <paramref name="childSlot"/> in place in the kept arena of
+    /// <paramref name="arenaSlot"/> (an overflow cue's bands, <c>SceneRecorder.PartialKeep.cs</c>): the arena's bytes are a new
+    /// buffer generation, so nothing derived from the old bytes is reused (its scan — markers, segments, content hash — is redone
+    /// at the next composite; spans recorded under the old generation miss), and the child's own copy of its marker layer follows.
+    /// The prior buffer is untouched, so its generation stands.</summary>
+    internal void NoteMarkerPatched(int arenaSlot, int childSlot, in PushLayerCmd layer)
+    {
+        _curGen[arenaSlot] = NewGen();
+        EnsureScanStorage(_recs.Length);
+        _scanGen[arenaSlot] = 0;
+        _recs[childSlot].Layer = layer;
+        _markerPatches++;
+    }
+
     internal ulong CurGen(int slot) => _curGen[slot];
     internal ulong PriorGen(int slot) => _priorGen[slot];
     internal bool IsRegisteredThisPass(int slot) => _recs[slot].RegFrame == _frame;
@@ -901,7 +917,7 @@ public sealed partial class SliceRecorder
     {
         if (++_frame == 0) _frame = 1;
         _passInlineSticky = ForceInlineStickyClip;
-        _walked = _kept = _effects = _folded = _acrylics = _acrylicFallbacks = _freeFades = _partialKeeps = _reentered = 0;
+        _walked = _kept = _effects = _folded = _acrylics = _acrylicFallbacks = _freeFades = _partialKeeps = _reentered = _markerPatches = 0;
         HoldBudgets();
         _sigMissWalks = 0;
         _bytes = 0;
@@ -1125,7 +1141,7 @@ public sealed partial class SliceRecorder
         }
         _recs[RootSlot].RegFrame = _frame;
         LastStats = new SliceRecordStats(LiveSlices, _walked, _kept, _effects, _folded, _bytes, keptAll,
-            _acrylics, _acrylicFallbacks, _freeFades, _sigMissWalks, _partialKeeps, _reentered);
+            _acrylics, _acrylicFallbacks, _freeFades, _sigMissWalks, _partialKeeps, _reentered, _markerPatches);
     }
 
     /// <summary>A composite-only turn (no pass): the census reports it.</summary>
@@ -1392,9 +1408,7 @@ public sealed partial class SliceRecorder
     /// rectangular clips): what it hides of the items composited before it. Empty = none known.</summary>
     // Heavy: the segment opens an inline layer, a stencil clip or a video hole, or starts inside one its prefix re-opens —
     // replaying it costs offscreen work every time, so it keeps tiles (see InlineSegment).
-    // Covers: F087, the union of the bounds of the ops that PAINT on this turn (Bounds minus opacity-0 ops and GroupAlpha-0 groups), the
-    // only bounds the video occlusion verdict reads; Bounds keeps its tile/damage meaning unchanged.
-    private struct ScanSeg { public int ByteStart, ByteEnd, Commands; public RectF Bounds, Opaque, Covers; public bool Heavy; }
+    private struct ScanSeg { public int ByteStart, ByteEnd, Commands; public RectF Bounds, Opaque; public bool Heavy; }
     /// <summary>A video hole a segment punched: its rect (slot space DIP, cut by the in-stream clips) and where its composite
     /// erase goes relative to that segment (<see cref="VideoHoleErase.Order"/> — on the tile, before it; inside an inline
     /// group layer, after it). The composite erase must be the SAME shape and strength as the in-tile punch (F078), so the scan
@@ -1406,7 +1420,6 @@ public sealed partial class SliceRecorder
         public int Seg; public RectF Rect; public VideoEraseOrder Order;
         public RectF Hole; public CornerRadius4 Radii; public float Strength; public RectF RoundRect; public float RoundR;
         public int SurfaceId;   // the registry slot token the DrawVideo carries (F070: keys the posed hole the video placement follows)
-        public RectF After;     // F087: the union of the painted bounds (slot space DIP) of every op recorded AFTER this DrawVideo in its segment
     }
     private struct ScanFade { public int Seg; public RectF Rect; public float Start, End; }
 
@@ -1466,13 +1479,9 @@ public sealed partial class SliceRecorder
         ulong whole = FluentGpu.Render.Evidence.TileContentHash.Empty;
         ContentScanBegin(s);
         int pos = 0, segStart = 0, cmds = 0;
-        RectF segBounds = default, segOpaque = default, segCovers = default;
+        RectF segBounds = default, segOpaque = default;
         bool segVideo = false, segHeavy = false;
         int stencils = 0;   // stencil (path) clips open: nothing inside them is a known opaque rect
-        // F087: the inline group layers open at each op that composite at GroupAlpha 0 (bit d = layer depth d, the first 64 levels): what
-        // they enclose paints nothing this turn, so it never counts as covering a video hole (see ScanVideo.After).
-        ulong silentLayers = 0;
-        int layerDepth = 0;
         RectF top = RectF.Infinite, round = default;
         float roundR = 0f;
         // The span-index entries open at each op (pre-order, properly nested, at most SpanIndexDepth deep): every footprint
@@ -1507,8 +1516,6 @@ public sealed partial class SliceRecorder
                     int kind = lc.Kind;
                     if (kind != (int)LayerKind.Acrylic) inline++;
                     layers.Push(kind);
-                    if (layerDepth < 64 && kind is (int)LayerKind.Opacity or (int)LayerKind.Blur && lc.GroupAlpha <= 0f) silentLayers |= 1UL << layerDepth;
-                    layerDepth++;
                     segHeavy = true;
                     layerPush = true;
                     // a blurred group composites each pixel from its content AROUND it: no sub-tile repaint bounds it
@@ -1537,7 +1544,6 @@ public sealed partial class SliceRecorder
                     break;
                 case DrawOp.PopLayer:
                     layers.Pop();
-                    if (layerDepth > 0) { layerDepth--; if (layerDepth < 64) silentLayers &= ~(1UL << layerDepth); }
                     ContentScanPop();
                     break;
                 case DrawOp.SetBlend:
@@ -1546,7 +1552,7 @@ public sealed partial class SliceRecorder
                     break;
                 case DrawOp.CompositeSlice:
                 {
-                    AddSeg(s, marks, segStart, pos, cmds, segBounds, segVideo ? default : segOpaque, segHeavy || segVideo, segCovers);
+                    AddSeg(s, marks, segStart, pos, cmds, segBounds, segVideo ? default : segOpaque, segHeavy || segVideo);
                     if (marks == _scanMarks[s].Length) Array.Resize(ref _scanMarks[s], marks * 2);
                     _scanMarks[s][marks++] = new ScanMark
                     {
@@ -1555,7 +1561,7 @@ public sealed partial class SliceRecorder
                     };
                     ContentScanSegment(s, marks);   // the scopes still open where segment `marks` starts
                     segStart = payload + body;
-                    segBounds = default; segOpaque = default; segCovers = default; segVideo = false;
+                    segBounds = default; segOpaque = default; segVideo = false;
                     segHeavy = layers.Depth > 0 || stencils > 0;   // the next segment's prefix re-opens these
                     cmds = 0;
                     pos = payload + body;
@@ -1581,16 +1587,6 @@ public sealed partial class SliceRecorder
                             && o.W * o.H > segOpaque.W * segOpaque.H)
                             segOpaque = o;
                         ContentScanOp(s, pos, in b, oh, layerPush, spread: layerSpread, reach: layerReach);
-                        // F087: this op paints after every hole already seen in the current segment, so it may cover them (the hole's
-                        // own DrawVideo is added below, after this, and never counts against itself). An op that paints nothing on
-                        // this turn - its own opacity 0 (the recorder folds node and inherited opacity, animated ones at their
-                        // current value, into each op; a fade re-records its subtree every step, so its last step rescans this
-                        // slot), a fill of alpha 0, or inside a group layer composited at GroupAlpha 0 - covers nothing.
-                        bool paints = !b.IsEmpty && silentLayers == 0 && !PaintsNothing(op, p);
-                        if (paints) segCovers = Union(segCovers, b);
-                        if (paints)
-                            for (int vi = videos - 1; vi >= 0 && _scanVideos[s][vi].Seg == marks; vi--)
-                                _scanVideos[s][vi].After = Union(_scanVideos[s][vi].After, b);
                         if (op == DrawOp.DrawVideo)
                         {
                             var v = MemoryMarshal.Read<DrawVideoCmd>(p);
@@ -1633,7 +1629,7 @@ public sealed partial class SliceRecorder
         if (pos < bytes.Length)
             whole = FluentGpu.Render.Evidence.TileContentHash.Fold(whole, FluentGpu.Render.Evidence.TileContentHash.OpHash(bytes[pos..]));
         _scanHash[s] = FluentGpu.Render.Evidence.TileContentHash.Fold(whole, (ulong)bytes.Length);
-        AddSeg(s, marks, segStart, bytes.Length, cmds, segBounds, segVideo ? default : segOpaque, segHeavy || segVideo, segCovers);
+        AddSeg(s, marks, segStart, bytes.Length, cmds, segBounds, segVideo ? default : segOpaque, segHeavy || segVideo);
         _scanMarkCount[s] = marks;
         _scanVideoCount[s] = videos;
         _scanFadeCount[s] = fades;
@@ -1710,10 +1706,10 @@ public sealed partial class SliceRecorder
            && !e.HasLayer && e.Dist.Count == 0 && e.RoundR <= 0f && float.IsNaN(e.StickyY)
            && !sg.Heavy && sg.Commands <= InlineMaxCommands;
 
-    private void AddSeg(int s, int k, int start, int end, int cmds, in RectF bounds, in RectF opaque, bool heavy, in RectF covers)
+    private void AddSeg(int s, int k, int start, int end, int cmds, in RectF bounds, in RectF opaque, bool heavy)
     {
         if (k >= _scanSegs[s].Length) Array.Resize(ref _scanSegs[s], Math.Max(k + 1, _scanSegs[s].Length * 2));
-        _scanSegs[s][k] = new ScanSeg { ByteStart = start, ByteEnd = end, Commands = cmds, Bounds = bounds, Opaque = opaque, Heavy = heavy, Covers = covers };
+        _scanSegs[s][k] = new ScanSeg { ByteStart = start, ByteEnd = end, Commands = cmds, Bounds = bounds, Opaque = opaque, Heavy = heavy };
     }
 
     /// <summary>Recorded commands across every live slice arena (the frame's command census).</summary>
@@ -1784,10 +1780,9 @@ public sealed partial class SliceRecorder
     // thread's VideoPlacementApplier follows, so a composite-only scroll or animation turn moves the video exactly as far as the hole.
     private readonly FluentGpu.Media.VideoPosedHole[] _posedHoles = new FluentGpu.Media.VideoPosedHole[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
     private int _posedHoleCount;
-    // F087: what the occlusion verdict of each posed hole needs, parallel to _posedHoles: its erase's plan entry (-1 = the clip emptied the
-    // erase), its segment, the posed bounds of the ops that paint after it in that segment, and whether it sits in an inline group layer.
-    private struct PosedMeta { public int PlanIdx, Slot, Seg; public RectF After; public bool Inline; }
-    private readonly PosedMeta[] _posedMeta = new PosedMeta[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
+    // Parallel to _posedHoles: each hole's erase plan entry (-1 = the clip emptied the erase), which NoteBackdropOverVideo reads to tell a
+    // frosted plate over the video from one beside it.
+    private readonly int[] _posedPlanIdx = new int[FluentGpu.Media.VideoSurfaceRegistry.MaxSurfaces];
     private ulong _compositeHash;
 
     /// <summary>The holes the last <see cref="Place"/> placed as the video placement must follow them (F070): the unclipped posed rect and
@@ -1821,7 +1816,6 @@ public sealed partial class SliceRecorder
         root.EffClip = RectF.Infinite;
         root.Visited = true;
         PlaceSlot(RootSlot, scene, 0f, 0f, 0f, 0f, RectF.Infinite, RectF.Infinite, float.NaN, 0f, RectF.Infinite, default, 0f, default, default, default, false, ref repaint);
-        if (_posedHoleCount > 0) ClassifyVideoOcclusion();
         // The census's Folded: the inline (folded) group layers the placed partition composites — read off the arenas'
         // scans, so a slice kept whole or a span copied from the prior buffer still counts the folds it carries.
         int folded = 0;
@@ -1912,14 +1906,11 @@ public sealed partial class SliceRecorder
                 {
                     Token = sv.SurfaceId, Hole = Offset(sv.Hole, accDx, accDy), EffClip = effClip, RoundRect = holeRound, RoundR = holeRoundR,
                 };
-                _posedMeta[posedAt] = new PosedMeta
-                {
-                    PlanIdx = -1, Slot = slot, Seg = k, After = Offset(sv.After, accDx, accDy), Inline = order == VideoEraseOrder.AfterSegment,
-                };
+                _posedPlanIdx[posedAt] = -1;
             }
             if (wr.IsEmpty) continue;
             ref Plan ve = ref NewPlan(PlanKind.Video);
-            if (posedAt >= 0) _posedMeta[posedAt].PlanIdx = _planCount - 1;
+            if (posedAt >= 0) _posedPlanIdx[posedAt] = _planCount - 1;
             ve.Slot = slot; ve.Rect = wr;
             // F078: the erase carries the hole's own shape and strength, like the in-tile punch it pairs with.
             ve.Hole = Offset(sv.Hole, accDx, accDy);
@@ -1935,84 +1926,52 @@ public sealed partial class SliceRecorder
         }
     }
 
-    /// <summary>F087: the occlusion verdict of every posed hole of the plan just laid out - does anything paint over the visible part of
-    /// the hole AFTER the video's own <c>DrawVideo</c>? Painter order is the plan's order: the later ops of the hole's own segment
-    /// (<see cref="ScanVideo.After"/>), then every later segment (its painted bounds at its posed offset, cut by its composite clip), backdrop
-    /// and hole. Bounds are per whole segment, so a segment that merely has paint somewhere over the hole's rect counts as covering it: the
-    /// verdict can only err towards "covered" (underlay), never towards a video hiding UI. A hole inside an inline group layer, or one the
-    /// clip emptied, is never clear. Neither is a hole whose erase is PARTIAL (<see cref="Plan.Alpha"/> below 1: the underlay leaves part of
-    /// the UI over the video, a promoted visual has no opacity and would show at full strength over it), one whose corner a rounded clip cuts
-    /// (<see cref="Plan.RoundR"/> above 0: the presenter then rounds the visual too, and DWM cannot put a rounded-clipped visual on a
-    /// hardware plane, so it stays an underlay), or one that sits under a layer or group surface (an ancestor's opacity /
-    /// fade / blur composites the UI over the underlay the same way). Detached fly snapshots are recorded into the root slice's tail, so they
-    /// are plan segments like any other and count as covering. Allocation-free; runs only when the plan holds a hole.</summary>
-    private void ClassifyVideoOcclusion()
+    /// <summary>A frosted plate (backdrop plan entry <paramref name="idx"/>) over a video hole erased EARLIER in painter order: its
+    /// mini-composite sees transparency there (the video is a compositor visual below the swapchain), so the plate is marked
+    /// <see cref="AcrylicRecipe.OverVideo"/> (the backend draws the frost's veil, not the opaque fallback) and listed on the hole
+    /// (<see cref="FluentGpu.Media.VideoPosedHole.Backdrops"/>) for the video presenter to blur the video beneath it. The plate's
+    /// opacity is its own times every enclosing opacity group's (an entering card fades its blur with its veil). Zero allocation.</summary>
+    private void NoteBackdropOverVideo(int idx)
     {
+        ref Plan b = ref _plan[idx];
+        RectF plate = b.Clip.IsInfinite ? b.Rect : b.Rect.Intersect(b.Clip);
+        if (plate.IsEmpty) return;
+        bool over = false;
+        float alpha = -1f;
         for (int h = 0; h < _posedHoleCount; h++)
         {
-            ref PosedMeta m = ref _posedMeta[h];
-            bool clear = false;
-            if (m.PlanIdx >= 0 && !m.Inline && _plan[m.PlanIdx].Alpha >= 0.999f && _plan[m.PlanIdx].RoundR <= 0f && !InsideGroup(m.PlanIdx))
+            int at = _posedPlanIdx[h];
+            if (at < 0 || at >= idx) continue;   // no erase this turn, or not under the plate in painter order
+            RectF hole = _plan[at].Rect;          // what the composite clip leaves of the hole
+            if (hole.IsEmpty || !hole.Overlaps(in plate)) continue;
+            over = true;
+            ref FluentGpu.Media.VideoPosedHole ph = ref _posedHoles[h];
+            if (ph.BackdropCount >= FluentGpu.Media.VideoHoleBackdrops.Max) continue;
+            if (alpha < 0f) alpha = b.Alpha * EnclosingGroupAlpha(idx);
+            ph.Backdrops[ph.BackdropCount++] = new FluentGpu.Media.VideoHoleBackdrop
             {
-                RectF hole = _plan[m.PlanIdx].Rect;   // the part of the hole the composite clip leaves: what the video shows
-                clear = !hole.IsEmpty && (m.After.IsEmpty || !m.After.Overlaps(in hole));
-                int depth = 0, silentAt = -1;   // group nesting since the hole, and the depth of the outermost GroupAlpha-0 group open (-1 none)
-                for (int j = m.PlanIdx + 1; clear && j < _planCount; j++)
-                {
-                    ref Plan e = ref _plan[j];
-                    // A group composited at GroupAlpha 0 this turn (a composite-time fade at rest, or mid-way at 0) paints nothing, and
-                    // neither does anything it encloses; a segment carrying such a leaf layer likewise.
-                    if (e.Kind == PlanKind.GroupOpen) { depth++; if (silentAt < 0 && SilentLayer(in e)) silentAt = depth; continue; }
-                    if (e.Kind == PlanKind.GroupClose) { if (depth == silentAt) silentAt = -1; depth--; continue; }
-                    if (silentAt >= 0 || (e.Kind == PlanKind.Seg && SilentLayer(in e) && !(e.Slot == m.Slot && e.Segment == m.Seg))) continue;
-                    RectF r;
-                    switch (e.Kind)
-                    {
-                        case PlanKind.Seg:
-                        {
-                            if (e.Slot == m.Slot && e.Segment == m.Seg)
-                            {
-                                // the hole's own segment: its later ops are m.After; a leaf layer / distributed fade on it dims the UI over the video
-                                if (e.HasLayer || e.Dist.Count > 0) clear = false;
-                                continue;
-                            }
-                            ScanSeg[]? segs = e.Slot >= 0 && e.Slot < _scanSegs.Length ? _scanSegs[e.Slot] : null;
-                            if (segs is null || (uint)e.Segment >= (uint)segs.Length) { clear = false; continue; }
-                            RectF b = segs[e.Segment].Covers;   // what the segment paints on this turn (opacity-0 ops excluded)
-                            r = b.IsEmpty ? default : Offset(in b, e.AccDx, e.AccDy);
-                            if (!e.Clip.IsInfinite) r = r.Intersect(e.Clip);
-                            break;
-                        }
-                        case PlanKind.Backdrop:
-                        case PlanKind.Video:
-                            r = e.Rect;
-                            break;
-                        default:
-                            continue;   // a group's open / close: what it encloses is Seg entries of their own
-                    }
-                    if (!r.IsEmpty && r.Overlaps(in hole)) clear = false;
-                }
-            }
-            _posedHoles[h].Unoccluded = clear;
+                Rect = plate, Radii = b.Radii, Sigma = b.Acrylic.BlurSigma, Tint = b.Acrylic.Tint, Luminosity = b.Acrylic.LuminosityOpacity, Opacity = alpha,
+            };
         }
+        if (over) b.Acrylic = b.Acrylic with { OverVideo = true };
     }
 
-    /// <summary>F087: does this plan entry's layer composite at GroupAlpha 0 (an opacity or self-blur group / leaf layer fully faded out on
-    /// this turn)? Then it paints nothing over a video hole.</summary>
-    private static bool SilentLayer(in Plan e)
-        => e.HasLayer && e.Layer.Kind is (int)LayerKind.Opacity or (int)LayerKind.Blur && e.Layer.GroupAlpha <= 0f;
-
-    /// <summary>Is plan entry <paramref name="idx"/> inside an open GROUP (a layer slice with children composited through one surface)?</summary>
-    private bool InsideGroup(int idx)
+    /// <summary>The product of the group alphas of every opacity group open around plan entry <paramref name="idx"/> (1 outside any).</summary>
+    private float EnclosingGroupAlpha(int idx)
     {
+        float a = 1f;
         int depth = 0;
         for (int j = idx - 1; j >= 0; j--)
         {
-            PlanKind k = _plan[j].Kind;
-            if (k == PlanKind.GroupClose) depth++;
-            else if (k == PlanKind.GroupOpen && depth-- == 0) return true;
+            ref Plan e = ref _plan[j];
+            if (e.Kind == PlanKind.GroupClose) depth++;
+            else if (e.Kind == PlanKind.GroupOpen)
+            {
+                if (depth > 0) { depth--; continue; }
+                if (e.HasLayer && e.Layer.Kind == (int)LayerKind.Opacity) a *= e.Layer.GroupAlpha;
+            }
         }
-        return false;
+        return a;
     }
 
     /// <summary>A scroller's CHROME slice (its scrollbar thumb, or its rail + edge-cue chevrons): drawn over the scroller's
@@ -2144,7 +2103,7 @@ public sealed partial class SliceRecorder
             if (sv.SurfaceId <= 0 || _posedHoleCount >= _posedHoles.Length) continue;
             int at = _posedHoleCount++;
             _posedHoles[at] = new FluentGpu.Media.VideoPosedHole { Token = sv.SurfaceId, Hole = Offset(sv.Hole, accDx, accDy), EffClip = clip };
-            _posedMeta[at] = new PosedMeta { PlanIdx = -1, Slot = slot, Seg = sv.Seg, After = Offset(sv.After, accDx, accDy), Inline = sv.Order == VideoEraseOrder.AfterSegment };
+            _posedPlanIdx[at] = -1;
         }
         int marks = _scanMarkCount[slot];
         for (int k = 0; k < marks; k++)
@@ -2271,6 +2230,7 @@ public sealed partial class SliceRecorder
             b.Alpha = c.AcrylicAlpha;
             b.Clip = clip;
             MixRect(ref _compositeHash, b.Rect); Mix(ref _compositeHash, b.Alpha);
+            if (_posedHoleCount > 0) NoteBackdropOverVideo(_planCount - 1);
         }
 
         ScanSlot(child);
@@ -2406,10 +2366,11 @@ public sealed partial class SliceRecorder
     /// May the edge fade on <paramref name="child"/>'s marker be DISTRIBUTED — composited as an analytic feather on every
     /// item below it instead of through a group surface? For premultiplied source-over, feather(A over B) equals
     /// feather(A) over feather(B) at a pixel iff f·αA·αB·(1−f) = 0, so it is exact when: the layer is a pure fade
-    /// (<see cref="CompositeSliceFlags.DistributeFade"/>: fade mode, no blur, alpha ≈ 1); the slice paints nothing of its
-    /// own this turn (every own segment's painted bounds empty — a fill / border / expanded scrollbar track makes it a
-    /// group); no acrylic backdrop or video hole lies below it; every item below carries at most two feathers (a third
-    /// makes the fade a group); and no two item footprints overlap inside the band strips where 0 &lt; f &lt; 1. The test runs
+    /// (<see cref="CompositeSliceFlags.DistributeFade"/>: fade mode, no blur, alpha ≈ 1); no acrylic backdrop or video
+    /// hole lies below it; every item below carries at most two feathers (a third makes the fade a group); and no two item
+    /// footprints overlap inside the band strips where 0 &lt; f &lt; 1 — the slice's OWN segments are items of that test
+    /// too (a virtual list's item band paints its rows itself and holds the rows' repaint boundaries as child slices: it
+    /// distributes unless one of them meets a row's paint inside the strip). The test runs
     /// per placement: a turn that fails it composites the fade as a group (≤ 1/255 apart — the group surface's 8-bit
     /// quantization), which the group cache then keeps.
     /// </summary>
@@ -2430,8 +2391,9 @@ public sealed partial class SliceRecorder
     /// appended to <see cref="_fp"/> from <paramref name="n"/>; <paramref name="ok"/> = false when the subtree holds an
     /// acrylic backdrop, a video hole, an item that would carry a third feather, or more items than the scratch holds.
     /// <paramref name="feathers"/> = the distributed feathers every item here already carries; <paramref name="halo"/> =
-    /// a self-blur's reach (DIP) the items' pixels spread by. <paramref name="root"/> = the fade's own slot (its own
-    /// segments must paint nothing).</summary>
+    /// a self-blur's reach (DIP) the items' pixels spread by. <paramref name="root"/> = the fade's own slot: its own
+    /// segments are items like any other (they are placed under the same feather, <see cref="PlaceSlot"/>'s
+    /// <c>dist</c>), so its own paint keeps the fade distributable wherever it overlaps nothing else inside the band.</summary>
     private void CollectFootprints(int slot, SceneRecordingSnapshot scene, float accDx, float accDy, float parentAccDx, float parentAccDy,
         in RectF clip, int feathers, float halo, bool root, in RectF ownSticky, ref int n, ref bool ok)
     {
@@ -2446,7 +2408,6 @@ public sealed partial class SliceRecorder
             if (!sb.IsEmpty && !ownSticky.IsInfinite && Offset(sb, accDx, accDy).Intersect(ownSticky).IsEmpty) sb = default;
             if (!sb.IsEmpty)
             {
-                if (root) { ok = false; return; }   // the fade's own paint overlaps its content inside the band
                 RectF fp = Offset(sb, accDx, accDy);
                 if (halo > 0f) fp = new RectF(fp.X - halo, fp.Y - halo, fp.W + 2f * halo, fp.H + 2f * halo);
                 if (!clip.IsInfinite) fp = fp.Intersect(clip);
@@ -3210,30 +3171,6 @@ public sealed partial class SliceRecorder
     /// <summary>A composite clip in device px, snapped OUT to whole pixels (the scissor a direct replay would set);
     /// unbounded → empty (no clip).</summary>
     /// <summary>A <see cref="DrawOp.FillRoundRect"/> that paints nothing: zero opacity, or a solid fill of alpha 0.</summary>
-    /// <summary>F087: does this op paint nothing on this turn - its own <c>Opacity</c> at or below 0 (where the recorder folds the node's
-    /// and its ancestors' opacity, animated values included), or a fill whose colour alpha is 0 (<see cref="InvisibleFill"/>)? Only the
-    /// video occlusion verdict reads it, so it errs towards "paints": an op kind it does not know counts as painting.</summary>
-    private static bool PaintsNothing(DrawOp op, ReadOnlySpan<byte> p) => op switch
-    {
-        DrawOp.FillRoundRect => InvisibleFill(op, p),
-        DrawOp.DrawGlyphRun => MemoryMarshal.Read<DrawGlyphRunCmd>(p).Opacity <= 0f,
-        DrawOp.DrawGlyphRunGradient => MemoryMarshal.Read<DrawGlyphRunGradientCmd>(p).Opacity <= 0f,
-        DrawOp.DrawImage => MemoryMarshal.Read<DrawImageCmd>(p).Opacity <= 0f,
-        DrawOp.DrawRoundRectStroke => MemoryMarshal.Read<DrawRoundRectStrokeCmd>(p).Opacity <= 0f,
-        DrawOp.DrawShadow => MemoryMarshal.Read<DrawShadowCmd>(p).Opacity <= 0f,
-        DrawOp.DrawGradientRect => MemoryMarshal.Read<DrawGradientRectCmd>(p).Opacity <= 0f,
-        DrawOp.DrawGradientStroke => MemoryMarshal.Read<DrawGradientStrokeCmd>(p).Opacity <= 0f,
-        DrawOp.DrawArc => MemoryMarshal.Read<DrawArcCmd>(p).Opacity <= 0f,
-        DrawOp.DrawPolylineStroke => MemoryMarshal.Read<DrawPolylineStrokeCmd>(p).Opacity <= 0f,
-        DrawOp.DrawTabShape => MemoryMarshal.Read<DrawTabShapeCmd>(p).Opacity <= 0f,
-        DrawOp.DrawIconMask => MemoryMarshal.Read<DrawIconMaskCmd>(p).Opacity <= 0f,
-        DrawOp.FillPath => MemoryMarshal.Read<FillPathCmd>(p).Opacity <= 0f,
-        DrawOp.StrokePath => MemoryMarshal.Read<StrokePathCmd>(p).Opacity <= 0f,
-        DrawOp.DrawSeries => MemoryMarshal.Read<DrawSeriesCmd>(p).Opacity <= 0f,
-        DrawOp.DrawSprites => MemoryMarshal.Read<DrawSpritesCmd>(p).Opacity <= 0f,
-        _ => false,
-    };
-
     private static bool InvisibleFill(DrawOp op, ReadOnlySpan<byte> payload)
     {
         if (op != DrawOp.FillRoundRect) return false;

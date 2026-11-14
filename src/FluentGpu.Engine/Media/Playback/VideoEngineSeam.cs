@@ -84,9 +84,11 @@ public struct VideoEngineSnapshot
     public uint ErrorCode;
     /// <summary>The underlying HRESULT for the error, valid iff <see cref="VideoEngineFlags.Error"/> is set.</summary>
     public int ErrorHr;
-    /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> value at which FIRSTFRAMEREADY landed for the
-    /// current <see cref="SourceEpoch"/>; 0 until it does (or when the backend does not report it). The moment a
-    /// surface may drop its poster — an event, never a state guess.</summary>
+    /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> value at which the current <see cref="SourceEpoch"/>'s
+    /// first frame was ON SCREEN; 0 until it is (or when the backend does not report it). For a source that plays, the renderer
+    /// counting its first frame after FIRSTFRAMEREADY (the event itself comes about 270 ms earlier on a switch); for one that does
+    /// not, FIRSTFRAMEREADY (MF paints the paused frame then). The moment a surface may drop its poster or a held picture, and a
+    /// host may refit to the new source — an event, never a state guess.</summary>
     public long FirstFrameTimestamp;
     /// <summary>How many SEEKED events the engine has raised for the current <see cref="SourceEpoch"/> (0 for a backend
     /// that does not report them). Lossless where the <see cref="VideoEngineFlags.Seeking"/> flag is not: a seek whose
@@ -96,13 +98,6 @@ public struct VideoEngineSnapshot
     /// <summary>Media buffered ahead of the playhead, in ms; 0 when empty or not reported by this backend. What a seek
     /// planner checks before it asks for a fetch, and what a scrub bar's loaded band starts from.</summary>
     public long BufferedAheadMs;
-    /// <summary>The stream width (device px) the backend has APPLIED (the echo of the last <see cref="VideoCommandKind.StreamRect"/>
-    /// it carried out); 0 until one has been, and again after a new source. A consumer keeps the content size it hands the
-    /// compositor at the PREVIOUS value until this equals the size it asked for, so DirectComposition never scales a buffer
-    /// still at the old size by the new size's factor.</summary>
-    public uint StreamW;
-    /// <summary>The stream height (device px) the backend has APPLIED; see <see cref="StreamW"/>.</summary>
-    public uint StreamH;
     /// <summary>Frames the backend's video renderer has PRESENTED for the current <see cref="SourceEpoch"/> (MF's
     /// FRAMES_RENDERED, accumulated across the counter resets the engine applies after an internal flush — see
     /// <see cref="VideoFrameCounters"/>). Polled only while video is actually playing, so it is frozen while paused, parked,
@@ -112,6 +107,10 @@ public struct VideoEngineSnapshot
     /// accumulation as <see cref="FramesRendered"/>). Counts only the renderer's own drops: a frame the compositor missed
     /// after the swap chain presented it is invisible here, which is what <see cref="RenderedFrameWatch"/> backstops.</summary>
     public long FramesDropped;
+    /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> at which <see cref="FramesRendered"/> /
+    /// <see cref="FramesDropped"/> were last read from the renderer (0 = never this source): a reader differences two snapshots over
+    /// the time between their samples, not between its own reads.</summary>
+    public long FramesSampledTimestamp;
 }
 
 /// <summary>Accumulates a media engine's rendered/dropped frame counters across the resets it applies: Media Foundation

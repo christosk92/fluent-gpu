@@ -234,6 +234,35 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
     /// <summary>Resolution-height ceiling from the laid-out video surface. Cleared by <see cref="ResetForNewSource"/>:
     /// the previous source's surface is not this one's.</summary>
     public int ViewportMaxHeight { get; set; } = int.MaxValue;
+    /// <summary>The height in device px the video surface last asked for, BEFORE the floor, the ladder quantise and the
+    /// lower-cap settle; 0 = none yet. NOT cleared by <see cref="Reset"/>, <see cref="ResetForNewSource"/> or a seek: an
+    /// in-place switch keeps its surface, and the opening pick of the next source reads it before that source's session
+    /// exists (its first pump commits <see cref="ViewportCapFor"/> of this height at once).</summary>
+    public int ViewportRequestedHeight { get; set; }
+
+    /// <summary>The floor the laid-out viewport height is clamped to before it becomes an ABR cap. Real video surfaces
+    /// are small (191 DIP docked, 202 DIP pop-out, 135 DIP at the pop-out minimum) and every one is below every rung a
+    /// manifest offers, so the raw height would filter the whole ladder away and Auto would collapse to the bottom rung
+    /// on any bandwidth. A viewport is a hint about what is worth downloading, not a licence to starve the ladder.</summary>
+    public const int MinViewportCapHeight = 720;
+
+    /// <summary>THE viewport-cap rule, shared by the protected session (its committed cap) and the app's opening pick: the
+    /// surface height floored at <see cref="MinViewportCapHeight"/>, then the smallest ladder height at or above it; the
+    /// tallest ladder height when the surface is taller than every rung; the floored height itself when no rung declares
+    /// a height (&gt; 0). Pure, no allocation.</summary>
+    public static int ViewportCapFor(int heightPx, ReadOnlySpan<int> ladderHeights)
+    {
+        int height = Math.Max(heightPx, MinViewportCapHeight);
+        int atOrAbove = int.MaxValue, tallest = 0;
+        for (int i = 0; i < ladderHeights.Length; i++)
+        {
+            int rung = ladderHeights[i];
+            if (rung > tallest) tallest = rung;
+            if (rung >= height && rung < atOrAbove) atOrAbove = rung;
+        }
+        if (atOrAbove != int.MaxValue) return atOrAbove;
+        return tallest > 0 ? tallest : height;
+    }
     /// <summary>Compat property for callers that treat the cap as one number: set writes <see cref="PolicyMaxHeight"/>,
     /// get returns the EFFECTIVE cap, <c>min(policy, viewport)</c>. See the <c>allowed == 0</c> branch of the variant
     /// overload — a cap bounds the climb; it must never manufacture a downswitch to the floor.</summary>

@@ -211,7 +211,7 @@ Hit-test inverts the same origin-conjugated `LocalTransform` (`InputDispatcher.S
 |------|------|
 | `DCompositionCreateDevice` / `CreateTargetForHwnd` / `Visual.SetContent(swapchain)` | Mica / `WS_EX_NOREDIRECTIONBITMAP` — UI pixels on the HWND |
 | `DCompositionWaitForCompositorClock` (`Win32CompositorClock`) | UI-loop display clock (not `IDXGIOutput::WaitForVBlank`) |
-| `IDCompositionVisual.SetOffset` | **Video children only** (`DCompVideoPresenter`) — not lists |
+| `IDCompositionVisual.SetOffset` | **Video children only** (the DirectComposition video presenter (deleted 2026-11-11)) — not lists |
 | `IDCompositionDevice.Commit` | Flush DComp tree (UI + video) |
 
 List content does **not** move via DComp `SetOffset`. Offset is a GPU transform inside the DrawList. That is why virtualization can re-realize on the same write.

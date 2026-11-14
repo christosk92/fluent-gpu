@@ -26,6 +26,23 @@ public static class Generators
     public const float RestDelta = 1e-3f;
     public const float RestSpeed = 1e-2f;
 
+    /// <summary>The rest of a spring whose value is a position or an extent in DIP (<see cref="IsDipPositionChannel"/>: a bounds FLIP's
+    /// translate, a Reflow / Relayout / Reveal size), in DEVICE pixels: within a quarter of a pixel of its target and slower than
+    /// 8 px/s (0.13 px per 60 Hz frame) nothing is left that the glass can show, so the row lands exactly on its target there and the
+    /// landing step stays under half a pixel. The normalized 0.01/s speed floor (and the translate's 0.001 DIP delta) held a 0.45 s
+    /// pane spring - re-solving layout and re-recording every frame - some 20 frames past the last pixel it could still move.
+    /// <see cref="DipRest"/> converts either to DIP at the node's device scale.</summary>
+    public const float DevicePxRestDelta = 0.25f, DevicePxRestSpeed = 8f;
+
+    /// <summary>A device-pixel rest threshold (<see cref="DevicePxRestDelta"/>, <see cref="DevicePxRestSpeed"/>) in DIP at
+    /// <paramref name="deviceScale"/>.</summary>
+    public static float DipRest(float devicePx, float deviceScale) => devicePx / (deviceScale > 0f ? deviceScale : 1f);
+
+    /// <summary>The channels whose value is a position or an extent in DIP and that rest on <see cref="DevicePxRestDelta"/>.</summary>
+    public static bool IsDipPositionChannel(AnimChannel ch)
+        => ch is AnimChannel.TranslateX or AnimChannel.TranslateY or AnimChannel.SizeW or AnimChannel.SizeH
+              or AnimChannel.LayoutW or AnimChannel.LayoutH;
+
     // Over-damped guard: clamp the exponent magnitude so a very stiff spring at large t cannot underflow/NaN.
     private const float ExpClamp = 300f;
 

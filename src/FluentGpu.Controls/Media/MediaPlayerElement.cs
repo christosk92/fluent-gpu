@@ -6,6 +6,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Media;
+using FluentGpu.Pal;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 
@@ -128,9 +129,14 @@ public sealed class MediaPlayerElement : Component
     /// rate is not the user's to change). Null sets <see cref="Player"/> directly.</summary>
     public Action<double>? RateRequested { get; init; }
     /// <summary>Round the composited video's corners (DIP; 0 = square, the default). The frame composites in its own
-    /// DirectComposition visual OUTSIDE the UI back buffer, so a rounded parent with ClipToBounds cannot clip it — the
+    /// composition visual OUTSIDE the UI back buffer, so a rounded parent with ClipToBounds cannot clip it — the
     /// radius has to reach the compositor, which is what this does. Half the shorter side gives a circle.</summary>
     public float CornerRadius { get; init; }
+    /// <summary>Fade the composited picture along an alpha ramp (<see cref="VideoAlphaRamp"/>, its span in DIP from this element's own top
+    /// (or left) edge, untransformed), so where its alpha falls the window's backdrop shows through instead of an opaque ground painted
+    /// over it. Read on every placement and watched (a change re-places the picture; the element does not re-render). Null (the
+    /// default) = opaque.</summary>
+    public IReadSignal<VideoAlphaRamp>? AlphaRamp { get; init; }
     /// <summary>Decoration mode: a BARE composited surface that owns none of the player frame. No minimum height, no
     /// border, no poster and no status overlay; the UI-side corners follow <see cref="CornerRadius"/> instead of the
     /// standard overlay radius, and everything before first frame paints transparent so whatever the caller stacked
@@ -141,10 +147,15 @@ public sealed class MediaPlayerElement : Component
     /// small decorative slot that same floor turns the composited rect into a capsule that overflows its container.</summary>
     public bool IsDecorative { get; init; }
 
+    /// <summary>The host sizes the player itself (a docked cap, a floating card the host clamps to its own floor): the 160 DIP floor above
+    /// is dropped, so the video area never outgrows the host's box and what is stacked at its foot (an on-media transport) stays inside the
+    /// host's clip. Nothing else of <see cref="IsDecorative"/> applies.</summary>
+    public bool HostSized { get; init; }
+
     /// <summary>The UI-side corner shape of the frame and the video stage. Fullscreen is square. An explicitly-set
     /// <see cref="CornerRadius"/> (&gt; 0) drives the frame regardless of <see cref="IsDecorative"/> — E2: a
     /// non-decorative (operable) player asked for e.g. <c>CornerRadius = Radii.Card</c> previously got a UI frame at
-    /// the hard-coded <see cref="Radii.OverlayAll"/> while the DComp child underneath was already told
+    /// the hard-coded <see cref="Radii.OverlayAll"/> while the video visual underneath was already told
     /// <see cref="CornerRadius"/> via <see cref="VideoSurfaceRegistry.SetCornerRadius"/> (<see cref="PumpNow"/>
     /// ~:516-517) — the UI clip and the compositor clip disagreed. <see cref="CornerRadius"/> == 0 keeps BOTH
     /// pre-existing defaults unchanged: decoration still follows its own (square-by-default) shape (a decorative
@@ -339,7 +350,8 @@ public sealed class MediaPlayerElement : Component
         _resolveFocusOut = ResolveFocusOut;
         _onWake = OnWake;
         _onMoveSizeEnded = OnMoveSizeEnded;
-        _onWindowBlur = OnWindowBlur;
+        _onWindowLeave = OnWindowLeave;
+        _onPointerHeld = OnPointerHeld;
         _seedPointerPresence = SeedPointerPresence;
         _onPointerMoved = OnPointerMoved;
     }
@@ -408,7 +420,7 @@ public sealed class MediaPlayerElement : Component
     private double _armedDueMs = double.PositiveInfinity;
     private bool _focusOutPending;
     // The device scale the most recent PumpNow ran at (1 until the first pump). Render-time FitVideoRect uses it so
-    // the hole's layout margins agree with the pump's DComp placement in VideoAspectMode.Native (natural is px).
+    // the hole's layout margins agree with the pump's video placement in VideoAspectMode.Native (natural is px).
     private float _lastPumpScale = 1f;
     // The natural size the most recent placed pump ran with (null until the first one). The player publishes the natural size
     // from its own state pump (F132), so it can change BEFORE a pump turn rather than inside it: a difference here is what
@@ -416,8 +428,9 @@ public sealed class MediaPlayerElement : Component
     private SizeI? _pumpedNatural;
     private bool _cursorHidden;
     private NodeHandle _playerRoot;
-    private readonly Action _resolveFocusOut, _onWake, _onMoveSizeEnded, _onWindowBlur, _seedPointerPresence;
+    private readonly Action _resolveFocusOut, _onWake, _onMoveSizeEnded, _onWindowLeave, _seedPointerPresence;
     private readonly Action<Point2> _onPointerMoved;
+    private readonly Action<bool> _onPointerHeld;
     private bool _pressIsTouch, _moveInFlight;
     // When the last OS move loop ended (host timer clock). A press within the double-click window of it is never the
     // second half of a double-click: a press right after a caption drag lands on the same client point, and it is not
@@ -445,6 +458,10 @@ public sealed class MediaPlayerElement : Component
             Diag.Line($"[media.chrome] {(vis.ChromeVisible ? "show" : "hide")} cause={vis.LastCause} holds=0x{(int)vis.Holds:X}");
         }
         if (vis.CursorHidden) HideCursor(); else ShowCursor();
+        // While controls that a window leave must hide are up, ask the platform to catch the leave no message reports (a
+        // window shown over the resting pointer; InputHooks.WatchPointerPresence). Pinned chrome (no auto-hide, paused) asks nothing.
+        bool watch = vis.ChromeVisible && (vis.Holds & (ChromeHold.Disabled | ChromeHold.Stopped)) == 0;
+        if (watch != _presenceWatch && _hooks is { } watchHooks) { _presenceWatch = watch; watchHooks.WatchPointerPresence(watch); }
         double due = vis.NextWakeMs;
         if (double.IsPositiveInfinity(due)) { _armedDueMs = double.PositiveInfinity; return; }   // a stale armed wake just finds nothing due
         // Re-arm only when the deadline moves EARLIER (the base::Timer trick). A pointer moving at 1 kHz pushes the
@@ -468,9 +485,27 @@ public sealed class MediaPlayerElement : Component
         Sync();
     }
 
-    /// <summary>The window lost activation: the user switched away, so this is a real leave wherever the pointer was
-    /// (and the dispatcher has already dropped every cursor override).</summary>
-    private void OnWindowBlur() { _vis?.PointerLeft(Now()); Sync(); }
+    /// <summary>The window lost activation (the user switched away; the dispatcher has already dropped every cursor override),
+    /// or the hovering pointer left the window: a real leave wherever hover was, the player's own exit included or not.</summary>
+    private void OnWindowLeave() { _vis?.PointerLeftWindow(Now()); Sync(); }
+
+    /// <summary>A mouse/pen button went down (or came up) anywhere in the window. A press that lands on the player, its own
+    /// transport or a host strip over it (a volume drag, the seek) holds the chrome until its release, wherever the drag
+    /// goes; the window's leave waits for that release too (InputHooks.PointerHeldObserved). A press elsewhere is not ours.</summary>
+    private void OnPointerHeld(bool held)
+    {
+        if (_vis is not { } vis) return;
+        double now = Now();
+        if (held) { if (!PointerStillOverPlayer()) return; vis.SetPressed(true, now); }
+        else if ((vis.Holds & ChromeHold.Pressed) != 0)
+        {
+            vis.SetPressed(false, now);
+            // released off the player but inside the window: the leave the drag deferred (HandleExit). Out of the window, the
+            // window's own leave follows in this batch and hides at once.
+            if (!PointerStillOverPlayer() && _hooks?.IsPointerInWindow?.Invoke() == true) vis.PointerLeft(now);
+        }
+        Sync();
+    }
 
     private bool CursorHidingAllowed() => CursorAutoHide switch
     {
@@ -592,6 +627,14 @@ public sealed class MediaPlayerElement : Component
 
     private void ReleaseCursorOverride() => _hooks?.SetCursorOverride?.Invoke(this, null);
 
+    private bool _presenceWatch;
+    private void ReleasePresenceWatch()
+    {
+        if (!_presenceWatch) return;
+        _presenceWatch = false;
+        _hooks?.WatchPointerPresence(false);
+    }
+
     /// <summary>S6 — "is ANY input-blocking overlay up right now". The overlay service knows; the interface does not yet
     /// surface it, and <c>OverlayServiceImpl</c> is internal to this very assembly, so the kit reads it directly. A
     /// host-less tree (the null service) answers false, which is the right answer there.</summary>
@@ -653,8 +696,9 @@ public sealed class MediaPlayerElement : Component
         var holeRef = UseRef<NodeHandle>(default);
         var posterRef = UseRef<NodeHandle>(default);
         // Latched once a frame has ever been ready: across a source switch (Playing -> Opening on the SAME element)
-        // the hole stays active and the poster (opacity 1) covers it, so the next source's first frame arrives by
-        // crossfade instead of a subtree rebuild. Never cleared for the life of the mount — see holeActive below.
+        // the hole stays active, over the held outgoing frame (see PictureShownOut) or under the poster when nothing is
+        // held, so the next source's first frame arrives without a subtree rebuild. Never cleared for the life of the
+        // mount — see holeActive below.
         var hadVideo = UseRef<bool>(false);
         var playerRoot = UseRef<NodeHandle>(default);
         var chromeRef = UseRef<NodeHandle>(default);
@@ -691,8 +735,14 @@ public sealed class MediaPlayerElement : Component
         MediaSeekBar seekBar = seekBarRef.Value!;
         _seekBar = seekBar;
 
-        var natural = Player.NaturalSize.Value;
         var state = Player.State.Value;
+        // A HELD picture (see PictureShownOut): the previous source's last frame stays on the slot until the next one's first
+        // frame, laid out for its own natural size. `natural` is what the slot shows; the player's own size is only for readiness.
+        var pictureShown = UseSignal(false);
+        _pictureShown = pictureShown;
+        var playerNatural = Player.NaturalSize.Value;
+        bool holding = HoldsPicture(pictureShown.Value, Player.VideoSurface.Value.IsNone, state, !playerNatural.IsEmpty, IsDecorative);
+        var natural = holding ? _heldNatural : playerNatural;
         bool playIntent = Player.IsPlayRequested.Value;
         // BufferingInfo is NOT read here: the protected pump republishes it for every appended segment (percent moves each
         // time), and a raw read made the whole element re-render, reallocating its children, closures and context menu,
@@ -703,7 +753,7 @@ public sealed class MediaPlayerElement : Component
         VideoAspectMode aspect = aspectSig.Value;
         double customAspect = customAspectSig.Value;
         bool audioOnly = IsAudioOnly(natural);
-        bool videoReady = IsVideoReady(natural, state);
+        bool videoReady = IsVideoReady(playerNatural, state);
         // PART B (poster-until-first-frame): `videoReady` says only "MF is no longer in Opening" — it says NOTHING
         // about whether a DECODED FRAME has ever reached the compositor. Gating the poster/hole on it alone punches
         // the erase hole (and drops the poster) the instant the state leaves Opening, up to ~1 s before the backend's
@@ -724,13 +774,13 @@ public sealed class MediaPlayerElement : Component
         // Opening, and `holeActive` below ORs it in — punching an erase hole with nothing yet composited behind it).
         if (framePresented) hadVideo.Value = true;
         // The hole stays active across a switch (Playing -> Opening on the same element) so the compositor keeps
-        // presenting the outgoing frame while the poster crossfades over it — no erase-to-transparent flash and no
-        // subtree rebuild. EXCEPTION: IsDecorative never latches — a decorative clip must never erase the caller's
+        // presenting the outgoing frame: held, with the poster down, while the slot still shows it (`holding`), else under the
+        // poster's crossfade — no erase-to-transparent flash and no subtree rebuild. EXCEPTION: IsDecorative never latches — a decorative clip must never erase the caller's
         // own still before its own first frame ever arrives.
-        bool holeActive = IsDecorative ? framePresented : !audioOnly && (framePresented || hadVideo.Value);
+        bool holeActive = IsDecorative ? framePresented : !audioOnly && (framePresented || hadVideo.Value || holding);
         // The poster is up whenever the element has not yet PRESENTED a ready frame; IsDecorative never shows one
         // (its "no poster" contract — the caller's own still shows through the transparent hole instead).
-        bool posterUp = !IsDecorative && !framePresented;
+        bool posterUp = !IsDecorative && !framePresented && !holding;   // a held picture is the previous frame, not "no picture yet"
         // "media-stage" is mounted iff !IsDecorative && ShowLetterboxBars — both frozen at mount (init props), so this
         // is a CONSTANT for the element's whole life: the fixed child shape below never gains or loses this slot.
         bool showStage = !IsDecorative && ShowLetterboxBars;
@@ -768,8 +818,10 @@ public sealed class MediaPlayerElement : Component
         // A KeepAlive/window activation edge and any source/fit change need one fresh settled placement, never a
         // permanent pump. Bounds changes below cover resizes/scroll geometry without re-rendering this component.
         UseActivation(RequestBindingPump, RequestBindingPump);
-        int pumpGeometryKey = HashCode.Combine(HashCode.Combine(natural, aspect), customAspect);
+        int pumpGeometryKey = HashCode.Combine(HashCode.Combine(playerNatural, aspect), customAspect);
         UseEffect(RequestBindingPump, pumpGeometryKey);
+        // The alpha ramp is watched, never read by Render: a caller's resize re-shapes the fade every frame without re-rendering this.
+        if (AlphaRamp is { } rampSig) UseSignalEffect(() => { _ = rampSig.Value; _binding.RequestPump(); });
 
         // Single-writer ownership: the fullscreen presentation CLAIMS the shared slot on mount; the inline element
         // (re)claims it whenever NOT fullscreen (mount + every exit, incl. the overlay's closing frames). A non-owner
@@ -845,18 +897,28 @@ public sealed class MediaPlayerElement : Component
         bool presentedFullscreen = PresentingFullscreen || fullscreen.Value;   // subscribe: the policy edge must re-render
         UseEffect(() => { vis.SetCursorMayHide(CursorHidingAllowed(), Now()); Sync(); }, presentedFullscreen ? 1 : 0);
 
-        // An OS move/size loop of the host window reports its end through the host; a window blur is a LEAVE (the
-        // dispatcher clears hover before it drops the pointer position, so the exit alone would read as "covered" and
-        // the controls would linger over a window the user has switched away from).
+        // An OS move/size loop of the host window reports its end through the host; a window blur and the pointer leaving
+        // the window are LEAVES. A hovered player's HandleExit already reads either as a leave (the dispatcher drops the
+        // pointer position before the blur's exits run, and a move out of the window exits the hovered chain); these two
+        // subscriptions cover the leave that finds the player NOT hovered (a scrim or a menu had taken hover, or no
+        // pointer event since mount), where no exit fires and the controls would linger: over a window the user has
+        // switched away from (the blur), or, once that menu closes with the pointer outside, over a window the pointer
+        // has left (InputHooks.PointerLeftWindowObserved). Both are needed: the window edge fires on a blur only while the
+        // pointer is in, and a blur never fires for a pointer that just leaves an active window. Both land in the same
+        // idempotent PointerLeftWindow: the hide is due on that tick (YouTube's rule), holds permitting.
         UseEffect(() =>
         {
             if (hooks is null) return (Action?)null;
             hooks.WindowMoveSizeEndedObserved += _onMoveSizeEnded;
-            hooks.WindowBlurObserved += _onWindowBlur;
+            hooks.WindowBlurObserved += _onWindowLeave;
+            hooks.PointerLeftWindowObserved += _onWindowLeave;
+            hooks.PointerHeldObserved += _onPointerHeld;
             return () =>
             {
                 hooks.WindowMoveSizeEndedObserved -= _onMoveSizeEnded;
-                hooks.WindowBlurObserved -= _onWindowBlur;
+                hooks.WindowBlurObserved -= _onWindowLeave;
+                hooks.PointerLeftWindowObserved -= _onWindowLeave;
+                hooks.PointerHeldObserved -= _onPointerHeld;
             };
         }, DepKey.Empty);
         // PART A: claim ChromeFeed on mount, release it on unmount — but only if it is STILL this instance. A keyed
@@ -869,7 +931,9 @@ public sealed class MediaPlayerElement : Component
             return () => { if (feed.Owner == this) feed.Owner = null; };
         }, DepKey.Empty);
         UseEffect(OnMounted, DepKey.Empty);
+        UseEffect(() => (Action?)(() => { if (pictureShown.Peek()) PictureShownOut?.SetIfChanged(false); }), DepKey.Empty);
         UseEffect(() => (Action?)ReleaseCursorOverride, DepKey.Empty);
+        UseEffect(() => (Action?)ReleasePresenceWatch, DepKey.Empty);
         UseLayoutEffect(_seedPointerPresence, DepKey.Empty);   // after layout: the frame's rect is valid
 
         bool showChrome = AreTransportControlsEnabled && !SuppressTransport && chromeVisible.Value;
@@ -1015,8 +1079,8 @@ public sealed class MediaPlayerElement : Component
         //       elements.
         //   [1] "media-hole" — ALWAYS mounted. The VIDEO HOLE PUNCH (DrawOp.DrawVideo, gpu-renderer.md §7.3), laid
         //       out at EXACTLY the fitted video rect. VideoHole is a PROP (holeActive) that TOGGLES — never a
-        //       presence change — so the node and its DComp registration survive a source switch. Active, it erases
-        //       everything already recorded beneath it toward premultiplied zero, so the DComp video visual
+        //       presence change — so the node and its video registration survive a source switch. Active, it erases
+        //       everything already recorded beneath it toward premultiplied zero, so the video visual
         //       composited z-BELOW the premultiplied UI swapchain shows through at full strength instead of blending
         //       with what stayed in the back buffer. Inactive, it is an ordinary (non-erasing) transparent box.
         //   [2] "media-poster" — ALWAYS mounted, a LATER sibling of the hole. Visibility rides OPACITY (posterUp),
@@ -1026,7 +1090,7 @@ public sealed class MediaPlayerElement : Component
         //   [3…] the status overlay — a LATER sibling still, so it repaints over the video. Presence-gated (it is
         //       genuinely transient), key preserved. Then "media-caption-slot" — ALWAYS mounted, a leaf that owns the
         //       caption: it reads the active cue itself, so cue changes never re-render this element.
-        // ONE SOURCE OF TRUTH: PumpNow places the DComp visual from scene.AbsoluteTransformedRect of the "media-hole" node, so
+        // ONE SOURCE OF TRUTH: PumpNow places the video visual from scene.AbsoluteTransformedRect of the "media-hole" node, so
         // the erased region and the presented video are the same rect BY CONSTRUCTION.
         bool showStatusOverlay = statusOverlay is not null;
         var videoChildren = new Element[(showStage ? 1 : 0) + 2 + (showStatusOverlay ? 1 : 0) + 1];
@@ -1088,7 +1152,7 @@ public sealed class MediaPlayerElement : Component
             Direction = 1,
             Grow = 1f,
             Shrink = 1f, MinWidth = 0f,
-            MinHeight = VideoAreaMinHeight(PresentingFullscreen, IsDecorative),
+            MinHeight = VideoAreaMinHeight(PresentingFullscreen, IsDecorative || HostSized),
             ClipToBounds = true,
             Corners = FrameCorners,
             Fill = ColorF.Transparent,
@@ -1217,8 +1281,12 @@ public sealed class MediaPlayerElement : Component
 
         void HandleExit()
         {
-            // A real leave (the window, the non-client resize band, a blur) hides after the short leave debounce; hover
-            // TAKEN over the player (a scrim, the OS move loop's capture cancel) only drops the pointer holds.
+            // A drag that started on the player carries the hover off it while the button is held: not a leave. Its release
+            // decides (OnPointerHeld: off the player then, the leave debounce; out of the window, the window's leave).
+            if (_vis is { } heldVis && (heldVis.Holds & ChromeHold.Pressed) != 0 && _hooks?.IsPointerHeld?.Invoke() == true) return;
+            // A real leave (the non-client resize band, off the player inside the window) hides after the short leave
+            // debounce (the window's own leave and a blur hide at once: OnWindowLeave); hover TAKEN over the player (a
+            // scrim, the OS move loop's capture cancel) only drops the pointer holds.
             if (PointerStillOverPlayer()) _vis?.PointerCovered(Now());
             else _vis?.PointerLeft(Now());   // also shows the cursor: it must never stay hidden outside the video
             Sync();
@@ -1312,7 +1380,7 @@ public sealed class MediaPlayerElement : Component
         VideoBinding b = _binding;
         if (!b.IsValid) return;
         // Parked (Flow.KeepAlive) or minimized: hide the composited surface. The video visual lives in its OWN
-        // DirectComposition visual below the UI swapchain, so it is not clipped or covered by whatever the shell draws
+        // composition visual below the UI swapchain, so it is not clipped or covered by whatever the shell draws
         // next — a parked page's frame keeps compositing at its last placement (a navigated-away artist portrait on the
         // nav rail). Decorative clips SKIP the pump while inactive (they must not keep an MF session alive off-screen).
         // Non-decorative player surfaces (PiP / pop-out) still pump. A MediaPlayer advances its own state, position, duration
@@ -1334,7 +1402,7 @@ public sealed class MediaPlayerElement : Component
         _lastPumpScale = s;
         if (!active)
         {
-            b.SetVisible(false);
+            ShowSlot(b, false);
             NoteInView(false);
             if (IsDecorative) return;
             Player.PumpVideo(default, default, s);
@@ -1349,7 +1417,7 @@ public sealed class MediaPlayerElement : Component
         if (scene is null || h.IsNull || !scene.IsLive(h))
         {
             if (!IsDecorative) Player.PumpVideo(b, default, s);
-            b.SetVisible(false);    // no laid-out area ⇒ empty viewport
+            ShowSlot(b, false);    // no laid-out area ⇒ empty viewport
             NoteInView(false);
             return;
         }
@@ -1359,11 +1427,14 @@ public sealed class MediaPlayerElement : Component
         if (area.W <= 0f || area.H <= 0f)
         {
             if (!IsDecorative) Player.PumpVideo(b, default, s);
-            b.SetVisible(false);
+            ShowSlot(b, false);
             NoteInView(false);
             return;
         }
-        SizeI natural = Player.NaturalSize.Peek();
+        // A held picture keeps ITS natural size (its fit, its placement) until the successor's first frame; the hold's end is then
+        // the natural-size move below, which refits the hole and places the new frame for its own size in the same pump.
+        bool holding = HoldingNow();
+        SizeI natural = holding ? _heldNatural : Player.NaturalSize.Peek();
         // The natural size may have changed since this element's last placed pump (the player publishes it from its own state
         // pump, before this turn, not inside PumpVideo): the hole is then still laid out from the PREVIOUS size, so write its
         // Margin from the new size now and run this turn as the refit pass, exactly the correction the follow-up below makes
@@ -1416,21 +1487,28 @@ public sealed class MediaPlayerElement : Component
                 if (ModeMayOverflow(mode)) geom = h;   // the rect now derives from the AREA, so follow the area's geometry
             }
         }
-        // Track geometry so a compositor-only move (a PiP drag, a page transition) re-places the DComp child on the
+        // Track geometry so a compositor-only move (a PiP drag, a page transition) re-places the video visual on the
         // frame it moves, instead of waiting for an unrelated native/transport event to request the next pump.
         b.SetGeometryNode(geom);
         // Clip the viewport to every clipping ancestor before handing it to the presenter. The frame composites in its
-        // OWN DirectComposition visual BELOW the UI swapchain — it is not inside any scissor the UI draws with — so a
+        // OWN composition visual BELOW the UI swapchain — it is not inside any scissor the UI draws with — so a
         // viewport of the element's own rect keeps presenting at full size while the element scrolls out of its
         // scroller. That is how a video in a list ended up painted across the tab strip and the title bar.
         RectF viewport = ClipToAncestors(scene, h, area);
-        if (viewport.W <= 0.5f || viewport.H <= 0.5f) { b.SetVisible(false); NoteInView(false); return; }
+        if (viewport.W <= 0.5f || viewport.H <= 0.5f) { ShowSlot(b, false); NoteInView(false); return; }
         NoteInView(true);
         b.SetViewport(viewport);
         // Clamped so a caller asking for "fully round" on a non-square element still gets a clean capsule rather than
         // radii that overlap and degenerate. CornerRadius freezes at mount, so this is a constant per element.
         if (CornerRadius > 0f)
             b.SetCornerRadius(MathF.Min(CornerRadius, MathF.Min(videoRect.W, videoRect.H) * 0.5f));
+        // The ramp from this element's own edge into window DIP: the applier lays it on whatever rect the session places (a crop places
+        // one larger than the element) and moves it with the hole's posed travel.
+        if (AlphaRamp is { } ramp)
+        {
+            VideoAlphaRamp r = ramp.Peek();
+            b.SetAlphaRamp(r.Mapped(r.Axis == VideoRampAxis.LeftToRight ? area.X : area.Y, 1f));
+        }
         // Overflow safety net: a layout defect that widens the element past its DIRECT host must degrade to a SMALLER
         // video, never to a video composited at a rect that is not on screen (plus an oversized ABR request). It is keyed
         // to the direct host's laid-out rect and NOT to the clip viewport: a scroller or the window edge cutting a
@@ -1451,39 +1529,53 @@ public sealed class MediaPlayerElement : Component
         // an animated placement), so nothing the session publishes changed: state, buffering, position, cue, the stream
         // rect and the ABR bookkeeping are all driven by native events and transport commands, which request a FULL pump.
         // Place the surface and stop — no PumpVideo, no per-frame Position write fanning out to every subscriber. The
-        // cached content size is only valid while it is still the size this rect needs (a pure translation never changes
+        // cached stream size is only valid while it is still the size this rect needs (a pure translation never changes
         // it; a resize inside the stream-size bucket does not either; a resize that crosses into another bucket does),
         // otherwise the turn falls through to the full pump so the stream is never left sized for a stale rect (the session's
         // size gate then holds the stream until the rect is stable). The settle timer then runs the full pump once the motion
-        // has ended.
-        // A surface with no content size yet (not bound / sized) is not in motion: its turn is the full pump that sizes it.
-        SizeI cached = b.IsGeometryOnlyPump ? b.ContentSize : SizeI.Zero;
+        // has ended. A stream pinned to the natural size (the protected path) serves every rect: no rect ever resizes it.
+        // A surface with no stream size yet (not bound / sized) is not in motion: its turn is the full pump that sizes it.
+        SizeI cached = b.IsGeometryOnlyPump ? b.StreamSize : SizeI.Zero;
         bool motion = !cached.IsEmpty;
         if (motion)
         {
             NoteGeometryMotion();
-            if (!audioOnly && VideoStreamSizing.Serves(cached, natural, videoRect, s, b.Display))
+            if (!audioOnly && (b.StreamPinned || VideoStreamSizing.Serves(cached, natural, videoRect, s, b.Display)))
             {
                 b.Place(videoRect);
-                b.SetVisible(active && !Player.VideoSurface.Peek().IsNone);   // the viewport is non-empty and the frame has video here (checked above); AND the session's per-attach readiness
+                ShowSlot(b, active && (holding || !Player.VideoSurface.Peek().IsNone));   // the viewport is non-empty and the frame has video here (checked above); AND the session's per-attach readiness (or a held picture)
                 return;
             }
         }
         LogPump(b, pumpMode, area, natural, videoRect, viewport, s, defer: motion || _settleArmed);
         Player.SetAdaptiveViewportHeight((int)MathF.Ceiling(videoRect.H * MathF.Max(1f, s)));
-        Player.PumpVideo(b, videoRect, s);
+        // The session sizes its stream for where ITS frame will be: the declared fit before metadata, the successor's fit while a
+        // picture is held (the held picture keeps its own placement: the session does not place before its first frame).
+        Player.PumpVideo(b, audioOnly ? DeclaredFitRect(area, pumpMode, s) : holding ? SuccessorFitRect(area, videoRect, pumpMode, s) : videoRect, s);
         // The first metadata, a FORMATCHANGE or a different-aspect ABR rung publishes a new natural size INSIDE the pump,
         // but this pump placed against the hole as laid out for the old one: the new frame would be squashed into the old
         // fit until the next render + layout. Refit and re-place in THIS pump, and write the hole's Margin now so the next
         // layout lands without waiting for a render. Value-gated (one follow-up at most), so it cannot loop pumps.
-        if (!refit && Player.NaturalSize.Peek() != natural)
+        if (!refit && ShownNatural() != natural)
         {
             SyncHoleLetterbox(scene.Bounds(h));
             PumpCore(s, refit: true);
             return;
         }
-        b.SetVisible(active && !audioOnly && !Player.VideoSurface.Peek().IsNone);   // the viewport is non-empty here (the early-out above returns hidden); the session publishes readiness (VideoSurface) inside PumpVideo, so a re-attached or detached slot stays hidden until its own first frame
+        bool show = active && !audioOnly && (holding || !Player.VideoSurface.Peek().IsNone);
+        ShowSlot(b, show);   // the viewport is non-empty here (the early-out above returns hidden); the session publishes readiness (VideoSurface) inside PumpVideo, so a re-attached or detached slot stays hidden until its own first frame - unless it holds the previous source's picture
+        if (show && !holding) _heldNatural = natural;   // the size the picture now on the slot was placed for: what a hold keeps
         if (!audioOnly) NoteSurfacePresented(b);
+    }
+
+    /// <summary>The destination a source that has not reported its natural size yet will be fitted to, from the size it DECLARED
+    /// (<see cref="IMediaPlayer.ExpectedNaturalSize"/>, a manifest's opening rung): the session sizes its stream from it before
+    /// metadata, so the first swap chain is built at the destination size. The area itself when nothing is declared (an audio-only
+    /// source, a backend that declares nothing): what an audio-only pump has always passed. Never a layout input or a placement.</summary>
+    private RectF DeclaredFitRect(RectF area, VideoAspectMode mode, float scale)
+    {
+        SizeI declared = Player.ExpectedNaturalSize.Peek();
+        return declared.IsEmpty ? area : FitVideoRectSnapped(area, declared, mode, _customAspectForPump?.Peek() ?? (16.0 / 9.0), scale);
     }
 
     /// <summary>The SAME-SOLVE letterbox: place the video hole at the fitted rect for <paramref name="area"/> inside the
@@ -1511,7 +1603,7 @@ public sealed class MediaPlayerElement : Component
         var scene = _scene;
         NodeHandle hole = _holeRef?.Value ?? default;
         if (scene is null || hole.IsNull || !scene.IsLive(hole)) return;
-        Edges4 next = HoleInsets(area, Player.NaturalSize.Peek(),
+        Edges4 next = HoleInsets(area, ShownNatural(),
             _aspectForPump?.Peek() ?? VideoAspectMode.Uniform,
             _customAspectForPump?.Peek() ?? (16.0 / 9.0), _lastPumpScale);
         // Two indexed touches instead of one held `ref`: a ref into the SoA column must not be alive across a call that
@@ -1760,7 +1852,7 @@ public sealed class MediaPlayerElement : Component
             //
             // OpaqueSurface: every menu this transport raises — quality, speed, captions, audio track — is anchored to
             // a button that sits ON the video, so the plate is over the hole BY CONSTRUCTION. A hole is a DestOut erase
-            // and the video is a sibling DComp visual below the UI swapchain, so there is nothing there for an acrylic
+            // and the video is a composition visual below the UI swapchain, so there is nothing there for an acrylic
             // layer to blur: it would composite premultiplied zero and leave the menu as floating text. Declaring it
             // here instead of letting OverlayHost discover it geometrically makes the plate solid from frame ONE — no
             // query, no frame of latency, and no per-frame slice re-record from the answer flipping.
@@ -2670,6 +2762,59 @@ public sealed class MediaPlayerElement : Component
 
     private bool _surfacePresentedRaised;
     private int _surfaceProbePumps;
+
+    // ── the held picture (a video -> video switch on the same element) ──────────────────────────────────────────────
+    //
+    // An in-place switch (the host opens the next source on the SAME player, so this element and its slot stay) resets the
+    // player's VideoSurface and NaturalSize at the open: the old source is gone, the new one has no frame yet. The slot still
+    // shows the old source's last frame, and that is what the user should keep seeing until the new one's first frame:
+    // picture -> picture, never picture -> poster -> picture. While HELD the element keeps the slot shown at the old picture's
+    // own placement (its natural size, its fit, its content size: nothing is re-placed for a source whose frames it does not
+    // show), keeps the hole and keeps its poster down; the session does not take the slot over before its own first frame
+    // (VideoBinding.ShowsOtherPicture). The hold ends with the successor's first frame (it is placed for its own size in that
+    // pump), a terminal state (failed, stopped, ended), the element going inactive or losing its area, or an audio-only
+    // successor. A host with its own loading picture reads PictureShownOut to know there is a picture under it.
+
+    /// <summary>Mirrors whether THIS element's slot is showing a picture right now (written by the pump on every visibility write;
+    /// true through a held picture across a source switch, false while hidden, parked or audio-only, and false at unmount). A host
+    /// that draws its own loading picture over the video (a join poster) reads it to keep that picture down while the previous
+    /// source's last frame is held. Frozen at mount like every init prop.</summary>
+    public Signal<bool>? PictureShownOut { get; init; }
+
+    private Signal<bool>? _pictureShown;   // the element's own copy (Render reads it; the pump writes it)
+    private SizeI _heldNatural;            // the natural size the shown picture was placed with (what a hold keeps)
+
+    /// <summary>The hold rule, pure: a picture is on the slot, the player's current source has none yet, and nothing ended the
+    /// source: not a terminal state, and not a successor that turned out audio-only (it plays or pauses with no natural size). A
+    /// decorative clip never holds: its caller's still shows through instead.</summary>
+    internal static bool HoldsPicture(bool pictureShown, bool surfaceNone, PlaybackState state, bool naturalKnown, bool decorative)
+        => !decorative && pictureShown && surfaceNone
+           && state is not (PlaybackState.Idle or PlaybackState.Failed or PlaybackState.Ended)
+           && (naturalKnown || state is not (PlaybackState.Playing or PlaybackState.Paused));
+
+    private bool HoldingNow()
+        => HoldsPicture(_pictureShown?.Peek() ?? false, Player.VideoSurface.Peek().IsNone, Player.State.Peek(),
+                        !Player.NaturalSize.Peek().IsEmpty, IsDecorative);
+
+    /// <summary>The natural size the slot's picture is laid out and placed for: the held picture's while held, else the player's.</summary>
+    private SizeI ShownNatural() => HoldingNow() ? _heldNatural : Player.NaturalSize.Peek();
+
+    /// <summary>The ONE visibility write of the pump (every path): the slot, and the picture-shown mirror the hold reads.</summary>
+    private void ShowSlot(in VideoBinding b, bool visible)
+    {
+        b.SetVisible(visible);
+        _pictureShown?.SetIfChanged(visible);
+        PictureShownOut?.SetIfChanged(visible);
+    }
+
+    /// <summary>The successor's destination while a picture is held: the fit of the size it reported (or declared) in the area, so the
+    /// session sizes its stream for where its own frame will be placed; the held rect while it has said nothing.</summary>
+    private RectF SuccessorFitRect(RectF area, RectF heldRect, VideoAspectMode mode, float scale)
+    {
+        SizeI next = Player.NaturalSize.Peek();
+        if (next.IsEmpty) next = Player.ExpectedNaturalSize.Peek();
+        return next.IsEmpty ? heldRect : FitVideoRectSnapped(area, next, mode, _customAspectForPump?.Peek() ?? (16.0 / 9.0), scale);
+    }
 
     // ── the in-view report (a host that pauses a decorative loop it cannot see) ─────────────────────────────────────
 

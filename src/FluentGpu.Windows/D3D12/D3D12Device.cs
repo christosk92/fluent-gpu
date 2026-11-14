@@ -98,7 +98,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // Host options (AppOptions.D3D12DebugLayer / D3D12Dred), set in code and fixed for the device's lifetime.
     private readonly bool _debugLayer, _dred;
 
-    private uint _w, _h;   // ALIAS: reassigned from _f.Target.W/H at BeginTargetFrame — Resize is render-owned and never mid-submit
+    private uint _w, _h;   // ALIAS of _f.Target.W/H: set by BeginTargetFrame, zeroed by EndTargetFrame — a target's size lives on the target
     private int _ringSlot;   // ALIAS: this submit's SubmissionRing slot — see the comment where it is assigned in SubmitDrawList
     // The current target's recording state — replaces _activeSwapchain (Phase 0) and every Activate/StoreActive
     // working-copy field (Phase 1). Set by BeginTargetFrame, cleared by EndTargetFrame; every stencil/layer/damage
@@ -316,34 +316,30 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // DirectComposition (Mica path): the swapchain is composed onto the HWND so DWM's Mica shows through transparent pixels.
     private IDCompositionDevice* _dcomp;
 
-    // Video compositing spine (M0): the DComp video presenter shares this device's ONE IDCompositionDevice
-    // (docs/plans/video-compositing-spine-design.md §4/§13.6). Each COMPOSITED swapchain gets its own presenter bound to
-    // ITS DComp root (stored on D3D12Swapchain.VideoPresenter) — the primary window and a detached video window each get
-    // one; all share _dcomp. Lazily created via GetVideoPresenter(...); render-thread-confined.
+    // Video compositing: each COMPOSITED swapchain gets its own presenter (stored on D3D12Swapchain.VideoPresenter), a
+    // Windows.UI.Composition tree on this device's one video compositor (D3D12Device.VideoCompositor.cs), in its own window target
+    // beneath the one that holds the UI swap chain. The primary window and a detached video window each get one. Lazily created via
+    // GetVideoPresenter(...); render-thread-confined.
 
-    // The shared IDCompositionDevice + the primary swapchain's DComp root/UI visual, for the video presenter (same assembly).
-    internal IDCompositionDevice* DcompDevice => _dcomp;
-    internal D3D12Swapchain? PrimarySwapchain => _primarySwapchain;
     internal void AssertRenderThread() => AssertSubmitThread();
 
     /// <summary>
-    /// The DRM-free video-compositing seam (<c>IVideoPresenter</c>), sharing this device's single
-    /// <c>IDCompositionDevice</c> and the primary swapchain's DComp root visual. Lazily created on first access; must be
-    /// touched only after the primary swapchain's DComp graph is bound (render-thread-confined). Returns null if there is
-    /// no composited primary swapchain (opaque HWND path has no DComp tree).
+    /// The DRM-free video-compositing seam (<c>IVideoPresenter</c>) of the primary swapchain. Lazily created on first access
+    /// (render-thread-confined). Returns null if there is no composited primary swapchain (the opaque HWND path has no
+    /// composition tree to put the UI's hole over).
     /// </summary>
     public FluentGpu.Pal.IVideoPresenter? GetVideoPresenter() => GetVideoPresenter(_primarySwapchain);
 
-    /// <summary><see cref="IGpuDevice.GetVideoPresenter(ISwapchain)"/> — the per-window video presenter bound to
-    /// <paramref name="swapchain"/>'s DComp root. Lazily creates + caches one presenter per COMPOSITED swapchain (stored
-    /// on <see cref="D3D12Swapchain.VideoPresenter"/>); null when the target is null / not composited. Render-thread
-    /// confined. The primary window and a detached video window each get their own; all share this device's one
-    /// <c>IDCompositionDevice</c>.</summary>
+    /// <summary><see cref="IGpuDevice.GetVideoPresenter(ISwapchain)"/> — the per-window video presenter of
+    /// <paramref name="swapchain"/>: a <see cref="FluentGpu.Pal.Windows.CompositionVideoPresenter"/>, whose surface brush stretches the
+    /// swap chain's current buffer to the placed rect. Lazily creates + caches one presenter per COMPOSITED swapchain (stored on
+    /// <see cref="D3D12Swapchain.VideoPresenter"/>); null when the target is null / not composited. Render-thread confined. The
+    /// primary window and a detached video window each get their own; all share this device's one video compositor.</summary>
     public FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(ISwapchain swapchain)
     {
         AssertSubmitThread();
         if (swapchain is not D3D12Swapchain { Composited: true } sc) return null;
-        return sc.VideoPresenter ??= new FluentGpu.Pal.Windows.DCompVideoPresenter(this, sc);
+        return sc.VideoPresenter ??= new FluentGpu.Pal.Windows.CompositionVideoPresenter(this, sc);
     }
 
     private FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(D3D12Swapchain? swapchain)
@@ -574,7 +570,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         var target = new D3D12Swapchain(this, (HWND)desc.PresentTarget.Value,
             (uint)Math.Max(1, (int)desc.SizePx.Width), (uint)Math.Max(1, (int)desc.SizePx.Height), composited,
             desc.DesktopAcrylic, desc.AcrylicTint, desc.CornerRadiusPx, ordinal: (byte)Math.Min(255, ++_swapchainOrdinalSeq));
-        InitSwapChain(target);
+        // A POPUP window's swapchain (the desktop-acrylic material: AppHost.OpenPopupWindow) is not built here. Its create runs on the
+        // shared render thread at the top of a turn (the popup mailbox), i.e. between the owner's frame start and its present, and
+        // costs 2-14 ms (13-19 ms for the first one in a process): the owner's frame missed a refresh on every menu open. It is
+        // built right AFTER the owner's next present instead (BuildPendingPopups); its first frame, deferred until then like a
+        // busy-slot frame (DeferPopupSubmit), shows one turn later. Until built it only records its size and chrome.
+        if (desc.DesktopAcrylic && _primarySwapchain is not null)
+        {
+            target.BuildPending = true;
+            _popupBuildPending = true;
+        }
+        else InitSwapChain(target);
         _swapchains.Add(target);
         _primarySwapchain ??= target;
         // NO Activate(target) here (INCIDENT 2026-09, detached-window-render-isolation-implementation.md §1.2): creation
@@ -1293,13 +1299,31 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             $" tier={FluentGpu.Foundation.GpuProfile.Tier} driver version={(driverVersion.Length > 0 ? driverVersion : "unknown")}");
 
         _memoryProbeObserver?.Invoke("native-device-created-before-queue");
+        // The one DIRECT queue every target of ours renders on (primary, popups, pop-outs, the backdrop plane) and the
+        // image bakes execute on, created at HIGH priority: a UI frame is a fraction of a millisecond of GPU work that
+        // the user is waiting on, and at NORMAL it queued behind other clients' work on the 3D engine (the protected
+        // video pipeline, its video processor and presents) for 30-90 ms before running in 0.3 (`[d3d12.present] frame
+        // fence wait=` gpuQueuedMs vs gpuRunMs, 2026-11-11). HIGH lets the GPU scheduler run our queue ahead of
+        // normal-priority queues; GLOBAL_REALTIME needs SeIncreaseBasePriorityPrivilege and is never asked for. The
+        // image COPY queue (UploadQueue) stays NORMAL: the frame never waits on it (readiness is a fence compare, the
+        // placeholder draws until it lands), so it cannot hold a frame back, and bulk uploads must not preempt frames.
+        // A driver that refuses HIGH gets NORMAL (logged), never no queue.
         D3D12_COMMAND_QUEUE_DESC qd = default;
         qd.Type = D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT;
         qd.Flags = D3D12_COMMAND_QUEUE_FLAGS.D3D12_COMMAND_QUEUE_FLAG_NONE;
+        qd.Priority = (int)D3D12_COMMAND_QUEUE_PRIORITY.D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
         ID3D12CommandQueue* queue;
-        Check(_device->CreateCommandQueue(&qd, __uuidof<ID3D12CommandQueue>(), (void**)&queue), "CreateCommandQueue");
+        int queueHr = (int)_device->CreateCommandQueue(&qd, __uuidof<ID3D12CommandQueue>(), (void**)&queue);
+        if (queueHr < 0)
+        {
+            qd.Priority = (int)D3D12_COMMAND_QUEUE_PRIORITY.D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+            Check(_device->CreateCommandQueue(&qd, __uuidof<ID3D12CommandQueue>(), (void**)&queue), "CreateCommandQueue");
+        }
         _queue = queue;
         SetName(_queue, "FluentGpu.CommandQueue");
+        FluentGpu.Foundation.Diag.Line(
+            $"[d3d12.present] queue=direct priority={(qd.Priority == (int)D3D12_COMMAND_QUEUE_PRIORITY.D3D12_COMMAND_QUEUE_PRIORITY_HIGH ? "high" : "normal")}" +
+            (queueHr < 0 ? $" highRefused=0x{(uint)queueHr:X8}" : "") + " copy=normal");
         _memoryProbeObserver?.Invoke("queue-created-before-ring");
 
         // The allocator RING is device-shared, sized to SubmissionRing.Depth (Phase 1 §3.2 — was FRAME_COUNT-deep and
@@ -1328,6 +1352,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     private void InitSwapChain(D3D12Swapchain target)
     {
+        long icT0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool lazyBuild = target.BuildPending;
+        target.BuildPending = false;
+        target.BuildFailed = false;
         DXGI_SWAP_CHAIN_DESC1 sd = default;
         sd.Width = target.W;
         sd.Height = target.H;
@@ -1361,6 +1389,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         else
             Check(_factory->CreateSwapChainForHwnd((IUnknown*)_queue, target.Hwnd, &sd, null, null, &sc1), "CreateSwapChainForHwnd");
 
+        long icT1 = System.Diagnostics.Stopwatch.GetTimestamp();
         IDXGISwapChain3* sc3;
         Check(sc1->QueryInterface(__uuidof<IDXGISwapChain3>(), (void**)&sc3), "QI IDXGISwapChain3");
         sc1->Release();
@@ -1398,6 +1427,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.RtvHeap = heap;
         D3D12MemoryDiagnostics.Track(target.RtvHeap, "Swapchain.RtvHeap", (ulong)FRAME_COUNT * _rtvSize);
 
+        long icT2 = System.Diagnostics.Stopwatch.GetTimestamp();
         if (target.DesktopAcrylic)
         {
             // Desktop-sampling acrylic popup (the WinUI MenuFlyout material): host the swapchain in a Windows.UI.Composition
@@ -1419,6 +1449,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             target.DcompBindPending = true;
         }
 
+        long icT3 = System.Diagnostics.Stopwatch.GetTimestamp();
         CreateRtvs(target);
         // ONE command list per target (Phase 1 §3.1 — was ONE device-global list, created once in InitDevice). Any
         // ring allocator is fine here: the first real submit's Reset() supplies the actual bank. This runs on the
@@ -1434,6 +1465,49 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.Frame.List4 = list4;
         SetName(target.Frame.List, $"FluentGpu.CommandList[{target.Ordinal}]");
         SamplePresentTopology(target);
+        // Always-on, once per popup swapchain build: where a popup's create time goes (the [overlay.popup] renderCreate= total),
+        // so the cost a popup open puts on the shared render thread is attributable by part.
+        if (target.DesktopAcrylic)
+        {
+            long icT4 = System.Diagnostics.Stopwatch.GetTimestamp();
+            double qf = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            Diag.Line($"[d3d12.present] popup create target={target.Ordinal} total={(icT4 - icT0) * qf:F2}ms swapchain={(icT1 - icT0) * qf:F2} waitable+heap={(icT2 - icT1) * qf:F2} backdrop={(icT3 - icT2) * qf:F2} rtv+list+topology={(icT4 - icT3) * qf:F2} lazy={(lazyBuild ? 1 : 0)}");
+        }
+        // The chrome a placement configured while the build was pending (D3D12Swapchain.ConfigurePopupChrome).
+        if (target.ChromePending && target.Backdrop is { } backdrop)
+        {
+            ref readonly var m = ref target.PendingChrome;
+            backdrop.ConfigureChrome(m.ContentRectPx, m.OpensUp, m.ClosedRatio, m.CornerRadiusPx);
+        }
+        target.ChromePending = false;
+    }
+
+    // ── popup swapchain build after the owner's present (CreateSwapchain) ──────────────────────────────────────────────
+    private bool _popupBuildPending;
+
+    /// <summary>Build every popup swapchain still pending: run right after the PRIMARY's present, so the build never sits between
+    /// the owner's frame start and its present. Render thread (the presenting thread).</summary>
+    private void BuildPendingPopups()
+    {
+        _popupBuildPending = false;
+        for (int i = 0; i < _swapchains.Count; i++)
+        {
+            var sc = _swapchains[i];
+            if (sc.BuildPending && !sc.Disposed) BuildPopupNow(sc);
+        }
+    }
+
+    private void BuildPopupNow(D3D12Swapchain sc)
+    {
+        try { InitSwapChain(sc); }
+        catch (Exception ex)
+        {
+            // CreateSwapchain would have thrown to the host's create (which drops the popup); here the owner's present already ran, so
+            // the popup keeps deferring its frames (never shown) until the host closes it. A lost device rebuilds it in RecoverDevice.
+            sc.BuildPending = false;
+            sc.BuildFailed = true;
+            Diag.Line($"[d3d12.present] popup build failed target={sc.Ordinal}: {ex.Message}");
+        }
     }
 
     private void EnsureDComp()
@@ -1457,10 +1531,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         IDCompositionTarget* dcompTarget;
         Check(_dcomp->CreateTargetForHwnd(target.Hwnd, BOOL.TRUE, &dcompTarget), "CreateTargetForHwnd");
         target.DcompTarget = dcompTarget;
-        // Video spine (M0, docs/plans/video-compositing-spine-design.md §3.2): a ROOT visual wrapping the UI child, so
-        // video child visuals can be lazily inserted z-BELOW the UI. With zero video children this is behaviorally
-        // identical to the old single-visual tree (root → one UI child on top). Back-compat: nothing about the swapchain,
-        // RTVs, present, or the SetContent-survives-ResizeBuffers property changes.
+        // A ROOT visual wrapping the UI child (--fg backdrop-plane puts its plane beneath the UI child). Nothing about the
+        // swapchain, RTVs, present, or the SetContent-survives-ResizeBuffers property depends on it. Video is not in this tree: it
+        // lives on its own window target beneath this one (CompositionVideoPresenter).
         IDCompositionVisual* root;
         Check(_dcomp->CreateVisual(&root), "CreateVisual(root)");
         target.DcompRoot = root;
@@ -1468,26 +1541,23 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Check(_dcomp->CreateVisual(&visual), "CreateVisual(ui)");
         target.DcompVisual = visual;
         Check(target.DcompVisual->SetContent((IUnknown*)target.SwapChain), "Visual.SetContent");
-        // UI child on TOP of the root (insertAbove=TRUE, ref=null). Video children go under it via AddVisual(child,
-        // insertAbove=FALSE, ref=uiVisual) in DCompVideoPresenter — strictly beneath, revealed by the premul-0 hole.
+        // UI child on TOP of the root (insertAbove=TRUE, ref=null).
         Check(target.DcompRoot->AddVisual(target.DcompVisual, BOOL.TRUE, null), "Root.AddVisual(ui)");
         Check(target.DcompTarget->SetRoot(target.DcompRoot), "Target.SetRoot(root)");
+        PosePendingPresentation(target);   // a starting hold asked for before the first present rides the tree's first commit
         Check(_dcomp->Commit(), "DComp.Commit");
         target.DcompBindPending = false;
-        // No re-attach of video children here: DComp visuals cannot move between IDCompositionDevice instances, so a device
-        // recovery disposes the presenter (RecoverDevice) and the video registry rebuilds its surfaces on a fresh one; a
-        // child created before this first lazy bind attaches on the presenter's next Commit.
     }
 
     // Producer swapchains that render into engine-owned shareable DComp surface handles (M0 test surfaces). Kept alive
-    // for the device lifetime so the DWM-side CreateSurfaceFromHandle reads live pixels; released in Dispose.
+    // for the device lifetime so the compositor's wrapped surface reads live pixels; released in Dispose.
     private readonly List<nint> _testSurfaceSwapchains = new();
 
     /// <summary>
     /// M0 (docs/plans/video-phase1-plan.md §4, correction #4): create a REAL shareable DirectComposition surface via
     /// <c>DCompositionCreateSurfaceHandle</c>, render a recognizable test pattern into it through a
-    /// composition-surface-handle DXGI swapchain, and return the handle. The video presenter binds it with
-    /// <c>CreateSurfaceFromHandle</c> — so <c>BindSurfaceHandle</c> is exercised end-to-end with no media/decoder/DRM.
+    /// composition-surface-handle DXGI swapchain, and return the handle. The video presenter wraps it
+    /// (<c>ICompositorInterop::CreateCompositionSurfaceForHandle</c>) — so <c>BindSurfaceHandle</c> is exercised end-to-end with no media/decoder/DRM.
     /// The pattern is a two-tone split (magenta right / cyan left) so the composited blend is unmistakably the surface,
     /// not a flat fill. Render-thread-confined; the producer swapchain is retained for the device lifetime.
     /// </summary>
@@ -1622,6 +1692,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void EndTargetFrame()
     {
         _f = null;
+        _w = 0; _h = 0;   // the size is the target's (D3D12Swapchain.W/H): nothing outside a bracket reads another target's last size
         _cmdList = null;
         _list4 = null;
     }
@@ -1703,14 +1774,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// <summary>
     /// The DIRECT route: clear + replay one stream straight into a swapchain's back buffer inside one render pass (CLEAR →
     /// STORE — no <c>ClearRenderTargetView</c>). Only targets that do not composite take it — windowed popups and
-    /// detached pop-outs (OS-backed acrylic, no engine layers: a stray PushLayer draws its acrylic fallback flat). The
-    /// primary window composites its retained tiles (<see cref="SubmitComposite"/>).
+    /// detached windows (the mini player, the video pop-out). Their opacity / blur / edge-fade layers render through scratch
+    /// surfaces as the main window's do (<see cref="SubmitStreaming"/>); an acrylic layer paints its fallback (the OS
+    /// material is their backdrop). The primary window composites its retained tiles (<see cref="SubmitComposite"/>).
     /// </summary>
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
     {
         if (target is not D3D12Swapchain sc || sc.Device != this || sc.Disposed)
             throw new InvalidOperationException("Submit target is not a live D3D12 swapchain from this device.");
         AssertSubmitThread();   // seam Step 0: when render-confined (force-sync/async), only the render thread may submit
+        if (DeferPopupSubmit(sc)) return;   // a popup whose last present has not retired waits for a later turn, never the render thread
         TargetFrameState f = sc.Frame;
         _stencilFloorW = 0; _stencilFloorH = 0;
         int slot = OpenSubmit(sc, f);
@@ -1731,13 +1804,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _imageClockMs = ctx.ImageClockMs;
         ResetFrameCounters();
         BeginPipesFrame(slot);
-        float lw = _w / _frameScale, lh = _h / _frameScale;
 
         f.TextRepaintPending = false;
         BeginPass(rtv, (int)_w, (int)_h, PassLoad.Clear, ctx.Clear);
         PassToScene();   // pass timeline — boundary: the clear is part of the pass begin, scene drawing starts
-        SetFullViewport();
-        SubmitStreaming(drawList, lw, lh, rtv);
+        SubmitStreaming(drawList, rtv, slot);
         EndPassIfOpen();
         NoteFaithfulness(f);
         PublishDecodeDiagnostics();
@@ -1855,10 +1926,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // no `slot` parameter to thread through — valid only inside one submit, like `_w`/`_h`/`_cmdList`.
         _ringSlot = slot;
         // Two waits, both usually no-ops: THIS target's back buffer k and the ring slot (the shared CPU-written banks).
-        if (!WaitForFenceValue(f.FenceValues[f.FrameIndex]) || !WaitForFenceValue(_ring.Fence[slot]))
+        // Timed apart (same order, same short-circuit) so a long wait can say which ledger it waited on (NoteFrameFenceWait).
+        ulong bufferFence = f.FenceValues[f.FrameIndex], ringFence = _ring.Fence[slot];
+        ulong completedAtEntry = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
+        bool bufferRetired = WaitForFenceValue(bufferFence);
+        long bufferDone = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (!bufferRetired || !WaitForFenceValue(ringFence))
             throw new InvalidOperationException("Frame fence did not reach the awaited value; submit cannot reuse its bank.");
+        long ringDone = System.Diagnostics.Stopwatch.GetTimestamp();
         f.LastFenceWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart).TotalMilliseconds;
         f.LastBufferFenceWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(latencyDone).TotalMilliseconds;
+        if (f.LastBufferFenceWaitMs >= FenceWaitNoteMs)
+            NoteFrameFenceWait(sc, f, slot, latencyDone, bufferDone, ringDone, bufferFence, ringFence, completedAtEntry);
         return slot;
     }
 
@@ -1879,8 +1958,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _frameImageUploads = 0; _frameUploadBytes = 0; _frameBakedBlurJobs = _turnBakedBlurJobs; _turnBakedBlurJobs = 0;
         _frameBackBuffer = sc.BackBuffers[f.FrameIndex];
         ID3D12CommandAllocator* allocator = _ring.Allocators[slot];
+        Ss(SsRecPre);
         Check(allocator->Reset(), "allocator.Reset");
         Check(_cmdList->Reset(allocator, null), "cmdList.Reset");
+        Ss(SsRecReset);
         Rec(RecordedOp.ListReset, (uint)slot, sc.W << 16 | (sc.H & 0xFFFF), aux: (ushort)f.FrameIndex);
         InvalidateCmdState();   // fresh command list — nothing is bound
         _inRenderPass = false;
@@ -1967,8 +2048,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             gpuExecutionResolved = true;
         }
         PassEnd(sc);
+        Ss(SsEndPre);
         HRESULT closeHr;
         using (CrashTrail.Enter(NativeRegion.D3D12Close)) closeHr = _cmdList->Close();
+        Ss(SsClose);
         if ((int)closeHr < 0)
         {
             DrainDebugLayerMessages();
@@ -1997,9 +2080,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         ID3D12CommandList* execList = (ID3D12CommandList*)_cmdList;
         global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.ExecuteCommandLists(_queue, 1, (void**)&execList);   // GEN-COM (wired)
+        Ss(SsExecute);
         // One monotonic device fence value, stamped into BOTH ledgers — the target's own back-buffer-keyed FenceValues
         // and the ring's slot-keyed Fence.
         ulong v = SignalNext();
+        Ss(SsSignal);
         f.FenceValues[f.FrameIndex] = v;
         f.LastSubmitFence = v;
         ulong gpuExecutionSubmitSequence = sc.NoteGpuSubmit();
@@ -2518,33 +2603,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     PushRun(PrimKind.VideoHole);
                     break;
                 }
+                // Layers are scope ops too: every live walk (a tile, a region, the direct route) opens and closes them in
+                // ApplyScopeOp before DecodeOne. This arm keeps the legacy whole-stream Decode() path byte-aligned.
                 case DrawOp.PushLayer:
-                {
-                    // This route composites NO layers: it is a NON-PRIMARY swapchain (a popup window, a detached pop-out)
-                    // with no retained composite behind it. An Acrylic layer's opaque FallbackColor base — the first
-                    // thing the composite's backdrop pass lays down under the blur — is therefore never produced here, and the recorder
-                    // has already dropped the node's duplicate Fallback fill (it would occlude the frost wherever the
-                    // layer DOES run). Paint the fallback in its place: WinUI's own no-transparency answer for the
-                    // surface, instead of a see-through plate of floating text. Rect + radii are already device-space,
-                    // so the transform is identity.
-                    var L = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<PushLayerCmd>();
-                    if (L.Kind != (int)LayerKind.Acrylic || L.Fallback.A <= 0f || L.GroupAlpha <= 0f) break;
-                    if (Cull(L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H, 1f, 0f, 0f, 1f, 0f, 0f, RepaintCull.AaHaloDip)) break;
-                    CoverPendingText(L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H, 1f, 0f, 0f, 1f, 0f, 0f, RepaintCull.AaHaloDip);
-                    var linst = new RectInstance
-                    {
-                        PosX = L.DeviceRect.X, PosY = L.DeviceRect.Y, W = L.DeviceRect.W, H = L.DeviceRect.H,
-                        RTL = L.Radii.TopLeft, RTR = L.Radii.TopRight, RBR = L.Radii.BottomRight, RBL = L.Radii.BottomLeft,
-                        R = L.Fallback.R, G = L.Fallback.G, B = L.Fallback.B, A = L.Fallback.A,
-                        M11 = 1f, M12 = 0f, M21 = 0f, M22 = 1f, Dx = 0f, Dy = 0f, Opacity = L.GroupAlpha,
-                    };
-                    ApplyRoundedClip(ref linst);
-                    _rectInsts.Add(linst);
-                    _frameRectCount++;
-                    PushRun(PrimKind.Rect);
                     break;
-                }
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>();
                     break;
@@ -2648,16 +2711,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _imageDraws.Add((inst, im.ImageId));
         _frameImageCount++;
         PushRun(PrimKind.Image);
-    }
-
-    private void SetFullViewport()
-    {
-        _targetOriginX = 0; _targetOriginY = 0;
-        _targetWidth = (int)_w; _targetHeight = (int)_h;
-        D3D12_VIEWPORT vpd = new() { TopLeftX = 0, TopLeftY = 0, Width = _w, Height = _h, MinDepth = 0, MaxDepth = 1 };
-        _cmdList->RSSetViewports(1, &vpd);
-        RecCoalesced(RecordedOp.Viewport, _w, _h);
-        SetFullScissor();
     }
 
     // The frame's OUTERMOST scissor: the whole current target, expressed in the replay's pixel space (a target whose
@@ -3503,63 +3556,44 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         ClearInsts();
     }
 
-    // <paramref name="targetRtv"/> is the RTV this walk is painting into (the back buffer on the FullDirect route, a
-    // tile or degraded chunk on the composite route). A tier-3 stencil scope needs it in order to re-attach the target WITH the
-    // depth-stencil view — the only reason a streaming walk needs to know its own target at all.
-    private void SubmitStreaming(ReadOnlySpan<byte> drawList, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
+    /// <summary>The DIRECT route's walk: the whole stream replayed into <paramref name="targetRtv"/> (the back buffer, its pass open)
+    /// as ONE replay target at offset 0 — the tile rasterizer's canonical viewport and its scope handling
+    /// (<see cref="ReplayStream"/>). A clip, a stencil clip and an opacity / blur / edge-fade layer are what they are in a tile: the
+    /// layer's subtree renders into a scratch surface and composites back at its alpha, feather and blur, so a detached window draws
+    /// the same scene as the main window does. This walk used to skip every layer, drawing its subtree flat: a mini player's lyric
+    /// lines lost their dimming, blur and edge fades. The scratch SRVs go into <paramref name="slot"/>'s bank
+    /// (<see cref="SurfacePool.UseBank"/>).</summary>
+    private void SubmitStreaming(ReadOnlySpan<byte> drawList, D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, int slot)
     {
-        _streamLw = lw; _streamLh = lh;
+        float s = _frameScale <= 0f ? 1f : _frameScale;
+        int bankWas = _surfaces?.UseBank(slot) ?? -1;
+        _replayClampOn = false;
+        _replayRtv = targetRtv;
+        _streamLw = _streamLh = CanonicalViewport / s;
         ClearInsts();
         _blendAdditive = false;   // a walk never inherits the previous stream's paint blend
         _clipStack.Clear();
         _roundedClipStack.Clear();
+        SetReplayTarget(0, 0, (int)_w, (int)_h);
+        _cullActive = true;
         ResetDesiredScissor();
-        int pos = 0;
-        while (pos + sizeof(int) <= drawList.Length)
+        int baseGroups = _inlineGroups.Count;
+        _directReplay = true;
+        try
         {
-            DrawOp op = (DrawOp)MemoryMarshal.Read<int>(drawList.Slice(pos));
-            if (op == DrawOp.PushClip)
-            {
-                pos += sizeof(int);
-                var clip = MemoryMarshal.Read<ClipCmd>(drawList.Slice(pos));
-                pos += Unsafe.SizeOf<ClipCmd>();
-                _frameClipOps++;
-                PushScissor(in clip);
-                EnsureDesiredScissor(CurrentScissorRect(), lw, lh);
-                continue;
-            }
-            if (op == DrawOp.PopClip)
-            {
-                pos += sizeof(int);
-                _frameClipOps++;
-                PopScissor();
-                EnsureDesiredScissor(CurrentScissorRect(), lw, lh);
-                continue;
-            }
-            if (op == DrawOp.PushStencilClip)
-            {
-                pos += sizeof(int);
-                var sc = MemoryMarshal.Read<PushStencilClipCmd>(drawList.Slice(pos));
-                pos += Unsafe.SizeOf<PushStencilClipCmd>();
-                _frameClipOps++;
-                BeginStencilScope(in sc, lw, lh, targetRtv);
-                continue;
-            }
-            if (op == DrawOp.PopStencilClip)
-            {
-                pos += sizeof(int);
-                var sc = MemoryMarshal.Read<PopStencilClipCmd>(drawList.Slice(pos));
-                pos += Unsafe.SizeOf<PopStencilClipCmd>();
-                _frameClipOps++;
-                EndStencilScope(in sc, lw, lh, targetRtv);
-                continue;
-            }
-            pos = DecodeOne(drawList, pos);
+            ReplayStream(drawList, 0f, 0f, default, default);
+            FlushSegment(_streamLw, _streamLh);
+            while (_inlineGroups.Count > baseGroups) CloseInlineLayer();
         }
-        FlushSegment(lw, lh);
-        EndStencilScopesAtSubmitEnd(targetRtv);
+        finally
+        {
+            _directReplay = false;
+            if (bankWas >= 0) _surfaces!.UseBank(bankWas);
+        }
+        EndStencilScopesAtSubmitEnd(_replayRtv);
         _clipStack.Clear();
         _roundedClipStack.Clear();
+        _cullActive = false;
         _desiredScissor = FullScissorRect();
         _desiredScissorValid = true;
         SetFullScissor();
@@ -3586,15 +3620,30 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // thread, nothing is queued, and the latency credit stays held.
     internal void Present(D3D12Swapchain target, bool noWait = false)
     {
+        PresentTarget(target, noWait);
+        if (!ReferenceEquals(target, _primarySwapchain)) return;
+        if (_popupBuildPending) BuildPendingPopups();
+        if (_popupUpkeepPending) ServicePopupUpkeep();   // the prewarm's build and a released popup's resources: after the owner's present, never before it
+    }
+
+    private void PresentTarget(D3D12Swapchain target, bool noWait)
+    {
         // Reset BEFORE the Disposed early-out: a dead target must never replay the previous call's refusal (the host would keep
         // the frame owed, and the shared render thread ticking, to retry a swapchain that is gone).
         target.Frame.LastPresentRefused = false;
         if (target.Disposed) return;
+        // A popup frame deferred at submit (DeferPopupSubmit) recorded nothing: there is nothing to flip, and no credit to spend.
+        if (target.SubmitDeferred) { target.SubmitDeferred = false; return; }
+        if (target.BuildPending || target.BuildFailed) return;   // never built: nothing to present
+        if (target.PresentNoWaitOnce) { target.PresentNoWaitOnce = false; noWait = true; }
+        long sdp = SdNow();
         AssertSubmitThread();   // seam Step 0: when render-confined (force-sync/async), only the render thread may present
         BeginTargetFrame(target.Frame);
         // Seam (DIM on-screen fix): bind the DirectComposition graph on the PRESENTING thread the first time this composited
         // swapchain presents — deferred out of the UI-thread InitSwapChain so DComp is owned by the thread that Presents.
         if (target.Composited && target.DcompBindPending) BindDComp(target);
+        // --fg backdrop-plane: the plane's copied buffer (the composite's list already executed) presents first, on every path
+        if (_planePresentPending && ReferenceEquals(target, _primarySwapchain)) PlanePresent();
         target.Frame.LastPresentStoodDown = false;
         target.Frame.LastPresentRefused = false;
         target.Frame.LastPresentHeld = false;
@@ -3668,6 +3717,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Whole-frame Present: the swapchain is FLIP_DISCARD, which refuses partial presentation (Present1 with dirty
         // rects is DXGI_ERROR_INVALID_CALL — pinned by ComAbiBindingTests), and the composite rewrites the whole back
         // buffer every frame anyway (docs/plans/scroll-gpu-retained-tiles-implementation.md, P2 status).
+        Sd(SdPresPre, ref sdp);
         HRESULT pr;
         byte pvMode = target.SequentialFlip && target.PpPresentCount > 0 && !target.PpNeedFullPresent ? (byte)2 : (byte)1;
         if (target.SequentialFlip && target.PpPresentCount > 0 && !target.PpNeedFullPresent)
@@ -3684,6 +3734,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         else
             pr = (HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChainVtbl.Present(target.SwapChain, interval, flags);   // GEN-COM (wired)
+        Sd(SdPresCall, ref sdp);
         // REFUSED (DXGI_ERROR_WAS_STILL_DRAWING, only possible with DO_NOT_WAIT): the queue was still full, so NOTHING was queued
         // and no credit was spent. Like a stand-down, return without touching LatencyCreditHeld - the slot this turn reserved is
         // still free, and the next submit must not wait for it twice. The frame sits drawn in the current back buffer (no flip
@@ -3721,6 +3772,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // target, never a device-wide wait (F117). Skipped when the present failed: the device may be gone, and the recover path
         // drains everything.
         if ((int)pr >= 0 && _fence != null) target.Frame.LastPresentFence = SignalNext();
+        Sd(SdPresSignal, ref sdp);
         // DXGI_STATUS_OCCLUDED (0x087A0001) is a SUCCESS code — previously dropped by the `< 0` check. Composition
         // swapchains often never return it; when they do, latch and stand down (next frame probes with PRESENT_TEST).
         if ((int)pr == DxgiStatusOccluded)
@@ -3758,7 +3810,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             // a resident-memory regression without a live capture. One line, one string, at one instant.
             FluentGpu.Foundation.Diag.Line("[d3d12.mem] first-present " + D3D12MemoryDiagnostics.BreakdownLine(10));
         }
+        sdp = SdNow();
         PublishVideoMemorySnapshot();
+        Sd(SdPresMem, ref sdp);
         // A Present that actually ran (the stand-down / TEST / covered paths returned above) feeds the attested ledger.
         // Every target's attested ledger is fed from ITS OWN swapchain's frame statistics (pacing evidence is per target); only the
         // primary also takes the 1 Hz DWM sample, which is main-monitor-global and would be counted twice from a second target.
@@ -3811,6 +3865,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // instead of waiting up to 10/60 presents for the ordinary cadence below to first fire.
     void PublishVideoMemorySnapshot(bool force = false)
     {
+        NoteUiPresentForUntracked();   // the present stamp and the bound-video sampler's edge (D3D12Device.UntrackedVideo.cs)
         if (!force)
         {
             if (--_videoMemorySampleCountdown > 0) return;
@@ -3834,19 +3889,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _glyphs?.CachedGlyphCount ?? 0);
     }
 
-    // ── untracked growth: what the driver allocates for itself (command allocators, pipelines, descriptor and query heaps) ──
-    // The adapter's LOCAL usage minus every resource and heap this device tracks. On a UMA driver that keeps freed GPU memory
-    // it only ratchets, so the moment it jumps is the one to name: a log line per jump of more than 8 MiB between samples,
-    // with what the device did in that frame.
-    private long _lastUntracked = long.MinValue;
-    private void NoteUntrackedGrowth(long localUsage)
-    {
-        long untracked = localUsage - D3D12MemoryDiagnostics.LiveTotals().bytes;
-        if (_lastUntracked != long.MinValue && untracked - _lastUntracked > (8L << 20))
-            Diag.Line($"[d3d12.untracked] +{(untracked - _lastUntracked) / 1048576.0:0.0} MiB now {untracked / 1048576.0:0.0} MiB" +
-                $" tilesRastered={_frameTilesRastered} passes={_frameRenderPasses} segments={_frameSegments} inlineItems={_frameInlineItems} inlineReopens={_frameInlineReopens} resumes={_frameResumes} inlineGroups={_frameInlineGroups} directRegions={_frameDirectRegions} passDrawsMax={_framePassDrawsMax} passesOver80={_framePassesOverBinning} inlineByKind={string.Join("/", _frameInlineByKind)} inlineBlurred={_frameInlineBlurred} sites={PassSitesLine()}");
-        _lastUntracked = untracked;
-    }
+    // ── untracked memory (NoteUntrackedGrowth and the bound-video sampler): D3D12Device.UntrackedVideo.cs ──
 
     // DXGI_STATUS_OCCLUDED — Present succeeded but the window is fully occluded (HWND flip-model). Not reliably returned
     // for CreateSwapChainForComposition; cloak/visibility is the composition path's stand-down. DXGI_PRESENT_TEST = 1.
@@ -3947,6 +3990,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         long idlePeriod = primary ? f.LastPresentStats.RefreshPeriodQpc : ResolveTargetRefreshPeriod(f, now);
         uint idle = FluentGpu.Hosting.Threading.PresentStatisticsLedger.IdleRefreshes(f.LastSubmitQpc, now, vblankAnchor, idlePeriod);
         f.LastSubmitQpc = now;
+        FluentGpu.Media.ProtectedVideoTrace.NotePresent(now);   // the DWM probe's "we asked for a composition" (two loads when not armed)
         f.PresentLedger.Observe(fsOk && presentId != 0, fs.PresentCount, fs.PresentRefreshCount, presentId, idle);
         if (!primary) return;
 
@@ -4036,6 +4080,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     t.CachedRefreshPeriodQpc = mode.RefreshPeriodQpc;
                     t.TopologyMonitor = mon;
+                    FluentGpu.Pal.Windows.DisplayInfo.RaiseWindowMonitorChanged((nint)t.Hwnd, mode.DeviceName, ReferenceEquals(t, _primarySwapchain));
                 }
             }
         }
@@ -4066,6 +4111,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         var mode = FluentGpu.Pal.Windows.DisplayInfo.ForWindow((nint)target.Hwnd);
         var primaryMode = FluentGpu.Pal.Windows.DisplayInfo.ForPrimary();
         if (mode.Valid) target.CachedRefreshPeriodQpc = mode.RefreshPeriodQpc;
+        // The app's per-monitor checks (protected video's HDCP) ride this same edge; a subscriber posts and returns.
+        // (At the first swapchain's InitSwapChain the primary is not assigned yet: that first target IS the main window.)
+        if (mode.Valid)
+            FluentGpu.Pal.Windows.DisplayInfo.RaiseWindowMonitorChanged((nint)target.Hwnd, mode.DeviceName,
+                _primarySwapchain is null || ReferenceEquals(target, _primarySwapchain));
 
         LUID luid = _device->GetAdapterLuid();
         IDXGIAdapter1* adapter = null;
@@ -4168,8 +4218,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         if (completed >= v) return true;
         Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(_fence, v, (void*)_fenceEvent), "SetEventOnCompletion");   // GEN-COM (wired)
-        if (_signalDeviceLostInsteadOfThrow) return WaitFenceEventBounded(v, forceResetOnStall: true);   // Step 4: no INFINITE hang on a lost device (async); frame fence gates presentation → force a clean reset on a hard stall
+        long stallQpc = System.Diagnostics.Stopwatch.GetTimestamp();   // PresentStall: the blocking wait's start
+        if (_signalDeviceLostInsteadOfThrow) { bool retired = WaitFenceEventBounded(v, forceResetOnStall: true); NoteFenceWaitEnd(stallQpc, v, completed); return retired; }   // Step 4: no INFINITE hang on a lost device (async); frame fence gates presentation → force a clean reset on a hard stall
         uint wait = WaitForSingleObject(_fenceEvent, INFINITE);
+        NoteFenceWaitEnd(stallQpc, v, completed);
         if (wait == 0xFFFFFFFFu) throw new InvalidOperationException("WaitForSingleObject(frame fence) failed.");
         completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
         if (completed == ulong.MaxValue)
@@ -4253,6 +4305,107 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private static void RepayLatencyDebt(D3D12Swapchain sc)
     {
         while (sc.LatencyCountsOwed > 0 && WaitForSingleObject(sc.FrameLatencyWaitable, 0) == WAIT_OBJECT_0) sc.LatencyCountsOwed--;
+    }
+
+    // ── popup frame deferral ─────────────────────────────────────────────────────────────────────────────────────────
+    // A popup window's frame is recorded and submitted on the SHARED render thread, in the same turn as the owner's frame
+    // (SceneRenderFrame.RecordPopups). OpenSubmit's latency wait for it blocked that thread until the popup's previous present
+    // retired: measured 23.4 ms on a menu open (the owner's submit 24.1 ms, 8 missed refreshes), bounded only at 1 s. So a
+    // popup takes its present slot WITHOUT waiting: a busy slot defers THIS popup's frame (nothing recorded on the GPU, its
+    // Present a no-op) and marks it owed, which PopupAnimating reports so the host keeps publishing turns (WakeReasons.PopupAnim;
+    // a turn with a popup open is never elided) until one finds the slot open. A popup can then only delay itself. Its first
+    // frame finds the slot open whenever its previous present has retired: always for a new (or rebuilt) swapchain, whose
+    // waitable starts signaled, and for a pooled one parked for more than a frame or two; a pooled swapchain reused within a
+    // frame of its close may defer its first frame like any busy-slot frame (bounded below). Bounded: past PopupDeferBoundMs of
+    // consecutive deferrals the frame goes out unpaid with DXGI_PRESENT_DO_NOT_WAIT (what the old 1 s timeout did, minus the
+    // block), so a popup whose presents never retire (a hidden HWND) cannot wake the loop forever.
+    // Scope: popup windows only, i.e. the swapchains created with the desktop-acrylic material (AppHost.OpenPopupWindow leases
+    // every popup window with PopupWindowMaterial.TransientAcrylic; the main window and a detached pop-out never ask for it, and
+    // a pop-out takes its slot itself, non-blocking, before it submits: AppHost.DrainChildRenderSources).
+    private const double PopupDeferBoundMs = 100.0;
+    private const int PopupDeferLogTurns = 4;   // consecutive deferrals before a line is logged (rate-limited per target)
+    private long _popupFramesDeferred;
+
+    /// <summary>Popup frames deferred so far because their present slot was busy (cumulative; render thread writes).</summary>
+    public long PopupFramesDeferred => Volatile.Read(ref _popupFramesDeferred);
+
+    /// <summary>True when this submit of a popup window's frame is deferred to a later turn (its present slot is still busy).
+    /// Takes the slot non-blocking when it is open (the credit is then held, so OpenSubmit does not wait again). Render thread.</summary>
+    private bool DeferPopupSubmit(D3D12Swapchain sc)
+    {
+        sc.SubmitDeferred = false;
+        if (sc.BuildFailed) { sc.SubmitDeferred = true; return true; }
+        if (sc.BuildPending)
+        {
+            // Not built yet: this turn's frame waits for the build after the owner's present. A second turn with the build still
+            // pending had no owner present in between (nothing to present on the primary): build here, one turn late.
+            if (sc.BuildWaitTurns++ == 0)
+            {
+                sc.SubmitDeferred = true;
+                Volatile.Write(ref sc.PopupFrameOwed, 1);
+                sc.PopupFramesAwaitingBuild++;
+                return true;
+            }
+            BuildPopupNow(sc);
+            if (sc.BuildFailed) { sc.SubmitDeferred = true; return true; }
+        }
+        if (!sc.DesktopAcrylic || ReferenceEquals(sc, _primarySwapchain) || !sc.HasLatencyWaitable
+            || sc.LatencyCreditHeld || sc.Frame.SkipLatencyOnce)
+        {
+            EndPopupDeferral(sc);
+            return false;
+        }
+        if (WaitForSingleObject(sc.FrameLatencyWaitable, 0) == WAIT_OBJECT_0)
+        {
+            RepayLatencyDebt(sc);
+            sc.LatencyCreditHeld = true;
+            EndPopupDeferral(sc);
+            return false;
+        }
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (sc.PopupDeferSinceQpc == 0) sc.PopupDeferSinceQpc = now;
+        sc.PopupDeferTurns++;
+        double deferredMs = System.Diagnostics.Stopwatch.GetElapsedTime(sc.PopupDeferSinceQpc, now).TotalMilliseconds;
+        if (deferredMs < PopupDeferBoundMs)
+        {
+            sc.SubmitDeferred = true;
+            Volatile.Write(ref sc.PopupFrameOwed, 1);
+            Volatile.Write(ref _popupFramesDeferred, _popupFramesDeferred + 1);
+            sc.PopupFramesDeferred++;
+            if (sc.PopupDeferTurns == PopupDeferLogTurns) NotePopupDeferral(sc, deferredMs, forced: false);
+            return true;
+        }
+        // The bound passed with the slot still busy: present this frame unpaid and without blocking (the timed-out wait's
+        // contract: the credit is held without a count taken, and the debt is repaid by a later open take).
+        NoteUnpaidLatencyCredit(sc);
+        sc.LatencyCreditHeld = true;
+        sc.PresentNoWaitOnce = true;
+        Volatile.Write(ref _nonPrimaryTimeouts, _nonPrimaryTimeouts + 1);
+        NotePopupDeferral(sc, deferredMs, forced: true);
+        EndPopupDeferral(sc);
+        return false;
+    }
+
+    // A submit went ahead: no frame of this popup is owed any more.
+    private static void EndPopupDeferral(D3D12Swapchain sc)
+    {
+        sc.PopupDeferSinceQpc = 0;
+        sc.PopupDeferTurns = 0;
+        if (Volatile.Read(ref sc.PopupFrameOwed) != 0) Volatile.Write(ref sc.PopupFrameOwed, 0);
+    }
+
+    private static void NotePopupDeferral(D3D12Swapchain sc, double deferredMs, bool forced)
+    {
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (!forced && sc.LatencyWaitLogQpc != 0
+            && System.Diagnostics.Stopwatch.GetElapsedTime(sc.LatencyWaitLogQpc, now).TotalMilliseconds < NonPrimaryLatencyLogPeriodMs)
+        {
+            sc.LatencyWaitsSuppressed++;
+            return;
+        }
+        Diag.Line($"[d3d12.present] popup frame deferred target={sc.Ordinal} turns={sc.PopupDeferTurns} sinceMs={deferredMs:F1} forced={(forced ? 1 : 0)} suppressed={sc.LatencyWaitsSuppressed}");
+        sc.LatencyWaitLogQpc = now;
+        sc.LatencyWaitsSuppressed = 0;
     }
 
     // Non-primary latency waits run on the shared render thread, so a long one is a main-window stall attributable to a
@@ -4345,6 +4498,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             ? WaitLatencyOrAbort(sc.FrameLatencyWaitable, livenessMs)   // bounded: a lost device must not wedge the loop
             : WaitForSlotWithin(sc.FrameLatencyWaitable, timeoutMs);
         sc.Frame.LastLatencyWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        NoteSlotWaitEnd(sc, wait);   // PresentStall: an edge line when the wait ran >= 100 ms
         // A park request ended the wait: nothing was taken, whatever the form - the credit stays un-held and the caller parks.
         if (wait == LatencyWait.Aborted) return false;
         if (timeoutMs < 0 && wait == LatencyWait.TimedOut) NoteSlotLivenessTimeout(sc, livenessMs);
@@ -4424,28 +4578,21 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Count("d3d12", "motionFenceWait");
     }
 
-    // F080: edits the video presenters applied to the shared IDCompositionDevice that no Commit has flushed yet. Every
-    // presenter shares the device's one IDCompositionDevice, so ONE commit per render turn (CommitVideoComposition) flushes the
-    // parent's and every pop-out's tree together instead of one commit per window landing in different DWM frames.
-    private bool _videoCommitDue;
-    private uint _videoCommitFailedHr;   // the last failing HRESULT logged (one line per distinct value)
-
-    /// <summary>A presenter applied composition edits that need a device commit (render thread).</summary>
-    internal void NoteVideoCommitDue() => _videoCommitDue = true;
+    /// <inheritdoc/>
+    /// <remarks>The device fence's completed value (every target's submits signal the one fence, in queue order). UINT64_MAX on a
+    /// removed device, so nothing waits on a GPU that will never finish. Render thread.</remarks>
+    public ulong CompletedSubmitSerial
+        => _fence == null ? ulong.MaxValue : global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
 
     /// <inheritdoc/>
+    /// <remarks>F080: every presenter shares the device's one video compositor, so ONE commit per render turn flushes the parent's and
+    /// every pop-out's tree together instead of one commit per window landing in different DWM frames: the controller's Commit, only
+    /// when a presenter wrote to the tree (D3D12Device.VideoCompositor.cs).</remarks>
     public void CommitVideoComposition()
     {
         AssertSubmitThread();
-        if (!_videoCommitDue) return;
-        _videoCommitDue = false;
-        if (_dcomp == null) return;
-        HRESULT hr = _dcomp->Commit();   // non-throwing, like the presenter's own edits: a failure leaves DWM on the prior composition
-        if ((int)hr < 0 && _videoCommitFailedHr != (uint)hr)
-        {
-            _videoCommitFailedHr = (uint)hr;
-            Diag.Line($"[video.presenter] device Commit failed: 0x{(uint)hr:X8}");
-        }
+        TickProtectedKeeper();   // an attach it makes rides this commit
+        CommitVideoCompositor();
     }
 
     // TryTakePresentSlot's grace timer (render-thread owned; created on the first bounded take, closed in Dispose). A plain
@@ -4834,6 +4981,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (end <= begin) return;
         double ms = (end - begin) * 1000.0 / _gpuExecutionTsFreq;
         if (!double.IsFinite(ms) || ms <= 0.0) return;
+        NoteGpuRun(ms, ownerSubmit);   // PresentStall: an edge line when our own frame ran >= 100 ms on the GPU
         long now = System.Diagnostics.Stopwatch.GetTimestamp();
         owner.PublishGpuRenderSample(ms, ownerSubmit, now, GpuTicksToQpc(begin, now), GpuTicksToQpc(end, now));
     }
@@ -5095,11 +5243,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         AssertDeviceOwner();
         if (w < 1) w = 1; if (h < 1) h = 1;
         if (target.Disposed || (w == target.W && h == target.H)) return;
+        if (target.BuildPending || target.BuildFailed) { target.W = w; target.H = h; return; }   // built at this size later
         BeginTargetFrame(target.Frame);
         // Phase 1 (§3.4, pal-rhi.md §5.4 as designed): CPU-wait only the fence values THIS target's in-flight work
         // stamped — its submits AND its last present (TargetFenceHorizon) — never a full device drain: a detached child's
         // resize must not stall the main window's recorder, and the old back buffers must not be released under a present.
+        long resizeT0 = System.Diagnostics.Stopwatch.GetTimestamp();
         WaitForFenceValue(TargetFenceHorizon(target.Frame));
+        long resizeT1 = System.Diagnostics.Stopwatch.GetTimestamp();
         // Swapchain-sized; recreated lazily at the new size on the next stencil scope. EXPLICIT target (INCIDENT 2026-09
         // §1.4): the old no-arg release freed only the working copy — this clears the target's own storage directly
         // (Phase 1 removes the working-copy concept structurally, so there is no reload to guard against any more).
@@ -5117,18 +5268,23 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Check(target.SwapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, target.SwapChainFlags), "ResizeBuffers");
         target.PpEpoch++;   // new buffers hold nothing: the next frame composites and presents whole
         target.W = w; target.H = h;
-        _w = w; _h = h;
         CreateRtvs(target);
         target.Backdrop?.SetBounds(w, h);   // resize the WUC backdrop/content visuals to match
+        long resizeT2 = System.Diagnostics.Stopwatch.GetTimestamp();
+        target.LastResizeWaitGpuMs = (resizeT1 - resizeT0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        target.LastResizeBuffersMs = (resizeT2 - resizeT1) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         EndTargetFrame();
     }
 
-    public Size2 SizePx => _primarySwapchain is { } sc ? sc.SizePx : new(_w, _h);
+    public Size2 SizePx => _primarySwapchain is { } sc ? sc.SizePx : default;   // no primary yet: no size
 
     internal void DisposeSwapchain(D3D12Swapchain target)
     {
         AssertDeviceOwner();   // a detached child's teardown runs under the parent loop's park (AppHost.Dispose, INCIDENT 2026-09 §1.3)
-        if (target.Disposed) return;
+        if (target.Disposed || target.RetireDeferred) return;
+        // A popup window's swapchain never waits on its own fence here: the shared render thread would stall the owner's frame for
+        // it at every menu close. Its backdrop goes now (the host destroys the window next), its buffers once its frames retired.
+        if (target.DesktopAcrylic && !ReferenceEquals(target, _primarySwapchain)) { RetirePopupTarget(target); return; }
         // F117: wait only for the work THIS target's own frames still have in flight (the Resize rule), never a device-wide
         // WaitForGpu: that signalled a fresh device fence and blocked until the queue reached it, i.e. until every queued frame of
         // OTHER windows (the main window's included) retired too, while the UI sat parked inside a pop-out / flyout close. What
@@ -5138,10 +5294,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Line($"[d3d12.teardown] phase=target-drain target={target.Ordinal} recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
         DrainForTeardown(TargetFenceHorizon(target.Frame), signal: false);
         ReleaseSwapchainResources(target);
-        // Release this swapchain's video presenter AFTER its resources (its DcompRoot is now null → DetachChild no-ops)
-        // but while the shared _dcomp is still alive (so the presenter's own child-visual ComPtrs release cleanly). This
-        // is the teardown path when a detached video window's swapchain is closed.
-        target.VideoPresenter?.Dispose();
+        // Release this swapchain's video presenter (its window target, visuals and wrapped surfaces) after its resources. This is
+        // the teardown path when a detached video window's swapchain is closed.
+        (target.VideoPresenter as System.IDisposable)?.Dispose();
         target.VideoPresenter = null;
         _swapchains.Remove(target);
         if (_primarySwapchain == target) { _primarySwapchain = null; _compositeOwner = 0; }   // the next primary is a new composite owner
@@ -5208,6 +5363,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             }
         }
         if (target.DcompVisual != null) { target.DcompVisual->Release(); target.DcompVisual = null; }
+        if (target.DcompEffect != null) { target.DcompEffect->Release(); target.DcompEffect = null; }
+        if (target.DcompScale != null) { target.DcompScale->Release(); target.DcompScale = null; }
         if (target.DcompRoot != null) { target.DcompRoot->Release(); target.DcompRoot = null; }
         if (target.DcompTarget != null) { target.DcompTarget->Release(); target.DcompTarget = null; }
         if (target.SwapChain != null) { target.SwapChain->Release(); target.SwapChain = null; }
@@ -5253,24 +5410,24 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     private void RecoverDeviceCore()
     {
+        ReleasePopupPoolForRecovery();
         // 1. Release every swapchain's GPU resources but KEEP the D3D12Swapchain objects (their W/H/Hwnd/Composited/etc.
-        //    survive for re-init); reset Disposed since we are recreating, not tearing down. ReleaseSwapchainResources
+        //    survive for re-init); reset Disposed since we are recreating, not tearing down. A PARKED popup and one still
+        //    retiring are released for good instead (ReleasePopupPoolForRecovery): the host builds a new one on its next open.
+        //    ReleaseSwapchainResources
         //    now also tears down each target's OWN command list + layer pools (Phase 1 §3.1/§3.3 — used to be device-
         //    global, released once below instead).
         for (int i = 0; i < _swapchains.Count; i++)
         {
             ReleaseSwapchainResources(_swapchains[i]);
-            // The video presenter's child visuals / wrapped surfaces were created by the DComp device released in step 2
-            // and cannot be parented under the new device's root: dispose it now (its DcompRoot is already null, so it only
-            // frees its own ComPtrs, while _dcomp is still alive) and let GetVideoPresenter build a fresh one on the new
-            // device. VideoSurfaceRegistry.Drain sees the new instance and re-creates, re-binds and re-places every live surface.
-            _swapchains[i].VideoPresenter?.Dispose();
+            // The video presenter is rebuilt with the device: dispose it now (it frees its own visuals and wrapped surfaces; the
+            // video compositor itself survives the recovery) and let GetVideoPresenter build a fresh one. VideoSurfaceRegistry.Drain
+            // sees the new instance and re-creates, re-binds and re-places every live surface.
+            (_swapchains[i].VideoPresenter as System.IDisposable)?.Dispose();
             _swapchains[i].VideoPresenter = null;
             _swapchains[i].Disposed = false;
         }
-        // The presenters' backing visuals are gone with them; the shared black backing content was built on the queue
-        // released below, so drop it too — the next video slot recreates it (EnsureVideoBacking) on the new device.
-        ReleaseVideoBacking();
+        ReleaseBackdropPlane();   // --fg backdrop-plane: its visual / swapchain belong to the dying DComp device and queue
         // 2. Release device-level ComPtrs + pipelines (null the pipe fields so EnsurePipelines re-runs). NO WaitForGpu.
         ReleaseGpuTimingResources();
         ReleaseFrameDissolveResources();   // E2: a frozen window's snapshot died with the device; its thaw presents the frame as it is
@@ -5279,7 +5436,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // to release here (the old single call site this replaced).
         if (_infoQueue != null) { _infoQueue->Release(); _infoQueue = null; }
         if (_dcomp != null) { _dcomp->Release(); _dcomp = null; }
-        _videoCommitDue = false;   // the edits it described went with the old composition device
         _glyphs?.Dispose(); _glyphs = null;
         _imagePipe?.Dispose(); _imagePipe = null;
         _bakedBlur?.Dispose(); _bakedBlur = null;
@@ -5359,14 +5515,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Unexpected drain errors propagate BEFORE releasing live in-flight GPU resources. A healthy fence still
         // waits for retirement, however long it takes; a polling interval is not a new shutdown timeout.
         DrainForTeardown(_fenceValue + 1, signal: true);
+        ReleasePopupPoolForRecovery();   // drained: the popups still retiring (and the parked ones) release now
         Diag.Line($"[d3d12.teardown] phase=device-release recovery={_recoveryCount} reason=0x{unchecked((uint)PollDeviceLost()):X8}");
         for (int i = _swapchains.Count - 1; i >= 0; i--)
         {
-            // Video spine: release each swapchain's presenter (child visuals + wrapped surface content) BEFORE the shared
-            // _dcomp below. ReleaseSwapchainResources has already nulled this swapchain's DcompRoot, so the presenter's
-            // DetachChild no-ops (guarded) — it only frees its own child ComPtrs.
+            // Release each swapchain's video presenter (its window target, visuals and wrapped surfaces) before the video
+            // compositor below.
             ReleaseSwapchainResources(_swapchains[i]);
-            _swapchains[i].VideoPresenter?.Dispose();
+            (_swapchains[i].VideoPresenter as System.IDisposable)?.Dispose();
             _swapchains[i].VideoPresenter = null;
         }
         _swapchains.Clear();
@@ -5374,7 +5530,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         foreach (nint sc in _testSurfaceSwapchains)
             if (sc != 0) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release((void*)sc);
         _testSurfaceSwapchains.Clear();
-        ReleaseVideoBacking();   // after every presenter (their backing visuals share this content), before the DComp device
+        ReleaseBackdropPlane();  // --fg backdrop-plane
+        ReleaseVideoCompositor();   // after every presenter
         if (_dcomp != null) { _dcomp->Release(); _dcomp = null; }
         _glyphs?.Dispose(); _glyphs = null;
         _imagePipe?.Dispose(); _imagePipe = null;
@@ -5471,6 +5628,22 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     // how many qualifying waits it swallowed since. Render-thread-only, like LatencyCreditHeld.
     internal long LatencyWaitLogQpc;
     internal int LatencyWaitsSuppressed;
+    // Popup frame deferral (D3D12Device.DeferPopupSubmit): this turn's submit was deferred (the Present that follows is a
+    // no-op), when the run of consecutive deferrals began (QPC, 0 = none) and how many turns it holds, and the one-shot
+    // DO_NOT_WAIT for the frame that goes out unpaid past the bound. Render thread only. PopupFrameOwed (0/1) is also read
+    // by the UI thread's wake computation through PopupAnimating.
+    internal bool SubmitDeferred, PresentNoWaitOnce;
+    internal long PopupDeferSinceQpc;
+    internal int PopupDeferTurns;
+    internal int PopupFrameOwed;
+    // A popup swapchain created but not built yet (D3D12Device.CreateSwapchain: built after the owner's next present), the turns
+    // its frames waited for that, a build that failed, and the chrome a placement configured meanwhile. Render thread only.
+    internal bool BuildPending, BuildFailed, ChromePending;
+    internal int BuildWaitTurns, PopupFramesAwaitingBuild, PopupFramesDeferred;
+    internal PopupChromeMetrics PendingChrome;
+    // The host's popup pool (D3D12Device.PopupPool.cs): parked between popups (at its size), and released for good but its D3D12
+    // resources waiting for its fence (out of the device's target list). Render thread.
+    internal bool Parked, RetireDeferred;
     // This swapchain's DXGI maximum frame latency when it is NOT the primary (D3D12Device.SetPresentQueueDepth(target, depth) —
     // a detached pop-out's own depth policy); the primary's lives on the device (_presentQueueDepth). Render thread writes
     // (Volatile), any thread may read. Starts at the creation depth, so a rebuild of the swapchain restores it.
@@ -5485,15 +5658,24 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal int PpPresentCount;
     internal bool PpNeedFullPresent;
     internal uint W, H;
+    // The last size-changing Resize's split (D3D12Device.Resize): the fence wait and the ResizeBuffers + RTV rebuild, ms.
+    internal double LastResizeWaitGpuMs, LastResizeBuffersMs;
+    public (double WaitGpuMs, double BuffersMs) LastResizeSplit => (LastResizeWaitGpuMs, LastResizeBuffersMs);
     // FrameIndex, StencilDsv/StencilDsvHeap/StencilDsvW/StencilDsvH DELETED (Phase 1, detached-window-render-
     // isolation-implementation.md §3.1/§3.5): they were the Activate/StoreActive per-target mirror of state that now
     // lives ONLY on Frame (below) — never copied into (or back out of) a device working field, so a detached child's
     // create/dispose/resize can no longer clobber another target's in-flight recording (INCIDENT 2026-09 §1.2/§1.3/§1.4).
     internal IDCompositionTarget* DcompTarget;
-    internal IDCompositionVisual* DcompRoot;     // video spine (M0): the tree root — UI child z-above, video children z-below
+    internal IDCompositionVisual* DcompRoot;     // the tree root: the UI child on top (--fg backdrop-plane's plane beneath it)
     internal IDCompositionVisual* DcompVisual;   // the UI child (owns the swapchain content); topmost, painted every frame
+    internal IDCompositionEffectGroup* DcompEffect;        // the window presentation motion's opacity (D3D12Device.Presentation.cs); on DcompRoot
+    internal IDCompositionScaleTransform* DcompScale;      // ...and its scale about the motion's origin
+    internal FluentGpu.Pal.WindowPresentationMotion Presentation;   // the window presentation motion (D3D12Device.Presentation.cs), render thread
+    internal long PresentationStartQpc;
+    internal bool PresentationMoving;     // posed every turn until it lands (a hold asked for before the tree was bound is posed by BindDComp)
+    internal bool PresentationAttached;   // the effect and the transform are on DcompRoot
     internal bool DcompBindPending;   // seam: DComp graph deferred out of UI-thread InitSwapChain; bound on the presenting thread (see BindDComp)
-    internal FluentGpu.Pal.Windows.DCompVideoPresenter? VideoPresenter;   // per-window video presenter bound to THIS swapchain's DComp root (lazily created; disposed with the swapchain)
+    internal FluentGpu.Pal.IVideoPresenter? VideoPresenter;   // per-window video presenter for THIS swapchain (lazily created; disposed with the swapchain)
     internal CompositionBackdrop? Backdrop;   // non-null ⇒ WUC desktop-acrylic popup (replaces the DComp path)
     // This target's per-submit recording + damage/present state (Phase 1 §3.1). Created once, here, never rebuilt —
     // BeginTargetFrame/EndTargetFrame take a reference to it for the duration of one submit; nothing ever copies it
@@ -5569,6 +5751,9 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     /// hidden / cloaked stand-down of a composited target). UI thread; a present already in flight on the render thread may
     /// re-set the latch - the host's reveal also requires a publication newer than the arm, so that cannot reveal early.</remarks>
     public void ArmRevealExemption() => System.Threading.Volatile.Write(ref _presentedContent, 0);
+    /// <inheritdoc/>
+    /// <remarks>The fence value this target's last submit signalled (<see cref="TargetFrameState.LastSubmitFence"/>). Render thread.</remarks>
+    public ulong LastSubmitSerial => Frame.LastSubmitFence;
 
     internal void NotePresentedContent()
     {
@@ -5783,10 +5968,20 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
         Device.Present(this, noWait: true);
         return !Frame.LastPresentRefused;
     }
-    public void ConfigurePopupChrome(in PopupChromeMetrics m) => Backdrop?.ConfigureChrome(m.ContentRectPx, m.OpensUp, m.ClosedRatio, m.CornerRadiusPx);
+    public void ConfigurePopupChrome(in PopupChromeMetrics m)
+    {
+        if (BuildPending) { PendingChrome = m; ChromePending = true; return; }   // applied when D3D12Device.InitSwapChain builds it
+        Backdrop?.ConfigureChrome(m.ContentRectPx, m.OpensUp, m.ClosedRatio, m.CornerRadiusPx);
+    }
     public void AnimatePopupOpen() => Backdrop?.AnimateOpen();
     public void AnimatePopupClose() => Backdrop?.AnimateClose();
-    public bool PopupAnimating => Backdrop?.IsAnimating ?? false;
+    /// <remarks>Also true while a frame of this popup is owed (deferred behind a busy present slot): the host keeps
+    /// publishing turns until one presents it (D3D12Device.DeferPopupSubmit, bounded).</remarks>
+    public bool PopupAnimating => (Backdrop?.IsAnimating ?? false) || System.Threading.Volatile.Read(ref PopupFrameOwed) != 0;
+    /// <inheritdoc/>
+    public bool ParkPopup() => Device.ParkPopup(this);
+    /// <inheritdoc/>
+    public bool UnparkPopup() => Device.UnparkPopup(this);
     public void Dispose() => Device.DisposeSwapchain(this);
 
     // ── Per-target seam members (Phase 1 §3.3) ──────────────────────────────────────────────────────────────────────

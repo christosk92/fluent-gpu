@@ -168,7 +168,7 @@ Notes:
   `SurfaceBrush` on the child visual), and it is why we sidestep WinUI issue #10918 entirely (see §9). **This is
   a deliberate divergence from the §8.1 signature — reconcile `media-pipeline.md §8.1` to `BindSurfaceHandle`
   when this lands** (canon owner is `media-pipeline.md`; see §11).
-- **Windows impl** (`src/FluentGpu.Windows/Pal/DCompVideoPresenter.cs`): holds the `IDCompositionDevice` (shared
+- **Windows impl** (the DirectComposition video presenter (deleted 2026-11-11)): holds the `IDCompositionDevice` (shared
   with `D3D12Device`, one device), a small `VideoSurfaceId → (IDCompositionVisual child, IDCompositionSurface
   content, IntRect rect)` table, and queues Place/Bind mutations applied on `Commit`. `ICompositorInterop`
   (a.k.a. `IDCompositionDevice`'s `CreateSurfaceFromHandle`, or the WinRT compositor interop) wraps the handle.

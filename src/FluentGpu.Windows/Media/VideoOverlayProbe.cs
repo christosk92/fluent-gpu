@@ -10,15 +10,14 @@ namespace FluentGpu.Media.Windows;
 
 /// <summary>
 /// The overlay-plane verdict per display output (F087), asked with a D3D11 device - the only "concerned device"
-/// <c>IDXGIOutput3::CheckOverlaySupport</c> answers truthfully for. Measured on the Adreno X1-85 (31.0.148.0): the render device's
-/// D3D12 queue fails it with E_NOINTERFACE (so the old probe logged <c>overlay[unprobed]</c> on every window, and overlay promotion
-/// could never switch on), an <c>ID3D12Device</c> or an 11on12 device "succeeds" with every flag 0, and a real D3D11 device reports
+/// <c>IDXGIOutput3::CheckOverlaySupport</c> answers truthfully for. A diagnostic: the <c>[video.overlay]</c> lines and the
+/// <c>[d3d12.present]</c> topology line say what the output reports; nothing is placed by it. Measured on the Adreno X1-85
+/// (31.0.148.0): the render device's D3D12 queue fails it with E_NOINTERFACE (so the old probe logged <c>overlay[unprobed]</c> on
+/// every window), an <c>ID3D12Device</c> or an 11on12 device "succeeds" with every flag 0, and a real D3D11 device reports
 /// NV12 = SCALING with BT.709 studio colour space supported - the planes dxdiag lists (MPO formats: NV12). Chromium probes with its
 /// D3D11 device too.
-/// <para><b>Which device.</b> The clear engine's own <see cref="MfVideoDevice"/> (<see cref="ProbeWith"/>, on its engine thread right
-/// after bring-up: no extra device). Otherwise, only when the overlay switch asks a presenter whether it may promote
-/// (<see cref="ForMonitor"/> with a miss), one background probe leases the same shared device, which then lingers for the next clear
-/// engine. Never at startup and never for an audio-only session: no D3D11 device is made for this unless video is on screen.</para>
+/// <para><b>Which device.</b> The clear engine's own <see cref="MfVideoDevice"/> (<see cref="ProbeIfEmpty"/>, on its engine thread
+/// right after bring-up): no D3D11 device is made for this, and nothing is probed at startup or for an audio-only session.</para>
 /// <para><b>Cost.</b> A table of at most <see cref="MaxOutputs"/> (HMONITOR, caps) pairs replaced whole by the probe (cold: once per
 /// display configuration a video meets); <see cref="ForMonitor"/> is a lock-free scan, zero allocation, safe on the render thread.</para>
 /// </summary>
@@ -34,66 +33,29 @@ internal static unsafe class VideoOverlayProbe
     }
 
     private static Entry[] s_table = Array.Empty<Entry>();
-    private static int s_requested;   // a background probe is queued or running (0/1)
-    private static nint s_requestedMonitor;   // the monitor whose miss queued it (recorded as "no plane" if no output of the adapter shows it)
     private static readonly object s_probeGate = new();
 
-    /// <summary>The verdict for the output showing <paramref name="monitor"/>; <c>default</c> (unprobed: nothing is promoted) when that
-    /// monitor was never probed. A miss with <paramref name="requestIfMissing"/> queues one background probe. Any thread, no allocation
-    /// on a hit.</summary>
-    internal static VideoOverlayCaps ForMonitor(nint monitor, bool requestIfMissing)
+    /// <summary>The verdict for the output showing <paramref name="monitor"/>; <c>default</c> (unprobed) when that monitor was never
+    /// probed. Any thread, no allocation.</summary>
+    internal static VideoOverlayCaps ForMonitor(nint monitor)
     {
         if (monitor == 0) return default;
         Entry[] t = Volatile.Read(ref s_table);
         for (int i = 0; i < t.Length; i++)
             if (t[i].Monitor == monitor) return t[i].Caps;
-        if (requestIfMissing && Interlocked.CompareExchange(ref s_requested, 1, 0) == 0)
-        {
-            Volatile.Write(ref s_requestedMonitor, monitor);
-            ThreadPool.UnsafeQueueUserWorkItem(static _ => ProbeInBackground(), null);
-        }
         return default;
-    }
-
-    private static void ProbeInBackground()
-    {
-        try
-        {
-            using var lease = MfVideoDevice.Acquire();
-            if (lease == null) { Diag.Line("[video.overlay] probe skipped: no D3D11 video device"); return; }
-            ProbeWith(lease.Device.D3d, "background");
-            // A monitor no output of the render adapter shows (a cross-adapter window) is recorded as probed with no plane, so its
-            // lookups hit instead of queueing a probe on every turn.
-            nint mon = Volatile.Read(ref s_requestedMonitor);
-            lock (s_probeGate)
-            {
-                Entry[] t = s_table;
-                bool known = false;
-                for (int i = 0; i < t.Length; i++) known |= t[i].Monitor == mon;
-                if (!known && mon != 0 && t.Length < MaxOutputs)
-                {
-                    var grown = new Entry[t.Length + 1];
-                    t.CopyTo(grown, 0);
-                    grown[t.Length] = new Entry(mon, new VideoOverlayCaps(true, OverlayPlaneSupport.None, OverlayPlaneSupport.None, OverlayPlaneSupport.None));
-                    Volatile.Write(ref s_table, grown);
-                    Diag.Line("[video.overlay] the window's monitor is not an output of the render adapter: no plane (composed by DWM)");
-                }
-            }
-        }
-        catch (Exception e) { Diag.Line($"[video.overlay] probe failed: {e.Message}"); }
-        finally { Volatile.Write(ref s_requested, 0); }
     }
 
     /// <summary>The clear engine's bring-up hook: probe with its own (already leased) device unless a probe already ran, so a warm rebuild
     /// costs one volatile read.</summary>
     internal static void ProbeIfEmpty(ID3D11Device* d3d)
     {
-        if (Volatile.Read(ref s_table).Length == 0) ProbeWith(d3d, "clear-engine");
+        if (Volatile.Read(ref s_table).Length == 0) ProbeWith(d3d);
     }
 
     /// <summary>Probe every output of <paramref name="d3d"/>'s adapter and replace the table (logs one line per output). Cold: a
-    /// handful of DXGI calls; callers are the clear engine's bring-up thread and the background probe.</summary>
-    internal static void ProbeWith(ID3D11Device* d3d, string via)
+    /// handful of DXGI calls, on a clear engine's bring-up thread.</summary>
+    private static void ProbeWith(ID3D11Device* d3d)
     {
         if (d3d == null) return;
         lock (s_probeGate)
@@ -117,7 +79,7 @@ internal static unsafe class VideoOverlayProbe
                         if ((int)output->GetDesc(&od) < 0) continue;
                         VideoOverlayCaps caps = ProbeOutput(output, (IUnknown*)d3d, out string extra);
                         found[n++] = new Entry((nint)od.Monitor, caps);
-                        Diag.Line($"[video.overlay] probe output={new string((char*)&od.DeviceName)} overlay[{caps.Describe()}] {extra} via={via}");
+                        Diag.Line($"[video.overlay] probe output={new string((char*)&od.DeviceName)} overlay[{caps.Describe()}] {extra} via=clear-engine");
                     }
                     finally { output->Release(); }
                 }

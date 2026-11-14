@@ -50,14 +50,15 @@ public enum ImageAtlasExperiment : byte
 /// <item><c>no-vsync</c> — present at sync-interval 0 (diagnose present cap vs frame cost).</item>
 /// <item><c>present-nowait</c> — a detached pop-out presents with DXGI_PRESENT_DO_NOT_WAIT and re-presents a refused frame on
 /// a later turn instead of ever blocking the shared render thread in Present (A/B arm, default off).</item>
+/// <item><c>backdrop-plane</c> — the full-window low-resolution backdrop on its own DComp plane below the UI (a measurement spike, default off).</item>
 /// <item><c>gpu-timing</c> — start with the pass-granular GPU timeline on (<c>AppHost.GpuPassTimingEnabled</c>, the
 /// same runtime toggle the Wavee Diagnostics "Tiles" card flips).</item>
 /// <item><c>playready-sl2000</c> — the protected runtime never probes hardware PlayReady SL3000 (the <c>.3000</c> key system with a
 /// "3000" video capability) and asks for the software SL2000 CDM it always did. Without it the runtime probes SL3000 and falls back to
 /// SL2000 when the machine cannot grant it, and logs the negotiated level (F022; default off = probe on).</item>
-/// <item><c>video-overlay</c> — a video whose rect nothing paints over is promoted ABOVE the UI plane instead of staying
-/// a hole-punched underlay, where the output's overlay probe (a D3D11 <c>CheckOverlaySupport</c>, <c>VideoOverlayProbe</c>) reports a
-/// plane and the surface has no rounded corners (F087, A/B arm, default off).</item>
+/// <item><c>protected-keeper=off|launch|runtime|auto</c> — the protected composition keeper's A/B arm
+/// (<see cref="FluentGpu.Media.ProtectedKeeperPolicy"/>): never, armed with the main window's first present, armed at this run's first
+/// SL3000 negotiation, or the default lifetime (launch on an adapter a previous run negotiated SL3000 on, else at the negotiation).</item>
 /// <item><c>ledger</c> or <c>ledger=PATH</c> — the per-frame <see cref="FrameLedger"/> on from the first frame (CPU, memory and GPU
 /// for every frame); with a PATH, FluentApp writes the binary dump there and one CSV per stream beside it when the window closes.</item>
 /// <item><c>group-repair-validate</c> — every unblurred group surface the composite repairs in place (only the rects that
@@ -67,10 +68,13 @@ public enum ImageAtlasExperiment : byte
 /// <item><c>test-input</c> — a window accepts the private registered message <c>FluentGpu.TestInput</c> (kind + client px in
 /// wParam/lParam, see <c>Win32TestInput</c>) and turns it into the pointer events <c>WM_POINTER*</c> would, so an out-of-process
 /// e2e driver can hover, click, drag and wheel without the physical mouse (default off).</item>
-/// <item><c>shot-window=PATH</c> — capture the COMPOSED window (Mica/acrylic, the DWM frame, DComp video children: what the
+/// <item><c>shot-window=PATH</c> — capture the COMPOSED window (Mica/acrylic, the DWM frame, the video visuals: what the
 /// user sees, unlike <c>--screenshot</c>'s swapchain readback) to a PNG at PATH, <c>shot-delay</c> ms (default 1500) after the
 /// first presented frame; <c>shot-delay=MS</c> sets that delay; <c>shot-exit</c> ends the run after the capture. PATH cannot
 /// contain a comma (the list separator). See <c>FluentApp.CaptureWindowPng</c>.</item>
+/// <item><c>anim-scale=F</c> — a capture/inspection tool: the host scales every frame delta the animation clock advances by
+/// (<see cref="AnimScale"/>; 0.5 = every engine animation, spring and layout transition takes twice as long, each frame still
+/// one the engine really rendered). Media clocks and wall-clock timers are not scaled. Default 1 (no change).</item>
 /// </list>
 /// <item><c>no-partial-raster</c> — every invalid retained tile re-rasters whole (the sub-tile damage A/B arm,
 /// <see cref="FluentGpu.Render.Tiles.TileDamage"/>). <c>damage-validate</c> — the backend re-rasters every partially
@@ -119,7 +123,9 @@ public enum ImageAtlasExperiment : byte
 /// placed resources in pooled heaps (the A/B arm of <see cref="FluentGpu.Render.Tiles.TileMemory.PlacedTiles"/>).
 /// <c>heap-probe</c> — time committed / heap / placed creates and releases once at device init. <c>heap-log</c> — a line per
 /// tile heap create / release. <c>pixel-slides</c> — a sliding transition layer re-rasters its members at their exact phase
-/// every frame instead of compositing its group surface bilinearly (the A/B arm of the slide groups).</item>
+/// every frame instead of compositing its group surface bilinearly (the A/B arm of the slide groups).
+/// <c>no-window-sync</c> — a full-screen toggle changes the window at once instead of holding the window change for the first
+/// frame presented at the new size (the A/B arm).</item>
 /// Unknown names are reported once on stderr and ignored.
 /// </summary>
 public static class EngineSwitches
@@ -127,6 +133,23 @@ public static class EngineSwitches
     public static bool DiagConsole;
     public static bool FpsLog;
     /// <summary>Print every <c>[render.pace]</c> window (<c>--fg pace</c>); by default only anomalous ones are printed.</summary>
+    /// <summary><c>--fg sub-split</c>: a <c>[sub.split]</c> line on stderr every 256 composite submits, the mean CPU microseconds of
+    /// each phase of the device's submit (D3D12Device.SubmitSplit.cs).</summary>
+    /// <summary><c>--fg scroll-pose-mark-all</c>: the render-side scroll poser marks every non-transform effect row it reports
+    /// changed (every row of each newly adopted publication), as before the same-value test (the A/B reference arm of
+    /// SnapshotScrollPoseSink).</summary>
+    public static bool ScrollPoseMarkAll;
+    /// <summary><c>--fg pose-trail-all</c>: a render-owned animation row that re-poses an unchanged value lays its dirty trail
+    /// on every tick, as before (its slice re-walks on every recorded turn): the A/B reference arm.</summary>
+    public static bool PoseTrailAll;
+    /// <summary><c>--fg pose-content-all</c>: a render-owned pose that only moves / scales / rotates its node marks it
+    /// content-dirty, as before (a slice root recorded pose-free re-walks on every pose tick): the A/B reference arm.</summary>
+    public static bool PoseContentAll;
+    public static bool SubmitSplit;
+    /// <summary><c>--fg backdrop-plane</c>: a measurement spike, default off. The stage's full-window low-resolution backdrop item
+    /// is presented on its own small opaque DComp plane below the UI (D3D12Device.BackdropPlane.cs) and the UI back buffer writes
+    /// it transparent, so it no longer dirties the UI frame every turn. Read every composite.</summary>
+    public static bool BackdropPlane;
     public static bool PaceLog;
     public static bool AllocDiag;
     public static bool AllocTypes;
@@ -156,6 +179,9 @@ public static class EngineSwitches
     public static bool OpaqueWindow;
     /// <summary>High-resolution waitable-timer frame waits (default on).</summary>
     public static bool PreciseWait = true;
+    /// <summary>A full-screen toggle holds the window's style + rect change until the render thread presents the first frame at
+    /// the new client size, so DWM gets both in one refresh (default on; <c>--fg no-window-sync</c> changes the window at once).</summary>
+    public static bool WindowSizeSync = true;
     /// <summary>Present at sync-interval 0 (+ ALLOW_TEARING) instead of 1.</summary>
     public static bool NoVsync;
     /// <summary>Start the host with its pass-granular GPU timeline on.</summary>
@@ -166,13 +192,6 @@ public static class EngineSwitches
     /// the child's present slot is already probed without waiting (F090), so the default is decided by PresentMon
     /// (MsBetweenDisplayChange) on both HWNDs with the pop-out playing, not by this flag's existence.</summary>
     public static bool NonBlockingSecondaryPresent;
-
-    /// <summary>Overlay promotion (F087, <c>--fg video-overlay</c>): a video whose rect nothing paints over (a fullscreen video with its
-    /// chrome hidden, an idle pop-out) is inserted ABOVE the UI visual and falls back to the hole-punched underlay the turn something
-    /// covers it, with a hold after each demotion; only where the output's overlay probe reports support. The UI hole stays punched in
-    /// both modes. A HYPOTHESIS arm, default off, decided by the owner's PresentMon A/B (<c>MsBetweenDisplayChange</c> and the
-    /// PresentMode column, switch on vs off), not by this flag's existence.</summary>
-    public static bool VideoOverlay;
 
     /// <summary>Skip the PlayReady SL3000 probe (F022, <c>--fg playready-sl2000</c>): the protected runtime's CDM is the software SL2000 request
     /// it has always made. The default (false) probes the hardware key system first - SL3000 is used only where the machine grants it,
@@ -219,6 +238,10 @@ public static class EngineSwitches
     public static int ShotWindowDelayMs = 1500;
     /// <summary><c>--fg shot-exit</c>: end the run once <see cref="ShotWindowPath"/> has been captured.</summary>
     public static bool ShotWindowExit;
+    /// <summary><c>--fg anim-scale=F</c> (0 &lt; F ≤ 4): the factor the host multiplies each frame delta of the animation clock by,
+    /// a capture tool (slow motion that is still every real frame). The video's media clock and wall-clock timers keep real time.
+    /// Default 1.</summary>
+    public static float AnimScale = 1f;
 
     /// <summary>Apply every <c>--fg</c> flag in <paramref name="args"/>.</summary>
     public static void Apply(ReadOnlySpan<string> args)
@@ -253,6 +276,11 @@ public static class EngineSwitches
                 return true;
             case "fps": FpsLog = true; return true;
             case "pace": PaceLog = true; return true;
+            case "sub-split": SubmitSplit = true; return true;
+            case "backdrop-plane": BackdropPlane = true; return true;
+            case "scroll-pose-mark-all": ScrollPoseMarkAll = true; return true;
+            case "pose-trail-all": PoseTrailAll = true; return true;
+            case "pose-content-all": PoseContentAll = true; return true;
             case "alloc": AllocDiag = true; return true;
             case "alloc-types": AllocTypes = true; return true;
             case "mem":
@@ -294,8 +322,16 @@ public static class EngineSwitches
             case "no-vsync": NoVsync = true; return true;
             case "present-nowait": NonBlockingSecondaryPresent = true; return true;
             case "gpu-timing": GpuPassTiming = true; return true;
-            case "video-overlay": VideoOverlay = true; return true;
             case "playready-sl2000": ForcePlayReadySl2000 = true; return true;
+            case "protected-keeper":
+                switch (value)
+                {
+                    case "off": FluentGpu.Media.ProtectedKeeperPolicy.Switch = FluentGpu.Media.ProtectedKeeperSwitch.Off; return true;
+                    case "launch": FluentGpu.Media.ProtectedKeeperPolicy.Switch = FluentGpu.Media.ProtectedKeeperSwitch.Launch; return true;
+                    case "runtime": FluentGpu.Media.ProtectedKeeperPolicy.Switch = FluentGpu.Media.ProtectedKeeperSwitch.Runtime; return true;
+                    case "auto": FluentGpu.Media.ProtectedKeeperPolicy.Switch = FluentGpu.Media.ProtectedKeeperSwitch.Auto; return true;
+                    default: return false;
+                }
             case "frame-trace":
                 // `--fg frame-trace[=PATH]`: the frame/animation/input timeline (FrameTrace.cs); started by the platform once the host exists.
                 FrameTrace.RequestedPath = value ?? "";
@@ -335,6 +371,7 @@ public static class EngineSwitches
             case "shape-validate": FluentGpu.Text.TextDiagnostics.ShapeValidate = true; return true;
             case "no-shape-prefetch": FluentGpu.Text.TextDiagnostics.NoShapePrefetch = true; return true;
             case "no-partial-keep": FluentGpu.Render.SceneRecordingContext.PartialKeepEnabled = false; return true;
+            case "no-window-sync": WindowSizeSync = false; return true;
             case "damage-log": FluentGpu.Render.Tiles.TileDamage.Log = true; return true;
             case "no-precise-present": FluentGpu.Render.Tiles.TileDamage.PrecisePresent = false; return true;
             case "present-structure-diff": FluentGpu.Render.Tiles.TileDamage.PresentStructureDiff = true; return true;
@@ -353,6 +390,10 @@ public static class EngineSwitches
                 ShotWindowDelayMs = shotMs;
                 return true;
             case "shot-exit": ShotWindowExit = true; return true;
+            case "anim-scale":
+                if (value is null || !float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float animScale) || !(animScale > 0f) || animScale > 4f) return false;
+                AnimScale = animScale;
+                return true;
             case "hidden": return HiddenMemoryBudget.TryApply(value);
             case "img-atlas":
                 switch (value)

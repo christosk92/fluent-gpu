@@ -1195,15 +1195,13 @@ scroll or animation turn moves the video with the hole), and on a turn that move
 for its own GPU work and the placement is committed immediately after it (`threading-render-seam.md` §10, Stage B). They are still
 two flushes; the single-transaction form (one DComp visual holding hole and video) is a recorded follow-up, not built.
 
-**Overlay probe and overlay promotion (F087, A/B arm, default off); no forced engine output format.** `VideoOverlayProbe`
+**Overlay probe (F087, a diagnostic); no forced engine output format.** `VideoOverlayProbe`
 (FluentGpu.Windows/Media) asks every output of the render adapter what `IDXGIOutput3::CheckOverlaySupport` reports for NV12, YUY2 and
 BGRA (plus, for the log, P010, `IDXGIOutput4::CheckOverlayColorSpaceSupport` for NV12 BT.709 studio and `IDXGIOutput6` hardware
 composition) and logs one `[video.overlay] probe output=... overlay[nv12=scaling yuy2=none bgra=none] ...` line per output. It must
 pass a D3D11 device as the concerned device: the D3D12 queue fails with E_NOINTERFACE and an `ID3D12Device` or an 11on12 device
 answers with every flag 0 (measured, Adreno X1-85 31.0.148.0; the queue probe that preceded it logged `overlay[unprobed]` on every
-window, so promotion never switched on). It reuses the clear engine's `MfVideoDevice` (at engine bring-up, once per process) or,
-when the overlay switch asks a presenter about a monitor not probed yet, leases that device on a background thread once; it never
-creates a device at startup or for an audio-only session. The `[d3d12.present] topology=...` line shows the cached verdict for its
+window). It reuses the clear engine's `MfVideoDevice` (at engine bring-up, once per process); it never creates a device of its own. The `[d3d12.present] topology=...` line shows the cached verdict for its
 monitor. The verdict is `VideoOverlayCaps` (`default` = not probed, which claims nothing).
 Neither engine sets `MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT` any more. It is the frame-server render-target format; in windowless
 swap-chain mode the Simple Video Renderer (mfsvr.dll) ignores it. A presentation-manager probe of the clear engine (BGRA forced, NV12
@@ -1213,21 +1211,9 @@ presenting at the content rate: zero copies and no video-processor pass. SVR als
 (`CompositionFrame` statistics: `ScanoutOnScreen` vs `ComposedOnScreen`). The forced BGRA and F249's `--fg video-nv12` arm were a
 no-op and are deleted (with `FgPrRuntimeSetVideoOutputFormat`); Chromium's MediaFoundationRenderer and the Microsoft MediaEngine
 samples set nothing here either.
-`--fg video-overlay` lets the video visual sit ABOVE the UI visual while
-nothing paints over its rect and the output reported a plane: the composite plan classifies every posed hole after the plan is laid out
-(`SliceRecorder.ClassifyVideoOcclusion` -> `VideoPosedHole.Unoccluded`: no op after the `DrawVideo` in its segment, and no later
-segment, slice, backdrop or hole in painter order overlaps the visible hole; judged on whole-segment painted bounds, so it only errs
-towards "covered". A hole is also never clear when its erase is partial (opacity below 1: the promoted visual has no opacity), when an
-in-stream rounded clip cuts it (the presenter rounds only by the element's own corner radius), or when it sits under a layer or group
-surface; detached fly snapshots sit in the root slice's tail and count as covering segments). Only paint that is visible on the turn counts: an op whose folded opacity is 0 (a crossfaded-out poster; the fade re-records every step, so its last step re-scans the slot and re-classifies with no polling), a fill of alpha 0, anything inside a GroupAlpha-0 opacity/blur group (inline or composite-time) is skipped (`SliceRecorder.PaintsNothing`, `ScanSeg.Covers`, `SilentLayer`), and `VideoPlacementApplier` runs each surface through a `VideoOverlayGate` (promote at the first clear turn, demote
-the SAME turn something covers it, hold the underlay for 500 ms after a demotion so the visual's z-order never flaps). The hole itself
-stays punched in both modes (a video above it simply covers it), so promotion changes only the visual's z-order
-(`IVideoPresenter.SetOverlay`, `DCompVideoPresenter` re-inserts the parent above the UI visual). A surface with a corner radius stays an
-underlay (DWM cannot put a rounded clip on a plane), and every z-order change logs `[video.surface] overlay ... above= reason=`
-(`clear`, `switch-off`, `no-plane`, `rounded`, `covered-or-hold`). Measure with PresentMon before turning the switch on by default:
-`--fg video-overlay` vs off, on the Adreno box, comparing the PresentMode column
-(Composed: Flip vs Hardware Composed: Independent Flip / MPO plane) and `MsBetweenDisplayChange` while a video plays fullscreen with
-the chrome hidden.
+Overlay PROMOTION (F087's A/B arm: the video visual raised above the UI visual while nothing painted over it) was deleted on
+2026-11-11 with the DirectComposition video presenter it lived in. The video now composites on its own Windows.UI.Composition window
+target beneath the UI's (`CompositionVideoPresenter`), so the probe's verdict only feeds the log lines above.
 
 ---
 
