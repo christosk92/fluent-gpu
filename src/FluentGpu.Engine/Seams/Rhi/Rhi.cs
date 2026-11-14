@@ -417,6 +417,19 @@ public interface ISwapchain : IDisposable
     /// <c>[window.resize]</c> line); the default (a backend that does not measure) is zero.</summary>
     (double WaitGpuMs, double BuffersMs) LastResizeSplit => default;
 
+    /// <summary>A live resize (size changes in quick succession) allocates the buffers with headroom, so the steps that fit are a
+    /// cheap source-size change instead of a reallocation. True while the allocated buffers exceed <see cref="SizePx"/>: the host
+    /// trims them back with <see cref="TrimSizeHeadroom"/> once the size has settled. Any thread may read it.</summary>
+    bool HasSizeHeadroom => false;
+
+    /// <summary>Reallocate the buffers at exactly <see cref="SizePx"/> (drops the live-resize headroom). The buffers it leaves
+    /// hold nothing: the caller presents a whole frame next. Render-owner thread. A no-op without headroom.</summary>
+    void TrimSizeHeadroom() { }
+
+    /// <summary>Diagnostics (the <c>[window.resize]</c> line): buffer reallocations since creation, the size changes served without
+    /// one, and the allocated buffer size.</summary>
+    (int Reallocations, int SourceSizeSteps, Size2 BufferPx) ResizeCounters => default;
+
     /// <summary>Present WITHOUT blocking the calling thread on this target's present queue (DXGI_PRESENT_DO_NOT_WAIT): the
     /// non-blocking secondary present (F085) a detached pop-out's frame takes on the render thread it shares with the main
     /// window. True when the frame is queued, stood down or otherwise handled exactly as <see cref="Present"/> would have
