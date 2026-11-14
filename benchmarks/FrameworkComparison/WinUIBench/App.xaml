@@ -9,6 +9,49 @@
         <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
         <local:BenchTemplates />
       </ResourceDictionary.MergedDictionaries>
+      <!-- theme-switch: the detail page's colours as ThemeResources. Dark = the navigation scenario's brushes; Light = the
+           FluentGPU warm palette's light tokens (window #E9E7E2, card #FCFBF9, control #F3F2EF, text 1F1E1B/5C5B57/656460).
+           The accent is WinUI's own AccentFillColorDefaultBrush (OS accent, Light2 in dark / Dark1 in light), the same
+           ramp rule FluentGPU's Tok.AccentDefault follows. -->
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="BenchWindowBrush" Color="#24211C" />
+          <SolidColorBrush x:Key="BenchCardBrush" Color="#2E2E2E" />
+          <SolidColorBrush x:Key="BenchThumbBrush" Color="#464646" />
+          <SolidColorBrush x:Key="BenchTextPrimaryBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="BenchTextSecondaryBrush" Color="#C8C8C8" />
+          <SolidColorBrush x:Key="BenchTextTertiaryBrush" Color="#969696" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="BenchWindowBrush" Color="#E9E7E2" />
+          <SolidColorBrush x:Key="BenchCardBrush" Color="#FCFBF9" />
+          <SolidColorBrush x:Key="BenchThumbBrush" Color="#F3F2EF" />
+          <SolidColorBrush x:Key="BenchTextPrimaryBrush" Color="#1F1E1B" />
+          <SolidColorBrush x:Key="BenchTextSecondaryBrush" Color="#5C5B57" />
+          <SolidColorBrush x:Key="BenchTextTertiaryBrush" Color="#656460" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+      <Style x:Key="BenchThemeRootStyle" TargetType="Grid">
+        <Setter Property="Background" Value="{ThemeResource BenchWindowBrush}" />
+      </Style>
+      <Style x:Key="BenchThemeCardStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource BenchCardBrush}" />
+      </Style>
+      <Style x:Key="BenchThemeThumbStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource BenchThumbBrush}" />
+      </Style>
+      <Style x:Key="BenchThemeAccentStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+      </Style>
+      <Style x:Key="BenchThemeTextPrimaryStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{ThemeResource BenchTextPrimaryBrush}" />
+      </Style>
+      <Style x:Key="BenchThemeTextSecondaryStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{ThemeResource BenchTextSecondaryBrush}" />
+      </Style>
+      <Style x:Key="BenchThemeTextTertiaryStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{ThemeResource BenchTextTertiaryBrush}" />
+      </Style>
       <Style x:Key="BenchListViewItemStyle" TargetType="ListViewItem">
         <Setter Property="Height" Value="44" />
         <Setter Property="MinHeight" Value="0" />

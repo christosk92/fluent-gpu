@@ -28,6 +28,11 @@ public sealed record BenchResult
     public string? Notes { get; init; }
     /// <summary>Cold-load sub-marks (startup, buttons-225, text-1125). Null for every other scenario.</summary>
     public ColdStartMarks? ColdStart { get; init; }
+    /// <summary>Desktop-driven scenarios (window-resize, theme-switch): per-run scalar observations (counts, rates).
+    /// Null for every other scenario.</summary>
+    public Dictionary<string, double>? Metrics { get; init; }
+    /// <summary>Desktop-driven scenarios: extra per-step series beside <see cref="FrameMs"/>. Null otherwise.</summary>
+    public Dictionary<string, double[]>? Series { get; init; }
 
     public static BenchResult Create(
         string framework,
@@ -154,6 +159,8 @@ public sealed record RunRecord
 
 [JsonSerializable(typeof(BenchResult))]
 [JsonSerializable(typeof(ColdStartMarks))]
+[JsonSerializable(typeof(Dictionary<string, double>))]
+[JsonSerializable(typeof(Dictionary<string, double[]>))]
 [JsonSerializable(typeof(BenchmarkSummary))]
 [JsonSerializable(typeof(SummaryRow))]
 [JsonSerializable(typeof(SummaryRow[]))]
