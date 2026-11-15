@@ -2153,7 +2153,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // pure update, with the live ItemsView the same sibling that never flashes out of the tree — but its CELLS
         // exist ONLY while a pass is in flight (_probeSample > 0). They used to be emitted on EVERY render forever
         // (_probeSample was latched by the first probe and never cleared): a settled measured shelf rebuilt up to 24
-        // FULL card subtrees per render — each a ShelfCard + LazyNowPlayingOverlay + CoverShimmer + tooltip tree — and
+        // FULL card subtrees per render — each a ShelfCard + LazyNowPlayingOverlay + cover tile + tooltip tree — and
         // kept them mounted. The record-cull below hides them from the RECORDER, but layout does not honour
         // NodeFlags.Visible, so every layout pass still measured all of them: eight measured shelves on the artist
         // page meant ~190 phantom cards resident and remeasured for the page's whole life.

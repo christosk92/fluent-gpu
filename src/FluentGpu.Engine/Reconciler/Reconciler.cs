@@ -408,14 +408,12 @@ public sealed partial class TreeReconciler
     private readonly Dictionary<int, SkelRegionEl> _skelEl = new();
     private readonly Dictionary<int, int> _skelEffect = new();
     private readonly HashSet<int> _skelForce = new();
-    // The shimmer's minimum time on screen (SkeletonStyle.MinShowMs): when each region's current shimmer mounted (anim clock), and the
-    // regions whose content waits for its shimmer's minimum time (the anim-clock time it may swap).
-    private readonly Dictionary<int, double> _skelShimmerAt = new();
-    private readonly Dictionary<int, double> _skelDwell = new();
-    private readonly List<int> _skelDwellDue = new();
     // Loading-scrollbar suppression is node-owned. Remember the exact viewport each pending region incremented so an
     // unmount, branch replacement, or independent sibling completion releases precisely its own claim.
     private readonly Dictionary<int, NodeHandle> _skelScrollSuppression = new();
+    // Loading-scope claims are node-owned too: the LoadingScope each pending (and unparked) region entered, released on its
+    // Ready/Failed edge, on a park and on unmount (see SetSkeletonLoadingClaim).
+    private readonly Dictionary<int, LoadingScope> _skelLoadingClaim = new();
     // KeepAlive boundaries retain inactive page subtrees detached from the live child chain. Entries are node-owned so
     // unmounting the boundary releases every parked component/effect/resource deterministically.
     private sealed class KeepAliveEntry
@@ -1815,34 +1813,6 @@ public sealed partial class TreeReconciler
     }
 
 
-    /// <summary>A shimmer keeps its minimum time on screen before its content replaces it (<see cref="SkeletonStyle.MinShowMs"/>): the
-    /// anim-clock time the swap may run, or null to swap now. Data that lands a moment after a shimmer showed would otherwise flash it.</summary>
-    private double? SkeletonDwell(int idx, SkelRegionEl se)
-    {
-        if (se.Style.MinShowMs <= 0f || !_skelShimmerAt.TryGetValue(idx, out double at) || Anim is not { } anim || anim.Snapping
-            || Motion.ReducedMotion) return null;
-        double due = at + se.Style.MinShowMs;
-        return _scene.AnimClockMs < due ? due : null;
-    }
-
-    /// <summary>Called by the host after animation ticking: the regions whose shimmer has had its minimum time swap to their content.
-    /// No work while none waits.</summary>
-    public void TickSkeletonDwell()
-    {
-        if (_skelDwell.Count == 0) return;
-        double now = _scene.AnimClockMs;
-        _skelDwellDue.Clear();
-        foreach (var kv in _skelDwell)
-            if (now >= kv.Value) _skelDwellDue.Add(kv.Key);
-        foreach (int idx in _skelDwellDue)
-        {
-            _skelDwell.Remove(idx);
-            _skelForce.Add(idx);
-            if (_skelEffect.TryGetValue(idx, out int row)) Runtime.Rows.Schedule(row);
-        }
-        RequestFrame?.Invoke();
-    }
-
     private void ReconcileSkeletonRegion(NodeHandle node, bool force)
     {
         if (!_scene.IsLive(node)) return;
@@ -1853,19 +1823,6 @@ public sealed partial class TreeReconciler
         byte branch = se.Failed() ? (byte)3 : se.Pending() ? (byte)1 : (byte)2;   // 1 shimmer / 2 real / 3 failed
         bool sameBranch = branch == lastBranch;
         if (sameBranch && !force && branch != 2 && !(branch == 1 && se.ShimmerSource is null)) return;
-        if (lastBranch == 1 && branch != 1)
-        {
-            // The shimmer's minimum time on screen: its content waits (the effect still subscribed to the loadable read above).
-            if (SkeletonDwell(idx, se) is { } due)
-            {
-                _skelDwell[idx] = due;
-                RequestFrame?.Invoke();
-                return;
-            }
-            _skelDwell.Remove(idx);
-            _skelShimmerAt.Remove(idx);
-        }
-        else if (branch == 1) _skelDwell.Remove(idx);
 
         Element? desired = branch switch
         {
@@ -1878,7 +1835,7 @@ public sealed partial class TreeReconciler
             // Bounded, not trusted: Remove() gives the orphan its OWN hard deadline (duration + delay + slack), so the
             // "half resolved page" a wedged/never-settling exit track once produced is now reclaimed in ~one exit
             // duration instead of waiting out the host's global 2s backstop.
-            // Reduced motion ⇒ no exit stamp at all (the swap snaps); the pulse + reveal already no-op under it.
+            // Reduced motion ⇒ no exit stamp at all (the swap snaps); the reveal already no-ops under it.
             // Content-owned reveal (SkelReveal.None): the shimmer must LINGER across the content's own per-row
             // entrance (it draws behind the live tree, so a too-fast exit leaves an empty gap before the rows fade
             // up). Floor the exit at the standard content-reveal duration so apps get the cross-dissolve for free —
@@ -1914,20 +1871,17 @@ public sealed partial class TreeReconciler
         // Hide the enclosing scrollbar while this region is loading (branch 1): the short skeleton → tall real swap
         // would otherwise pop the rail from a tiny thumb to its real size. Restored on Ready/Failed.
         SetSkeletonScrollbarSuppression(node, branch == 1);
+        // Report to the nearest LoadingScope while on the placeholder (the page's loading bar counts these). After the
+        // branch swap above, so a Ready region whose content holds nested pending regions hands over without the count
+        // touching 0.
+        SetSkeletonLoadingClaim(node, branch == 1);
 
         // Every edge INTO the shimmer (mount, refresh, retry after Failed) opens this member's slot in its group's round,
         // so the round waits only for the members that are actually loading — a region that reloads alone reveals on
         // its own Ready edge instead of parking its reveal behind siblings that stayed Ready.
         if (branch == 1 && lastBranch != 1 && se.Group is { } lg) SkelGroupCoordinator.Loading(lg, idx);
 
-        if (branch == 1 && lastBranch != 1 && Anim is { } a1)
-        {
-            // Pulse the whole derived skeleton (one looping track on the root; CancelAll on the orphan path kills it).
-            var shimmerRoot = _scene.FirstChild(node);
-            if (!shimmerRoot.IsNull) a1.SkeletonPulse(shimmerRoot, se.Style.PulseMin, se.Style.PulseMs);
-            _skelShimmerAt[idx] = _scene.AnimClockMs;   // the shimmer's minimum time on screen counts from here
-        }
-        else if (branch == 2 && lastBranch == 0 && se.Group is { } initialGroup)
+        if (branch == 2 && lastBranch == 0 && se.Group is { } initialGroup)
         {
             // A grouped region may mount directly on its real branch when its data was already warm. It still
             // registered above, so it MUST report Done or it leaves the group waiting forever for a transition that
@@ -2411,6 +2365,10 @@ public sealed partial class TreeReconciler
         // covers back" Browse→Charts→Back bug. Land the authored rest on both edges; pointer state is gone.
         Anim?.SnapAuthoredPose(node);
         if (parked) _scene.Mark(node, NodeFlags.Parked); else _scene.Unmark(node, NodeFlags.Parked);
+        // A parked region is off screen: it drops its loading-scope claim and claims again on the un-park. Every park path
+        // (KeepAlive pages, virtual spare and kept rows, Persist, BoundRebuild) walks through here; without it a row parked
+        // while its per-row region is still pending would hold its page's loading bar up for as long as the spare lives.
+        if (_skelState.Count != 0 && _skelState.TryGetValue((int)node.Raw.Index, out var parkedSkel)) SetSkeletonLoadingClaim(node, parkedSkel.Branch == 1);
         OnNodeParkedChanged?.Invoke(node, parked);
         if (!parked) SyncParkedThemeFade(node);   // E20: a bound fade seeded while parked re-joins the live theme fade's timeline
         if (_comps.TryGetValue(node, out var entry))
@@ -3661,6 +3619,30 @@ public sealed partial class TreeReconciler
         if (sc.LoadingBarSuppressors > 0) sc.LoadingBarSuppressors--;
         _scene.Mark(viewport, NodeFlags.PaintDirty);
     }
+
+    /// <summary>While a <see cref="SkelRegionEl"/> is on its placeholder and not parked, hold one claim on the nearest
+    /// <see cref="LoadingScope"/> (resolved from the region's node; none resolves: no claim). Node-owned like the scrollbar
+    /// claim: released on the Ready/Failed edge, on a park and on unmount.</summary>
+    private void SetSkeletonLoadingClaim(NodeHandle node, bool pending)
+    {
+        int owner = (int)node.Raw.Index;
+        bool want = pending && (_scene.Flags(node) & NodeFlags.Parked) == 0;   // a parked region is not on screen: no claim
+        if (!want) { ReleaseSkeletonLoadingClaim(owner); return; }
+        if (_skelLoadingClaim.ContainsKey(owner)) return;                       // one claim per region
+        if (ResolveContext(node, LoadingScope.Current)?.Peek() is not LoadingScope scope) return;
+        _skelLoadingClaim[owner] = scope;
+        scope.Enter();
+    }
+
+    private void ReleaseSkeletonLoadingClaim(int owner)
+    {
+        if (_skelLoadingClaim.Remove(owner, out var scope)) scope.Leave();
+    }
+
+    /// <summary>True while <paramref name="region"/> (a <see cref="SkelRegionEl"/> node) shows its placeholder branch.
+    /// Diagnostics (the inspector's settle).</summary>
+    internal bool IsSkeletonPending(NodeHandle region)
+        => _skelState.TryGetValue((int)region.Raw.Index, out var st) && st.Branch == 1;
 
     private void MountVirtual(NodeHandle node, VirtualListEl ve)
     {
@@ -4992,8 +4974,8 @@ public sealed partial class TreeReconciler
             float revealFrom = 0f, revealVelocity = 0f;
             if (flowReveal) anim.ReadFlowReveal(node, out revealFrom, out revealVelocity);
             UnmountSubtree(node);
-            // Kill any looping track (the SkeletonPulse) BEFORE orphaning + SeedExit, so only the FINITE exit tracks
-            // remain: an orphan is reclaimed when HasTracks(node)→false, and a forever-looping pulse would pin it and
+            // Kill any looping track (an indicator, a breathing badge) BEFORE orphaning + SeedExit, so only the FINITE exit
+            // tracks remain: an orphan is reclaimed when HasTracks(node)→false, and a forever-looping track would pin it and
             // defeat the engine's idle wake-stop (a battery/never-quiesce regression). Then seed the finite exit.
             anim.CancelAll(node);
             // Hand the orphan its OWN hard deadline (see ExitMaxAgeMs) on top of the host's global 2s backstop: a wedged
@@ -5103,9 +5085,8 @@ public sealed partial class TreeReconciler
         _skelEl.Remove(idx);
         _skelEffect.Remove(idx);
         _skelForce.Remove(idx);
-        _skelShimmerAt.Remove(idx);
-        _skelDwell.Remove(idx);
         ReleaseSkeletonScrollbarSuppression(idx);
+        ReleaseSkeletonLoadingClaim(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
         if (_attachments.Count != 0) DetachAttachment(idx);   // BoxEl.Attachment: the node leaves with its per-node state
         if (_comps.Remove(node, out var e)) { e.QueuedReplay = false; e.DisposeLifetime(); if (MountCensusEnabled) _mountFrameOf.Remove(e); }   // dispose the render-effect, then RunAllCleanups

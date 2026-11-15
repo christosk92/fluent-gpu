@@ -40,7 +40,6 @@ also have own-node `Component` hooks (`this.UseSoftReveal()`), the counterpart t
 | --- | --- | --- |
 | **Number pop-in** | `anim.PopIn(n)` / `anim.PopInStaggered(span)` | each char re-enters from a direction with a blurred slide (Pop curve); decimals stagger |
 | **Error shake** | `anim.Shake(n)` | percussive ±X shake with overshoot — a per-segment-eased keyframe path (A,A,B,B legs) |
-| **Skeleton reveal** | `anim.SkeletonPulse(bar)` + swap → `this.UseSoftReveal()` | placeholder breathes, then content cross-fades + cross-blurs in (layout-free) |
 | **Success check** | `anim.SuccessCheck(n)` + `StrokeTrimEnd` 0→1 | fade + un-rotate (80°) + Y-bob + un-blur, while the checkmark path draws itself on |
 | **Icon swap** | `anim.IconSwapIn(icon)` | the new glyph grows from 0.25 scale with a blurred fade-in |
 | **Notification badge** | `anim.BadgePop(dot)` | slides onto the trigger and pops with a low-damping overshoot spring + un-blur |

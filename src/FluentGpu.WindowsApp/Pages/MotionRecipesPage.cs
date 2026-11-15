@@ -40,9 +40,9 @@ sealed class MotionRecipesPage : Component
             """),
         ExampleCard.Build("Skeleton loader → reveal",
             Embed.Comp(() => new RecipeSkeleton()),
-            description: "The placeholder bars pulse (looping opacity); when data arrives the real content cross-fades in with a matching cross-blur (SoftReveal). The skeleton stays in the same slot, so the swap is layout-free.",
+            description: "Flat placeholder bars hold the slot; when data arrives the real content cross-fades in over them with a matching cross-blur (SoftReveal). The placeholder never moves, so the swap is layout-free.",
             code: """
-            Context.Anim.SkeletonPulse(bar, min: 0.5f, durationMs: 1000f);   // loops
+            // the placeholder: flat bars in Tok.FillSubtleSecondary, no motion
             // when loaded → swap to the content component, which calls:
             this.UseSoftReveal();                                            // opacity + blur rise
             """),
@@ -184,20 +184,11 @@ sealed class RecipeSkeletonBars : Component
 {
     public override Element Render()
     {
-        var bars = UseRef(new NodeHandle[3]);
-        UseLayoutEffect(() =>
-        {
-            if (Context.Anim is not { } anim) return;
-            for (int i = 0; i < 3; i++)
-                if (!bars.Value[i].IsNull) anim.SkeletonPulse(bars.Value[i], min: 0.45f, durationMs: 1000f);
-        }, 0);
-
-        Element Bar(int idx, float w) => new BoxEl
+        static Element Bar(float w) => new BoxEl
         {
             Width = w, Height = 12f, Corners = Radii.Circle(12f), Fill = Tok.FillSubtleSecondary,
-            OnRealized = h => bars.Value[idx] = h,
         };
-        return new BoxEl { Direction = 1, Gap = 8f, Children = [Bar(0, 200f), Bar(1, 150f), Bar(2, 110f)] };
+        return new BoxEl { Direction = 1, Gap = 8f, Children = [Bar(200f), Bar(150f), Bar(110f)] };
     }
 }
 

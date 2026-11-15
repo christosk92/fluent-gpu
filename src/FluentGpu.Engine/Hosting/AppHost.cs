@@ -3526,6 +3526,9 @@ public sealed partial class AppHost : IDisposable
     /// detached snapshot still drawing. It raises <see cref="WakeReasons.Anim"/> with no animation row of its own, so a caller
     /// that reads <see cref="Animation"/> alone (the inspector's settle) cannot see it.</summary>
     public bool HasConnectedFlight => _connected.HasActive;
+    /// <summary>True while <paramref name="region"/> (a <c>Skel.Region</c> node) shows its placeholder branch: the state the
+    /// inspector's settle waits on now that a placeholder carries no looping track.</summary>
+    public bool IsSkeletonPending(NodeHandle region) => _reconciler.IsSkeletonPending(region);
     /// <summary>The host-owned video-surface intent buffer (published on <c>VideoCompositor.Current</c>). A media player
     /// façade writes surface rect/visibility/handle here; the host drains it into the render-thread presenter at phase 11.</summary>
     public FluentGpu.Media.VideoSurfaceRegistry VideoSurfaces => _videoSurfaces;
@@ -7239,7 +7242,6 @@ public sealed partial class AppHost : IDisposable
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             long tAnimTick1 = Stopwatch.GetTimestamp();
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
-            _reconciler.TickSkeletonDwell();                    // 7 a shimmer that showed keeps its minimum time before its content swaps in
             _reconciler.SettleEntranceCascades();               // 7 a cascade unit whose entrance settled stops compositing
             _reconciler.SettlePersistWaiters();                 // 7 E7: a Flow.Persist slot still waiting for a live owner has a duplicate key
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present

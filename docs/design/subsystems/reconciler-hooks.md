@@ -247,7 +247,7 @@ contracts owned elsewhere:
   page-sized blur group is the effect-layer perf cliff (`backdrop-effects-animation.md`). `SkeletonStyle.ExitMs`
   (default `Expressive.Fast`) is the shimmer half of the dissolve, floored at `Expressive.Slow` for
   `SkelReveal.None` (content owns its entrance, so the shimmer must linger across it); no exit is stamped under
-  `Motion.ReducedMotion`. The looping `SkeletonPulse` is cancelled on the exit so HasTracks drops (the idle wake-stop is
+  `Motion.ReducedMotion`. Any looping track in the exiting subtree is cancelled on the exit so HasTracks drops (the idle wake-stop is
   not defeated), and the orphan is enqueued with its OWN hard deadline (`SceneStore.OrphanMaxAgeMs` = duration + delay +
   slack, measured on `SceneStore.AnimClockMs` — the animation timebase, not the wall clock, so a slow frame cannot
   force-reclaim a healthy exit) on top of the host's global settle-timeout: a wedged exit track is dropped in ~one exit
