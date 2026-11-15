@@ -5,7 +5,7 @@ namespace FluentGpu.Hooks;
 /// A component reads it with <c>UseContext(SharedTransition.Begin)</c> and calls <c>begin("album:"+uri)</c> from a
 /// navigation click handler, JUST BEFORE writing the route — that snapshots the live source node tagged with the
 /// same key (its <see cref="FluentGpu.Dsl.Element.MorphId"/>) so its art flies to the like-tagged dest that mounts on
-/// the new route. The reverse direction (Back) needs no call: a tagged node captures itself on park/unmount.
+/// the new route. Page navigation (a card to its page and Back) uses <see cref="BeginNav"/> instead.
 /// <para>Default (no host / headless tests) is <see langword="null"/>; callers null-check before invoking.</para>
 /// </summary>
 public static class SharedTransition
@@ -21,4 +21,10 @@ public static class SharedTransition
     /// <summary>Host-provided setter for the connected-animation fly MOTION token (spring OR an eased curve + duration),
     /// so an app can surface a LIVE switcher to A/B the shared-element feel. Null when no host published one.</summary>
     public static readonly Context<System.Action<FluentGpu.Animation.ConnectedMotion>?> SetMotion = new(null);
+
+    /// <summary>Host-provided connected NAVIGATION flight (<see cref="FluentGpu.Animation.ConnectedAnimation.BeginNav"/>): the shell calls it on
+    /// every route commit, before the route is written, with the shared-element key of the page being opened (or left, for Back), an
+    /// empty key when it has none. True when a flyer is up (a card's cover flies into the page's hero, or back): the shell then
+    /// plays a quiet page swap under it. Null when no host published one (headless/test).</summary>
+    public static readonly Context<System.Func<FluentGpu.Animation.ConnectedNavRequest, bool>?> BeginNav = new(null);
 }

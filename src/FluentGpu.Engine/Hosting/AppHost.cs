@@ -3526,6 +3526,10 @@ public sealed partial class AppHost : IDisposable
     /// detached snapshot still drawing. It raises <see cref="WakeReasons.Anim"/> with no animation row of its own, so a caller
     /// that reads <see cref="Animation"/> alone (the inspector's settle) cannot see it.</summary>
     public bool HasConnectedFlight => _connected.HasActive;
+    /// <summary>Probe: the live connected navigation flights (<see cref="ConnectedAnimation.BeginNav"/>), pending, flying, landed or fading out.</summary>
+    public int NavFlightCount => _connected.NavFlightCount;
+    /// <summary>Probe: a read-only view of navigation flight <paramref name="i"/> (allocation-free), for the inspector's trace.</summary>
+    public bool TryGetNavFlight(int i, out ConnectedNavFlightInfo info) => _connected.TryGetNavFlight(i, out info);
     /// <summary>True while <paramref name="region"/> (a <c>Skel.Region</c> node) shows its placeholder branch: the state the
     /// inspector's settle waits on now that a placeholder carries no looping track.</summary>
     public bool IsSkeletonPending(NodeHandle region) => _reconciler.IsSkeletonPending(region);
@@ -4297,11 +4301,6 @@ public sealed partial class AppHost : IDisposable
         }
         private Action<FrameStats>? _frameCallback;
     }
-
-    /// <summary>Probe/diagnostic only: a live shared-element (connected-animation) key, so a harness can trigger a REAL Hero fly.</summary>
-    public string? FirstMorphKey => _connected.FirstTaggedKey;
-    /// <summary>Probe/diagnostic only: collect distinct live <c>pl:</c> shared-element keys (home cards) for fresh-page fly measurement.</summary>
-    public void CollectMorphKeys(System.Collections.Generic.List<string> into) => _connected.CollectTaggedKeys(into);
 
     /// <summary>The input dispatcher. Exposed for the validation.md §12.6 arena-determinism gate (the harness attaches a
     /// gesture-arena recorder to <c>Input.Arena</c> and reads the resolution trace after a scripted sequence). The
@@ -5715,14 +5714,12 @@ public sealed partial class AppHost : IDisposable
         _reconciler.Connected = _connected;   // shared-element (connected-animation) participant registry, fed by Element.MorphId
         _reconciler.RequestFrame = WakeFrame;      // wake-only seam: mutate retained scene state, wake, DON'T re-render
         // KeepAlive park/un-park → quiesce/resume the parked subtree's animation + scroll tickers so a backgrounded tab's
-        // looping animation or mid-fling scroll can't keep the frame loop awake (defeating the idle wake-stop). A parked
-        // shared-element node also captures its reverse-fly snapshot here (Back returns to it via the like-tagged dest).
+        // looping animation or mid-fling scroll can't keep the frame loop awake (defeating the idle wake-stop).
         _reconciler.OnNodeParkedChanged = (node, parked) =>
         {
             _anim.SetNodeParked(node, parked);
             // Only viewports own a chrome row — the reconciler raises this for EVERY node in the parked subtree.
             if (_scene.HasScroll(node)) _scrollChrome.SetNodeParked((int)node.Raw.Index, parked);
-            _connected.OnNodeParked(node, parked);
         };
         // Symmetric teardown of INDEX-keyed per-node side-tables on slot free (mem-06): a freed node's slot is reused,
         // so the AnimEngine layout-transition spec (keyed by node index, not gen-checked handle) must be dropped or the
@@ -5819,6 +5816,8 @@ public sealed partial class AppHost : IDisposable
         _reconciler.SetAmbient(SharedTransition.Begin, new Signal<object?>((Action<string>)_connected.Begin));   // connected-anim forward capture-at-click
         _reconciler.SetAmbient(SharedTransition.BeginConfigured, new Signal<object?>((Action<FluentGpu.Animation.ConnectedTransitionRequest>)_connected.Begin));
         _reconciler.SetAmbient(SharedTransition.SetMotion, new Signal<object?>((Action<FluentGpu.Animation.ConnectedMotion>)(m => _connected.FlyMotion = m)));   // live fly-curve switcher (app A/B)
+        _reconciler.SetAmbient(SharedTransition.BeginNav, new Signal<object?>((Func<FluentGpu.Animation.ConnectedNavRequest, bool>)(r => _connected.BeginNav(in r))));   // connected navigation flight (a card's cover into its page)
+        _connected.NavOrigin = () => _dispatcher.ActivatingNode is { IsNull: false } acting ? acting : _dispatcher.Focused;   // the element the user acted on
         // Window-visibility ambient: the channel value IS the visibility signal (an IReadSignal<bool>, never re-published),
         // so UseIsActive resolves it once and subscribes to the INNER signal — see Activation.IsActive.
         _reconciler.SetAmbient(Activation.IsActive, new Signal<object?>(_windowVisible));

@@ -12,11 +12,11 @@ namespace FluentGpu.Animation;
 /// content. Route transitions remain free of inner layout scissors; an opt-in local morph can instead carry its effective
 /// ancestor crop through the flight so clipped header media is never resurrected outside its visible band.
 ///
-/// Lifecycle: a node is registered by the reconciler (<see cref="NoteTagged"/>) and its laid-out rect + image are
-/// remembered each frame (<see cref="Tick65"/>, phase 6.5, Bounds valid). A source snapshot is captured either at
-/// click (<see cref="Begin"/>, forward nav) or on the source's unmount (<see cref="NoteUntagged"/>, reverse nav).
-/// When a like-tagged node is live + laid out on the new route, <see cref="Tick65"/> seeds an overlay that springs
-/// from the source rect to the dest rect; <see cref="Settle"/> retires it (revealing the real dest) once it arrives.
+/// Lifecycle: a node is registered by the reconciler (<see cref="NoteTagged"/>). A source snapshot is captured at the
+/// trigger (<see cref="Begin(string)"/>: the Stage's art). When a like-tagged node is live + laid out, <see cref="Tick65"/>
+/// seeds an overlay that springs from the source rect to the dest rect; <see cref="Settle"/> retires it (revealing the real
+/// dest) once it arrives. Page navigation (a card's cover into its page's hero, and back) is the separate mode in
+/// ConnectedAnimation.Nav.cs (<see cref="BeginNav"/>).
 ///
 /// The single-slot-per-key snapshot supersedes on a second capture (releasing the prior pin); an unclaimed snapshot
 /// expires after <see cref="MaxPendingAge"/> frames (fast nav-away / a dest that never mounts) — never leaking a pin.
@@ -52,15 +52,14 @@ public readonly record struct ConnectedTransitionRequest(
     bool PreserveSourceOpacity = false,
     bool EnableClipAnimation = false);
 
-public sealed class ConnectedAnimation
+public sealed partial class ConnectedAnimation
 {
     private readonly SceneStore _scene;
     private readonly AnimEngine _anim;
     private readonly ImageCache _images;
 
-    // A live shared-element participant: its key + last-laid-out world rect/image (the reverse-capture source data).
-    private struct Tag { public string Key; public RectF Rect; public bool HasRect; public int ImageId; public CornerRadius4 Corners; public byte Fit; }
-    private readonly Dictionary<NodeHandle, Tag> _tagged = new();
+    // A live shared-element participant and its key (the node's Element.MorphId).
+    private readonly Dictionary<NodeHandle, string> _tagged = new();
 
     // Single-slot-per-key source snapshot awaiting a dest on the new route.
     private struct Snapshot
@@ -109,8 +108,7 @@ public sealed class ConnectedAnimation
     private bool _detachedFly => DetachedFly;
     private const int MaxFlightFrames = 240;   // defensive: force-retire a wedged fly (~4s) so an overlay can never get stuck
 
-    // Reused scratch (alloc-free steady state): keys/nodes touched this frame.
-    private readonly List<NodeHandle> _scratchNodes = new();
+    // Reused scratch (alloc-free steady state): keys touched this frame.
     private readonly List<string> _scratchKeys = new();
 
     private const int MaxPendingAge = 30;   // frames a snapshot waits for its dest before expiring (~0.5s — the detail
@@ -140,28 +138,10 @@ public sealed class ConnectedAnimation
     }
 
     /// <summary>The host keeps painting while a fly is in flight or a snapshot is waiting for its dest.</summary>
-    public bool HasActive => _flights.Count > 0 || _pending.Count > 0 || _detached.HasActive;
+    public bool HasActive => _flights.Count > 0 || _pending.Count > 0 || _detached.HasActive || _nav.Count > 0;
 
     /// <summary>The detached-snapshot slab the flag-gated rebuild renders the fly through (SceneRecorder.RecordDetached).</summary>
     public DetachedAnimSlab Detached => _detached;
-
-    /// <summary>Probe/diagnostic only: the first live shared-element key currently registered (preferring a <c>pl:</c>
-    /// key — the preview-path detail). Lets a harness trigger a REAL Hero fly without knowing the catalog data. Null if none.</summary>
-    public string? FirstTaggedKey
-    {
-        get
-        {
-            string? any = null;
-            foreach (var kv in _tagged)
-            {
-                if (!_scene.IsLive(kv.Key)) continue;
-                var k = kv.Value.Key;
-                if (k.StartsWith("pl:", System.StringComparison.Ordinal)) return k;
-                any ??= k;
-            }
-            return any;
-        }
-    }
 
     /// <summary>Spatial span-reuse scoping (scene-memory.md): collect the scene nodes whose ancestor-chain spans could go
     /// stale while a connected-animation fly or a pending capture is live. A fly HIDES/REVEALS its dest anchor (toggling
@@ -181,28 +161,16 @@ public sealed class ConnectedAnimation
             var s = kv.Value.Source;
             if (!s.IsNull && _scene.IsLive(s)) into.Add(s);
         }
-    }
-
-    /// <summary>Probe/diagnostic only: collect the distinct live <c>pl:</c> shared-element keys (the home cards), so a
-    /// harness can fly to several DIFFERENT (uncached) detail pages to measure the cold-mount-plus-fly cost.</summary>
-    public void CollectTaggedKeys(System.Collections.Generic.List<string> into)
-    {
-        into.Clear();
-        foreach (var kv in _tagged)
-        {
-            if (!_scene.IsLive(kv.Key)) continue;
-            var k = kv.Value.Key;
-            if (k.StartsWith("pl:", System.StringComparison.Ordinal) && k.Length > 3 && !into.Contains(k)) into.Add(k);
-        }
+        CollectNavReuseBlockRoots(into);
     }
 
     // ── tagging (reconciler-driven) ──────────────────────────────────────────────────────────────
     /// <summary>Register a node as a shared-element participant for <paramref name="key"/> (its <c>MorphId</c>).</summary>
     public void NoteTagged(NodeHandle node, string key)
     {
-        if (_tagged.TryGetValue(node, out var t))
+        if (_tagged.TryGetValue(node, out string? t))
         {
-            if (t.Key == key) return;   // already tagged with this key
+            if (t == key) return;   // already tagged with this key
             // REASSIGNED to a different shared element on a REUSED node: the detail shell serves successive routes, so its
             // ONE cover node re-tags (album:A → album:B / a sidebar nav to another playlist) every navigation. A fly still
             // in flight under the OLD key is culling this node (Visible cleared + Opacity 0, re-applied each frame by
@@ -212,7 +180,7 @@ public sealed class ConnectedAnimation
             // for `key` is genuinely in flight.
             ReleaseCull(node);
         }
-        _tagged[node] = new Tag { Key = key };
+        _tagged[node] = key;
     }
 
     // Undo a fly-cull (NodeFlags.Visible cleared + Opacity 0) left on a node whose shared-element key is being reassigned.
@@ -225,10 +193,6 @@ public sealed class ConnectedAnimation
         _scene.Paint(node).Opacity = 1f;
         _scene.Mark(node, NodeFlags.PaintDirty);
     }
-
-    /// <summary>KeepAlive parked / un-parked a node. Reverse-fly capture on park is deferred to Phase 6 (capturing every
-    /// parked tagged node on a forward nav floods the registry with snapshots that have no dest); for now this is a no-op.</summary>
-    public void OnNodeParked(NodeHandle node, bool parked) { }
 
     /// <summary>The node is LEAVING the live route — freed (unmount, <paramref name="removeTag"/> = true) or parked by
     /// KeepAlive (<paramref name="removeTag"/> = false, the node stays a participant for when it un-parks). For a reverse
@@ -263,7 +227,7 @@ public sealed class ConnectedAnimation
 
         foreach (var kv in _tagged)
         {
-            if (kv.Value.Key != request.Key || !_scene.IsLive(kv.Key)) continue;
+            if (kv.Value != request.Key || !_scene.IsLive(kv.Key)) continue;
             ref NodePaint p = ref _scene.Paint(kv.Key);
             if (p.ImageId == 0) continue;
             var sr = _scene.AbsoluteRect(kv.Key);
@@ -449,31 +413,12 @@ public sealed class ConnectedAnimation
     }
 
     // ── phase 6.5: remember rects, seed flies to arrived dests, expire stale ─────────────────────
-    /// <summary>Called once per frame after layout (Bounds valid, before the anim tick): refresh every live tag's
-    /// remembered rect/image, seed a fly for any pending snapshot whose dest is now live + laid out, and age out
-    /// snapshots that never found a dest. Allocation-free in steady state (no tags / no pending / no flights).</summary>
+    /// <summary>Called once per frame after layout (Bounds valid, before the anim tick): seed a fly for any pending snapshot
+    /// whose dest is now live + laid out, age out snapshots that never found a dest, and tick the navigation flights
+    /// (<see cref="BeginNav"/>). Allocation-free in steady state (nothing pending, nothing flying): it touches no tag.</summary>
     public void Tick65()
     {
-        // 1. Remember the current laid-out rect + image of every live tag (the reverse-capture source data) and drop dead ones.
-        if (_tagged.Count > 0)
-        {
-            _scratchNodes.Clear();
-            foreach (var node in _tagged.Keys) _scratchNodes.Add(node);
-            for (int i = 0; i < _scratchNodes.Count; i++)
-            {
-                var node = _scratchNodes[i];
-                if (!_scene.IsLive(node)) { _tagged.Remove(node); continue; }
-                if (!OnLiveTree(node)) continue;   // parked/detached: keep the last-good rect for a reverse capture
-                ref NodePaint p = ref _scene.Paint(node);
-                RectF r = _scene.AbsoluteRect(node);
-                var t = _tagged[node];
-                if (r.W > 1f && r.H > 1f) { t.Rect = r; t.HasRect = true; }
-                t.ImageId = p.ImageId; t.Corners = p.Corners; t.Fit = p.ImageFit;
-                _tagged[node] = t;
-            }
-        }
-
-        // 2. Seed flies: for each pending snapshot, find a live dest tagged with the same key (NOT the source) and fly to it.
+        // Seed flies: for each pending snapshot, find a live dest tagged with the same key (NOT the source) and fly to it.
         if (_pending.Count > 0)
         {
             _scratchKeys.Clear();
@@ -513,6 +458,7 @@ public sealed class ConnectedAnimation
         // (never sails over the sidebar / window chrome) — RectF.Infinite (the unbounded band) when nothing is flying.
         _scene.OverlayClip = _flights.Count > 0 ? ComputeFlyClip() : RectF.Infinite;
 
+        TickNav();   // the navigation flights (ConnectedAnimation.Nav.cs): seed, retarget, hide, clip
         _freshlyCaptured.Clear();
     }
 
@@ -562,7 +508,7 @@ public sealed class ConnectedAnimation
         NodeHandle fallback = default; RectF fallbackRect = default;
         foreach (var kv in _tagged)
         {
-            if (kv.Value.Key != key || kv.Key == source || !_scene.IsLive(kv.Key) || !OnLiveTree(kv.Key)) continue;
+            if (kv.Value != key || kv.Key == source || !_scene.IsLive(kv.Key) || !OnLiveTree(kv.Key)) continue;
             RectF r = _scene.AbsoluteRect(kv.Key);
             if (r.W <= 1f || r.H <= 1f) continue;   // tagged but not yet arranged on the live route → wait
             if (_scene.Paint(kv.Key).ImageId != 0) { rect = r; return kv.Key; }   // prefer a real-image cover
@@ -814,7 +760,8 @@ public sealed class ConnectedAnimation
             FreeFlight(in f);
             _flights.RemoveAt(i);
         }
-        if (_flights.Count == 0) _scene.OverlayClip = RectF.Infinite;   // last fly retired — release the band clip
+        SettleNav();   // the navigation flights (ConnectedAnimation.Nav.cs): hand off, back-stop, retire
+        if (_flights.Count == 0 && _nav.Count == 0) _scene.OverlayClip = RectF.Infinite;   // last fly retired — release the band clip
     }
 
     // Free a retired flight's overlay node AND release its detached snapshot (flag-gated). One chokepoint so EVERY
@@ -982,7 +929,7 @@ public sealed class ConnectedAnimation
     {
         foreach (var kv in _tagged)
         {
-            if (kv.Value.Key != key || !_scene.IsLive(kv.Key)) continue;
+            if (kv.Value != key || !_scene.IsLive(kv.Key)) continue;
             ref NodePaint p = ref _scene.Paint(kv.Key);
             if (MathF.Abs(p.Opacity - op) <= 0.0001f) continue;
             p.Opacity = op;
@@ -1000,7 +947,7 @@ public sealed class ConnectedAnimation
         int flipped = 0;
         foreach (var kv in _tagged)
         {
-            if (kv.Value.Key != key || !_scene.IsLive(kv.Key)) continue;
+            if (kv.Value != key || !_scene.IsLive(kv.Key)) continue;
             bool current = (_scene.Flags(kv.Key) & NodeFlags.Visible) != 0;
             if (current == visible) continue;
             if (visible) _scene.SetFlagBits(kv.Key, NodeFlags.Visible);

@@ -2868,12 +2868,26 @@ public sealed partial class InputDispatcher
         // press/release handler is not part of it. (ClickRequestsContext implies ClickBit, so a "…" overflow button is an
         // owner too — pressing it must not also select the row it sits in.)
         if (owner.IsNull || (_scene.Interaction(owner).HandlerMask & InteractionInfo.PressedBit) == 0) return;
-        _scene.GetPointerReleased(owner)?.Invoke(new PointerEventArgs
+        // An items-view slot's card does not own its click: its container raises the tap from this release, so the release
+        // is an activation too (the connected navigation flight reads its origin from ActivatingNode).
+        NodeHandle was = ActivatingNode;
+        ActivatingNode = owner;
+        try
         {
-            Local = LocalPos(owner, positionPx), ClickCount = _pressClickCount, Mods = _pressMods,
-            Button = 0, Kind = _pressKind,
-        });
+            _scene.GetPointerReleased(owner)?.Invoke(new PointerEventArgs
+            {
+                Local = LocalPos(owner, positionPx), ClickCount = _pressClickCount, Mods = _pressMods,
+                Button = 0, Kind = _pressKind,
+            });
+        }
+        finally { ActivatingNode = was; }
     }
+
+    /// <summary>The node whose activation handler is running right now (a click, a keyboard activation, or the release an
+    /// items-view slot raises its tap from), else Null. Set around the handler call only, so a navigation that handler
+    /// commits can find the element the user acted on (the connected navigation flight's source,
+    /// <c>ConnectedAnimation.BeginNav</c>).</summary>
+    internal NodeHandle ActivatingNode { get; private set; }
 
     /// <summary>The node that owns a POINTER GESTURE started at <paramref name="node"/>: the nearest enabled
     /// self-or-ancestor carrying a press/release handler or a click handler. The single definition of gesture ownership,
@@ -2996,9 +3010,14 @@ public sealed partial class InputDispatcher
     private void InvokeActivation(NodeHandle node, ContextRequestTrigger ctxTrigger)
     {
         if (!node.IsNull && (_scene.Interaction(node).HandlerMask & InteractionInfo.ClickRequestsContextBit) != 0)
+        {
             RequestContextFrom(node, ctxTrigger);
-        else
-            _scene.GetClickHandler(node)?.Invoke();
+            return;
+        }
+        NodeHandle was = ActivatingNode;
+        ActivatingNode = node;
+        try { _scene.GetClickHandler(node)?.Invoke(); }
+        finally { ActivatingNode = was; }
     }
 
     /// <summary>Redispatch a context request at a window point — the OverlayHost scrim's dismiss-and-reopen seam

@@ -629,6 +629,29 @@ public sealed partial class AnimEngine
         value = 0f; return false;
     }
 
+    /// <summary>How far the node's live translate rows have it from where they rest: for each live, undriven TranslateX/Y row,
+    /// its position minus its target, summed per axis. True when the node has a live translate or scale row at all (a scale
+    /// moves its rect too, which this cannot express, so a caller that needs the rest rect knows it is not there yet). A
+    /// node's rest rect is <c>SceneStore.AbsoluteRect</c> minus these offsets summed up its parent chain (the connected
+    /// navigation flight's destination). O(rows on the node), allocation-free.</summary>
+    internal bool RestOffset(NodeHandle node, out float dx, out float dy)
+    {
+        dx = 0f; dy = 0f;
+        bool live = false;
+        for (int s = _slab.HeadOnNode((int)node.Raw.Index); s >= 0; s = _slab.At(s).NextOnNode)
+        {
+            ref readonly AnimValue r = ref _slab.At(s);
+            if (r.Has(AnimFlags.Done)) continue;
+            switch (r.Channel)
+            {
+                case AnimChannel.TranslateX: live = true; if (!r.Has(AnimFlags.Driven)) dx += r.Position - r.To; break;
+                case AnimChannel.TranslateY: live = true; if (!r.Has(AnimFlags.Driven)) dy += r.Position - r.To; break;
+                case AnimChannel.ScaleX or AnimChannel.ScaleY: live = true; break;
+            }
+        }
+        return live;
+    }
+
     /// <summary>Does a live (unsettled) row drive the node's pose: its opacity, translate or scale? An entrance cascade leaves such a
     /// node to the track that owns it (its own mount Enter, a hover lift), since its paint is then not its authored rest.</summary>
     internal bool DrivesPose(NodeHandle node)
