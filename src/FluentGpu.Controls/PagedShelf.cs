@@ -1474,8 +1474,11 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             _glideRemap = _remapPending;
             _glideRev++;
             // A multi-row cell changes its width with the column count: while the glide runs, each slot's content eases to its new width
-            // through layout (ShelfCardSlot). Written here, never read by this render (the _effSpanSig shape above).
-            if (rowsNow > 1)
+            // through layout (ShelfCardSlot). Written here, never read by this render (the _effSpanSig shape above). Only when the cell's width
+            // changes (the columns per page or the lead's span): a rows-only re-fit (a chart taking the rows its column holds) keeps every cell's
+            // width, so there is nothing to ease, and an armed resize would ease any width correction landing in its window (a cell that realized
+            // against a provisional width) into a visible grow, and re-render every slot twice to arm and disarm it.
+            if (rowsNow > 1 && (laidOut.PerPage != perPageColumns || laidOut.LeadSpan != effSpan))
             {
                 _resizeArmed.Value = true;
                 _armRev++;
