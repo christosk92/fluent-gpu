@@ -637,6 +637,16 @@ public sealed partial class RenderContext
     /// For a component that MOUNTS a page's content after the keep-alive switch itself (a deferred cold mount): the content's first layouts must
     /// land, not animate in from zero as a keep-alive activation's would not.</summary>
     public Action? SuppressLayoutTransitions;
+    /// <summary>Reconciler-injected: the tree THIS render mounts arrives whole, as one with this component, so no <c>Enter</c> inside it plays and
+    /// every part lands at its authored pose. For a component that mounts a page (a keep-alive page's first mount, a deferred cold mount): the
+    /// page's own entrance (or its cut) presents it, and a part's Enter is for when that part comes or swaps inside the live page, not for the
+    /// page's arrival. Mounted under it, every Enter of a page multiplied the page's entrance (a detail frame's arm fading in from 0 under the
+    /// page's fade: the card read almost empty for two frames). Parts that mount later (a row the data brings, a swap) enter as authored. Call
+    /// it from inside the render whose output arrives; it holds for that render's reconcile only.</summary>
+    public Action? ArriveWhole;
+    /// <summary>Reconciler-set: this component mounted inside an <see cref="ArriveWhole"/> reconcile and has not rendered yet. Its first render's
+    /// <see cref="UseTransition"/> seeds start at their end value (the part arrives with its page, at rest), as a reduced-motion seed does.</summary>
+    internal bool ArrivedWhole;
     /// <summary>Reconciler-injected: stagger the on-screen <see cref="FluentGpu.Dsl.Element.EntranceGroup"/> children under a node (and
     /// any group inside it) in, after this frame's layout (<see cref="FluentGpu.Foundation.EntranceCascade"/>). For a component that
     /// re-presents part of its own tree (a pivot that brings a section in) the way a keep-alive page swap presents a page.</summary>
@@ -1347,8 +1357,13 @@ public sealed partial class RenderContext
 
     public void UseSpring(AnimChannel channel, float to, SpringParams spring, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
         => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Spring(HostNode, channel, to, spring); }, deps, __hf, __hl);
+    /// <summary>Seed <paramref name="from"/> to <paramref name="to"/> at mount and whenever <paramref name="deps"/> change. A component that arrives with its
+    /// page (<see cref="ArrivedWhole"/>) starts its first seed at <paramref name="to"/>: the page's entrance presents it.</summary>
     public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, from, to, durationMs, easing); }, deps, __hf, __hl);
+    {
+        float start = ArrivedWhole ? to : from;
+        UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, start, to, durationMs, easing); }, deps, __hf, __hl);
+    }
     /// <summary><paramref name="cadence"/> is the row's own frame rate (see <c>AnimEngine.Keyframes</c>): <c>null</c>
     /// = display rate, one-shot or <paramref name="loop"/>. <paramref name="snapToDevicePixels"/>: a ScaleX/ScaleY track poses
     /// whole device pixels of the host node's extent (<c>AnimFlags.SnapDevicePx</c>).</summary>

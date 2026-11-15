@@ -68,7 +68,8 @@ public abstract record Element
     public FluentGpu.Animation.MotionTarget? WhilePressed { get => (_ecold ?? ElementCold.Default).WhilePressed; init { if (!EqualityComparer<FluentGpu.Animation.MotionTarget?>.Default.Equals((_ecold ?? ElementCold.Default).WhilePressed, value)) ECold.WhilePressed = value; } }
     public FluentGpu.Animation.MotionTarget? WhileFocus { get => (_ecold ?? ElementCold.Default).WhileFocus; init { if (!EqualityComparer<FluentGpu.Animation.MotionTarget?>.Default.Equals((_ecold ?? ElementCold.Default).WhileFocus, value)) ECold.WhileFocus = value; } }
     /// <summary>Declarative enter terminal (Framer <c>initial</c>; CSS <c>@starting-style</c>): the node animates FROM
-    /// this to identity on mount, seeded under a Presence boundary.</summary>
+    /// this to identity on mount, seeded under a Presence boundary. Not inside a tree that arrives whole (<c>RenderContext.ArriveWhole</c>: a
+    /// page's first mount, which its own entrance presents): there it rests at its pose; it plays when it mounts into the live tree later.</summary>
     public EnterExit? Enter { get => (_ecold ?? ElementCold.Default).Enter; init { if (!EqualityComparer<EnterExit?>.Default.Equals((_ecold ?? ElementCold.Default).Enter, value)) ECold.Enter = value; } }
     /// <summary>Declarative exit terminal (Framer <c>exit</c>; CSS <c>allow-discrete</c>): a removed node animates TO
     /// this before its structural removal (deferred via the DetachedAnimSlab / Presence completion gate).</summary>

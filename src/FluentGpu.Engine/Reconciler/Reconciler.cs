@@ -722,6 +722,19 @@ public sealed partial class TreeReconciler
     /// no Enter and a removal frees at once (no Exit orphan) — the window reached or left the row; the list did not change.</summary>
     private int _edgeRealize;
 
+    /// <summary>Depth of an ARRIVING-WHOLE reconcile (<see cref="ArriveWhole"/>): while &gt; 0 a mount seeds no Enter. The tree a component's
+    /// render mounts arrives as one with that component (a page's first mount, whose own entrance or cut presents it), so a part inside it
+    /// rests at its authored pose instead of fading in from its terminal under the page's entrance. A part that mounts into the live tree
+    /// later (a row the data brings, a swap inside the page) is outside the window and enters as authored.</summary>
+    private int _arrivingWhole;
+
+    /// <summary>Set by <see cref="ArriveWhole"/> during a component's render; read (and cleared) by <see cref="RunComponent"/> before it reconciles that render.</summary>
+    private bool _arriveWholeAsked;
+
+    /// <summary>The <see cref="FluentGpu.Hooks.RenderContext.ArriveWhole"/> seam: the tree the component rendering NOW mounts arrives whole
+    /// (no Enter inside it plays). Called from inside a render; it applies to that render's reconcile only.</summary>
+    public void ArriveWhole() => _arriveWholeAsked = true;
+
     /// <summary>RAII helper for <see cref="SuppressBoundTransitions"/> — <c>using (reconciler.PushSuppressBoundTransitions())</c>.</summary>
     public SuppressBoundTransitionsScope PushSuppressBoundTransitions() { SuppressBoundTransitions++; return new SuppressBoundTransitionsScope(this); }
 
@@ -965,6 +978,7 @@ public sealed partial class TreeReconciler
     private Func<NodeHandle, object, Signal<object?>?>? _resolveContextSeam;
 
     private Action? _armSuppressionSeam;
+    private Action? _arriveWholeSeam;
 
     /// <summary>Open the keep-alive activation's layout-suppression window (two frames), as an activation does.</summary>
     public void ArmKeepAliveLayoutSuppression()
@@ -980,6 +994,7 @@ public sealed partial class TreeReconciler
         ctx.Runtime = Runtime;
         ctx.Anim = Anim;
         ctx.SuppressLayoutTransitions = _armSuppressionSeam ??= ArmKeepAliveLayoutSuppression;
+        ctx.ArriveWhole = _arriveWholeSeam ??= ArriveWhole;
         ctx.EntranceCascade = _cascadeSeam ??= RequestEntranceCascade;
         ctx.Images = Images;
         ctx.Scene = _scene;
@@ -1455,6 +1470,7 @@ public sealed partial class TreeReconciler
         // E7: a Flow.Persist slot owns its key here, adopting the parked subtree of that key (or waiting for its live owner).
         if (IsPersistSlot(ce)) MountPersistSlot(node, entry, ((PersistProps)ce.Props!).Key);
         FluentGpu.Hosting.MountProf.Exit();
+        comp.Context.ArrivedWhole = _arrivingWhole > 0;   // mounted with an arriving page: its first render's UseTransition lands (ArriveWhole)
         entry.RunNow();                                   // first render + child mount (deferred if mounted parked)
     }
 
@@ -1500,6 +1516,7 @@ public sealed partial class TreeReconciler
         bool catchUp = entry.ThemeCatchUp && BeginThemeCatchUp(out savedThemeMs, out savedThemeFromT);
         entry.ThemeCatchUp = false;
         Element newRendered;
+        _arriveWholeAsked = false;   // only THIS render's ask counts (ArriveWhole)
         bool prevShape = _layoutShapeMutated;
         long t1;
         try
@@ -1515,12 +1532,19 @@ public sealed partial class TreeReconciler
                 }
             }
             else { FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Render); try { newRendered = comp.RenderWithHooks(); } finally { FluentGpu.Hosting.MountProf.Exit(); } }
+            comp.Context.ArrivedWhole = false;   // only the first render arrives with its page
             if (entry.DerivedSkeletonStyle is { } skeletonStyle)
                 newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
             t1 = census ? Stopwatch.GetTimestamp() : 0;
             _layoutShapeMutated = false;
             FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Reconcile);
-            try { ReconcileSingleChild(node, newRendered, entry.Rendered); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+            // A render that asked to arrive whole (ArriveWhole) reconciles with mount Enters off: its tree lands at rest, presented by its owner's
+            // entrance. The nested renders this reconcile runs ask (or not) for their own; the window is this reconcile's alone.
+            bool whole = _arriveWholeAsked;
+            _arriveWholeAsked = false;
+            if (whole) _arrivingWhole++;
+            try { ReconcileSingleChild(node, newRendered, entry.Rendered); }
+            finally { FluentGpu.Hosting.MountProf.Exit(); if (whole) _arrivingWhole--; }
         }
         finally { if (catchUp) EndThemeCatchUp(savedThemeMs, savedThemeFromT); }
         // Nested component renders (children mounted/re-rendered inside this reconcile) report their own rows; this
@@ -5194,7 +5218,7 @@ public sealed partial class TreeReconciler
         {
             danim.SetTransition(node, dt);
             if ((dt.Channels & TransitionChannels.Bounds) != 0) { _scene.Mark(node, NodeFlags.BoundsAnimated); anchorAnimated = true; }
-            if (isMount && dt.Enter.Active && !SnapMotion && _edgeRealize == 0 && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
+            if (isMount && dt.Enter.Active && !SnapMotion && _edgeRealize == 0 && _arrivingWhole == 0 && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
             {
                 danim.SeedEnter(node, dt.Enter, dt);
                 // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout (host-driven). SizeMode.FlowReveal enter:
@@ -6073,7 +6097,7 @@ public sealed partial class TreeReconciler
                     anim.SetRestPose(node, EnterRestOf(b));
                     _scene.Mark(node, NodeFlags.BoundsAnimated);
                     animated = true;
-                    if (isMount && at.Enter.Active && !SnapMotion && _edgeRealize == 0 && (at.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
+                    if (isMount && at.Enter.Active && !SnapMotion && _edgeRealize == 0 && _arrivingWhole == 0 && (at.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         anim.SeedEnterOver(node, at.Enter, at, EnterRestOf(b));
                         // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout so neighbours reflow as it
@@ -6094,7 +6118,7 @@ public sealed partial class TreeReconciler
                     danim.SetRestTransform(node, restTf);
                     danim.SetRestPose(node, EnterRestOf(b));
                     if ((dt.Channels & TransitionChannels.Bounds) != 0) { _scene.Mark(node, NodeFlags.BoundsAnimated); animated = true; }
-                    if (isMount && dt.Enter.Active && !SnapMotion && _edgeRealize == 0 && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
+                    if (isMount && dt.Enter.Active && !SnapMotion && _edgeRealize == 0 && _arrivingWhole == 0 && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         danim.SeedEnterOver(node, dt.Enter, dt, EnterRestOf(b));
                         if (dt.Size == SizeMode.Reflow) danim.PendingEnterReflow.Add(node);

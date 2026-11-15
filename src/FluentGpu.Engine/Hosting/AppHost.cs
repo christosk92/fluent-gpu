@@ -7152,7 +7152,14 @@ public sealed partial class AppHost : IDisposable
             DrainLayoutEffects();                              // 6.5 layout effects (Bounds valid)
             // A layout effect that scrolled (BringIntoView on the freshly laid-out rows) shows and windows THIS frame:
             // re-evaluate the plans and, when a window moved, realize + scoped-relayout once more (bounded to one pass).
-            if (SyncScrollPlansMidFrame() && !_scene.Root.IsNull && _reconciler.ReRealizeVirtuals())
+            // So does a viewport's first geometry when something reads it: a list that mounted this frame publishes its viewport
+            // height here, and a part bound to it (a rail as tall as the list's viewport) was laid out at 0, clipped away on the
+            // frame that shows the page and drawn only on the next.
+            bool scrolledMidFrame = SyncScrollPlansMidFrame();
+            int viewportArrivals = ScrollHandle.ViewportArrivals;
+            bool viewportArrived = viewportArrivals != _viewportArrivalsSeen;
+            _viewportArrivalsSeen = viewportArrivals;
+            if (!_scene.Root.IsNull && ((scrolledMidFrame && _reconciler.ReRealizeVirtuals()) || (viewportArrived && _runtime.HasPending)))
             {
                 if (_runtime.HasPending) FlushRebindsToQuiescence();
                 _reconciler.ConsumeReconciled();

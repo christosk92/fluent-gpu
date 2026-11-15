@@ -147,6 +147,10 @@ public sealed class ScrollHandle
     /// <summary>The viewport extent along the scroll axis as a signal.</summary>
     public IReadSignal<double> ViewportSignal => _viewportSig;
 
+    /// <summary>How many viewports have published their FIRST laid-out geometry (0 to a size) on the UI thread. The host compares it across its post-layout
+    /// pass: an arrival re-binds and re-lays out once in the same frame, so a part bound to <see cref="ViewportSignal"/> is never shown at 0.</summary>
+    internal static int ViewportArrivals;
+
     /// <summary><c>max(0, Extent − Viewport)</c> as a signal.</summary>
     public IReadSignal<double> MaxOffsetSignal => _maxSig;
 
@@ -232,6 +236,7 @@ public sealed class ScrollHandle
         if (extent < 0.0) extent = 0.0;
         if (viewport < 0.0) viewport = 0.0;
         bool geometryChanged = extent != _extent || viewport != _viewport;
+        if (_viewport <= 0.0 && viewport > 0.0) ViewportArrivals++;   // its first laid-out geometry (the host's 6.5 pass reads the count)
         _extent = extent;
         _viewport = viewport;
         _extentSig.Value = extent;
