@@ -927,6 +927,23 @@ public sealed partial class RenderContext
     [OverloadResolutionPriority(1)]
     public void UseLayoutEffect(Func<Action?> effect, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => EffectKeyC(effect, deps, PendingLayoutEffects, __hf, __hl);
 
+    /// <summary>Hold one claim on <paramref name="scope"/> (default: the nearest <see cref="LoadingScope"/>, resolved at
+    /// render without subscribing) while <paramref name="pending"/> is true; released when it turns false and on unmount.
+    /// For pending UI that is not a <c>Skel.Region</c> (a region claims by itself). The claim is taken and released in the
+    /// passive effect drain, after paint, so a parent that hands over to its children's own claims never lets the count dip
+    /// to zero. No scope resolves: nothing is claimed.</summary>
+    public void UsePendingClaim(bool pending, LoadingScope? scope = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+    {
+        var s = scope ?? ResolveContextSignal?.Invoke(AnchorNode, LoadingScope.Current)?.Peek() as LoadingScope;
+        bool claim = pending && s is not null;
+        EffectKeyC(() =>
+        {
+            if (!claim) return null;
+            s!.Enter();
+            return s.Leave;
+        }, DepKey.From(claim ? 1 : 0, claim ? RuntimeHelpers.GetHashCode(s!) : 0), PendingEffects, __hf, __hl);
+    }
+
     /// <summary>Mount a signal-tracked effect owned by this component that runs EAGERLY (the body runs synchronously now,
     /// then re-runs inline during <see cref="ReactiveRuntime.Flush"/> when a read signal changes). Distinct from the
     /// passive auto-tracked <see cref="UseEffect(Action)"/> — use this adapter form ONLY to bridge a hot signal into a

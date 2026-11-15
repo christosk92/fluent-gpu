@@ -110,6 +110,13 @@ public abstract class Component
     /// <paramref name="deps"/> change (default = once from mount); a due fire after unmount is a no-op. See
     /// <see cref="RenderContext.UseTimeout"/>.</summary>
     protected TimerHandle UseTimeout(Action callback, float ms, DepKey deps = default, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseTimeout(callback, ms, deps, __hf, __hl);
+    /// <summary>A "this is taking a while" flag: true once <paramref name="pending"/> has held for
+    /// <paramref name="showAfterMs"/>, then for at least <paramref name="minShowMs"/> (zero re-render). See
+    /// <see cref="RenderContext.UseDelayedPending"/>.</summary>
+    protected IReadSignal<bool> UseDelayedPending(IReadSignal<bool> pending, float showAfterMs = 500f, float minShowMs = 400f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseDelayedPending(pending, showAfterMs, minShowMs, __hf, __hl);
+    /// <summary>Hold one claim on <paramref name="scope"/> (default: the nearest <see cref="LoadingScope"/>) while
+    /// <paramref name="pending"/> is true. See <see cref="RenderContext.UsePendingClaim"/>.</summary>
+    protected void UsePendingClaim(bool pending, LoadingScope? scope = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UsePendingClaim(pending, scope, __hf, __hl);
     /// <summary>Fire <paramref name="tick"/> every <paramref name="ms"/> while <paramref name="enabled"/> and the
     /// component is active — auto-pauses while parked/minimized, resumes cleanly. See <see cref="RenderContext.UseInterval"/>.</summary>
     protected void UseInterval(Action tick, float ms, bool enabled = true, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseInterval(tick, ms, enabled, __hf, __hl);
