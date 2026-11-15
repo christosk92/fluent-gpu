@@ -408,6 +408,12 @@ public sealed partial class TreeReconciler
     private readonly Dictionary<int, SkelRegionEl> _skelEl = new();
     private readonly Dictionary<int, int> _skelEffect = new();
     private readonly HashSet<int> _skelForce = new();
+    // The shimmer's timing on screen (SkeletonStyle.ShowDelayMs / MinShowMs): when each region's current shimmer mounted (anim clock),
+    // and the regions whose content waits for its shimmer's minimum time (the anim-clock time it may swap).
+    private readonly Dictionary<int, double> _skelShimmerAt = new();
+    private readonly Dictionary<int, double> _skelDwell = new();
+    private readonly List<int> _skelDwellDue = new();
+    private static readonly EnterExit s_skelShowEnter = new(Opacity: 0f, Active: true);
     // Loading-scrollbar suppression is node-owned. Remember the exact viewport each pending region incremented so an
     // unmount, branch replacement, or independent sibling completion releases precisely its own claim.
     private readonly Dictionary<int, NodeHandle> _skelScrollSuppression = new();
@@ -439,7 +445,32 @@ public sealed partial class TreeReconciler
         public NodeHandle Boundary;
         public long Clock;
         public int TransientSeq;
+        // The boundary's own effect (MountKeepAlive): the ready check re-runs it, so a held swap commits inside a reconcile,
+        // before the frame's layout and animation tick, exactly where an unheld swap starts.
+        public Effect? Effect;
+        // The switch waiting for its incoming page's first screen (KeepAliveOptions.HoldMaxMs); null = none.
+        public HeldSwap? Held;
     }
+    // A held page swap: the incoming page mounted off screen (transparent, hit-test invisible, inactive) beside the page on screen.
+    private sealed class HeldSwap
+    {
+        public string Key = "";
+        public object Token = null!;
+        public object FromToken = null!;
+        // The entry the incoming page will be: a new or reopened entry, or (SameKey) the active entry, whose root the held one replaces.
+        public KeepAliveEntry Entry = null!;
+        public NodeHandle Root;
+        public Element El = null!;
+        public bool SameKey;
+        public bool Cold;
+        public bool Cacheable;
+        // One layout of the held root has run (the per-frame check sets it): before it, nothing in it has a place to be judged in.
+        public bool LaidOut;
+        // When the hold began, on the anim clock (the frame clock: the headless harness's virtual 16 ms frames, a window's wall clock).
+        public double StartMs;
+    }
+    // The roots of held swaps: a component mounted below one starts inactive, a Skel region below one swaps without motion.
+    private readonly HashSet<int> _heldRoots = new();
     private readonly Dictionary<int, KeepAliveState> _keepAliveState = new();
     // Reverse map: a KeepAlive entry's ROOT node index → its slot key.
     private readonly Dictionary<int, string> _keepAliveRootKey = new();
@@ -1413,7 +1444,8 @@ public sealed partial class TreeReconciler
         // must still seed Hidden — walk up (mount-only cost, O(depth)) rather than trust one parent's bit.
         bool hidden = false;
         for (var a = node; !a.IsNull; a = _scene.Parent(a))
-            if ((_scene.Flags(a) & NodeFlags.Visible) == 0) { hidden = true; break; }
+            if ((_scene.Flags(a) & NodeFlags.Visible) == 0
+                || (_heldRoots.Count != 0 && _heldRoots.Contains((int)a.Raw.Index))) { hidden = true; break; }
         var entry = new CompEntry(this, node, comp)
         {
             Type = ce.ComponentType,
@@ -1811,6 +1843,60 @@ public sealed partial class TreeReconciler
 
     private void ReconcileSkeletonRegion(NodeHandle node, bool force)
     {
+        // Inside a held page (KeepAlive's off-screen swap) nothing is seen yet: the swap lands at its end, no shimmer fade, no reveal.
+        if (Anim is { } snapAnim && !snapAnim.Snapping && IsUnderHeldRoot(node))
+        {
+            snapAnim.Snapping = true;
+            try { ReconcileSkeletonRegionCore(node, force); }
+            finally { snapAnim.Snapping = false; }
+            return;
+        }
+        ReconcileSkeletonRegionCore(node, force);
+    }
+
+    /// <summary>A shimmer that has shown keeps its minimum time on screen before its content replaces it: the anim-clock time the swap
+    /// may run, or null to swap now. A shimmer still inside its show delay was never seen: it leaves at once, without a fade, and the
+    /// region (faded out until then) is landed at its rest, so the content alone takes the slot.</summary>
+    private double? SkeletonDwell(NodeHandle node, int idx, SkelRegionEl se)
+    {
+        if (!_skelShimmerAt.TryGetValue(idx, out double at) || Anim is not { } anim || anim.Snapping || Motion.ReducedMotion) return null;
+        double now = _scene.AnimClockMs;
+        double visibleFrom = at + se.Style.ShowDelayMs;
+        if (se.Style.ShowDelayMs > 0f && now < visibleFrom)
+        {
+            var shimmerRoot = _scene.FirstChild(node);
+            if (!shimmerRoot.IsNull)
+            {
+                anim.CancelAll(shimmerRoot);
+                anim.ApplyImmediate(shimmerRoot, AnimChannel.Opacity, 0f);   // its exit fades from nothing to nothing
+            }
+            anim.LandEnterRest(node, EnterRestOf(se));
+            return null;
+        }
+        double due = visibleFrom + se.Style.MinShowMs;
+        return se.Style.MinShowMs > 0f && now < due ? due : null;
+    }
+
+    /// <summary>Called by the host after animation ticking: the regions whose shimmer has had its minimum time swap to their content.
+    /// No work while none waits.</summary>
+    public void TickSkeletonDwell()
+    {
+        if (_skelDwell.Count == 0) return;
+        double now = _scene.AnimClockMs;
+        _skelDwellDue.Clear();
+        foreach (var kv in _skelDwell)
+            if (now >= kv.Value) _skelDwellDue.Add(kv.Key);
+        foreach (int idx in _skelDwellDue)
+        {
+            _skelDwell.Remove(idx);
+            _skelForce.Add(idx);
+            if (_skelEffect.TryGetValue(idx, out int row)) Runtime.Rows.Schedule(row);
+        }
+        RequestFrame?.Invoke();
+    }
+
+    private void ReconcileSkeletonRegionCore(NodeHandle node, bool force)
+    {
         if (!_scene.IsLive(node)) return;
         int idx = (int)node.Raw.Index;
         if (!_skelEl.TryGetValue(idx, out var se)) return;
@@ -1819,6 +1905,19 @@ public sealed partial class TreeReconciler
         byte branch = se.Failed() ? (byte)3 : se.Pending() ? (byte)1 : (byte)2;   // 1 shimmer / 2 real / 3 failed
         bool sameBranch = branch == lastBranch;
         if (sameBranch && !force && branch != 2 && !(branch == 1 && se.ShimmerSource is null)) return;
+        if (lastBranch == 1 && branch != 1)
+        {
+            // The shimmer's minimum time on screen: its content waits (the effect still subscribed to the loadable read above).
+            if (SkeletonDwell(node, idx, se) is { } due)
+            {
+                _skelDwell[idx] = due;
+                RequestFrame?.Invoke();
+                return;
+            }
+            _skelDwell.Remove(idx);
+            _skelShimmerAt.Remove(idx);
+        }
+        else if (branch == 1) _skelDwell.Remove(idx);
 
         Element? desired = branch switch
         {
@@ -1878,6 +1977,12 @@ public sealed partial class TreeReconciler
             // Pulse the whole derived skeleton (one looping track on the root; CancelAll on the orphan path kills it).
             var shimmerRoot = _scene.FirstChild(node);
             if (!shimmerRoot.IsNull) a1.SkeletonPulse(shimmerRoot, se.Style.PulseMin, se.Style.PulseMs);
+            // The show delay: the region (its slot already laid out at the shimmer's size) stays clear and fades the shimmer in only if
+            // the data is still out by then. On the region, not the shimmer root, whose opacity the pulse owns.
+            _skelShimmerAt[idx] = _scene.AnimClockMs;
+            if (se.Style.ShowDelayMs > 0f && !a1.Snapping && !Motion.ReducedMotion)
+                a1.SeedEnterOver(node, s_skelShowEnter, new LayoutTransition(TransitionChannels.Opacity,
+                    TransitionDynamics.Tween(se.Style.ShowFadeMs, Easing.SmoothOut), DelayMs: se.Style.ShowDelayMs), EnterRestOf(se));
         }
         else if (branch == 2 && lastBranch == 0 && se.Group is { } initialGroup)
         {
@@ -2024,6 +2129,7 @@ public sealed partial class TreeReconciler
             // Show/Skel/For boundaries REMOVE their outgoing branch rather than park it, and a removed computation is
             // already skipped by the drain's Disposed check.)
         }, owner: null, runNow: true, structural: true);
+        state.Effect = eff;
         AddBinding(node, eff);
     }
 
@@ -2031,6 +2137,8 @@ public sealed partial class TreeReconciler
     {
         state.Clock++;
         state.Options = options;
+        if ((state.Held is not null || options.HoldMaxMs > 0f) && TryHoldKeepAlive(node, state, options, key, token, desired, cacheable))
+            return;
 
         LayoutTransition? transition = null;
         object? fromToken = null;   // the old token TransitionFor was asked with: CascadeFor gets the same edge
@@ -2152,7 +2260,261 @@ public sealed partial class TreeReconciler
         // The staggered half of the entrance: resolved after this frame's layout (RunEntranceCascades), over the entry's root.
         if (fromToken is not null && swapMotion && options.CascadeFor?.Invoke(fromToken, token) is { } cascade)
             RequestEntranceCascade(entry.Root, cascade);
+        if (activationChanged) options.OnShown?.Invoke(token);
         EvictInactiveKeepAliveEntries(state, options);
+    }
+
+    // ── the held swap (KeepAliveOptions.HoldMaxMs) ───────────────────────────────────────────────────────────────────
+
+    /// <summary>Hold this switch until the incoming page's first screen has settled, or carry on with a hold already running. True =
+    /// the switch is the hold's (the caller returns); false = the ordinary immediate swap.</summary>
+    private bool TryHoldKeepAlive(NodeHandle node, KeepAliveState state, KeepAliveOptions options, string key, object token, Element desired, bool cacheable)
+    {
+        if (state.Held is { } held)
+        {
+            if (held.Key == key && Equals(held.Token, token) && held.El.ElementTypeId == desired.ElementTypeId)
+            {
+                // The same switch, run again (the ready check, a re-theme, a signal View read): keep the held page current, then swap
+                // if it is ready.
+                UpdateHeldRoot(held, desired);
+                if (HoldReady(held, options)) CommitHeldSwap(node, state, options);
+                return true;
+            }
+            CancelHeldSwap(node, state, options);
+        }
+        if (options.HoldMaxMs <= 0f || FrameEpoch <= 1 || !_scene.IsLive(node) || state.ActiveKey is not { } activeKey) return false;
+        if (!state.Entries.TryGetValue(activeKey, out var active) || !active.Attached) return false;
+        bool sameKey = activeKey == key;
+        if (sameKey && Equals(active.Token, token)) return false;          // no switch: the in-place update
+        if (state.ExitingKey == key) return false;                          // back to the page still leaving: the ordinary reclaim
+        if (options.HoldFor is { } holdFor && !holdFor(active.Token, token)) return false;
+        state.Entries.TryGetValue(key, out var target);
+        // A cached page reopened on its own token is ready as it was left.
+        if (!sameKey && target is not null && !target.Attached && Equals(target.Token, token)) return false;
+        if (!sameKey && target is not null && (target.Attached || target.El.ElementTypeId != desired.ElementTypeId))
+        {
+            if (target.Attached) return false;
+            state.Entries.Remove(key);           // reopened as another element type: it mounts fresh below
+            FreeKeepAliveEntry(target);
+            target = null;
+        }
+
+        var hold = new HeldSwap
+        {
+            Key = key, Token = token, FromToken = active.Token, SameKey = sameKey, Cacheable = cacheable, El = desired,
+            StartMs = _scene.AnimClockMs,
+        };
+        if (target is null)
+        {
+            var root = _scene.CreateNode(desired.ElementTypeId);
+            _scene.AppendChild(node, root);
+            _keepAliveRootKey[(int)root.Raw.Index] = key;   // before Mount: descendant scroll nodes resolve scope at mount
+            if (options.CompositeTransitions) _scene.Paint(root).CompositeLayer = true;
+            _heldRoots.Add((int)root.Raw.Index);           // before Mount: its components start inactive
+            Mount(root, desired);
+            hold.Root = root;
+            hold.Cold = true;
+            if (sameKey) hold.Entry = active;
+            else
+            {
+                hold.Entry = new KeepAliveEntry
+                {
+                    Key = key, Token = token, El = desired, Root = root, LastUsed = state.Clock,
+                    Attached = true, ResourcesActive = true, Cacheable = cacheable,
+                };
+                state.Entries[key] = hold.Entry;
+            }
+        }
+        else
+        {
+            // A cached page reopened on another token (one warm slot for every album): it comes back inactive and updates off screen.
+            _heldRoots.Add((int)target.Root.Raw.Index);
+            WriteSubtreeHidden(target.Root, hidden: true);
+            ReactivateKeepAliveEntry(node, target, options);
+            Anim?.CancelAll(target.Root);
+            target.Token = token;
+            target.Cacheable = cacheable;
+            target.LastUsed = state.Clock;
+            Update(target.Root, desired, target.El);
+            target.El = desired;
+            hold.Entry = target;
+            hold.Root = target.Root;
+        }
+        HideHeldRoot(hold.Root);
+        _scene.Mark(node, NodeFlags.ZStack);                 // the two pages share the boundary for the hold
+        MarkLayoutShape(node);
+        state.Held = hold;
+        if (options.SuppressLayoutTransitionsOnActivation)
+            { _keepAliveLayoutSuppressionFrames = Math.Max(_keepAliveLayoutSuppressionFrames, 2); _keepAliveSuppressionAge = 0; }
+        RequestFrame?.Invoke();
+        return true;
+    }
+
+    /// <summary>The held page is laid out and renders, but draws nothing and takes no input (re-applied after every update of its root).</summary>
+    private void HideHeldRoot(NodeHandle root)
+    {
+        if (!_scene.IsLive(root)) return;
+        _scene.Paint(root).Opacity = 0f;
+        _scene.Unmark(root, NodeFlags.HitTestVisible);
+        _scene.Mark(root, NodeFlags.PaintDirty);
+    }
+
+    private void UpdateHeldRoot(HeldSwap held, Element desired)
+    {
+        if (!_scene.IsLive(held.Root)) return;
+        Element old = held.SameKey ? held.El : held.Entry.El;
+        Update(held.Root, desired, old);
+        held.El = desired;
+        if (!held.SameKey) held.Entry.El = desired;
+        HideHeldRoot(held.Root);
+    }
+
+    /// <summary>Is the held page ready to be seen: the hold's budget has run out, or (after its first layout) nothing in its first screen
+    /// is still on its way.</summary>
+    private bool HoldReady(HeldSwap held, KeepAliveOptions options)
+    {
+        if (_scene.AnimClockMs - held.StartMs >= options.HoldMaxMs || !_scene.IsLive(held.Root)) return true;
+        return held.LaidOut && !HeldWorkPending(held.Root);
+    }
+
+    /// <summary>Something in view below <paramref name="root"/> is still on its way: a Skel region on its shimmer, or a picture still
+    /// decoding. A region or picture below the fold (or in a collapsed part) does not hold the page.</summary>
+    private bool HeldWorkPending(NodeHandle root)
+    {
+        foreach (var kv in _skelState)
+        {
+            if (kv.Value.Branch != 1) continue;
+            var region = _scene.HandleAt(kv.Key);
+            if (_scene.IsLive(region) && IsBelow(region, root) && _scene.IsInClipView(region)) return true;
+        }
+        return Images is not null && ImageDecodingInView(root);
+    }
+
+    private bool ImageDecodingInView(NodeHandle n)
+    {
+        if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.Visible) == 0) return false;
+        ref readonly NodePaint paint = ref _scene.Paint(n);
+        if (paint.VisualKind == VisualKind.Image && paint.ImageId != 0
+            && Images!.StateOf(new ImageHandle(paint.ImageId)) == ImageState.Pending && _scene.IsInClipView(n))
+            return true;
+        for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c))
+            if (ImageDecodingInView(c)) return true;
+        return false;
+    }
+
+    private bool IsBelow(NodeHandle n, NodeHandle root)
+    {
+        for (var a = n; !a.IsNull; a = _scene.Parent(a))
+            if (a == root) return true;
+        return false;
+    }
+
+    /// <summary>Is <paramref name="node"/> inside a held page (a page mounted off screen for a swap that has not run yet).</summary>
+    private bool IsUnderHeldRoot(NodeHandle node)
+    {
+        if (_heldRoots.Count == 0) return false;
+        for (var a = node; !a.IsNull; a = _scene.Parent(a))
+            if (_heldRoots.Contains((int)a.Raw.Index)) return true;
+        return false;
+    }
+
+    /// <summary>The held swap runs: the outgoing page leaves on TransitionFor's exit leg, the incoming one (its unseen motion landed, now
+    /// active and hit-testable) enters on the enter leg, as an unheld swap would have at the switch.</summary>
+    private void CommitHeldSwap(NodeHandle node, KeepAliveState state, KeepAliveOptions options)
+    {
+        var held = state.Held!;
+        state.Held = null;
+        _heldRoots.Remove((int)held.Root.Raw.Index);
+        if (state.ActiveKey is not { } activeKey || !state.Entries.TryGetValue(activeKey, out var active) || !_scene.IsLive(held.Root))
+        {
+            CancelHeld(node, state, options, held);
+            return;
+        }
+        bool swapMotion = Anim is not null && !SnapMotion && (options.RecipeOwnsReducedMotion || !Motion.ReducedMotion);
+        Anim?.LandSubtreeAtEnd(held.Root);                 // what moved while unseen arrives finished
+        SetSubtreeHidden(held.Root, hidden: false);        // active: UseActivation's onActivated fires
+        _scene.Mark(held.Root, NodeFlags.HitTestVisible);
+
+        var transition = options.TransitionFor?.Invoke(active.Token, held.Token);
+        KeepAliveEntry outgoing = active;
+        if (held.SameKey)
+        {
+            // The old root leaves as a transient entry (freed once it is gone); the slot's entry takes the new root.
+            outgoing = new KeepAliveEntry
+            {
+                Key = "__retired:" + (++state.TransientSeq).ToString(), Token = active.Token, El = active.El, Root = active.Root,
+                LastUsed = state.Clock, Attached = true, ResourcesActive = active.ResourcesActive, Cacheable = false,
+            };
+            state.Entries[outgoing.Key] = outgoing;
+            active.Root = held.Root;
+            active.El = held.El;
+            active.Token = held.Token;
+            active.Cacheable = held.Cacheable;
+            active.LastUsed = state.Clock;
+            active.Attached = true;
+            active.ResourcesActive = true;
+        }
+        if (transition is { } spec && spec.Exit.Active && swapMotion)
+            BeginKeepAliveExit(state, outgoing, options, spec);
+        else
+        {
+            FinishKeepAliveExit(state, options);
+            DeactivateKeepAliveEntry(outgoing, options);
+            if (!outgoing.Cacheable) state.Entries.Remove(outgoing.Key);
+            if (_scene.IsLive(state.Boundary) && state.ExitingKey is null) _scene.Unmark(state.Boundary, NodeFlags.ZStack);
+        }
+
+        var entry = held.SameKey ? active : held.Entry;
+        state.ActiveKey = held.Key;
+        MirrorParticipation(node, entry.Root);
+        RemirrorAncestors(node);
+        MarkLayoutShape(node);
+        if (options.SuppressLayoutTransitionsOnActivation)
+            { _keepAliveLayoutSuppressionFrames = Math.Max(_keepAliveLayoutSuppressionFrames, 2); _keepAliveSuppressionAge = 0; }
+        var rest = EnterRestOf(entry.El);
+        Anim?.LandEnterRest(entry.Root, rest);
+        if (transition is { } enter && enter.Enter.Active && Anim is { } anim && swapMotion)
+            anim.SeedEnterOver(entry.Root, enter.Enter, enter, rest);
+        if (swapMotion && options.CascadeFor?.Invoke(held.FromToken, held.Token) is { } cascade)
+            RequestEntranceCascade(entry.Root, cascade);
+        options.OnShown?.Invoke(held.Token);
+        EvictInactiveKeepAliveEntries(state, options);
+    }
+
+    private void CancelHeldSwap(NodeHandle node, KeepAliveState state, KeepAliveOptions options)
+    {
+        if (state.Held is not { } held) return;
+        state.Held = null;
+        _heldRoots.Remove((int)held.Root.Raw.Index);
+        CancelHeld(node, state, options, held);
+    }
+
+    /// <summary>Drop a held page that will not be shown: a fresh mount is freed, a reopened cached page goes back to the cache.</summary>
+    private void CancelHeld(NodeHandle node, KeepAliveState state, KeepAliveOptions options, HeldSwap held)
+    {
+        if (_scene.IsLive(held.Root))
+        {
+            if (held.SameKey)
+            {
+                OnSubtreeDeactivated?.Invoke(held.Root);
+                UnmountSubtree(held.Root);
+                _keepAliveRootKey.Remove((int)held.Root.Raw.Index);
+                _scene.FreeSubtree(held.Root);
+            }
+            else if (held.Cold)
+            {
+                state.Entries.Remove(held.Key);
+                FreeKeepAliveEntry(held.Entry);
+            }
+            else
+            {
+                DeactivateKeepAliveEntry(held.Entry, options);       // parked first, so clearing the held flag below fires no activation
+                WriteSubtreeHidden(held.Root, hidden: false);
+                if (!held.Entry.Cacheable) state.Entries.Remove(held.Key);
+            }
+        }
+        if (_scene.IsLive(state.Boundary) && state.ExitingKey is null) _scene.Unmark(state.Boundary, NodeFlags.ZStack);
+        MarkLayoutShape(node);
     }
 
     private void BeginKeepAliveExit(KeepAliveState state, KeepAliveEntry entry, KeepAliveOptions options, in LayoutTransition spec)
@@ -2187,13 +2549,13 @@ public sealed partial class TreeReconciler
         state.ExitDeadlineAnimMs = 0; state.ExitStartTicks = 0;
         if (!state.Entries.TryGetValue(key, out var entry))
         {
-            if (_scene.IsLive(state.Boundary)) _scene.Unmark(state.Boundary, NodeFlags.ZStack);
+            if (_scene.IsLive(state.Boundary) && state.Held is null) _scene.Unmark(state.Boundary, NodeFlags.ZStack);
             return;
         }
         Anim?.CancelAll(entry.Root);
         DeactivateKeepAliveEntry(entry, options);
         if (!entry.Cacheable) state.Entries.Remove(key);
-        if (_scene.IsLive(state.Boundary)) _scene.Unmark(state.Boundary, NodeFlags.ZStack);
+        if (_scene.IsLive(state.Boundary) && state.Held is null) _scene.Unmark(state.Boundary, NodeFlags.ZStack);
     }
 
     /// <summary>Park retained outgoing pages once their finite exit track settles — OR force-finish at the exit's own
@@ -2206,6 +2568,14 @@ public sealed partial class TreeReconciler
     {
         foreach (var state in _keepAliveState.Values)
         {
+            if (state.Held is { } held)
+            {
+                // This frame's layout has run: the held page's first screen can be judged. Ready: the boundary's effect re-runs and
+                // commits in the next reconcile. Either way the frame loop keeps turning until it has, or the budget runs out.
+                held.LaidOut = true;
+                if (HoldReady(held, state.Options ?? KeepAliveOptions.Default)) state.Effect?.Schedule();
+                RequestFrame?.Invoke();
+            }
             if (state.ExitingKey is not { } key || !state.Entries.TryGetValue(key, out var entry)) continue;
             bool settled = Anim is null || !Anim.HasTracks(entry.Root);
             if (!settled)
@@ -5005,8 +5375,10 @@ public sealed partial class TreeReconciler
             RemoveMorphKey(node, morphKey);
             Connected?.CaptureOnLeave(node, removeTag: true);   // shared-element: only tagged nodes participate
         }
+        if (_heldRoots.Count != 0) _heldRoots.Remove(idx);
         if (_keepAliveState.Remove(idx, out var kas))
         {
+            kas.Held = null;
             foreach (var ex in kas.Entries.Values)
             {
                 if (!_scene.IsLive(ex.Root) || !_scene.Parent(ex.Root).IsNull) continue;
@@ -5055,6 +5427,8 @@ public sealed partial class TreeReconciler
         _skelEl.Remove(idx);
         _skelEffect.Remove(idx);
         _skelForce.Remove(idx);
+        _skelShimmerAt.Remove(idx);
+        _skelDwell.Remove(idx);
         ReleaseSkeletonScrollbarSuppression(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
         if (_attachments.Count != 0) DetachAttachment(idx);   // BoxEl.Attachment: the node leaves with its per-node state

@@ -63,6 +63,33 @@ public sealed partial class AnimEngine
         }
     }
 
+    /// <summary>Land every finite one-shot row on <paramref name="root"/>'s subtree at its end, as if it had run its course: structural
+    /// rows (FLIP, reflow, presented size) settle to the layout (<see cref="SnapStructuralToLayout"/>), opacity / transform / blur / brush
+    /// rows land at their target. Looping, additive and driven rows (authored continuous motion) keep running. KeepAlive's held swap
+    /// calls it as a page that was laid out and updated off screen comes on screen: the motion nobody saw must not play afterwards.
+    /// Zero-alloc; O(subtree).</summary>
+    public void LandSubtreeAtEnd(NodeHandle root)
+    {
+        if (!_scene.IsLive(root)) return;
+        SnapStructuralToLayout(root);
+        for (bool again = true; again; )
+        {
+            again = false;
+            for (int s = _slab.HeadOnNode((int)root.Raw.Index); s >= 0; s = _slab.At(s).NextOnNode)
+            {
+                ref var row = ref _slab.At(s);
+                if (row.Has(AnimFlags.Loop) || row.Has(AnimFlags.Additive) || row.Has(AnimFlags.Driven)) continue;
+                if (row.Channel is not (AnimChannel.TranslateX or AnimChannel.TranslateY or AnimChannel.ScaleX or AnimChannel.ScaleY
+                    or AnimChannel.Rotation or AnimChannel.Opacity or AnimChannel.BlurSigma or AnimChannel.BrushFade)) continue;
+                TryLandAtEnd(root, row.Channel, row.To);   // frees this row: rescan the node's list
+                again = true;
+                break;
+            }
+        }
+        for (var c = _scene.FirstChild(root); !c.IsNull; c = _scene.NextSibling(c))
+            LandSubtreeAtEnd(c);
+    }
+
     private int FindReplaceRow(NodeHandle node, AnimChannel ch)
     {
         for (int s = _slab.HeadOnNode((int)node.Raw.Index); s >= 0; s = _slab.At(s).NextOnNode)

@@ -7238,7 +7238,8 @@ public sealed partial class AppHost : IDisposable
             long tAnimTick0 = Stopwatch.GetTimestamp();
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             long tAnimTick1 = Stopwatch.GetTimestamp();
-            _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
+            _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles; judge held swaps
+            _reconciler.TickSkeletonDwell();                    // 7 a shimmer that showed keeps its minimum time before its content swaps in
             _reconciler.SettleEntranceCascades();               // 7 a cascade unit whose entrance settled stops compositing
             _reconciler.SettlePersistWaiters();                 // 7 E7: a Flow.Persist slot still waiting for a live owner has a duplicate key
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present

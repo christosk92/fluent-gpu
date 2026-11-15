@@ -2727,6 +2727,36 @@ public sealed partial class SceneStore : ISceneBackend
         return true;
     }
 
+    /// <summary><see cref="IsInView"/> without the opacity test: some of <paramref name="h"/>'s box survives every clipping ancestor and the
+    /// root, every node of its chain is <see cref="NodeFlags.Visible"/>, and it is linked to <see cref="Root"/>. A page laid out off screen
+    /// (KeepAlive's held swap, drawn at opacity 0 until it is ready) asks it of its parts: what WILL be in view once it shows.
+    /// Allocation-free; O(depth).</summary>
+    public bool IsInClipView(NodeHandle h)
+    {
+        if (h.IsNull || !IsLive(h)) return false;
+        float l = 0f, t = 0f, r = _bounds[h.Raw.Index].W, b = _bounds[h.Raw.Index].H;
+        if (r <= 0f || b <= 0f) return false;
+        for (var n = h; ; )
+        {
+            if ((_flags[n.Raw.Index] & NodeFlags.Visible) == 0) return false;
+            var parent = Parent(n);
+            if (parent.IsNull) return n == Root;
+            float dx = _bounds[n.Raw.Index].X + _paint[n.Raw.Index].LocalTransform.Dx + _paint[parent.Raw.Index].ChildShiftX;
+            float dy = _bounds[n.Raw.Index].Y + _paint[n.Raw.Index].LocalTransform.Dy + _paint[parent.Raw.Index].ChildShiftY;
+            l += dx; r += dx; t += dy; b += dy;
+            n = parent;
+            if ((_flags[n.Raw.Index] & NodeFlags.ClipsToBounds) != 0 || n == Root)
+            {
+                ref RectF pb = ref _bounds[n.Raw.Index];
+                if (l < 0f) l = 0f;
+                if (t < 0f) t = 0f;
+                if (r > pb.W) r = pb.W;
+                if (b > pb.H) b = pb.H;
+                if (r <= l || b <= t) return false;
+            }
+        }
+    }
+
     /// <summary>Does the tree say <paramref name="h"/> is on screen: live, linked to <see cref="Root"/> (a KeepAlive-parked
     /// tab or an exit orphan is not), <see cref="NodeFlags.Visible"/> on every node of its chain, no zero
     /// <see cref="NodePaint.Opacity"/> on the chain, and a non-empty box. Clip and scroll culling are NOT considered: a
