@@ -961,6 +961,7 @@ public sealed partial class TreeReconciler
     // so converting them per mount cost five delegates (~320 bytes) per component; they are built once per reconciler.
     private Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? _beginVirtualRemovalSeam;
     private Action<NodeHandle, Func<int, int>, Action>? _beginVirtualRemapSeam;
+    private VirtualMembershipCommit? _commitVirtualMembershipSeam;
     private Func<NodeHandle, object, Signal<object?>?>? _resolveContextSeam;
 
     private Action? _armSuppressionSeam;
@@ -985,6 +986,7 @@ public sealed partial class TreeReconciler
         ctx.RequestFrame = RequestFrame;
         ctx.BeginVirtualRemoval = _beginVirtualRemovalSeam ??= BeginVirtualRemoval;
         ctx.BeginVirtualRemap = _beginVirtualRemapSeam ??= BeginVirtualRemap;
+        ctx.CommitVirtualMembership = _commitVirtualMembershipSeam ??= CommitVirtualMembership;
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = _resolveContextSeam ??= ResolveContext;
         ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
@@ -5340,25 +5342,8 @@ public sealed partial class TreeReconciler
         int[]? dealt = animate && staggerMs > 0f ? RealizedRemoved(entry, removed) : null;
 
         void Retire(in BoundSlot slot)
-        {
-            int index = slot.Index.Peek();
-            ve.OnItemClearing?.Invoke(index);
-            var root = slot.Root;
-            if (root.IsNull || !_scene.IsLive(root)) return;
-            // The removal hook Remove() runs, while the slot is still attached: the hover exit and the focus leave
-            // (LostFocus, IME/SIP teardown) reach the row and its ancestors. An exit orphan stays LIVE, so without it a
-            // focused row kept focus through its fade and Enter re-fired it on an index that now names another item.
-            OnSubtreeRemoved?.Invoke(root);
-            UnmountSubtree(root);
-            if (animate)
-            {
-                anim!.CancelAll(root);
-                _scene.Orphan(root);
-                anim!.SeedExitOver(root, exit, in motionDef, EnterRestOf(slot.El), dealt is null ? 0f : staggerMs * RemovedRank(index, dealt));
-            }
-            else _scene.FreeSubtree(root);
-            _reconciled = true;
-        }
+            => RetireBoundSlot(viewport, ve, in slot, animate, in exit, in motionDef,
+                               dealt is null ? 0f : staggerMs * RemovedRank(slot.Index.Peek(), dealt), 0f, false);
 
         static void DetachRemoved(List<BoundSlot>? slots, IReadOnlyList<int> indices, ActionRef<BoundSlot> retire)
         {
@@ -5421,6 +5406,50 @@ public sealed partial class TreeReconciler
         _realizeProgress = true;
     }
 
+    /// <summary>Take one realized bound slot out of the list: the item-clearing hook, the removal hook (hover exit, focus leave), the unmount,
+    /// then either an exit orphan that fades from where it is drawn (<paramref name="animate"/>) or an immediate free. The orphan keeps the
+    /// subtree's LAST content: nothing renders it again. <paramref name="frameShift"/> moves its bounds along the scroll axis by the anchor
+    /// rebase of the same change (an orphan is laid out by nobody, so the offset shift would otherwise carry it).</summary>
+    private void RetireBoundSlot(NodeHandle viewport, VirtualListEl ve, in BoundSlot slot, bool animate, in EnterExit exit, in MotionTokenDef motionDef,
+                                 float delayMs, float frameShift, bool horizontal)
+    {
+        int index = slot.Index.Peek();
+        ve.OnItemClearing?.Invoke(index);
+        var root = slot.Root;
+        if (root.IsNull || !_scene.IsLive(root)) return;
+        // The removal hook Remove() runs, while the slot is still attached: the hover exit and the focus leave
+        // (LostFocus, IME/SIP teardown) reach the row and its ancestors. An exit orphan stays LIVE, so without it a
+        // focused row kept focus through its fade and Enter re-fired it on an index that now names another item.
+        OnSubtreeRemoved?.Invoke(root);
+        UnmountSubtree(root);
+        if (animate && Anim is { } anim)
+        {
+            anim.CancelAll(root);
+            ref RectF b = ref _scene.Bounds(root);
+            if (frameShift != 0f) b = horizontal ? b with { X = b.X + frameShift } : b with { Y = b.Y + frameShift };
+            // The row's place from the row band's start, in the list's extent (content space + the arrange origin): the list's arrange keeps
+            // it there (FlexLayout pass 3) while the head above the rows or the window's origin moves.
+            double fromBand = double.NaN;
+            if (_scene.TryGetScroll(viewport, out var sc) && sc.Extent is { } ext)
+                fromBand = (horizontal ? b.X : b.Y) + sc.WindowOrigin - ext.OffsetOf(Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount));
+            _scene.Orphan(root);
+            if (!double.IsNaN(fromBand)) _scene.SetOrphanBandOffset(root, fromBand);
+            anim.SeedExitOver(root, exit, in motionDef, EnterRestOf(slot.El), delayMs);
+        }
+        else _scene.FreeSubtree(root);
+        _reconciled = true;
+    }
+
+    /// <summary>A bound list's model already holds a NEW membership (a remote answer): every realized slot follows its item to the item's new
+    /// logical index, and the slot of an item that is gone, or that <paramref name="leaves"/> the live rows although it survives, retires as an
+    /// exit orphan with its OLD content while it is on screen (<see cref="RetireBoundSlot"/>; off screen it keeps the remap's rule and the next
+    /// realize recycles it). Called from a structural effect, ahead of every row unit, so no row has rendered as its new item yet. At most
+    /// the scene's free orphan slots retire, top-down; the rest are freed at once. Prefix and keep-alive slots stay as they are. Without
+    /// <paramref name="animate"/> (reduced motion) nothing retires: the list changes in place.</summary>
+    private void CommitVirtualMembership(NodeHandle viewport, Func<int, int> newIndexOf, Func<int, bool>? leaves, float frameShift,
+                                         Func<int, float>? exitDelayMs, EnterExit exit, MotionTokenId motion, bool animate)
+        => RemapBoundSlots(viewport, newIndexOf, null, animate && exit.Active && Anim is not null, leaves, frameShift, exitDelayMs, exit, motion);
+
     /// <summary>A reorder of a bound list's backing items (the same items at other indices: a reading order that changes with the
     /// column count, an item moved): commit the mutation, then move every realized slot to its item's new logical index, so the item
     /// keeps its slot, its subtree and its state. Without this a slot keeps its INDEX and shows whatever item now sits there, so a
@@ -5430,16 +5459,22 @@ public sealed partial class TreeReconciler
     /// the commit runs BEFORE the slot writes, so the owning count/plan computation queues ahead of the rows. Prefix and keep-alive
     /// slots are fixed-index and stay as they are. Allocates only to grow its per-slot scratch (a data edge, never a frame).</summary>
     private void BeginVirtualRemap(NodeHandle viewport, Func<int, int> newIndexOf, Action commit)
+        => RemapBoundSlots(viewport, newIndexOf, commit, false, null, 0f, null, default, default);
+
+    /// <summary>The remap both <see cref="BeginVirtualRemap"/> (a reorder, <paramref name="commit"/> run first) and
+    /// <see cref="CommitVirtualMembership"/> (a membership already committed, <paramref name="retire"/> on) share.</summary>
+    private void RemapBoundSlots(NodeHandle viewport, Func<int, int> newIndexOf, Action? commit, bool retire, Func<int, bool>? leaves,
+                                 float frameShift, Func<int, float>? exitDelayMs, EnterExit exit, MotionTokenId motion)
     {
         if (viewport.IsNull || !_scene.IsLive(viewport) || !_virtuals.TryGetValue(viewport, out var entry)
             || entry.El?.RowBind is null || entry.Slots is not { Count: > 0 } slots)
         {
-            commit();
+            commit?.Invoke();
             return;
         }
 
         var ve = entry.El!;
-        commit();
+        commit?.Invoke();
 
         int n = slots.Count;
         var target = entry.RemapTarget is { } t && t.Length >= n ? t : entry.RemapTarget = new int[Math.Max(8, n)];
@@ -5451,17 +5486,54 @@ public sealed partial class TreeReconciler
                 if (target[j] == mapped) mapped = -1;
             target[i] = mapped;
         }
+
+        bool retired = false;
+        if (retire)
+        {
+            // The retire arm: a slot whose item is gone, or that leaves the live rows, exits from where it is drawn while its root is on
+            // screen. The orphan budget is spent top-down (the slots are in logical order after a realize); past it a row is freed at once.
+            var motionDef = MotionTok.Get(motion);
+            RectF clip = _scene.AbsoluteRect(viewport);
+            int budget = _scene.FreeOrphanSlots;
+            bool horizontal = ve.Horizontal;
+            for (int i = 0; i < n; i++)
+            {
+                int old = slots[i].Index.Peek();
+                if (target[i] >= 0 && leaves?.Invoke(old) != true) continue;
+                var root = slots[i].Root;
+                if (root.IsNull || !_scene.IsLive(root) || !Intersects(_scene.AbsoluteRect(root), clip)) continue;
+                bool animate = budget-- > 0;
+                RetireBoundSlot(viewport, ve, slots[i], animate, in exit, in motionDef, exitDelayMs?.Invoke(old) ?? 0f, frameShift, horizontal);
+                target[i] = RetiredTarget;
+                retired = true;
+            }
+        }
+
         // Pass 2: a slot whose item is gone keeps its index unless a moved item claimed it (then the realize recycles it).
         for (int i = 0; i < n; i++)
         {
-            if (target[i] >= 0) continue;
+            if (target[i] >= 0 || target[i] == RetiredTarget) continue;
             int old = slots[i].Index.Peek();
             bool claimed = false;
             for (int j = 0; j < n && !claimed; j++) claimed = target[j] == old;
             target[i] = claimed ? -1 : old;
         }
 
-        bool moved = false;
+        if (retired)
+        {
+            // The retired slots are gone from the list (their roots are orphans, or freed): the window's holes are the realize's to fill.
+            int kept = 0;
+            for (int i = 0; i < n; i++)
+            {
+                if (target[i] == RetiredTarget) continue;
+                target[kept] = target[i];
+                slots[kept++] = slots[i];
+            }
+            slots.RemoveRange(kept, n - kept);
+            n = kept;
+        }
+
+        bool moved = retired;
         for (int i = 0; i < n; i++)
         {
             int old = slots[i].Index.Peek(), mapped = target[i];
@@ -5471,6 +5543,7 @@ public sealed partial class TreeReconciler
             moved = true;
         }
         if (!moved) return;
+        if (n == 0) { MarkVirtualRangeAfterRemap(viewport); return; }
 
         // A displaced slot (its item gone, its index claimed) still holds that index until the realize recycles it, and the realize's
         // overlap pass gives an index to the FIRST slot holding it: list the displaced slots last so the moved item keeps its slot.
@@ -5487,6 +5560,17 @@ public sealed partial class TreeReconciler
 
         // The slots are no longer in logical order: the next realize repairs the chain (RealizeBoundWindow's cold path keeps every
         // exact index overlap, so each moved slot stays with its item) and the arrange places every slot at its item's new rect.
+        MarkVirtualRangeAfterRemap(viewport);
+    }
+
+    /// <summary><see cref="RemapBoundSlots"/>'s retired-slot marker (pass 2 never reads it as "gone").</summary>
+    private const int RetiredTarget = int.MinValue;
+
+    private static bool Intersects(in RectF a, in RectF b)
+        => a.X < b.X + b.W && b.X < a.X + a.W && a.Y < b.Y + b.H && b.Y < a.Y + a.H;
+
+    private void MarkVirtualRangeAfterRemap(NodeHandle viewport)
+    {
         if (_scene.TryGetScroll(viewport, out var current) && !current.ContentNode.IsNull && _scene.IsLive(current.ContentNode))
             MarkLayoutShape(current.ContentNode);
         _scene.Mark(viewport, NodeFlags.VirtualRangeDirty);

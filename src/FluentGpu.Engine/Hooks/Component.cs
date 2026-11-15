@@ -79,6 +79,8 @@ public abstract class Component
     /// inactive (page parked OR window minimized/suspended), <paramref name="onActivated"/> when it returns. Transitions
     /// only — never at mount (start work in <c>UseEffect</c>) or unmount (use its cleanup). Pause your own background
     /// work (poll/timer/OS subscription) here.</summary>
+    /// <inheritdoc cref="RenderContext.UseStructuralEffect"/>
+    protected void UseStructuralEffect(Action body, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseStructuralEffect(body, __hf, __hl);
     protected void UseActivation(Action? onActivated = null, Action? onDeactivated = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseActivation(onActivated, onDeactivated, __hf, __hl);
     /// <summary>The host UI-thread poster (<see cref="HostDispatch.Post"/>): run an action on the UI thread next frame
     /// from any thread. Use for off-thread data instead of <c>UseContext(FrameClock.Tick)</c> + a per-frame drain.</summary>

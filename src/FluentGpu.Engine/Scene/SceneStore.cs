@@ -62,6 +62,9 @@ public sealed partial class SceneStore : ISceneBackend
     // through real layout): the only ones FlexLayout.AddOrphanMain folds into the parent's Measure. An authored size on an
     // opacity-only exit is no such request (audit B3bc: a fixed-height line held its slot through its fade).
     private readonly HashSet<NodeHandle> _spaceHoldingOrphans = new();
+    // The orphans a virtual list retired from its ROW BAND (a bound slot a membership change took out): their main-axis offset from the band's
+    // start (the first item after the persistent prefix), so the list's arrange keeps carrying them as it carries the live rows.
+    private readonly Dictionary<NodeHandle, double> _bandOrphans = new();
     private const int MaxOrphans = 64;
 
     /// <summary>The ANIMATION timebase in ms (monotonic sum of the per-frame deltas the host feeds the animator),
@@ -874,6 +877,7 @@ public sealed partial class SceneStore : ISceneBackend
     private void UnindexOrphan(in OrphanEntry entry)
     {
         _spaceHoldingOrphans.Remove(entry.Node);
+        if (_bandOrphans.Count != 0) _bandOrphans.Remove(entry.Node);
         if (entry.VisualParent.IsNull || !_orphansByParent.TryGetValue(entry.VisualParent, out var children)) return;
         children.Remove(entry.Node);
         if (children.Count == 0) _orphansByParent.Remove(entry.VisualParent);
@@ -900,6 +904,7 @@ public sealed partial class SceneStore : ISceneBackend
             for (int j = _orphans.Count - 1; j >= 0; j--)
                 if (_orphans[j].Node == child) { _orphans.RemoveAt(j); break; }
             _spaceHoldingOrphans.Remove(child);
+            if (_bandOrphans.Count != 0) _bandOrphans.Remove(child);
             FreeSubtree(child);
         }
     }
@@ -923,8 +928,27 @@ public sealed partial class SceneStore : ISceneBackend
         return false;
     }
 
+    /// <summary>Anchor exit orphan <paramref name="node"/> (a row a virtual list retired) to the list's row band: its main-axis place is
+    /// <paramref name="offsetFromBand"/> past the band's start (the first item after the persistent prefix, in the list's extent), and the list's
+    /// arrange re-places it every pass, so a head above the rows that grows, or a window whose arrange origin moves, carries it with the live rows
+    /// instead of leaving it where it was cut. No-op for a node that is not an orphan.</summary>
+    public void SetOrphanBandOffset(NodeHandle node, double offsetFromBand)
+    {
+        if (IsOrphan(node)) _bandOrphans[node] = offsetFromBand;
+    }
+
+    /// <summary>The band offset of a row-band exit orphan (<see cref="SetOrphanBandOffset"/>); false for any other node.</summary>
+    internal bool TryGetOrphanBandOffset(NodeHandle node, out double offsetFromBand)
+    {
+        offsetFromBand = 0.0;
+        return _bandOrphans.Count != 0 && _bandOrphans.TryGetValue(node, out offsetFromBand);
+    }
+
     /// <summary>Count of exit orphans currently animating out (the host keeps painting while &gt; 0).</summary>
     public int OrphanCount => _orphans.Count;
+
+    /// <summary>How many more exit orphans fit before the budget (64) frees the oldest: a caller retiring a batch spends at most this many.</summary>
+    public int FreeOrphanSlots => Math.Max(0, MaxOrphans - _orphans.Count);
 
     /// <summary>The i-th orphan node + its frozen parent-world origin (used only by the rootless fallback draw pass).</summary>
     public NodeHandle OrphanAt(int i, out float px, out float py)

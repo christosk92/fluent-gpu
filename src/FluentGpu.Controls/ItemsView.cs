@@ -33,6 +33,7 @@ public sealed class ItemsViewController
     internal Func<NodeHandle>? GetViewportImpl;
     internal Action<IReadOnlyList<int>, Action>? BeginRemovalImpl;
     internal Action<Func<int, int>, Action>? RemapImpl;
+    internal Action<Func<int, int>, Func<int, bool>?, float, Func<int, float>?, bool>? CommitMembershipImpl;
     internal Action<object>? ObserveInsertionMembershipImpl;
     internal Action<int>? ClearBandImpl;
     /// <summary>Marks the engine band committed (AnimEngine.CommitRevealBand) right before a collapse commit runs.</summary>
@@ -208,6 +209,22 @@ public sealed class ItemsViewController
         ArgumentNullException.ThrowIfNull(commit);
         if (RemapImpl is { } remap) remap(newIndexOf, commit);
         else commit();
+    }
+
+    /// <summary>The model ALREADY holds a new membership (a remote answer) and no row of the list has re-rendered for it yet: call it from the
+    /// list's <see cref="ListOptions.Membership"/> observer (it runs ahead of the rows). Each realized slot takes its item's new index (same node,
+    /// same subtree); the slot of an item that is gone, or whose old index <paramref name="leaves"/> names (it survives but leaves the live rows),
+    /// retires as an exit orphan with its OLD content while it is on screen, with <see cref="ListOptions.Removal"/>'s recipe after
+    /// <paramref name="exitDelayMs"/>. <paramref name="frameShift"/> is the anchor rebase this change applied (DIP, scroll axis): retired rows
+    /// keep their place on screen. Without <paramref name="animate"/> retired slots are not kept: the list changes in place. The keyboard-current
+    /// item and the selection follow their items. Indices are ITEM indices (a persistent prefix maps to itself). Without a removal recipe, the
+    /// bound seam or a virtual host it degrades to the selection and current-item remap alone.</summary>
+    public void CommitMembership(Func<int, int> newIndexOf, Func<int, bool>? leaves, float frameShift,
+                                 Func<int, float>? exitDelayMs, bool animate)
+    {
+        ArgumentNullException.ThrowIfNull(newIndexOf);
+        if (CommitMembershipImpl is { } commit) commit(newIndexOf, leaves, frameShift, exitDelayMs, animate);
+        else Selection?.Remap(newIndexOf);
     }
 
     /// <summary>The optimistic-membership HANDOFF edge for a configured <see cref="InsertionOptions"/>: call it from a
@@ -642,8 +659,12 @@ public sealed class ItemsView : Component, IPropsHost
     /// Opacity from the value to 1 after the per-row delay (an added-row ease-in with a stagger, without a slot remount —
     /// bound slots recycle, so mount-keyed Enter can't express this). The delay also staggers the row's translate seed.</summary>
     public Func<int, (float from, float delayMs)?>? ItemFadeFrom;
+    /// <summary>OPTIONAL delay of a row's translate seed when it has no <see cref="ItemFadeFrom"/> seed (<see cref="EntranceOptions.ItemDelayMs"/>).</summary>
+    public Func<int, float>? ItemDelayMs;
     /// <summary>Optional bound-slot removal choreography, invoked through <see cref="ItemsViewController"/>.</summary>
     public RemovalOptions? Removal;
+    /// <summary>Remote membership observer (<see cref="ListOptions.Membership"/>), run at structural priority once per list.</summary>
+    public MembershipOptions? Membership;
     public DisclosureOptions? Disclosure;
     /// <summary>Declarative insertion destination (<see cref="InsertionOptions"/>): the view mounts its own drop
     /// target and owns ALL insertion geometry — slot, exact live gap with virtual-removal accounting, the 2px accent
@@ -763,6 +784,7 @@ public sealed class ItemsView : Component, IPropsHost
             RepaintBoundary = o.RepaintBoundary,
             ItemCountSignal = o.CountSignal,
             Removal = o.Removal,
+            Membership = o.Membership,
             Disclosure = o.Disclosure,
             Insertion = o.Insertion,
         });
@@ -824,7 +846,9 @@ public sealed class ItemsView : Component, IPropsHost
             DraggedSlot = o.Reorder?.DraggedSlot,
             ItemFlipFrom = o.Entrance?.ItemFlipFrom,
             ItemFadeFrom = o.Entrance?.ItemFadeFrom,
+            ItemDelayMs = o.Entrance?.ItemDelayMs,
             Removal = o.Removal,
+            Membership = o.Membership,
             Disclosure = o.Disclosure,
             Insertion = o.Insertion,
             ContentType = o.ContentType,
@@ -906,6 +930,7 @@ public sealed class ItemsView : Component, IPropsHost
             Insertion = o.Insertion,
             Entrance = o.Entrance,
             Removal = o.Removal,
+            Membership = o.Membership,
             Disclosure = o.Disclosure,
             ContentType = o.ContentType,
             PersistentPrefixCount = o.PersistentPrefixCount,
@@ -1753,6 +1778,17 @@ public sealed class ItemsView : Component, IPropsHost
                 if (moved >= 0 && moved != cur) current.Value = moved;
                 model.Remap(newIndexOf);
             });
+            var commitMembership = Context.CommitVirtualMembership;
+            ctl.CommitMembershipImpl = (newIndexOf, leaves, frameShift, exitDelayMs, animate) =>
+            {
+                if (removal is not null && commitMembership is not null)
+                    commitMembership(viewportNode.Value, newIndexOf, leaves, frameShift, exitDelayMs, removal.Exit, removal.Motion, animate);
+                // The keyboard-current item and the selection are indices too: they follow their items, never the slot positions.
+                int cur = current.Peek();
+                int moved = cur >= 0 ? newIndexOf(cur) : -1;
+                if (moved >= 0 && moved != cur) current.Value = moved;
+                model.Remap(newIndexOf);
+            };
             ctl.ClearBandImpl = slot => Context.Anim?.ClearRevealBand(viewportNode.Value, slot);
             ctl.CommitBandImpl = slot => Context.Anim?.CommitRevealBand(viewportNode.Value, slot);
             ctl.RetireBandImpl = slot => Context.Anim?.RetireRevealBand(viewportNode.Value, slot);
@@ -1761,6 +1797,10 @@ public sealed class ItemsView : Component, IPropsHost
             ctl.ObserveInsertionMembershipImpl = insertion is null ? null : insertion.ObserveMembership;
         }
 
+
+        // A remote membership change is committed ahead of every row (ListOptions.Membership): the owner's observer runs at structural
+        // priority, so it can keep each slot with its item and retire the gone rows with their old content before any row re-renders.
+        if (Membership is { } membership) UseStructuralEffect(membership.Observe);
 
         UseEffect(() =>
         {
@@ -1785,6 +1825,7 @@ public sealed class ItemsView : Component, IPropsHost
                 ctl.GetOffsetImpl = null;
                 ctl.BeginRemovalImpl = null;
                 ctl.RemapImpl = null;
+                ctl.CommitMembershipImpl = null;
                 ctl.ObserveInsertionMembershipImpl = null;
                 ctl.ClearBandImpl = null;
                 ctl.CommitBandImpl = null;
@@ -1951,6 +1992,7 @@ public sealed class ItemsView : Component, IPropsHost
             lastEntranceVer.Value = dispVer;
             var flip = entranceEdge ? ItemFlipFrom : null;   // optional FLIP start override (data-reorder glide)
             var fade = entranceEdge ? ItemFadeFrom : null;   // optional opacity seed + stagger delay (added-row ease-in)
+            var lead = entranceEdge ? ItemDelayMs : null;     // optional delay of a glide with no fade (it waits for the rows leaving)
             if (disp is null && !insEngaged && flip is null && fade is null) return;
             var vp = viewportNode.Value;
             if (vp.IsNull || !sceneRef.IsLive(vp)) return;
@@ -1989,17 +2031,21 @@ public sealed class ItemsView : Component, IPropsHost
                 (float dx, float dy) = disp is null ? (0f, 0f) : disp(item);   // (0,0) for non-displaced items
                 anyMoved |= dx != 0f || dy != 0f;      // latch: this pass parted rows, so the close edge owes them a reset
                 var fd = fade?.Invoke(item);           // opacity seed (from→1) + the row's stagger delay
-                float delay = fd?.delayMs ?? 0f;
+                float delay = fd?.delayMs ?? lead?.Invoke(item) ?? 0f;
                 ref NodePaint p = ref sceneRef.Paint(n);
                 var f = flip?.Invoke(item);            // FLIP "first": start from the OLD visual position, not the live translate
-                float fromX = f?.dx ?? p.LocalTransform.Dx, fromY = f?.dy ?? p.LocalTransform.Dy;   // deadband reference
+                // The FLIP offset is ADDED to the row's live translate: a slot follows its item, so a second change landing mid-glide
+                // continues from where the row is drawn instead of restarting from its resting place (a row at rest carries 0).
+                float liveX = p.LocalTransform.Dx, liveY = p.LocalTransform.Dy;
+                float? flipX = f is { } fx ? fx.dx + liveX : null, flipY = f is { } fy ? fy.dy + liveY : null;
+                float fromX = flipX ?? liveX, fromY = flipY ?? liveY;   // deadband reference
                 // `from:` is supplied ONLY for the FLIP override; null lets SeedValue read the row's LIVE value, which on
                 // an in-flight placement row is a velocity-continuous retarget instead of a restart (the drag cadence
                 // wants exactly that, and it equals `fromX/fromY` when the row is at rest).
                 if (MathF.Abs(dx - fromX) > DisplacementEpsilon)
-                    anim.SeedValue(n, AnimChannel.TranslateX, dx, in motion, from: f?.dx, delayMs: delay);
+                    anim.SeedValue(n, AnimChannel.TranslateX, dx, in motion, from: flipX, delayMs: delay);
                 if (MathF.Abs(dy - fromY) > DisplacementEpsilon)
-                    anim.SeedValue(n, AnimChannel.TranslateY, dy, in motion, from: f?.dy, delayMs: delay);
+                    anim.SeedValue(n, AnimChannel.TranslateY, dy, in motion, from: flipY, delayMs: delay);
                 if (fd is { } o)
                     anim.SeedValue(n, AnimChannel.Opacity, 1f, in motion, from: o.from, delayMs: o.delayMs);
                 if (!insHides) continue;

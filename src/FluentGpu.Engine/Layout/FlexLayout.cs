@@ -1955,6 +1955,23 @@ public sealed partial class FlexLayout
             Arrange(rc, x, y, MathF.Max(0f, w), MathF.Max(0f, h));
         }
 
+        // Pass 3 — the rows a membership change retired (exit orphans of the content, SceneStore.SetOrphanBandOffset) ride the row band: the
+        // prefix above them growing (a head that gains a line) or the arrange origin moving carries them as it carries the live rows. Cold:
+        // only while such an exit plays.
+        if (!Verifying && _scene.OrphanCount != 0 && _scene.OrphanChildrenOf(content) is { Count: > 0 } exits)
+        {
+            double band = ext.OffsetOf(Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount));
+            for (int i = 0; i < exits.Count; i++)
+            {
+                var o = exits[i];
+                if (!_scene.IsLive(o) || !_scene.TryGetOrphanBandOffset(o, out double fromBand)) continue;
+                ref RectF ob = ref _scene.Bounds(o);
+                float at = (float)(band + fromBand - origin);
+                ob = horizontal ? ob with { X = at } : ob with { Y = at };
+                _scene.NoteCaptureChanged((int)o.Raw.Index);
+            }
+        }
+
         float mainContent = (float)ext.Total;
         float contentW = horizontal ? mainContent : innerW;
         float contentH = horizontal ? innerH : mainContent;
