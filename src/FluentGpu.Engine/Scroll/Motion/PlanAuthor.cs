@@ -311,6 +311,25 @@ public static class PlanAuthor
             prev.ViewportExtent, prev.RubberC, prev.Clock, OverpanPolicy.None, MotionKind.Programmatic, default);
     }
 
+    /// <summary>A programmatic move that arrives instead of crossing the whole distance: it cuts to <paramref name="lead"/> short of
+    /// <paramref name="target"/> (clamped to the plan's extent) on the side the move comes from, already moving, and decelerates in on one
+    /// <see cref="SegKind.Glide"/>. The segment starts at <c>target − dir·lead</c> with <c>v0 = dir·GlideOmega·lead</c>, so the critically damped
+    /// form reduces to <c>remaining = lead·e^(−GlideOmega·t)</c>: monotonic, never overshooting, as fast on its first frame as a glide that had
+    /// travelled the rest of the way. For a long move over content that a plain glide would cross at a viewport per frame (a section many screens
+    /// away). A lead at or past the distance is the plain <see cref="Glide"/>. Never overpans.</summary>
+    public static ScrollPlan Arrive(in ScrollPlan prev, double tNow, double target, double lead, in MotionFeel feel)
+    {
+        double p0 = prev.Eval(tNow, out _, out _);
+        double clampedTarget = Math.Clamp(target, prev.Min, prev.Max);
+        double distance = clampedTarget - p0;
+        if (!(lead >= 0.0) || Math.Abs(distance) <= lead) return Glide(in prev, tNow, target, in feel);
+        double dir = Math.Sign(distance);
+        double from = clampedTarget - dir * lead;
+        var seg = new MotionSeg(SegKind.Glide, tNow, double.PositiveInfinity, from, clampedTarget, dir * feel.GlideOmega * lead, feel.GlideOmega, 1.0);
+        return new ScrollPlan(seg, default, default, default, 1, prev.Vp, prev.Gen, prev.Seq + 1, prev.Min, prev.Max,
+            prev.ViewportExtent, prev.RubberC, prev.Clock, OverpanPolicy.None, MotionKind.Programmatic, default);
+    }
+
     /// <summary>An instant jump: a single open-ended <see cref="SegKind.Hold"/> at <paramref name="target"/>
     /// (clamped to the plan's extent).</summary>
     public static ScrollPlan Immediate(in ScrollPlan prev, double tNow, double target)
