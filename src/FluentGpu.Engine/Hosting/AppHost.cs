@@ -7226,7 +7226,6 @@ public sealed partial class AppHost : IDisposable
             // A width reflow seeded or re-aimed on a frame with no projection pass, or a window resize while one flies: probe its destination here.
             if (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)) _anim.DestinationStale = true;
             if (_anim.DestinationStale || _recordStaleProbe) ProbeReflowDestinations(layoutSize);
-            _reconciler.CommitReadyHolds();                    // 6.69 a held page swap whose page is ready commits on this layout, before the tick
             _reconciler.RunEntranceCascades();                 // 6.7 staggered entrances requested this commit: their units are what this layout shows
             _enterReflowsSeeded.Clear();                       // read by ApplyProjections' SeedReflowsFirst (this frame's only)
             _anim.PendingEnterReveal.Clear();                  // seeded at 6.3, read by ApplyProjections as shove carriers
@@ -7239,7 +7238,7 @@ public sealed partial class AppHost : IDisposable
             long tAnimTick0 = Stopwatch.GetTimestamp();
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             long tAnimTick1 = Stopwatch.GetTimestamp();
-            _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles; judge held swaps
+            _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
             _reconciler.TickSkeletonDwell();                    // 7 a shimmer that showed keeps its minimum time before its content swaps in
             _reconciler.SettleEntranceCascades();               // 7 a cascade unit whose entrance settled stops compositing
             _reconciler.SettlePersistWaiters();                 // 7 E7: a Flow.Persist slot still waiting for a live owner has a duplicate key

@@ -128,26 +128,8 @@ public sealed record KeepAliveOptions(
     bool SuppressLayoutTransitionsOnActivation = false,
     bool CompositeTransitions = false,
     Func<object, object, EntranceCascade?>? CascadeFor = null,
-    bool RecipeOwnsReducedMotion = false,
-    float HoldMaxMs = 0f,
-    Func<object, object, bool>? HoldFor = null,
-    Action<object>? OnShown = null)
+    bool RecipeOwnsReducedMotion = false)
 {
-    // HoldMaxMs (> 0 turns it on): the boundary SWAPS A COMPLETE PAGE. A switch to a page that is not ready to be seen (a cold
-    // mount, a cached page reopened on another token, or a same-key token change that HoldFor asks to treat as a page swap) mounts
-    // the incoming page off screen: attached, laid out at the boundary's size and rendering, but transparent, hit-test invisible
-    // and INACTIVE (UseIsActive false, so a page's shared claims wait for its activation). The outgoing page stays on screen and
-    // live. The swap (TransitionFor's legs, CascadeFor) runs once the incoming page's first screen has settled: no Skel region in
-    // view still pending and no image in view still decoding, or HoldMaxMs after the switch, whichever comes first. Motion the
-    // incoming page seeded while it was held lands at its end on the swap, so it arrives as one finished layout. A switch back to
-    // the page on screen while another is held drops the held one; a cached page reopened on its own token swaps at once.
-    //
-    // HoldFor(oldToken, newToken): whether this edge holds (null = every edge holds). For a same-key token change, true also means
-    // "a fresh instance": the new token mounts as a second root that swaps in over the old one, which then leaves and is freed;
-    // false keeps the in-place update (a facet switch inside one page).
-    //
-    // OnShown(token): the token whose page just came on screen (the swap's commit), on every activation edge, held or not.
-
     // CascadeFor(oldToken, newToken): asked on the same activation edges as TransitionFor, right after it. A cascade staggers the
     // incoming entry's on-screen EntranceGroup children (FluentGpu.Foundation.EntranceCascade), resolved after the frame's layout.
     // Null (the default, or a null answer) = the entry enters as the one block TransitionFor describes.

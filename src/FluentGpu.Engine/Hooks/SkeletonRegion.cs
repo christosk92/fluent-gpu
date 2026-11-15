@@ -25,11 +25,9 @@ public enum SkelReveal : byte
 }
 
 /// <summary>The look of the derived shimmer (bar color + corner, the breathing pulse, and the inter-row gap the list
-/// shimmer stacks at), plus its timing on screen: <c>ShowDelayMs</c>, how long a region stays pending before its shimmer starts to
-/// fade in (its slot is laid out at the shimmer's size from the first frame, so nothing moves when it shows; content that lands
-/// sooner takes the slot without a shimmer ever showing), <c>ShowFadeMs</c>, that fade, and <c>MinShowMs</c>, how long a shimmer
-/// that did show stays before the content replaces it (a shimmer flashing up for a split second reads as a glitch). 0 turns either
-/// off. Then <c>ExitMs</c> — the shimmer's own FADE-OUT duration on the Pending→Ready swap. The shimmer
+/// shimmer stacks at), plus <c>MinShowMs</c>, how long a shimmer stays on screen before its content replaces it (data that lands a
+/// moment after the shimmer showed would otherwise flash it up for a split second, which reads as a glitch; 0 turns it off; content
+/// already in hand never shows a shimmer at all), and <c>ExitMs</c> — the shimmer's own FADE-OUT duration on the Pending→Ready swap. The shimmer
 /// leaves as an exit orphan (drawn UNDER the live tree) while the real content reveals up over it, so ExitMs is one half
 /// of a cross-dissolve, never a delay before the content appears. Defaults to the WinUI-flavoured subtle fill + a 1s
 /// breathe (matches the gallery skeleton bars) and a <see cref="Expressive.Fast"/> dissolve. For
@@ -37,7 +35,7 @@ public enum SkelReveal : byte
 /// so the shimmer has to linger across it). Ignored under <c>Motion.ReducedMotion</c> — the swap snaps.</summary>
 public readonly record struct SkeletonStyle(
     ColorF BarColor, float PulseMs = 1000f, float PulseMin = 0.5f, float RowGap = 8f, float BarRadius = 4f, float TextRatio = 0.72f,
-    float ExitMs = Expressive.Fast, float ShowDelayMs = 250f, float ShowFadeMs = 200f, float MinShowMs = 300f)
+    float ExitMs = Expressive.Fast, float MinShowMs = 350f)
 {
     public static SkeletonStyle Default => new(Tok.FillSubtleSecondary);
 }
