@@ -1114,11 +1114,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// uncloaked - the safe direction: a window that cannot be asked is never parked.</summary>
     public bool IsCloaked => DwmGetCloakedAttribute((nint)_hwnd, DwmwaCloaked, out int cloaked, sizeof(int)) >= 0 && cloaked != 0;
 
-    // F118: per-window occlusion. The process-wide win-event hooks (Win32WindowOcclusion) are installed on the first read of
-    // OcclusionEpoch (the host reads it every frame, on the UI thread, which pumps the messages the hooks are delivered through)
-    // and released with the last window. 0 = not asked yet (or released while minimized / hidden), 1 = installed, 2 = unavailable
-    // (the host then never parks for a cover).
+    // F118: per-window occlusion. The process-wide win-event hooks (Win32WindowOcclusion, on a thread of their own) are acquired
+    // on the first read of OcclusionEpoch (the host reads it every frame, on the UI thread) and released with the last window.
+    // 0 = not asked yet (or released while minimized / hidden), 1 = registered, 2 = unavailable (the host then never parks for a cover).
     private Action? _occlusionWake;
+    private Win32WindowOcclusion.Registration? _occlusionReg;
     private int _occlusionHooks;
 
     /// <inheritdoc cref="IPlatformWindow.OcclusionEpoch"/>
@@ -1127,27 +1127,31 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     /// window event on the desktop (a window moving, reordering, showing, taking the foreground) was delivered to this thread
     /// and woke its parked loop, which then re-armed the wake by reading the epoch: ~20-50 empty loop iterations a second
     /// for as long as the window stayed minimized while the user worked elsewhere (audit PERF r2). The first read on screen
-    /// re-acquires them and returns a fresh epoch, so the cover test runs again on the un-park frame.</remarks>
+    /// re-acquires them and returns a fresh epoch, so the cover test runs again on the un-park frame. A window on screen (a
+    /// covered one included) is woken only by the events that can change its own verdict (Win32WindowOcclusion.Concerns).</remarks>
     public long OcclusionEpoch
     {
         get
         {
             if (IsIconic(_hwnd) || IsWindowVisible(_hwnd) == 0)
             {
-                if (_occlusionHooks == 1) { Win32WindowOcclusion.Release(_occlusionWake!); _occlusionHooks = 0; }
+                if (_occlusionHooks == 1) { Win32WindowOcclusion.Release(_occlusionReg!); _occlusionReg = null; _occlusionHooks = 0; }
                 return 0;
             }
             if (_occlusionHooks == 0)
             {
                 _occlusionWake ??= Wake;
-                _occlusionHooks = Win32WindowOcclusion.Acquire(_occlusionWake) ? 1 : 2;
+                _occlusionReg = Win32WindowOcclusion.Acquire((nint)_hwnd, _occlusionWake);
+                _occlusionHooks = _occlusionReg is null ? 2 : 1;
             }
-            return _occlusionHooks == 1 ? Win32WindowOcclusion.ConsumeEpoch() : 0;
+            return _occlusionReg is { } reg ? Win32WindowOcclusion.ConsumeEpoch(reg) : 0;
         }
     }
 
     /// <inheritdoc cref="IPlatformWindow.CopyOccluderRectsPx"/>
-    public int CopyOccluderRectsPx(Span<RectF> into) => Win32WindowOcclusion.CopyOccluders((nint)_hwnd, into);
+    public int CopyOccluderRectsPx(Span<RectF> into) => _occlusionReg is { } reg
+        ? Win32WindowOcclusion.CopyOccluders(reg, into)   // also tells the hook thread which windows' events concern this one
+        : Win32WindowOcclusion.CopyOccluders((nint)_hwnd, into);
 
     /// <inheritdoc cref="IPlatformWindow.CloseRequested"/>
     public Func<CloseReason, bool>? CloseRequested { get; set; }
@@ -2352,7 +2356,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     public void Dispose()
     {
-        if (_occlusionHooks == 1 && _occlusionWake is not null) Win32WindowOcclusion.Release(_occlusionWake);
+        if (_occlusionReg is not null) Win32WindowOcclusion.Release(_occlusionReg);
+        _occlusionReg = null;
         _occlusionHooks = 2;
         Win32DropTarget.Revoke(_dropReg);   // RevokeDragDrop + free the CCW before the HWND dies
         _dropReg = null;
