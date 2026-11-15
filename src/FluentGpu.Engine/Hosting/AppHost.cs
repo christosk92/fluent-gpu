@@ -7226,6 +7226,7 @@ public sealed partial class AppHost : IDisposable
             // A width reflow seeded or re-aimed on a frame with no projection pass, or a window resize while one flies: probe its destination here.
             if (_scene.HasDestinationWidths && !_destLayoutSize.Equals(layoutSize)) _anim.DestinationStale = true;
             if (_anim.DestinationStale || _recordStaleProbe) ProbeReflowDestinations(layoutSize);
+            _reconciler.CommitReadyHolds();                    // 6.69 a held page swap whose page is ready commits on this layout, before the tick
             _reconciler.RunEntranceCascades();                 // 6.7 staggered entrances requested this commit: their units are what this layout shows
             _enterReflowsSeeded.Clear();                       // read by ApplyProjections' SeedReflowsFirst (this frame's only)
             _anim.PendingEnterReveal.Clear();                  // seeded at 6.3, read by ApplyProjections as shove carriers

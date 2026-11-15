@@ -445,9 +445,6 @@ public sealed partial class TreeReconciler
         public NodeHandle Boundary;
         public long Clock;
         public int TransientSeq;
-        // The boundary's own effect (MountKeepAlive): the ready check re-runs it, so a held swap commits inside a reconcile,
-        // before the frame's layout and animation tick, exactly where an unheld swap starts.
-        public Effect? Effect;
         // The switch waiting for its incoming page's first screen (KeepAliveOptions.HoldMaxMs); null = none.
         public HeldSwap? Held;
     }
@@ -2129,7 +2126,6 @@ public sealed partial class TreeReconciler
             // Show/Skel/For boundaries REMOVE their outgoing branch rather than park it, and a removed computation is
             // already skipped by the drain's Disposed check.)
         }, owner: null, runNow: true, structural: true);
-        state.Effect = eff;
         AddBinding(node, eff);
     }
 
@@ -2377,8 +2373,9 @@ public sealed partial class TreeReconciler
         return held.LaidOut && !HeldWorkPending(held.Root);
     }
 
-    /// <summary>Something in view below <paramref name="root"/> is still on its way: a Skel region on its shimmer, or a picture still
-    /// decoding. A region or picture below the fold (or in a collapsed part) does not hold the page.</summary>
+    /// <summary>Something in view below <paramref name="root"/> is still on its way: a Skel region on its shimmer. A region below the fold
+    /// (or in a collapsed part) does not hold the page, and neither does a picture: a decoding picture keeps its reserved box on its
+    /// placeholder colour and fades in on its own, which moves nothing.</summary>
     private bool HeldWorkPending(NodeHandle root)
     {
         foreach (var kv in _skelState)
@@ -2387,18 +2384,6 @@ public sealed partial class TreeReconciler
             var region = _scene.HandleAt(kv.Key);
             if (_scene.IsLive(region) && IsBelow(region, root) && _scene.IsInClipView(region)) return true;
         }
-        return Images is not null && ImageDecodingInView(root);
-    }
-
-    private bool ImageDecodingInView(NodeHandle n)
-    {
-        if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.Visible) == 0) return false;
-        ref readonly NodePaint paint = ref _scene.Paint(n);
-        if (paint.VisualKind == VisualKind.Image && paint.ImageId != 0
-            && Images!.StateOf(new ImageHandle(paint.ImageId)) == ImageState.Pending && _scene.IsInClipView(n))
-            return true;
-        for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c))
-            if (ImageDecodingInView(c)) return true;
         return false;
     }
 
@@ -2408,6 +2393,26 @@ public sealed partial class TreeReconciler
             if (a == root) return true;
         return false;
     }
+
+    /// <summary>Called by the host once a frame's layout has run, before its animation tick and its entrance cascades: a held swap whose
+    /// page is ready (or whose budget has run out) commits HERE, in the same frame. A page whose data is already in hand therefore swaps
+    /// on the frame the click landed in, its legs seeded before the tick exactly as an unheld swap's are. No work without a hold.</summary>
+    public void CommitReadyHolds()
+    {
+        if (_heldRoots.Count == 0) return;
+        // Collected first: a commit can free a page, and a boundary inside it leaves _keepAliveState.
+        _readyHolds.Clear();
+        foreach (var state in _keepAliveState.Values)
+        {
+            if (state.Held is not { } held) continue;
+            held.LaidOut = true;
+            if (HoldReady(held, state.Options ?? KeepAliveOptions.Default)) _readyHolds.Add(state);
+        }
+        foreach (var state in _readyHolds)
+            if (state.Held is not null && _scene.IsLive(state.Boundary)) CommitHeldSwap(state.Boundary, state, state.Options ?? KeepAliveOptions.Default);
+        _readyHolds.Clear();
+    }
+    private readonly List<KeepAliveState> _readyHolds = new();
 
     /// <summary>Is <paramref name="node"/> inside a held page (a page mounted off screen for a swap that has not run yet).</summary>
     private bool IsUnderHeldRoot(NodeHandle node)
@@ -2568,14 +2573,8 @@ public sealed partial class TreeReconciler
     {
         foreach (var state in _keepAliveState.Values)
         {
-            if (state.Held is { } held)
-            {
-                // This frame's layout has run: the held page's first screen can be judged. Ready: the boundary's effect re-runs and
-                // commits in the next reconcile. Either way the frame loop keeps turning until it has, or the budget runs out.
-                held.LaidOut = true;
-                if (HoldReady(held, state.Options ?? KeepAliveOptions.Default)) state.Effect?.Schedule();
-                RequestFrame?.Invoke();
-            }
+            // A swap still held: the frame loop keeps turning until CommitReadyHolds swaps it, or its budget runs out.
+            if (state.Held is not null) RequestFrame?.Invoke();
             if (state.ExitingKey is not { } key || !state.Entries.TryGetValue(key, out var entry)) continue;
             bool settled = Anim is null || !Anim.HasTracks(entry.Root);
             if (!settled)
