@@ -24,7 +24,7 @@ namespace FluentGpu.Rhi.D3D12;
 /// </summary>
 internal sealed unsafe class SliceCompositor : IDisposable
 {
-    public enum Pso : byte { Load, LoadCopy, Sample, SampleCopy, Fill, FillCopy, Erase, Blur, Down2, KawaseDown, KawaseUp, Acrylic, LoadScreen, SampleScreen, Feedback, Dissolve, Count }
+    public enum Pso : byte { Load, LoadCopy, Sample, SampleCopy, Fill, FillCopy, Erase, Blur, Down2, KawaseDown, KawaseUp, Acrylic, AcrylicVideo, LoadScreen, SampleScreen, Feedback, Dissolve, Count }
 
     /// <summary>The F6 feedback pass, appended to composite.hlsl: the previous trail sampled through the INVERSE warp
     /// (K[2], K[3] = affine rows mapping destination px → source px), multiplied by the keep fraction toward the fade colour
@@ -70,6 +70,7 @@ float4 PSFeedback(V i) : SV_Target
         ID3DBlob* kd = ShaderCompiler.Compile(src, "PSKawaseDown", "ps_5_1", "composite");
         ID3DBlob* ku = ShaderCompiler.Compile(src, "PSKawaseUp", "ps_5_1", "composite");
         ID3DBlob* acr = ShaderCompiler.Compile(src, "PSAcrylic", "ps_5_1", "composite");
+        ID3DBlob* acrVideo = ShaderCompiler.Compile(src, "PSAcrylicVideo", "ps_5_1", "composite");
         ID3DBlob* fb = ShaderCompiler.Compile(src, "PSFeedback", "ps_5_1", "composite");
         _pso[(int)Pso.Load] = MakePso(device, vs, load, Blend.Over);
         _pso[(int)Pso.LoadCopy] = MakePso(device, vs, load, Blend.Copy);
@@ -85,10 +86,11 @@ float4 PSFeedback(V i) : SV_Target
         _pso[(int)Pso.KawaseDown] = MakePso(device, vs, kd, Blend.Copy);
         _pso[(int)Pso.KawaseUp] = MakePso(device, vs, ku, Blend.Copy);
         _pso[(int)Pso.Acrylic] = MakePso(device, vs, acr, Blend.Over);
+        _pso[(int)Pso.AcrylicVideo] = MakePso(device, vs, acrVideo, Blend.Replace);
         _pso[(int)Pso.Feedback] = MakePso(device, vs, fb, Blend.Copy);
         _pso[(int)Pso.Dissolve] = MakePso(device, vs, load, Blend.Dissolve);
         vs->Release(); load->Release(); sample->Release(); fill->Release(); blur->Release(); down->Release();
-        kd->Release(); ku->Release(); acr->Release(); fb->Release();
+        kd->Release(); ku->Release(); acr->Release(); acrVideo->Release(); fb->Release();
     }
 
     private static string LoadHlsl()
@@ -193,7 +195,7 @@ float4 PSFeedback(V i) : SV_Target
         GpuDrawCount.Frame++;
     }
 
-    private enum Blend : byte { Over, Copy, DestOut, Screen, Dissolve }
+    private enum Blend : byte { Over, Copy, DestOut, Screen, Dissolve, Replace }
 
     private ID3D12RootSignature* BuildRootSignature(ID3D12Device* device)
     {
@@ -276,6 +278,14 @@ float4 PSFeedback(V i) : SV_Target
                 rt.BlendEnable = BOOL.TRUE;
                 rt.SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE; rt.DestBlend = D3D12_BLEND.D3D12_BLEND_INV_SRC_COLOR; rt.BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
                 rt.SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE; rt.DestBlendAlpha = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA; rt.BlendOpAlpha = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+                break;
+            case Blend.Replace:
+                // Dual-source: SV_Target1 carries the coverage, so out = S + D·(1 − cov) on all four premultiplied channels. The
+                // pixel is REPLACED under the coverage whatever alpha S has (an acrylic plate's translucent veil over a video hole,
+                // PSAcrylicVideo), where source-over would keep D·(1 − S.a): the crisp UI the back buffer holds there.
+                rt.BlendEnable = BOOL.TRUE;
+                rt.SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE; rt.DestBlend = D3D12_BLEND.D3D12_BLEND_INV_SRC1_ALPHA; rt.BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+                rt.SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE; rt.DestBlendAlpha = D3D12_BLEND.D3D12_BLEND_INV_SRC1_ALPHA; rt.BlendOpAlpha = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
                 break;
             case Blend.DestOut:
                 rt.BlendEnable = BOOL.TRUE;

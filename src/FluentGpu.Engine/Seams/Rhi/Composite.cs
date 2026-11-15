@@ -45,9 +45,14 @@ public enum CompositeKind : byte { Tiles, Region, EraseVideoHole, Group, Backdro
 /// the backdrop there is transparent and the recipe's opaque fallback filled it flat. Over video the backend draws the frost's
 /// translucent veil instead (<see cref="VeilAlpha"/>) and the video presenter shows the recipe's first half beneath the plate
 /// (<see cref="FluentGpu.Pal.IVideoPresenter.SetBackdrops"/>): the compositor blurs the video and pulls its lightness to the tint's
-/// (the luminosity step, as a colour matrix that keeps the video's hue and saturation); the swapchain adds the colour step over it.</para></summary>
+/// (the luminosity step, as a colour matrix that keeps the video's hue and saturation); the swapchain adds the colour step over it.
+/// <see cref="VideoRect"/> (window device px, set with <see cref="OverVideo"/>) bounds the holes under the plate: the veil is drawn only
+/// inside it, the ordinary opaque recipe outside it (over UI, or over the clear colour where the window's Mica shows). An OverVideo
+/// plate also REPLACES the back buffer under its coverage instead of blending over it: the back buffer still holds the crisp UI
+/// painted over the video (a panel's tabs and combo over an edge-to-edge Canvas), and the translucent veil blended over it let that
+/// UI show through sharp. The mini-composite already carries that UI, blurred, into the plate.</para></summary>
 public readonly record struct AcrylicRecipe(ColorF Tint, ColorF Fallback, float TintOpacity, float BlurSigma,
-    float NoiseOpacity, float LuminosityOpacity, float FeatherFrac = 0f, bool OverVideo = false)
+    float NoiseOpacity, float LuminosityOpacity, float FeatherFrac = 0f, bool OverVideo = false, RectF VideoRect = default)
 {
     public bool IsNone => BlurSigma <= 0f && TintOpacity <= 0f && LuminosityOpacity <= 0f && NoiseOpacity <= 0f;
 

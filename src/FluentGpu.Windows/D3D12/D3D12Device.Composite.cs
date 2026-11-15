@@ -1810,7 +1810,17 @@ public sealed unsafe partial class D3D12Device
         k[28] = it.Acrylic.TintOpacity; k[29] = it.Acrylic.LuminosityOpacity; k[30] = it.Acrylic.NoiseOpacity; k[31] = it.Acrylic.VeilAlpha;
         int w = region.Right - region.Left, h = region.Bottom - region.Top;
         k[32] = (w - 0.5f) / tw; k[33] = (h - 0.5f) / th; k[34] = 0.5f / tw; k[35] = 0.5f / th;
-        _compositor.Draw(_cmdList, SliceCompositor.Pso.Acrylic, _surfaces.ScratchSrv(s));
+        if (!it.Acrylic.OverVideo)
+        {
+            _compositor.Draw(_cmdList, SliceCompositor.Pso.Acrylic, _surfaces.ScratchSrv(s));
+            return;
+        }
+        // Over video: the veil only inside the holes' bounds, and the plate REPLACES what the back buffer holds under it (the crisp
+        // UI painted over the hole, which the mini-composite already carries blurred into the plate).
+        // An empty rect (a hole thinner than half a pixel) reads as no video anywhere: the ordinary frost.
+        RectF video = it.Acrylic.VideoRect.IsEmpty ? new RectF(-1e4f, -1e4f, 0f, 0f) : Offset(it.Acrylic.VideoRect, -ox, -oy);
+        k[36] = video.X; k[37] = video.Y; k[38] = video.Right; k[39] = video.Bottom;
+        _compositor.Draw(_cmdList, SliceCompositor.Pso.AcrylicVideo, _surfaces.ScratchSrv(s));
     }
 
     /// <summary>The item's composite parameters onto the current quad: alpha, the analytic feather(s) — its own and a

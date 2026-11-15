@@ -1151,10 +1151,10 @@ public sealed class OverlayHost : Component
     /// for its material even when it fits (<see cref="WantsMaterialWindow"/>) and so is normally OS-backed; it lands here
     /// only where no window can be leased (host refusal, no popup-window platform, headless, a non-frosted chrome).</item>
     /// <item><b>Ordinary in-window</b> — the engine acrylic + drop shadow, with the authored resting fill restored. This
-    /// includes a plate that overlaps a video hole: the acrylic stays right there too. Where the hole shows the video,
-    /// its erased pixels reach the blur as premultiplied zero and the acrylic recipe (backdrop over the opaque
-    /// FallbackColor) paints its solid fallback; where UI is painted over the hole (a Canvas cut to the Now playing
-    /// panel under its opaque ground and text), it frosts that UI. The flat fill is no stand-in for either: its
+    /// includes a plate that overlaps a video hole: the acrylic stays right there too. Over the hole the compositor
+    /// blurs the video beneath the plate and the plate draws its tint veil, replacing the crisp UI the back buffer holds
+    /// over the hole (<c>AcrylicRecipe.OverVideo</c>, gpu-renderer.md §7.3); off the hole it is the ordinary opaque frost
+    /// of the UI (a Canvas cut to the Now playing panel under its opaque ground and text). The flat fill is no stand-in for either: its
     /// see-through share (15% in light) shows whatever is under the plate crisp and unblurred.</item>
     /// </list></summary>
     internal static void SyncWindowedMenuBackdrop(SceneStore scene, OverlayEntry e)

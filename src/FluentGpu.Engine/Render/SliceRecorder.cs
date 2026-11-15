@@ -1930,7 +1930,9 @@ public sealed partial class SliceRecorder
     /// mini-composite sees transparency there (the video is a compositor visual below the swapchain), so the plate is marked
     /// <see cref="AcrylicRecipe.OverVideo"/> (the backend draws the frost's veil, not the opaque fallback) and listed on the hole
     /// (<see cref="FluentGpu.Media.VideoPosedHole.Backdrops"/>) for the video presenter to blur the video beneath it. The plate's
-    /// opacity is its own times every enclosing opacity group's (an entering card fades its blur with its veil). Zero allocation.</summary>
+    /// opacity is its own times every enclosing opacity group's (an entering card fades its blur with its veil). The bounds of
+    /// those holes ride the plan's <c>Hole</c> (window DIP; a backdrop has no hole of its own) into <see cref="AcrylicRecipe.VideoRect"/>:
+    /// the veil belongs inside them only. Zero allocation.</summary>
     private void NoteBackdropOverVideo(int idx)
     {
         ref Plan b = ref _plan[idx];
@@ -1938,6 +1940,7 @@ public sealed partial class SliceRecorder
         if (plate.IsEmpty) return;
         bool over = false;
         float alpha = -1f;
+        float vx0 = float.MaxValue, vy0 = float.MaxValue, vx1 = float.MinValue, vy1 = float.MinValue;
         for (int h = 0; h < _posedHoleCount; h++)
         {
             int at = _posedPlanIdx[h];
@@ -1945,6 +1948,8 @@ public sealed partial class SliceRecorder
             RectF hole = _plan[at].Rect;          // what the composite clip leaves of the hole
             if (hole.IsEmpty || !hole.Overlaps(in plate)) continue;
             over = true;
+            vx0 = MathF.Min(vx0, hole.X); vy0 = MathF.Min(vy0, hole.Y);
+            vx1 = MathF.Max(vx1, hole.Right); vy1 = MathF.Max(vy1, hole.Bottom);
             ref FluentGpu.Media.VideoPosedHole ph = ref _posedHoles[h];
             if (ph.BackdropCount >= FluentGpu.Media.VideoHoleBackdrops.Max) continue;
             if (alpha < 0f) alpha = b.Alpha * EnclosingGroupAlpha(idx);
@@ -1953,7 +1958,9 @@ public sealed partial class SliceRecorder
                 Rect = plate, Radii = b.Radii, Sigma = b.Acrylic.BlurSigma, Tint = b.Acrylic.Tint, Luminosity = b.Acrylic.LuminosityOpacity, Opacity = alpha,
             };
         }
-        if (over) b.Acrylic = b.Acrylic with { OverVideo = true };
+        if (!over) return;
+        b.Acrylic = b.Acrylic with { OverVideo = true };
+        b.Hole = new RectF(vx0, vy0, vx1 - vx0, vy1 - vy0);
     }
 
     /// <summary>The product of the group alphas of every opacity group open around plan entry <paramref name="idx"/> (1 outside any).</summary>
@@ -2769,10 +2776,14 @@ public sealed partial class SliceRecorder
                     continue;
                 }
                 case PlanKind.Backdrop:
+                {
+                    // Over video: the holes' bounds in device px by pixel rule R, the pixels their erase items cleared.
+                    AcrylicRecipe acr = e.Acrylic.OverVideo ? e.Acrylic with { VideoRect = WholePx(ScalePx(e.Hole, scale)) } : e.Acrylic;
                     AddItem(new CompositeItem(-1, CompositeKind.Backdrop, Affine2D.Identity, e.Alpha, ClipPx(e.Clip, scale),
                         new CornerRadius4(e.Radii.TopLeft * scale, e.Radii.TopRight * scale, e.Radii.BottomRight * scale, e.Radii.BottomLeft * scale),
-                        default, 0f, e.Acrylic, 0, ScalePx(e.Rect, scale)), default, default, in e);
+                        default, 0f, acr, 0, ScalePx(e.Rect, scale)), default, default, in e);
                     continue;
+                }
                 case PlanKind.Video:
                     AddVideoErase(in e, scale, 1f, 0f, 0f);
                     continue;

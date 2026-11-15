@@ -1177,6 +1177,15 @@ none), so the video stays at full strength under a faded hole; a Debug build log
 recorded with opacity below 1. These are **accepted and transient** — the supported scope is a video node outside a
 non-leaf group and outside an opacity ancestor.
 
+**A frosted plate over a hole (`AcrylicRecipe.OverVideo`, as built 2026-11-15).** The plan marks a `Backdrop` item that lies over a hole
+erased earlier in painter order and lists it on the hole, so the video presenter blurs and luminosity-pins the video beneath it
+(`IVideoPresenter.SetBackdrops`); the swapchain draws only the colour step, the tint veil at `TintOpacity`, there. The veil is drawn
+only inside the holes' bounds (`AcrylicRecipe.VideoRect`, whole device px by rule R); outside them the plate is the ordinary opaque
+frost (over UI, or over the clear colour where the window's Mica shows). And an over-video plate REPLACES the back buffer under its
+coverage (`PSAcrylicVideo`, a dual-source blend: out = plate x cov + dst x (1 - cov)) instead of blending over it: the back buffer
+there still holds the UI painted over the hole crisp (a panel's tabs and combo over an edge-to-edge Canvas), which the mini-composite
+already carries blurred into the plate; a source-over veil at 15 % let it through sharp (a menu over the WinUI Now playing Canvas).
+
 **Settle-frame ordering (F101).** A resize-settle frame (`resized && keepAlive`) carries its DWM sync hint in the published
 `RenderFrame.SettlePresent` (like `SuppressVsync`), armed by `ApplyPresentPacing` on the presenting thread for exactly the
 submit that presents it — not a flag the UI thread pokes into render-owned swapchain state. `Present` never blocks on it: the
