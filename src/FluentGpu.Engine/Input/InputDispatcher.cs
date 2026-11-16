@@ -2610,14 +2610,7 @@ public sealed partial class InputDispatcher
     /// <summary>Nearest <c>CanDrag</c> (drag-reorder source, <see cref="InteractionInfo.DragBit"/>) self-or-ancestor of
     /// <paramref name="from"/>, or null. Mirrors <see cref="DragController.TryArm"/>'s chain walk so the DragReorder
     /// member is enrolled exactly where the controller would arm.</summary>
-    private NodeHandle NearestCanDrag(NodeHandle from)
-    {
-        for (var n = from; !n.IsNull; n = _scene.Parent(n))
-            if (_scene.IsLive(n) && (_scene.Interaction(n).HandlerMask & InteractionInfo.DragBit) != 0
-                && (_scene.Flags(n) & NodeFlags.Disabled) == 0)
-                return n;
-        return NodeHandle.Null;
-    }
+    private NodeHandle NearestCanDrag(NodeHandle from) => DragController.ArmTarget(_scene, from);
 
     /// <summary>Nearest enabled DragYieldsToPan content-pan drag node (SwipeControl/FlipView) self-or-ancestor of
     /// <paramref name="from"/>, or null — the §7A.1 route walk that enrolls a swipe/flip wrapper AROUND an interactive
@@ -2670,11 +2663,19 @@ public sealed partial class InputDispatcher
 
     private NodeHandle NearestContextOrHold(NodeHandle from)
     {
+        // The nearest context-or-hold node; above it, a holding node that claims its descendants' drags (a pinned-Home tile in its
+        // board's reorder context) takes the hold instead, so a hold on a row inside the tile can still become the TILE's drag
+        // (and a release without one raises the tile's context request).
+        NodeHandle found = NodeHandle.Null;
+        const uint claim = InteractionInfo.HoldBit | InteractionInfo.ClaimsDescendantDragBit;
         for (var n = from; !n.IsNull; n = _scene.Parent(n))
-            if (_scene.IsLive(n) && (_scene.Interaction(n).HandlerMask & (InteractionInfo.ContextBit | InteractionInfo.HoldBit)) != 0
-                && (_scene.Flags(n) & NodeFlags.Disabled) == 0)
-                return n;
-        return NodeHandle.Null;
+        {
+            if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            uint mask = _scene.Interaction(n).HandlerMask;
+            if (found.IsNull) { if ((mask & (InteractionInfo.ContextBit | InteractionInfo.HoldBit)) != 0) found = n; }
+            else if ((mask & claim) == claim) found = n;
+        }
+        return found;
     }
 
     /// <summary>The §7A "OnFrameEnd" timer tick (§7A.4): advance the arena clock by the frame's <paramref name="dtMs"/>
@@ -2790,8 +2791,13 @@ public sealed partial class InputDispatcher
         // does not also click the element on release) and no fling. Nulling _down frees the arena seat in SlotOut.
         if (_holdFired)
         {
+            // Released after the hold with no drag: the node's OnHoldReleased, else its context request (the touch long-press menu,
+            // deferred to the release so the hold could still become a drag).
             if (_scene.TryGetHold(_touchHoldNode, out var hr))
-                hr.OnReleased?.Invoke(new HoldEventArgs(_touchHoldPos, PointerKind.Touch, _touchHoldNode));
+            {
+                if (hr.OnReleased is { } released) released(new HoldEventArgs(_touchHoldPos, PointerKind.Touch, _touchHoldNode));
+                else DispatchContextRequest(_touchHoldNode, _touchHoldPos, ContextRequestTrigger.Hold);
+            }
             _touchHoldNode = NodeHandle.Null;
             if (_pressed == _down) SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
             _down = NodeHandle.Null; _panTarget = NodeHandle.Null; _panClaimed = false;

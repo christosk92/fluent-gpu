@@ -343,7 +343,9 @@ public sealed record BoxEl : Element
     /// hold instead of raising <c>OnContextRequested</c> (Hold). After it, movement past the slop within
     /// <see cref="HoldSpec.DragWindowMs"/> promotes the node's own drag (<see cref="Draggable"/>): "hold, then drag".</summary>
     public Action<HoldEventArgs>? OnHold { get => (_cGesture ?? BoxColdGesture.Default).OnHold; init { if (!EqualityComparer<Action<HoldEventArgs>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnHold, value)) CGesture.OnHold = value; } }
-    /// <summary>Released after <see cref="OnHold"/> with no drag (WinUI opens the card's menu here).</summary>
+    /// <summary>Released after <see cref="OnHold"/> with no drag (WinUI opens the card's menu here). Unset, a TOUCH hold released
+    /// without a drag raises the node's context request (<c>OnContextRequested</c>, trigger Hold) at the press point: the touch
+    /// long-press menu, deferred to the release so the hold can still become a drag.</summary>
     public Action<HoldEventArgs>? OnHoldReleased { get => (_cGesture ?? BoxColdGesture.Default).OnHoldReleased; init { if (!EqualityComparer<Action<HoldEventArgs>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnHoldReleased, value)) CGesture.OnHoldReleased = value; } }
     /// <summary>E5-L2 typed drag SOURCE (the Flutter Draggable / react-beautiful-dnd model — deliberately NOT WinUI
     /// OLE, per the 2026-06-10 user ruling): marks this box draggable (implies <see cref="CanDrag"/> — the L1 gesture
@@ -553,6 +555,11 @@ public sealed record BoxEl : Element
     /// this element's own click/press handling are unaffected, and it says nothing about whether the element itself is
     /// draggable (set <c>Draggable</c>/<c>CanDrag</c> for that).</summary>
     public bool BlocksDragArm { get => (_cInput ?? BoxColdInput.Default).BlocksDragArm; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).BlocksDragArm, value)) CInput.BlocksDragArm = value; } }
+    /// <summary>A draggable box (<c>Draggable</c>/<c>CanDrag</c>) that takes the drag of any draggable inside it: a press on a
+    /// draggable descendant (a track row in a card) arms THIS box's drag instead of the descendant's. For a container whose
+    /// own move is the gesture while it is in a reorder context (a pinned-Home tile); turn it off outside that context so the
+    /// inner sources drag as themselves. A <see cref="BlocksDragArm"/> child below still arms nothing. Mouse and touch.</summary>
+    public bool ClaimsDescendantDrag { get => (_cInput ?? BoxColdInput.Default).ClaimsDescendantDrag; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).ClaimsDescendantDrag, value)) CInput.ClaimsDescendantDrag = value; } }
 
     /// <summary>A pointer LISTENER that is not an interaction scope (the ToolTip service wrapper): it carries pointer
     /// handlers, so it is hit-testable and receives them normally, but the hover cascade, the lazy-mount hover seed and

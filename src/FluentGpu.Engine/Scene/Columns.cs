@@ -838,6 +838,11 @@ public record struct InteractionInfo
                                                     // drag, so this bit STOPS that walk at itself. Discriminator only:
                                                     // never a hit/press/focus target, deliberately outside
                                                     // AnyInteractiveMask. Clear as `~BlocksDragArmBit`.
+    public const uint ClaimsDescendantDragBit = 1u << 24;   // BoxEl.ClaimsDescendantDrag: a DRAGGABLE node that takes the drag of
+                                                            // any draggable inside it (a pinned-Home tile while its board reorders:
+                                                            // dragging a track row in a card moves the card). The arm walk finds
+                                                            // the nearest draggable, then keeps climbing for a claiming one.
+                                                            // Discriminator only, outside AnyInteractiveMask.
     public const uint HoldBit = 1u << 23;                   // BoxEl.OnHold (pinned Home): a press-and-hold handler (SceneStore.SetHold). Hit-testable
                                                             // in its own right; the touch arena enrolls a Hold member on it with the node's own
                                                             // dwell, the mouse path runs a hold timer when its spec names one, and a Draggable

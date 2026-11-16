@@ -152,6 +152,7 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
     public bool? TabStop;
     public Edges4? FocusVisualMargin;
     public bool BlocksDragArm;
+    public bool ClaimsDescendantDrag;
     public bool HoverScopeTransparent;
     public bool FocusRingHost;
     public NodeAttachment? Attachment;
@@ -181,6 +182,7 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
             && EqualityComparer<bool?>.Default.Equals(TabStop, o.TabStop)
             && EqualityComparer<Edges4?>.Default.Equals(FocusVisualMargin, o.FocusVisualMargin)
             && EqualityComparer<bool>.Default.Equals(BlocksDragArm, o.BlocksDragArm)
+            && EqualityComparer<bool>.Default.Equals(ClaimsDescendantDrag, o.ClaimsDescendantDrag)
             && EqualityComparer<bool>.Default.Equals(HoverScopeTransparent, o.HoverScopeTransparent)
             && EqualityComparer<bool>.Default.Equals(FocusRingHost, o.FocusRingHost)
             && EqualityComparer<NodeAttachment?>.Default.Equals(Attachment, o.Attachment);

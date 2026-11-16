@@ -55,7 +55,8 @@ The result depends on entries, metrics and width only. Nothing a tile has loaded
 ## Reorder (`PackReorder<T>`)
 
 - Projection, not mutation: while lifted the grid packs a projected order; the app's list changes only at the drop (one
-  `OnCommit(PackMove)`), so a cancel needs no undo. A list that changes under a lift cancels it.
+  `OnCommit(PackMove)`), so a cancel needs no undo. A list that changes under a lift (the app republishing its model
+  mid-gesture, a sync adding a row) carries the projection over by key; only a lifted item that left the list ends the lift.
 - Pointer: tiles are `Draggable` (mouse past `MouseSlop`; touch after a 500 ms hold, see below). The rule for a hit, the
   concept's `moveRel`: onto a later entry the item lands after it, onto an earlier one before it, onto a group head after it.
   A target triggers once, cannot trigger again until the pointer has left it, and never sooner than `DwellMs` after the last.
@@ -65,6 +66,13 @@ The result depends on entries, metrics and width only. Nothing a tile has loaded
   `MoveBy` and `MoveToward` commit one step at once when nothing is lifted. Left/right: one step in order; up/down: onto the
   `Nearest` entry. After a move the item is brought into view once the slide ends. Plain arrows move focus between tiles;
   modified arrows bubble to the board (a theme's Alt+Shift+arrows reads `FocusedKey`).
+- Whose drag: in reorder context (reorder enabled, the tile can lift) the tile wrapper sets `BoxEl.ClaimsDescendantDrag`, so a
+  drag that starts on a draggable inside the tile (a track row in a card) moves the TILE, mouse and touch alike, and the
+  tile takes a touch hold over context or hold handlers inside it. Out of reorder context (Classic outside Edit Home, Zune
+  outside customize) the wrapper is not draggable and inner sources drag as themselves. A `BlocksDragArm` control inside
+  the tile (its ⋯ corner) still arms nothing.
+- Touch hold on a tile: a move past the slop after the hold lifts it; a release without one raises the tile's context
+  request (the menu a right-click opens), or calls `PackGridOptions.OnHoldReleased` when the theme sets it.
 - Drag-in: the grid is a drop target for `AcceptKinds`; `Materialize` makes a provisional item that joins the projection
   under the pointer; a release commits through `OnForeignCommit(payload, index)`; leaving removes it.
 - Announcements on edges only (`Grab`, `Move` throttled, `Drop`, `Cancel`, `Edge`), composed by the app (`AnnounceText`).
@@ -75,7 +83,9 @@ The result depends on entries, metrics and width only. Nothing a tile has loaded
 - Touch: the arena's Hold member, with the node's own dwell. A node with `OnHold` takes the hold instead of raising its
   context request. A draggable node that holds enrolls no axis-locked drag at the down, so a pan scrolls until the hold
   fires; after it, a move past the slop inside `DragWindowMs` lifts the node's drag. A release without that fires
-  `OnHoldReleased`. The press's tap is swallowed.
+  `OnHoldReleased`, or, when the node has none, raises its context request (trigger Hold): the touch long-press menu,
+  deferred to the release. The press's tap is swallowed. Above the nearest context-or-hold node, a holding node that claims
+  its descendants' drags (`ClaimsDescendantDrag`) takes the hold.
 - Mouse: a timer on the press (ticked with the gesture arenas; `HasArmedHold` keeps frames coming). A move past the slop
   before the dwell cancels it; after it, a move past the slop arms the drag of the nearest draggable. The click is swallowed.
 

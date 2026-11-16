@@ -6192,6 +6192,9 @@ public sealed partial class TreeReconciler
                 // play FAB must not be a handle for dragging the card). Discriminator only — same toggle-both-ways rule.
                 if (b.BlocksDragArm) ii.HandlerMask |= InteractionInfo.BlocksDragArmBit;
                 else ii.HandlerMask &= ~InteractionInfo.BlocksDragArmBit;
+                // BoxEl.ClaimsDescendantDrag: the arm walk climbs past the nearest draggable to this one (DragController.ArmTarget).
+                if (b.ClaimsDescendantDrag) ii.HandlerMask |= InteractionInfo.ClaimsDescendantDragBit;
+                else ii.HandlerMask &= ~InteractionInfo.ClaimsDescendantDragBit;
 
                 // BoxEl.HoverScopeTransparent: a pointer listener the hover cascade / mount seed look through (the
                 // ToolTip wrapper). Discriminator only — same toggle-both-ways rule.

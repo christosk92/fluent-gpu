@@ -29,6 +29,7 @@ public sealed class PackCell
     internal Action<DragEventArgs>? OnDragStarted, OnDragDelta, OnDragCompleted;
     internal Action? OnDragCanceled;
     internal Action<HoldEventArgs>? OnHold;
+    internal Action<HoldEventArgs>? OnHoldReleased;
     internal bool Seen;   // still in the list this render (cells of removed keys are dropped)
 
     internal PackCell(string key) => Key = key;
@@ -65,6 +66,11 @@ public sealed record PackGridOptions<T>
     public Func<T, PackAutomation>? Automation { get; init; }
     /// <summary>[first, last) of the realized entries, on change: the live-budget gate reads it.</summary>
     public Action<int, int>? OnRealizedRange { get; init; }
+    /// <summary>A touch hold on a tile released without a drag. Unset (the usual case), the release raises the tile's context
+    /// request (<c>OnContextRequested</c> on the wrapper or an ancestor, trigger Hold): the same menu a right-click opens. Set, it
+    /// replaces that. Either way a move after the hold lifts the tile instead when reorder is on ("hold, then drag"), and with
+    /// this set every tile holds (500 ms on touch) even with reorder off.</summary>
+    public Action<T, HoldEventArgs>? OnHoldReleased { get; init; }
     /// <summary>The grid's own node key.</summary>
     public string? Key { get; init; }
 }
@@ -282,8 +288,9 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
         bool focusable = o.ItemsFocusable?.Invoke() ?? true;
         bool reorderOn = o.Reorder is { } rr && (rr.Enabled?.Invoke() ?? true);
 
-        // a lift whose list changed under it (a sync removed a row) cannot commit: cancel it
-        if (_liftKey is not null && !ReferenceEquals(items, _items)) CancelLift(announce: true, rerender: false);
+        // the list changed under a lift (the app republished its model mid-gesture, a sync added or removed a row): carry the
+        // projection over by key; only a lifted item that left the list ends the lift
+        if (_liftKey is not null && !ReferenceEquals(items, _items) && !RebaseProjection(items)) CancelLift(announce: true, rerender: false);
         _items = items;
         int n = items.Count;
         BuildShown(n);
@@ -375,6 +382,7 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
             bool tileLike = _entries[i].Kind is PackEntryKind.Tile or PackEntryKind.Band;
             bool canLift = reorderOn && tileLike && phase != PackItemPhase.Provisional && (Reorder!.CanLift?.Invoke(item) ?? true);
             bool kbLifted = phase == PackItemPhase.KeyboardLifted;
+            bool holds = (canLift || o.OnHoldReleased is not null) && phase != PackItemPhase.Provisional;
             bool isFocusable = focusable && tileLike;
             float liftScale = kbLifted ? Reorder!.LiftStyle.Scale : 1f;
             _children.Add(new BoxEl
@@ -391,13 +399,17 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
                 OnRealized = cell.OnRealized,
                 Role = o.Automation is { } au ? au(item).Role : AutomationRole.None,
                 Draggable = canLift ? cell.Drag : null,
+                // reorder context: a drag that starts on a draggable inside the tile (a track row in a card) moves the TILE;
+                // outside it (reorder off) the wrapper is not draggable and inner sources drag as themselves
+                ClaimsDescendantDrag = canLift,
                 OnDragStarted = canLift ? cell.OnDragStarted : null,
                 OnDragDelta = canLift ? cell.OnDragDelta : null,
                 OnDragCompleted = canLift ? cell.OnDragCompleted : null,
                 OnDragCanceled = canLift ? cell.OnDragCanceled : null,
                 // touch lifts only after a hold: the hold on the wrapper keeps an axis drag from taking the page's pan
-                Hold = canLift ? new HoldSpec(TouchMs: 500f, MouseMs: 0f) : null,
-                OnHold = canLift ? cell.OnHold : null,
+                Hold = holds ? new HoldSpec(TouchMs: 500f, MouseMs: 0f) : null,
+                OnHold = holds ? cell.OnHold : null,
+                OnHoldReleased = holds && o.OnHoldReleased is not null ? cell.OnHoldReleased : null,   // unset: the engine raises the context request
                 Shadow = kbLifted ? Elevation.Flyout : null,
                 ScaleX = liftScale, ScaleY = liftScale,
                 HitTestVisible = phase != PackItemPhase.Provisional,
@@ -495,7 +507,8 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
         cell.OnDragDelta = e => { _pointerAbs = e.Absolute; DragTick(); };
         cell.OnDragCompleted = e => { _pointerAbs = e.Absolute; DragTick(); if (_liftKey == cl.Key && !_liftKb) CommitLift(); };
         cell.OnDragCanceled = () => { if (_liftKey == cl.Key && !_liftKb) CancelLift(announce: true, rerender: true); };
-        cell.OnHold = static _ => { };   // the hold only gates the touch lift; the drag that follows lifts the tile
+        cell.OnHold = static _ => { };   // the hold gates the touch lift; the drag that follows lifts the tile
+        cell.OnHoldReleased = e => HoldReleased(cl.Key, e);
         _cells[key] = cell;
         return cell;
     }
@@ -505,6 +518,12 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
         var ro = Reorder;
         if (ro is null) return DragVisualStyle.Default;
         return ro.LiftStyle with { ThresholdMultiplier = MathF.Max(1f, ro.MouseSlop / 4f) };
+    }
+
+    void HoldReleased(string key, HoldEventArgs e)
+    {
+        if (_p?.Options.OnHoldReleased is not { } released || !_index.TryGetValue(key, out int i) || i >= _count) return;
+        released(ItemAt(_show[i]), e);
     }
 
     // ── window ──
@@ -663,6 +682,42 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
         EnsureArrays(_count + 1);
         Array.Copy(_show, _proj, _count);
         _projCount = _count;
+    }
+
+    readonly Dictionary<string, int> _rebase = new(StringComparer.Ordinal);
+    readonly List<int> _rebased = new();
+
+    /// <summary>Maps the projection (source indices of the old list) onto <paramref name="next"/> by key: kept items keep their
+    /// projected order, items new to the list go in at their own index, the provisional item stays the last source index.
+    /// False when the lifted item is not in the new list.</summary>
+    bool RebaseProjection(IReadOnlyList<T> next)
+    {
+        var o = _p!.Options;
+        _rebase.Clear();
+        for (int i = 0; i < next.Count; i++) _rebase[o.KeyOf(next[i])] = i;
+        _rebased.Clear();
+        int liftSrc = -1;
+        for (int k = 0; k < _projCount; k++)
+        {
+            int src = _proj[k];
+            if (src >= _items.Count)   // the provisional item
+            {
+                if (_liftForeign && src == _liftSrc) { liftSrc = next.Count; _rebased.Add(next.Count); }
+                continue;
+            }
+            if (!_rebase.TryGetValue(o.KeyOf(_items[src]), out int ni)) continue;
+            _rebase.Remove(o.KeyOf(_items[src]));
+            if (src == _liftSrc) liftSrc = ni;
+            _rebased.Add(ni);
+        }
+        if (liftSrc < 0) return false;
+        foreach (var kv in _rebase) _rebased.Insert(Math.Min(kv.Value, _rebased.Count), kv.Value);
+        EnsureArrays(_rebased.Count + 1);
+        for (int k = 0; k < _rebased.Count; k++) _proj[k] = _rebased[k];
+        _projCount = _rebased.Count;
+        _liftSrc = liftSrc;
+        _lastTargetSrc = -1;
+        return true;
     }
 
     int ProjIndexOf(int src)
