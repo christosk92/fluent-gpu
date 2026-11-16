@@ -1858,6 +1858,7 @@ public sealed partial class InputDispatcher
                 {
                     Local = local, ClickCount = _clickCount, Mods = e.Mods, Button = 0, Kind = e.Pointer,
                 });
+            NotifyPressListeners(_down, in e);   // press listeners hear a finger as they hear the mouse (a ToolTip hides, a tile tilts)
             if ((_scene.Interaction(_down).HandlerMask & (InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.ClickBit | InteractionInfo.DragBit)) != 0) handled = true;
         }
         else if (!_touchSuppressTap && scrollable.IsNull && !_focused.IsNull && _scene.IsLive(_focused))
