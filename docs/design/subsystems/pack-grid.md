@@ -52,6 +52,9 @@ The result depends on entries, metrics and width only. Nothing a tile has loaded
 - The wrapper clips at the packed box. `PackGridOptions.InkOutset(item)` lets an item's paint reach beyond it (a full row's
   heading on the page gutter whose display glyph overhangs): the wrapper stays a boundary by `IsolateLayout` and one clip
   layer reaches the outset with negative margins, padding its content back, so box, pack and neighbours are unchanged.
+- Leaving the window is not a removal: an item scrolled out of reach renders once more with its exit off and is dropped on
+  the next render, so a window edge never leaves an exiting orphan behind (drawn at a stale place, and read by an
+  inspector as the tile's rect). `TryNodeRect` answers only for keys realized now. Exits play for keys removed from the list.
 - Entering: a key new to the list fades in (`Enter`); a key the window reaches mounts in place; a known key a re-pack brought
   into the window enters from its previous rect (an `EnterExit` offset, opacity 1), so it slides in. On a re-pack every
   item that was realized stays realized for that render, so it slides to its new place instead of vanishing.

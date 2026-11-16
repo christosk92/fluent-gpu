@@ -224,6 +224,8 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
     readonly Dictionary<string, PackCell> _cells = new(StringComparer.Ordinal);
     HashSet<string> _realized = new(StringComparer.Ordinal);
     HashSet<string> _realizedNext = new(StringComparer.Ordinal);
+    HashSet<string> _leaving = new(StringComparer.Ordinal);       // rendered last time on their way out (exit off): dropped now
+    HashSet<string> _leavingNext = new(StringComparer.Ordinal);
     readonly HashSet<string> _docKeys = new(StringComparer.Ordinal);             // every key of the last list
     readonly List<Element> _children = new();
     readonly List<string> _dropCells = new();
@@ -372,7 +374,13 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
             cell.Seen = true;
             if ((_entries[i].Flags & PackFlags.Hidden) != 0 || r.BandOf[i] < 0) continue;
             // inside the window; or, on a re-pack, an item that was realized keeps its node so it slides to its new place
-            if (!((i >= first && i < last) || (repacked && _realized.Contains(key)))) continue;
+            bool inWindow = i >= first && i < last;
+            bool wasRealized = _realized.Contains(key);
+            // inside the window; or, on a re-pack, an item that was realized keeps its node so it slides to its new place; or an item
+            // LEAVING the window: it renders once more with its exit off and goes on the next render, so a window edge never leaves an
+            // exiting orphan behind (an exit is for an item removed from the list, not for one scrolled out of reach)
+            bool leaving = !inWindow && wasRealized && !(repacked) && !_leaving.Contains(key);
+            if (!(inWindow || (repacked && wasRealized) || leaving)) continue;
             var q = rects[i];
             var box = new PackBox(r.SpanCols[i], r.SpanRows[i], q.W, q.H, r.ToolStripOf[i]);
             if (cell.BoxSig.Peek() != box) cell.BoxSig.Value = box;
@@ -393,7 +401,8 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
                         anim = anim with { Enter = new EnterExit(Dx: pq.X - q.X, Dy: pq.Y - q.Y, Active: true) };
                 }
             }
-            anim = anim with { Exit = o.Exit };
+            anim = anim with { Exit = leaving ? default : o.Exit };
+            if (leaving) _leavingNext.Add(key);
             LayoutTransition? animate = widthOnly ? null : anim;
             T item = ItemAt(_show[i]);
             bool tileLike = _entries[i].Kind is PackEntryKind.Tile or PackEntryKind.Band;
@@ -446,6 +455,8 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
             foreach (var k in _dropCells) _cells.Remove(k);
         }
         (_realized, _realizedNext) = (_realizedNext, _realized);
+        (_leaving, _leavingNext) = (_leavingNext, _leaving);
+        _leavingNext.Clear();
         if (repacked)
         {
             _prevIndex.Clear();
@@ -613,6 +624,7 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
 
     void AfterCommit()
     {
+        if (_leaving.Count > 0) _edge.Value = 0;   // the leaving items' second step: drop them on the next render
         if (_pendingFocus is { } k && _cells.TryGetValue(k, out var cell) && !cell.Node.IsNull && Context.Scene is { } s && s.IsLive(cell.Node))
         {
             _pendingFocus = null;
@@ -653,7 +665,8 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
     public bool TryNodeRect(string key, out RectF rect)
     {
         rect = default;
-        if (!_cells.TryGetValue(key, out var cell) || cell.Node.IsNull || Context.Scene is not { } s || !s.IsLive(cell.Node)) return false;
+        // only a key realized NOW: a cell keeps its last node handle, which may be a node on its way out
+        if (!_realized.Contains(key) || !_cells.TryGetValue(key, out var cell) || cell.Node.IsNull || Context.Scene is not { } s || !s.IsLive(cell.Node)) return false;
         rect = s.PresentedAbsoluteRect(cell.Node);
         return true;
     }
