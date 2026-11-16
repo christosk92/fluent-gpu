@@ -914,3 +914,21 @@ public struct GestureSubscription
         }
     }
 }
+
+/// <summary>A node's corner radius as a function of its PRESENTED extent (the connected navigation flyer, whose size rides SizeW/H rows
+/// that the render thread may own): <see cref="FromRadius"/> at <see cref="FromExtent"/>, <see cref="ToRadius"/> at <see cref="ToExtent"/>,
+/// linear between and clamped outside, along the width or (<see cref="AlongHeight"/>) the height. The recorder evaluates it where it
+/// resolves the presented size, so the radius is exact on the frame that draws the rect, whichever thread advanced it: a circle that
+/// opens into a wide header never draws a pill on a slow UI frame. Uniform radius only (all four corners).</summary>
+public readonly record struct CornerMorph(float FromRadius, float ToRadius, float FromExtent, float ToExtent, bool AlongHeight)
+{
+    /// <summary>The radius at a presented size (allocation-free).</summary>
+    public float At(float presentedW, float presentedH)
+    {
+        float extent = AlongHeight ? presentedH : presentedW;
+        float span = ToExtent - FromExtent;
+        float t = MathF.Abs(span) < 0.001f ? 1f : Math.Clamp((extent - FromExtent) / span, 0f, 1f);
+        float r = FromRadius + (ToRadius - FromRadius) * t;
+        return MathF.Max(0f, MathF.Min(r, MathF.Min(presentedW, presentedH) * 0.5f));
+    }
+}

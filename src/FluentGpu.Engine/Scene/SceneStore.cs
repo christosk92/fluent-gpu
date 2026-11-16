@@ -168,6 +168,8 @@ public sealed partial class SceneStore : ISceneBackend
     // Optional rich-paint side-tables (O(decorated nodes), keyed by node index): eased interaction, shadow, gradient, acrylic.
     private readonly ColdSlab<InteractionAnim> _interact = new();   // GEN-17 (wired)
     private readonly ColdSlab<ShadowSpec> _shadows = new();   // GEN-17 (wired): dense slab, not Dictionary
+    private readonly ColdSlab<CornerMorph> _cornerMorphs = new();   // the connected navigation flyer's radius by presented size
+    private readonly ColdSlab<NodeHandle> _mirrors = new();         // an overlay that draws another node's subtree (a whole-picture flyer)
     private readonly ColdSlab<ArcSpec> _arcs = new();
     private readonly ColdSlab<PolylineStrokeSpec> _polylines = new();   // GEN-17 (wired)
     private readonly ColdSlab<PathSpec> _paths = new();   // GEN-17 (wired) — VisualKind.Path's geometry/fill/stroke
@@ -568,6 +570,8 @@ public sealed partial class SceneStore : ISceneBackend
         if ((flags & NodeFlags.SparsePaint) != 0)
         {
             _shadows.Remove(idx);
+            _cornerMorphs.Remove(idx);
+            _mirrors.Remove(idx);
             _arcs.Remove(idx);
             _polylines.Remove(idx);
             _paths.Remove(idx);
@@ -2228,6 +2232,30 @@ public sealed partial class SceneStore : ISceneBackend
     }
     public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGet((int)h.Raw.Index, out s);
     public void ClearShadow(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_shadows.Contains(idx)) return; _shadows.Remove(idx); MarkRecordDirty(idx); }
+
+    /// <summary>Draw this node's corners by its presented size (<see cref="CornerMorph"/>) instead of <see cref="NodePaint.Corners"/>.</summary>
+    public void SetCornerMorph(NodeHandle h, in CornerMorph m)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint | NodeFlags.PaintDirty;
+        _cornerMorphs.GetOrAdd(idx) = m;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetCornerMorph(NodeHandle h, out CornerMorph m) => _cornerMorphs.TryGet((int)h.Raw.Index, out m);
+    public void ClearCornerMorph(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_cornerMorphs.Contains(idx)) return; _cornerMorphs.Remove(idx); _flags[idx] |= NodeFlags.PaintDirty; MarkRecordDirty(idx); }
+
+    /// <summary>An OVERLAY node (<see cref="AddOverlay"/>) that also draws <paramref name="target"/>'s subtree, scaled from the target's
+    /// own size into the overlay's presented rect (a connected navigation flyer carrying a generated cover: a gradient, a glyph, a
+    /// mosaic). The target draws even while its own Visible flag is cleared (the flight hides it in place) and while it is parked
+    /// off the live tree: the recording snapshot captures its subtree beside the overlays.</summary>
+    public void SetMirror(NodeHandle overlay, NodeHandle target)
+    {
+        int idx = (int)overlay.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint | NodeFlags.PaintDirty;
+        _mirrors.GetOrAdd(idx) = target;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetMirror(NodeHandle h, out NodeHandle target) => _mirrors.TryGet((int)h.Raw.Index, out target);
 
     public void SetArc(NodeHandle h, in ArcSpec a)
     {

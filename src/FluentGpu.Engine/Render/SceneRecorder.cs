@@ -861,10 +861,37 @@ internal sealed partial class SceneRecordingContext
             var abs = scene.AbsoluteRect(ov);
             ref readonly RectF ob = ref scene.Bounds(ov);
             ref readonly NodePaint op = ref scene.Paint(ov);
+            // A flyer's own clip (NodePaint.ClipRect, local to its presented rect): a card that a scroller's edge cut takes off as
+            // its visible part and opens to the whole picture (ConnectedAnimation.Nav). A walk clips only children by it.
+            RectF ovClip = overlayClip;
+            bool ownClip = !op.ClipRect.IsInfinite;
+            if (ownClip)
+            {
+                ovClip = new RectF(abs.X + op.ClipRect.X, abs.Y + op.ClipRect.Y, op.ClipRect.W, op.ClipRect.H).Intersect(overlayClip);
+                rootDl.PushClip(ovClip, overlayKey);
+            }
             Walk(scene, rootDl, images, ov,
                  Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
-                 1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                 1f, (1 << 16) | 1, ovClip, in focus, in textEdit, scrollThumb, scrollTrack,
                  1f, 1f, false, false, default, default, null, 0, true, false, ref stats);
+            // A whole-picture flyer (SceneStore.SetMirror): the mirrored subtree drawn scaled from its own box into the flyer's
+            // presented rect, at the flyer's opacity (a generated cover: one continuous picture from the card to the header).
+            if ((scene.Flags(ov) & NodeFlags.SparsePaint) != 0 && scene.TryGetMirror(ov, out NodeHandle mirrored) && scene.IsLive(mirrored))
+            {
+                ref readonly RectF mb = ref scene.Bounds(mirrored);
+                float pw = float.IsNaN(op.PresentedW) ? ob.W : op.PresentedW, ph = float.IsNaN(op.PresentedH) ? ob.H : op.PresentedH;
+                if (mb.W > 0.5f && mb.H > 0.5f && op.Opacity > 0.001f)
+                {
+                    float msx = pw / mb.W, msy = ph / mb.H;
+                    _mirrorBypass = mirrored;
+                    Walk(scene, rootDl, images, mirrored,
+                         Affine2D.Translation(abs.X, abs.Y).Multiply(Affine2D.Scale(msx, msy)).Translate(-mb.X, -mb.Y),
+                         op.Opacity, (1 << 16) | 1, ovClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                         msx, msy, false, false, default, default, null, 0, true, false, ref stats);
+                    _mirrorBypass = NodeHandle.Null;
+                }
+            }
+            if (ownClip) rootDl.PopClip(overlayKey);
         }
         if (overlayClipped) rootDl.PopClip(overlayKey);
         // E5 drag-OVERLAY top band (the chip): same hoist as the ghost band above, at band depth (1<<16)|2 and emitted
@@ -1069,6 +1096,11 @@ internal sealed partial class SceneRecordingContext
     //
     // NOTE: `depth` still carries a z-band in the high bits for painter order; that is unrelated to these guards.
     private uint[]? t_walkPath;
+    // The connected navigation flyer: its corners by its presented size (SceneStore.SetCornerMorph) are resolved into this copy
+    // of its paint (a flyer node has no children, so no nested walk can overwrite it while it is in use), and the one node a
+    // whole-picture flyer mirrors (SceneStore.SetMirror) draws although the flight cleared its Visible flag in place.
+    private NodePaint _morphPaint;
+    private NodeHandle _mirrorBypass;
     private int t_walkPathLen;
     private int s_cycleAbortLogged;
     private int s_depthAbortLogged;
@@ -1227,7 +1259,7 @@ internal sealed partial class SceneRecordingContext
                                          ref RecordAccumulator stats)
     {
         if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return default;   // subtree renders in its own popup window
-        if ((scene.Flags(node) & NodeFlags.Visible) == 0) return default;
+        if ((scene.Flags(node) & NodeFlags.Visible) == 0 && node != _mirrorBypass) return default;
         if (!PushWalkPath(node)) return default;
         if (!HasWalkStackHeadroom(ref stats)) { PopWalkPath(); return default; }
         // Retained tiles: a PRE-ORDER span-index entry for each of the first SpanIndexDepth levels below a slice root —
@@ -1523,6 +1555,13 @@ internal sealed partial class SceneRecordingContext
 
         ref readonly RectF b = ref scene.Bounds(node);
         ref readonly NodePaint p = ref scene.Paint(node);
+        if (maybeSparsePaint && scene.TryGetCornerMorph(node, out CornerMorph cornerMorph))
+        {
+            _morphPaint = p;
+            _morphPaint.Corners = CornerRadius4.All(cornerMorph.At(float.IsNaN(p.PresentedW) ? b.W : p.PresentedW,
+                float.IsNaN(p.PresentedH) ? b.H : p.PresentedH));
+            p = ref _morphPaint;
+        }
         // The cold half (state colours, hover/press opacity, dash, flare, image focus): the node's row or the shared
         // default row — a ref, no branch, no copy.
         ref readonly NodePaintCold pc = ref scene.PaintCold(node);
