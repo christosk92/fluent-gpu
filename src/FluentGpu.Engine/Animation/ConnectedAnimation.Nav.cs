@@ -366,6 +366,8 @@ public sealed partial class ConnectedAnimation
                 RectF rest = RestRect(f.Dest, out _, out _);
                 if (RectDiffers(in rest, in f.Model, RetargetEps))
                 {
+                    // A scroll or a resize that leaves under MinVisible of the dest on screen: never chase it out of view.
+                    if (VisibleArea(f.Dest, out float shown) <= 0f || shown < f.Spec.MinVisible) { AbandonNav(f); continue; }
                     // Flying: the springs follow the dest's new rest rect. Standing in (landed): it never chases a move, it hands off.
                     if (f.Phase == ConnectedNavPhase.Landed) { HandOffFade(f, f.Spec.AbandonFadeMs); continue; }
                     Reaim(f, rest, keepResponse: true);
@@ -457,6 +459,8 @@ public sealed partial class ConnectedAnimation
         }
         SeedNode(f.Image, in from, in rest, f.Spring);
         SeedNode(f.Image2, in from, in rest, f.Spring);
+        // A partly visible source opens on the flight's spring; a partly visible dest (Back onto a card a scroller cuts) closes to its part.
+        if (!f.Clipped && !DestLocalClip(f, in rest).Equals(new RectF(0f, 0f, rest.W, rest.H))) f.Clipped = true;
         if (f.Clipped) { SeedClip(f, f.Image, rest); SeedClip(f, f.Image2, rest); }
         if (!f.Shadow.IsNull)
         {
@@ -524,9 +528,8 @@ public sealed partial class ConnectedAnimation
         UpdateCornerMorph(f, rest);
         ReaimNode(f.Image, rest, f.Spring);
         if (_scene.IsLive(f.Image2)) ReaimNode(f.Image2, rest, f.Spring);
-        if (f.Clipped || !DestLocalClip(f, in rest).Equals(new RectF(0f, 0f, rest.W, rest.H)))
+        if (f.Clipped)   // a re-aim retargets a clip already running (velocity kept); it never starts one mid-flight
         {
-            f.Clipped = true;
             SeedClip(f, f.Image, rest);
             if (_scene.IsLive(f.Image2)) SeedClip(f, f.Image2, rest);
         }
