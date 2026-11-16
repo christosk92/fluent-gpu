@@ -315,7 +315,7 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
             _prev.CopyFrom(r);
             PackLayout.Pack(_entries.AsSpan(0, shown), metrics, width, r);
 #if DEBUG
-            VerifyDebug(r);
+            if (width > 0f) VerifyDebug(r);   // the pack before the first measure (width 0) has no geometry to prove
 #endif
         }
 
@@ -363,7 +363,7 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
             if (!_realized.Contains(key))
             {
                 if (_docKeys.Count > 0 && !_docKeys.Contains(key)) anim = anim with { Enter = o.Enter };
-                else if (repacked && _prevIndex.TryGetValue(key, out int pi) && pi < _prev.Count && _prev.BandOf[pi] >= 0)
+                else if (repacked && _prev.Width > 0f && _prevIndex.TryGetValue(key, out int pi) && pi < _prev.Count && _prev.BandOf[pi] >= 0)
                 {
                     var pq = _prev.Rects[pi];
                     if (MathF.Abs(pq.X - q.X) > 0.5f || MathF.Abs(pq.Y - q.Y) > 0.5f)

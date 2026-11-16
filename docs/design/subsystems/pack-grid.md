@@ -1,0 +1,86 @@
+# Pack grid: the bento packer, windowing and reorder
+
+Code: `src/FluentGpu.Engine/Scene/PackLayout.cs` (pure), `src/FluentGpu.Controls/PackGrid.cs`,
+`src/FluentGpu.Controls/PackReorder.cs`, `src/FluentGpu.Controls/TileMotion.cs`, `BoxEl.Hold` / `OnHold` /
+`OnHoldReleased` (`Dsl/Element.cs`, dispatch in `Input/InputDispatcher.cs`). Gallery: `pack-grid`
+(`src/FluentGpu.WindowsApp/Pages/PackGridPage.cs`). First caller: Wavee's pinned Home.
+
+## The packer (`PackLayout.Pack`)
+
+Input: entries in order, `PackMetrics` (columns, row unit, gap, group gap, tool strip), width. Output: a `PackResult`
+(grow-only tables, one per grid): a rect, a column span, a row span and a tool strip per entry, and a band table.
+
+Order is the truth. Nothing is back-filled: an entry is never placed ahead of an earlier one.
+
+1. A `GroupHead` starts a group (whole row, `Extent` tall; `Extent` 0 with nothing after it takes no room). `GroupGap` goes
+   above every shown head but the first.
+2. A `Row` (chrome in a group) and a `Band` (a `full` item, `Extent` DIP or `Rows` rows tall) take the whole row alone.
+3. Tiles are cut into bands in reading order. A band takes the next tiles that fit across and is as tall as the tallest of
+   them. A run of equal tiles that needs more than one band wraps evenly (five in four columns is three and two).
+4. Tiles shorter than the band stack in columns beside the tall ones, sharing the band's height; a few left over join the
+   stacks instead of stranding on a band of their own (so a stack member can be shorter than its class: by design).
+5. The fill pass: the columns a band has left go one at a time to its narrowest block; a block with a size the user chose
+   (no `Auto` flag) waits half a column longer. Tiles only grow.
+6. A span wider than the grid is clamped. An `Open` entry is at least `Extent` DIP tall and `OpenMinCols` wide.
+7. A tool strip (`ToolStrip` > 0) sits above every block of one tile `ToolStripMinRows` rows or taller, and adds to the band.
+
+Every placed vertical slice (a head, a row, a full band, a band of tiles) is one band of the result, so the band table is a
+monotonic partition of the height: `Window` and `HitTest` are binary searches. `Verify` proves the bento: in every band the
+column blocks start at 0, follow one gap apart and end at the width, every block spans the band (its members one gap
+apart), nothing overlaps, no tile is narrower than its class (nor, standing alone, shorter), reading order is entry order.
+DEBUG builds of `PackGrid` run it after every pack and print `[pack] fault ...` to stderr.
+
+The result depends on entries, metrics and width only. Nothing a tile has loaded changes it: that is the no-jump guarantee.
+
+## The grid (`PackGrid.Create`)
+
+- A ZStack box (`IsolateLayout`, `Height` = the pack's height) with one keyed wrapper per realized entry, in entry order
+  (tab and narrator order = reading order). A wrapper has explicit `Width`/`Height`, `Margin = (x, y)`, `Start` alignment,
+  no grow or shrink and `ClipToBounds`: a fixed-size relayout boundary, so a tile's own re-render never reaches the grid.
+- It is not a scroller. It sits in the page's scroller and realizes the bands within `OverscanViewports` of the viewport
+  (widened toward the scroll's motion). The grid's top in the scroll content is the sum of layout offsets from the grid up
+  to the nearest `Scrollable` node (the scroll is a paint shift, so it is not in them). An auto-tracked effect reads the
+  scroller's offset and viewport on scroll frames (arithmetic and binary searches, no allocation) and re-renders the grid
+  only when the realized range no longer covers half the overscan, or reaches past two and a half of it.
+- Every change of entries, metrics or width re-packs once. Wrappers keep their keys and nodes; their new margins and sizes
+  are layout changes the FLIP pass animates (`PackGrid.Reflow`: bounds, 250 ms tween on cubic-bezier(0.25, 1, 0.5, 1),
+  `SizeMode.Reveal`; reduced motion: a 120 ms fade). A column-count change is the same path: no remount at a tier crossing.
+- Entering: a key new to the list fades in (`Enter`); a key the window reaches mounts in place; a known key a re-pack brought
+  into the window enters from its previous rect (an `EnterExit` offset, opacity 1), so it slides in. On a re-pack every
+  item that was realized stays realized for that render, so it slides to its new place instead of vanishing.
+- `PackCell.Box` / `Phase` are signals a tile reads to pick its form from the span it got; written on pack edges only.
+- `PackGridController`: the live pack, rects, hit test, neighbours, `BringIntoView`, `Focus` (realizes first when needed),
+  `FocusedKey`, `Verify`, and `TryNodeRect` / `TryOrigin` for an inspector's "realized rect equals packed rect" check.
+
+## Reorder (`PackReorder<T>`)
+
+- Projection, not mutation: while lifted the grid packs a projected order; the app's list changes only at the drop (one
+  `OnCommit(PackMove)`), so a cancel needs no undo. A list that changes under a lift cancels it.
+- Pointer: tiles are `Draggable` (mouse past `MouseSlop`; touch after a 500 ms hold, see below). The rule for a hit, the
+  concept's `moveRel`: onto a later entry the item lands after it, onto an earlier one before it, onto a group head after it.
+  A target triggers once, cannot trigger again until the pointer has left it, and never sooner than `DwellMs` after the last.
+  A 40 ms interval re-runs the hit while lifted (a resting pointer, the edge auto-scroll moving content under it). While
+  lifted the re-flow animates during scroll (`AnimateDuringScroll`). `Slot(rect)` draws under the tiles at the packed rect.
+- Keyboard: `PackKeyboard.LiftMode` (Space lifts, arrows move, Space/Enter drop, Esc cancels, focus loss drops).
+  `MoveBy` and `MoveToward` commit one step at once when nothing is lifted. Left/right: one step in order; up/down: onto the
+  `Nearest` entry. After a move the item is brought into view once the slide ends. Plain arrows move focus between tiles;
+  modified arrows bubble to the board (a theme's Alt+Shift+arrows reads `FocusedKey`).
+- Drag-in: the grid is a drop target for `AcceptKinds`; `Materialize` makes a provisional item that joins the projection
+  under the pointer; a release commits through `OnForeignCommit(payload, index)`; leaving removes it.
+- Announcements on edges only (`Grab`, `Move` throttled, `Drop`, `Cancel`, `Edge`), composed by the app (`AnnounceText`).
+
+## Press and hold (`BoxEl.Hold`, `OnHold`, `OnHoldReleased`)
+
+- `HoldSpec(TouchMs, MouseMs, SlopDip, DragWindowMs)`; `MouseMs` 0: the mouse does not hold.
+- Touch: the arena's Hold member, with the node's own dwell. A node with `OnHold` takes the hold instead of raising its
+  context request. A draggable node that holds enrolls no axis-locked drag at the down, so a pan scrolls until the hold
+  fires; after it, a move past the slop inside `DragWindowMs` lifts the node's drag. A release without that fires
+  `OnHoldReleased`. The press's tap is swallowed.
+- Mouse: a timer on the press (ticked with the gesture arenas; `HasArmedHold` keeps frames coming). A move past the slop
+  before the dwell cancels it; after it, a move past the slop arms the drag of the nearest draggable. The click is swallowed.
+
+## Tile motion (2-D)
+
+`TileMotion.Tilt`: a press listener (`HoverScopeTransparent` + `OnPointerPressed`) seeds scale and 1-2 DIP of travel toward
+the press point on the tile's own node, and eases back when the pointer is no longer held. `TileMotion.TurnOver`: scale X to
+0, swap the face at the half, back to 1; reduced motion cross-fades. The transform is a 2x3 affine: no perspective.
