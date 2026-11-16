@@ -2123,8 +2123,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // Union a just-appended glyph run's transformed DIP box (plus its cull halo) into the pending-text box.
     private void NotePendingText(float x, float y, float w, float h, float m11, float m12, float m21, float m22, float dx, float dy, float halo)
     {
-        RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
-        l -= halo; t -= halo; r += halo; b += halo;
+        RepaintCull.Footprint(x, y, w, h, m11, m12, m21, m22, dx, dy, halo, out float l, out float t, out float r, out float b);
         if (!_pendTextAny) { _pendTextL = l; _pendTextT = t; _pendTextR = r; _pendTextB = b; _pendTextAny = true; return; }
         if (l < _pendTextL) _pendTextL = l;
         if (t < _pendTextT) _pendTextT = t;
@@ -2137,8 +2136,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void CoverPendingText(float x, float y, float w, float h, float m11, float m12, float m21, float m22, float dx, float dy, float halo)
     {
         if (!_pendTextAny) return;
-        RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
-        if (r + halo <= _pendTextL || l - halo >= _pendTextR || b + halo <= _pendTextT || t - halo >= _pendTextB) return;
+        RepaintCull.Footprint(x, y, w, h, m11, m12, m21, m22, dx, dy, halo, out float l, out float t, out float r, out float b);
+        if (r <= _pendTextL || l >= _pendTextR || b <= _pendTextT || t >= _pendTextB) return;
         _frameTextCoverFlushes++;
         FlushSegment(_streamLw, _streamLh);
     }
@@ -2811,8 +2810,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         float m11, float m12, float m21, float m22, float dx, float dy, float halo)
     {
         if (!_cullActive) return false;
-        RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
-        if (RepaintCull.Keep(l, t, r, b, halo, in _cullRect)) return false;
+        RepaintCull.Footprint(x, y, w, h, m11, m12, m21, m22, dx, dy, halo, out float l, out float t, out float r, out float b);
+        if (RepaintCull.Keep(l, t, r, b, 0f, in _cullRect)) return false;
         _rcCulledTally++;
         return true;
     }
