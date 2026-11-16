@@ -631,12 +631,13 @@ public sealed partial class AnimEngine
 
     /// <summary>How far the node's live translate rows have it from where they rest: for each live, undriven TranslateX/Y row,
     /// its position minus its target, summed per axis. True when the node has a live translate or scale row at all (a scale
-    /// moves its rect too, which this cannot express, so a caller that needs the rest rect knows it is not there yet). A
-    /// node's rest rect is <c>SceneStore.AbsoluteRect</c> minus these offsets summed up its parent chain (the connected
-    /// navigation flight's destination). O(rows on the node), allocation-free.</summary>
-    internal bool RestOffset(NodeHandle node, out float dx, out float dy)
+    /// moves its rect too, which this cannot express, so a caller that needs the rest rect knows it is not there yet:
+    /// <paramref name="scaling"/>). A node's rest rect is <c>SceneStore.AbsoluteRect</c> minus these offsets summed up its parent
+    /// chain (the connected navigation flight's destination). O(rows on the node), allocation-free.</summary>
+    internal bool RestOffset(NodeHandle node, out float dx, out float dy, out bool scaling)
     {
         dx = 0f; dy = 0f;
+        scaling = false;
         bool live = false;
         for (int s = _slab.HeadOnNode((int)node.Raw.Index); s >= 0; s = _slab.At(s).NextOnNode)
         {
@@ -646,10 +647,17 @@ public sealed partial class AnimEngine
             {
                 case AnimChannel.TranslateX: live = true; if (!r.Has(AnimFlags.Driven)) dx += r.Position - r.To; break;
                 case AnimChannel.TranslateY: live = true; if (!r.Has(AnimFlags.Driven)) dy += r.Position - r.To; break;
-                case AnimChannel.ScaleX or AnimChannel.ScaleY: live = true; break;
+                case AnimChannel.ScaleX or AnimChannel.ScaleY: live = true; scaling = true; break;
             }
         }
         return live;
+    }
+
+    /// <summary>Does <paramref name="node"/> have a live (unsettled) row on <paramref name="channel"/>? O(rows on the node).</summary>
+    internal bool HasLiveRow(NodeHandle node, AnimChannel channel)
+    {
+        int s = Find(node, channel);
+        return s >= 0 && !_slab.At(s).Has(AnimFlags.Done);
     }
 
     /// <summary>Does a live (unsettled) row drive the node's pose: its opacity, translate or scale? An entrance cascade leaves such a

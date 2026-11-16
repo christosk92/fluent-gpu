@@ -168,9 +168,12 @@ public sealed partial class ConnectedAnimation
     /// <summary>Register a node as a shared-element participant for <paramref name="key"/> (its <c>MorphId</c>).</summary>
     public void NoteTagged(NodeHandle node, string key)
     {
+        // A whole picture (WholeKey: a generated cover) registers under the key without its mark, and remembers that it is one.
+        bool whole = key.Length > 1 && key[0] == WholeMark;
         if (_tagged.TryGetValue(node, out string? t))
         {
-            if (t == key) return;   // already tagged with this key
+            bool same = whole ? t.AsSpan().SequenceEqual(key.AsSpan(1)) : t == key;
+            if (same && whole == _whole.Contains(node)) return;   // already tagged with this key
             // REASSIGNED to a different shared element on a REUSED node: the detail shell serves successive routes, so its
             // ONE cover node re-tags (album:A → album:B / a sidebar nav to another playlist) every navigation. A fly still
             // in flight under the OLD key is culling this node (Visible cleared + Opacity 0, re-applied each frame by
@@ -180,7 +183,10 @@ public sealed partial class ConnectedAnimation
             // for `key` is genuinely in flight.
             ReleaseCull(node);
         }
-        _tagged[node] = key;
+        string bare = whole ? key.Substring(1) : key;
+        _tagged[node] = bare;
+        if (whole) _whole.Add(node); else _whole.Remove(node);
+        NoteNavTagged(bare);   // a navigation flight landing on this key looks again (the loaded header replacing its plate)
     }
 
     // Undo a fly-cull (NodeFlags.Visible cleared + Opacity 0) left on a node whose shared-element key is being reassigned.
@@ -201,7 +207,7 @@ public sealed partial class ConnectedAnimation
     /// (the forward path owns it) or motion is reduced.</summary>
     public void CaptureOnLeave(NodeHandle node, bool removeTag)
     {
-        if (removeTag) _tagged.Remove(node);   // cleanup; reverse-fly capture (Back) is Phase 6
+        if (removeTag) { _tagged.Remove(node); _whole.Remove(node); }   // cleanup; reverse-fly capture (Back) is Phase 6
     }
 
     // ── forward capture at click (app, before the nav route write) ───────────────────────────────
