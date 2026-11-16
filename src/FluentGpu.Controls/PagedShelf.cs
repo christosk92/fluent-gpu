@@ -1355,6 +1355,14 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         _pageScrollSig = pageScrollSig;                 // the hoisted watcher/latch delegates read the live slot
         _inputHooks = UseContext(InputHooks.Current);   // keyboard page-follow's focus-visual probe (FollowFocusToPage)
         _ = _bandTick.Value;                           // subscribe → the latch's wake re-renders us with the strip
+        // Nothing remembered for this call site (see ShelfWidthMemory) and an ancestor knows the slot's width (a pack grid tile): fit at it
+        // on the first render, so the cards realize at the width their cells take and no width hint lands a frame after the mount.
+        if (!_rendered && _sw.Peek() <= 1f
+            && Context.ResolveContextSignal?.Invoke(Context.AnchorNode, MeasureMemory.KnownWidth)?.Peek() is float known && known > 1f)
+        {
+            _w.Value = known;
+            _sw.Value = known;
+        }
         float w = _sw.Value;                           // subscribe → re-fit when the width the columns are chosen at moves
         // The live width sizes the cards for those columns. A measured strip pins its own width to it (below), so it re-renders with it; a
         // fill strip's cells follow layout, and its cards' width hint follows from the bounds handler.

@@ -444,7 +444,9 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
                 Shadow = kbLifted ? Elevation.Flyout : null,
                 ScaleX = liftScale, ScaleY = liftScale,
                 HitTestVisible = phase != PackItemPhase.Provisional,
-                Children = [hasOutset ? InkLayer(p.Template(item, cell), outset) : p.Template(item, cell)],
+                // the tile's exact width, known before layout: a measuring control inside (a shelf) seeds its first fit from it
+                Children = [Ctx.Provide(MeasureMemory.KnownWidth, q.W,
+                    hasOutset ? InkLayer(p.Template(item, cell), outset) : p.Template(item, cell))],
             });
         }
         // forget cells of keys that left the list

@@ -28,6 +28,12 @@ public static class MeasureMemory
     /// identity), and every keyed measurement below composes its role key onto it. Default empty (the role key alone).</summary>
     public static readonly Context<string> Scope = new("");
 
+    /// <summary>The exact width of the slot below, provided by a container that knows it before layout (a pack grid's tile: its
+    /// packed box). A measuring control with nothing remembered seeds its FIRST render from it instead of a provisional width, so
+    /// it fits in its mount frame rather than one frame later. 0 (the default): not known. Read untracked, once: a seed, never a
+    /// subscription; the control's own measure stays the truth (a padded body inside the slot corrects as it always did).</summary>
+    public static readonly Context<float> KnownWidth = new(0f);
+
     /// <summary>The most keys remembered at once (least recently captured dropped first).</summary>
     public const int Capacity = 1024;
 
