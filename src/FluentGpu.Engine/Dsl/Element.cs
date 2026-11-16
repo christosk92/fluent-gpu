@@ -335,6 +335,16 @@ public sealed record BoxEl : Element
     /// <summary>The drag aborted (Escape / pointer-capture loss / window blur): drop hints without committing. Also the abort
     /// edge of an <c>OnDrag</c> capture owner whose contact dies with no release (its OnClick commit never comes).</summary>
     public Action? OnDragCanceled { get => (_cGesture ?? BoxColdGesture.Default).OnDragCanceled; init { if (!EqualityComparer<Action?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnDragCanceled, value)) CGesture.OnDragCanceled = value; } }
+    /// <summary>Press and hold (pinned Home): how long a press must stay inside its slop before <see cref="OnHold"/> fires, per
+    /// pointer kind (<see cref="HoldSpec.MouseMs"/> 0: the mouse does not hold). Null with an <see cref="OnHold"/> handler means
+    /// the default spec (touch 500 ms, no mouse hold).</summary>
+    public HoldSpec? Hold { get => (_cGesture ?? BoxColdGesture.Default).Hold; init { if (!EqualityComparer<HoldSpec?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).Hold, value)) CGesture.Hold = value; } }
+    /// <summary>The hold's dwell elapsed inside the slop. The press's click is swallowed. A node with this handler takes the
+    /// hold instead of raising <c>OnContextRequested</c> (Hold). After it, movement past the slop within
+    /// <see cref="HoldSpec.DragWindowMs"/> promotes the node's own drag (<see cref="Draggable"/>): "hold, then drag".</summary>
+    public Action<HoldEventArgs>? OnHold { get => (_cGesture ?? BoxColdGesture.Default).OnHold; init { if (!EqualityComparer<Action<HoldEventArgs>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnHold, value)) CGesture.OnHold = value; } }
+    /// <summary>Released after <see cref="OnHold"/> with no drag (WinUI opens the card's menu here).</summary>
+    public Action<HoldEventArgs>? OnHoldReleased { get => (_cGesture ?? BoxColdGesture.Default).OnHoldReleased; init { if (!EqualityComparer<Action<HoldEventArgs>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnHoldReleased, value)) CGesture.OnHoldReleased = value; } }
     /// <summary>E5-L2 typed drag SOURCE (the Flutter Draggable / react-beautiful-dnd model — deliberately NOT WinUI
     /// OLE, per the 2026-06-10 user ruling): marks this box draggable (implies <see cref="CanDrag"/> — the L1 gesture
     /// armer) with a string Kind discriminator + a payload factory the engine resolves ONCE when the press promotes

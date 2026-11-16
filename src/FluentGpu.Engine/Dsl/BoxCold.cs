@@ -210,6 +210,9 @@ internal sealed class BoxColdGesture : IEquatable<BoxColdGesture>
     public Action<DragEventArgs>? OnDragDelta;
     public Action<DragEventArgs>? OnDragCompleted;
     public Action? OnDragCanceled;
+    public HoldSpec? Hold;
+    public Action<HoldEventArgs>? OnHold;
+    public Action<HoldEventArgs>? OnHoldReleased;
     public DragSource? Draggable;
     public DropTargetSpec? DropTarget;
     public bool Repeats;
@@ -247,6 +250,9 @@ internal sealed class BoxColdGesture : IEquatable<BoxColdGesture>
             && EqualityComparer<Action<DragEventArgs>?>.Default.Equals(OnDragDelta, o.OnDragDelta)
             && EqualityComparer<Action<DragEventArgs>?>.Default.Equals(OnDragCompleted, o.OnDragCompleted)
             && EqualityComparer<Action?>.Default.Equals(OnDragCanceled, o.OnDragCanceled)
+            && EqualityComparer<HoldSpec?>.Default.Equals(Hold, o.Hold)
+            && EqualityComparer<Action<HoldEventArgs>?>.Default.Equals(OnHold, o.OnHold)
+            && EqualityComparer<Action<HoldEventArgs>?>.Default.Equals(OnHoldReleased, o.OnHoldReleased)
             && EqualityComparer<DragSource?>.Default.Equals(Draggable, o.Draggable)
             && EqualityComparer<DropTargetSpec?>.Default.Equals(DropTarget, o.DropTarget)
             && EqualityComparer<bool>.Default.Equals(Repeats, o.Repeats)
