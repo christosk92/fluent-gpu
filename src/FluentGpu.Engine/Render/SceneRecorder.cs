@@ -1382,8 +1382,13 @@ internal sealed partial class SceneRecordingContext
             return false;
         }
         // Inside an inline group layer no slice may be cut (its marker would sit inside a layer the tile replay applies to
-        // nothing): the subtree records inline with its pose baked, and re-records when that pose moves.
-        if (stats.InlineLayerDepth > 0 || (pose == SliceRecorder.PoseKind.Effect && !sl.EffectBudgetFor(idx, node.Raw.Gen, SliceRole.Main)))
+        // nothing): the subtree records inline with its pose baked, and re-records when that pose moves. A composited transition
+        // layer posed with a scale spends no share of its own: its Main slice only carries its opacity group's Layer slice, which
+        // spends the one share the pair costs (ScaledCutAllowed asks for it; BudgetClass.Carrier).
+        bool scaleCandidate = pose == SliceRecorder.PoseKind.Effect && p.CompositeLayer
+            && (p.LocalTransform.M11 != 1f || p.LocalTransform.M22 != 1f || p.LocalTransform.M12 != 0f || p.LocalTransform.M21 != 0f);
+        if (stats.InlineLayerDepth > 0
+            || (pose == SliceRecorder.PoseKind.Effect && !scaleCandidate && !sl.EffectBudgetFor(idx, node.Raw.Gen, SliceRole.Main)))
         {
             if (pose == SliceRecorder.PoseKind.Effect) sl.NoteFolded();
             if (stats.InlineLayerDepth == 0) sl.NoteRefusedCut(stats.CurSlot);   // a budget decision a later pass may reverse
@@ -1411,13 +1416,27 @@ internal sealed partial class SceneRecordingContext
                 (float)(vsc.WindowOrigin - baseOffset), vsc.ZoomFactor);
             freeLocal = free.LocalTransform;
         }
+        bool scaled = false;
         if (!SliceRecorder.SameLinear(in posedLocal, in freeLocal))
         {
-            // a pose that is not a pure translation of the free one (a zoom mid-gesture, an animated scale on the content
-            // node): record inline with it baked; the fresh slot, never registered, retires at the end of the pass.
-            sl.AddBaked(stats.CurSlot, node, posedLocal);
-            return false;
+            // A composited transition layer whose pose carries an axis-aligned SCALE (a page growing in, shrinking out, a drill
+            // zoom) records pose-free like its translate: its stream becomes its opacity group's Layer slice alone (the walk
+            // below forces that group, ScaledCompositeLayer) and the composite draws that group scaled (CompositeItem.SlideScaleX),
+            // so the transition re-records nothing below the layer. Anything else — a zoom mid-gesture, an animated scale on a
+            // content node, a scale whose group the stream could not be (ScaledCutAllowed) — records inline with its pose
+            // baked; the fresh slot, never registered, retires at the end of the pass.
+            bool budgetDenied = false;
+            scaled = scaleCandidate && ScaledCutAllowed(scene, sl, node, in p, in baseWorld, in posedLocal, sl.HoldsEffectShare(slot), out budgetDenied);
+            if (!scaled)
+            {
+                if (budgetDenied) { sl.NoteFolded(); sl.NoteRefusedCut(stats.CurSlot); }   // a budget decision a later pass may reverse
+                sl.AddBaked(stats.CurSlot, node, posedLocal);
+                return false;
+            }
+            sl.ReleaseEffectShare(slot);   // the share it held last pass (cut as a plain transition layer) goes to its Layer slice
+            sl.SetBudget(slot, SliceRecorder.BudgetClass.Carrier);
         }
+        else if (p.CompositeLayer) sl.ClearScaleRefused(idx);   // back to a translation: a later scale may be composited again
         if (!HasWalkStackHeadroom(ref stats)) return true;   // counted + reported; the subtree goes unpainted, never a stack overflow
         Affine2D posedW = SliceRecorder.Conjugate(in baseWorld, in posedLocal, ox, oy);
         Affine2D freeW = SliceRecorder.Conjugate(in baseWorld, in freeLocal, ox, oy);
@@ -1429,6 +1448,7 @@ internal sealed partial class SceneRecordingContext
         sl.AddChild(stats.CurSlot, slot);
         sl.SetPose(slot, pose, in baseWorld, ox, oy, in freeLocal, ownDx, ownDy);
         if (p.CompositeLayer) sl.SetFractional(slot);
+        if (scaled) sl.SetScalable(slot);
         sl.SetMarker(slot, in clip, 0, default, default);
         if (pose == SliceRecorder.PoseKind.Content)
         {
@@ -1471,11 +1491,39 @@ internal sealed partial class SceneRecordingContext
         // (span bounds, damage, cull) covers the viewport it owns, never the whole (far taller) content.
         if (res.HasBounds)
         {
-            RectF painted = SliceRecorder.Offset(res.SubtreeBounds, ownDx, ownDy);
+            RectF painted = scaled ? SliceRecorder.PoseBounds(in posedW, in freeW, res.SubtreeBounds)
+                : SliceRecorder.Offset(res.SubtreeBounds, ownDx, ownDy);
             result.Include(clip.IsInfinite ? painted : painted.Intersect(clip));
         }
         return true;
     }
+
+    /// <summary>May the composited transition layer at <paramref name="node"/>, posed with the axis-aligned scale
+    /// <paramref name="posedLocal"/>, be cut pose-free with that scale as a composite parameter? Its stream must come out as ONE
+    /// opacity group (the Layer slice the walk forces, <see cref="ScaledCompositeLayer"/>) for the composite to draw scaled: not
+    /// when the node needs another group (an edge fade, a self-blur, an acrylic frost), carries a composite sticky clip, a scale
+    /// the composite could not draw (not axis-aligned, under a rotated base, non-positive) or one a placement already refused
+    /// (<see cref="SliceRecorder.ScaleRefused"/>), or when no effect budget is left for the group (<paramref name="heldShare"/>: the
+    /// layer's own Main slice holds a share from last pass, which it hands to the group).</summary>
+    private bool ScaledCutAllowed(SceneRecordingSnapshot scene, SliceRecorder sl, NodeHandle node, in NodePaint p,
+        in Affine2D baseWorld, in Affine2D posedLocal, bool heldShare, out bool budgetDenied)
+    {
+        budgetDenied = false;
+        if (posedLocal.M12 != 0f || posedLocal.M21 != 0f || posedLocal.M11 <= 0f || posedLocal.M22 <= 0f) return false;
+        if (baseWorld.M12 != 0f || baseWorld.M21 != 0f || baseWorld.M11 == 0f || baseWorld.M22 == 0f) return false;
+        int idx = (int)node.Raw.Index;
+        if (sl.ScaleRefused(idx, node.Raw.Gen) || sl.IsStickyClipNode(idx)) return false;
+        if (p.BlurSigma > 0.01f || scene.TryGetAcrylic(node, out _)) return false;
+        NodeFlags flags = scene.Flags(node);
+        if (TryResolveEdgeFade(scene, node, flags, (flags & NodeFlags.SparsePaint) != 0, out _)) return false;
+        budgetDenied = !heldShare && !sl.EffectBudgetFor(idx, node.Raw.Gen, SliceRole.Layer); return !budgetDenied;
+    }
+
+    /// <summary>Is the walk at <paramref name="node"/> the self walk of a SCALED composited transition layer
+    /// (<see cref="ScaledCutAllowed"/>)? Its opacity group is then made even at full or zero opacity: the group is what the composite
+    /// draws scaled.</summary>
+    private static bool ScaledCompositeLayer(in RecordAccumulator stats, bool isSliceSelf, int selfSlot)
+        => isSliceSelf && stats.Slicing && selfSlot > SliceRecorder.RootSlot && stats.Slices!.IsScalable(selfSlot);
 
     private SpanRecordResult WalkCore(SceneRecordingSnapshot scene, DrawList dl, ImageRecordingSnapshot? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                                          int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
@@ -1665,8 +1713,10 @@ internal sealed partial class SceneRecordingContext
         bool isBlurGroup = isBlurCandidate;
         // ── flat opacity group (NodePaint.OpacityGroup, WinUI Composition LayerVisual semantics): the subtree renders at
         // FULL alpha into a pooled offscreen RT and composites ONCE at the group alpha. Skipped at alpha ≈ 1 (a no-op) and
-        // ≈ 0 (invisible — still walked for hit/anim state). A self-blur group SUBSUMES it.
-        bool isOpacityGroup = !isEdgeFade && !isBlurGroup && (p.OpacityGroup || p.CompositeLayer) && opacity < 0.999f && opacity > 0.001f && overlapsClip;
+        // ≈ 0 (invisible — still walked for hit/anim state). A self-blur group SUBSUMES it. A SCALED composited transition layer
+        // (ScaledCutAllowed) always makes it, whatever its opacity: the group is what the composite draws at the layer's scale.
+        bool isOpacityGroup = !isEdgeFade && !isBlurGroup && (p.OpacityGroup || p.CompositeLayer)
+            && (ScaledCompositeLayer(in stats, isSliceSelf, selfSlot) || (opacity < 0.999f && opacity > 0.001f && overlapsClip));
         if (isBlurGroup || (isEdgeFade && edgeFade.Mode != EdgeFadeMode.Fade)) stickyCut = false;
         // EdgeFadeSpec.WhileStuck: the fade exists only while the node's own sticky clip is engaged. On a composite sticky
         // cut the MARKER carries it (CompositeSliceFlags.FadeWhileStuck) and the composite plan decides per turn from the

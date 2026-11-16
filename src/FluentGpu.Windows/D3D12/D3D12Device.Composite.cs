@@ -1406,6 +1406,7 @@ public sealed unsafe partial class D3D12Device
             Mix(ref h, (ulong)(uint)it.Kind << 32 | (uint)it.SliceId);
             Mix(ref h, (ulong)(uint)(int)it.Transform.Dx << 32 | (uint)(int)it.Transform.Dy);
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.SubPxX) << 32 | BitConverter.SingleToUInt32Bits(it.SubPxY));   // a posed blur between pixels
+            Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.SlideScaleX) << 32 | BitConverter.SingleToUInt32Bits(it.SlideScaleY));   // a scaled slide group
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Alpha) << 32 | BitConverter.SingleToUInt32Bits(it.BlurSigma));
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Clip.X) << 32 | BitConverter.SingleToUInt32Bits(it.Clip.Y));
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Clip.W) << 32 | BitConverter.SingleToUInt32Bits(it.Clip.H));
@@ -1651,16 +1652,19 @@ public sealed unsafe partial class D3D12Device
         PixelRect region = _itemRegion[i];
         ItemScissor(in it, ox, oy);
         int down = _itemDown[i];
-        if (it.SubPxX != 0f || it.SubPxY != 0f)
+        if (it.Displaced)
         {
-            // A posed self-blur between whole pixels (CompositeItem.SubPxX): its surface drawn that much further, bilinearly,
-            // clamped to the region it holds (a pooled scratch past it is not this blur's).
-            float fx = it.SubPxX, fy = it.SubPxY;
+            // A posed self-blur between whole pixels (CompositeItem.SubPxX), or a slide group at its pose (SubPx, and its slide
+            // scale: a page growing in or shrinking out): its surface drawn there, bilinearly, clamped to the region it holds (a
+            // pooled scratch past it is not this item's). A rest pixel p lands at p·scale + SubPx.
+            float sx = it.ScaleX, sy = it.ScaleY;
+            float x0 = region.Left * sx + it.SubPxX - ox, y0 = region.Top * sy + it.SubPxY - oy;
+            float x1 = region.Right * sx + it.SubPxX - ox, y1 = region.Bottom * sy + it.SubPxY - oy;
             float clampU = ((region.Right - region.Left) / (float)down - 0.5f) / _surfaces!.ScratchW(s);
             float clampV = ((region.Bottom - region.Top) / (float)down - 0.5f) / _surfaces.ScratchH(s);
-            DrawItemQuad(in it, region.Left - ox + fx, region.Top - oy + fy, region.Right - ox + fx, region.Bottom - oy + fy, ox, oy, feathers,
+            DrawItemQuad(in it, x0, y0, x1, y1, ox, oy, feathers,
                 it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.SampleScreen : SliceCompositor.Pso.Sample, _surfaces.ScratchSrv(s),
-                sample: true, 1f / (down * _surfaces.ScratchW(s)), 1f / (down * _surfaces.ScratchH(s)), clampU, clampV);
+                sample: true, 1f / (down * sx * _surfaces.ScratchW(s)), 1f / (down * sy * _surfaces.ScratchH(s)), clampU, clampV);
         }
         else if (down <= 1)
             DrawItemQuad(in it, region.Left - ox, region.Top - oy, region.Right - ox, region.Bottom - oy, ox, oy, feathers,

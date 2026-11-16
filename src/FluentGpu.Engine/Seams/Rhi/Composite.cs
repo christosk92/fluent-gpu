@@ -86,13 +86,27 @@ public readonly record struct AcrylicRecipe(ColorF Tint, ColorF Fallback, float 
 /// <see cref="SubPxX"/>/<see cref="SubPxY"/> = the part of a POSED self-blur's placement below a whole device pixel
 /// (−0.5..0.5): <see cref="Transform"/> stays whole (its tiles, its blur source and its retained blur are placed by it), and
 /// the backend draws the blurred surface that much further, bilinearly — so a blurred row moved by its pose glides at the
-/// sub-pixel precision its re-raster used to give it, without re-rastering or re-blurring.</summary>
+/// sub-pixel precision its re-raster used to give it, without re-rastering or re-blurring. A SLIDE GROUP's surface (rendered at
+/// its members' REST placement) is drawn the same way at its pose; <see cref="SlideScaleX"/>/<see cref="SlideScaleY"/> (0 = 1, unscaled)
+/// add an axis-aligned scale to that pose: a rest-surface pixel at window px <c>p</c> lands at <c>p · SlideScale + SubPx</c>
+/// (a composited transition layer that scales: a page growing in or shrinking out, re-recording nothing below it).</summary>
 public readonly record struct CompositeItem(int SliceId, CompositeKind Kind, Affine2D Transform, float Alpha, RectF Clip,
     CornerRadius4 ClipRadii, EdgeFeather Feather, float BlurSigma, AcrylicRecipe Acrylic, byte BlendCopy,
     RectF RoundClip = default, int GroupCount = 0, byte HasLayer = 0, RectF SourceClip = default,
     EdgeFeather Feather2 = default, RectF Footprint = default, byte Inherited = 0, byte LowResDown = 0, RectF Opaque = default,
-    FeedbackSpec Feedback = default, Affine2D FeedbackWarp = default, float FeedbackDecay = 0f, float SubPxX = 0f, float SubPxY = 0f)
+    FeedbackSpec Feedback = default, Affine2D FeedbackWarp = default, float FeedbackDecay = 0f, float SubPxX = 0f, float SubPxY = 0f,
+    float SlideScaleX = 0f, float SlideScaleY = 0f)
 {
+    /// <summary>The surface is drawn away from its rest placement: a sub-pixel offset and/or a slide scale (<see cref="SubPxX"/>,
+    /// <see cref="SlideScaleX"/>).</summary>
+    public bool Displaced => SubPxX != 0f || SubPxY != 0f || Scaled;
+    /// <summary>A slide group drawn scaled (<see cref="SlideScaleX"/>).</summary>
+    public bool Scaled => (SlideScaleX != 0f && SlideScaleX != 1f) || (SlideScaleY != 0f && SlideScaleY != 1f);
+    /// <summary>The horizontal draw scale (1 when unscaled).</summary>
+    public float ScaleX => SlideScaleX != 0f ? SlideScaleX : 1f;
+    /// <summary>The vertical draw scale (1 when unscaled).</summary>
+    public float ScaleY => SlideScaleY != 0f ? SlideScaleY : 1f;
+
     /// <summary>A FEEDBACK item (BoxEl.Feedback, visualizer F6): a <see cref="CompositeKind.Direct"/> low-res item whose backend
     /// surface persists and is advanced through <see cref="FeedbackWarp"/> / <see cref="FeedbackDecay"/> each change.</summary>
     public bool IsFeedback => FeedbackDecay > 0f;

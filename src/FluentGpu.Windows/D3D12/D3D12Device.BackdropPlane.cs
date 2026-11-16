@@ -142,7 +142,7 @@ public sealed unsafe partial class D3D12Device
         if (!it.Feather.IsNone || !it.Feather2.IsNone) return "feather";
         // the low-res route samples source-over for BlendCopy 0 and BlendCopyWrite alike (DrawSurfaceItem): only SCREEN differs
         if (it.BlendCopy == CompositeItem.BlendScreen) return "blend-screen";
-        if (it.SubPxX != 0f || it.SubPxY != 0f) return "subpx";
+        if (it.Displaced) return "subpx";
         if (_itemSurface[k] < 0) return "no-surface";
         if (_itemChunkCount[k] != 0) return "chunks";
         if (_itemDown[k] != it.LowResDown) return "down-mismatch";
