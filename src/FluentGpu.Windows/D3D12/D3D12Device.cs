@@ -5445,7 +5445,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // values the new fence (restarting at 0) would not reach for a long time: drop them, restart their sequences.
         ReleaseValidatorsForRecovery();
         _feedbackTrails.Clear(); Volatile.Write(ref _feedbackLive, 0);   // F6: trails restart empty after a device loss
-        _groupMemos.Clear();   // the surfaces they describe went with the pool
+        _groupMemoCount = 0;   // the surfaces they describe went with the pool (the memos stay, unused)
         ReleaseGroupRepairValidation();
         _compositor?.Dispose(); _compositor = null;
         _imageTextures?.Dispose(); _imageTextures = null;

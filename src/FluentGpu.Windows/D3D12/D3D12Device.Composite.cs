@@ -1203,7 +1203,17 @@ public sealed unsafe partial class D3D12Device
         public int Turn;
     }
 
-    private readonly List<GroupMemo> _groupMemos = new(MaxGroupMemos);
+    // Every memo exists from the start (a composite turn never allocates: a receding tile's group mints a new shape each frame of its motion,
+    // and minting the first eight memos in those frames allocated 456 bytes a frame, SKILL rule 7); _groupMemoCount of them are in use.
+    private readonly GroupMemo[] _groupMemos = NewGroupMemoPool();
+    private int _groupMemoCount;
+
+    private static GroupMemo[] NewGroupMemoPool()
+    {
+        var pool = new GroupMemo[MaxGroupMemos];
+        for (int k = 0; k < pool.Length; k++) pool[k] = new GroupMemo();
+        return pool;
+    }
     private GroupEntry[] _groupEntries = new GroupEntry[16];
     private readonly PixelRect[] _groupDirty = new PixelRect[GroupDelta.MaxDirtyRects];
     private PixelRect _drawClip;
@@ -1215,7 +1225,7 @@ public sealed unsafe partial class D3D12Device
 
     private GroupMemo? FindGroupMemo(ulong shape)
     {
-        for (int k = 0; k < _groupMemos.Count; k++) if (_groupMemos[k].Shape == shape) return _groupMemos[k];
+        for (int k = 0; k < _groupMemoCount; k++) if (_groupMemos[k].Shape == shape) return _groupMemos[k];
         return null;
     }
 
@@ -1223,17 +1233,17 @@ public sealed unsafe partial class D3D12Device
     /// lines move mints a new shape every turn — recycling keeps that allocation-free).</summary>
     private const int MaxGroupMemos = 8;
 
-    /// <summary>A memo for a shape seen for the first time: a fresh one while fewer than <see cref="MaxGroupMemos"/> exist,
-    /// else the least recently used one, recycled.</summary>
+    /// <summary>A memo for a shape seen for the first time: an unused one of the pool while fewer than <see cref="MaxGroupMemos"/> are in use,
+    /// else the least recently used one, recycled (never an allocation).</summary>
     private GroupMemo NewGroupMemo(ulong shape)
     {
         GroupMemo? memo = null;
-        if (_groupMemos.Count >= MaxGroupMemos)
+        if (_groupMemoCount >= MaxGroupMemos)
         {
             memo = _groupMemos[0];
-            for (int k = 1; k < _groupMemos.Count; k++) if (_groupMemos[k].Turn < memo.Turn) memo = _groupMemos[k];
+            for (int k = 1; k < _groupMemoCount; k++) if (_groupMemos[k].Turn < memo.Turn) memo = _groupMemos[k];
         }
-        else _groupMemos.Add(memo = new GroupMemo());
+        else memo = _groupMemos[_groupMemoCount++];
         memo.Shape = shape;
         memo.Count = 0;
         return memo;

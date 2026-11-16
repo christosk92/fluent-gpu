@@ -36,6 +36,16 @@ public sealed partial class AnimEngine
     public List<(NodeHandle Node, NodeHandle VisualParent)> RevealExitCarriers { get; } = new(8);
 
     private readonly record struct SettleKey(uint Index, uint Gen, AnimChannel Channel);
+
+    // The settle map's comparer, made with the map: a default comparer (and the record's own field comparers) is created lazily on its first
+    // lookup, which landed on the animation frame the first reveal settled (88 bytes; Zune's edit mode opening, SKILL rule 7).
+    private sealed class SettleKeyComparer : IEqualityComparer<SettleKey>
+    {
+        public static readonly SettleKeyComparer Instance = new();
+        public bool Equals(SettleKey a, SettleKey b) => a.Index == b.Index && a.Gen == b.Gen && (int)a.Channel == (int)b.Channel;
+        public int GetHashCode(SettleKey k) => HashCode.Combine(k.Index, k.Gen, (int)k.Channel);
+    }
+
     private readonly record struct RevealEntry(NodeHandle Node, int Depth, float Presented, float Target);
 
     private int _revealRows;                                    // live RevealExtent rows (the idle fast path's census)
@@ -44,7 +54,7 @@ public sealed partial class AnimEngine
     private List<NodeHandle> _ovViewports = new(8), _ovPrevViewports = new(8);   // viewports given RevealOverscan
     private List<float> _ovAmount = new(8), _ovPrevAmount = new(8);              // (this pass / last pass)
     private bool _overscanGrew;
-    private readonly Dictionary<SettleKey, Action> _settleCallbacks = new();
+    private readonly Dictionary<SettleKey, Action> _settleCallbacks = new(SettleKeyComparer.Instance);
     private readonly Dictionary<uint, int> _settleIndexRefs = new();   // node index → callbacks registered on it
     private readonly List<Action> _settledQueue = new(32);
     private Action?[] _settledDrain = new Action?[32];
