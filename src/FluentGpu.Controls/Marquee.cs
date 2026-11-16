@@ -468,7 +468,16 @@ internal sealed class MarqueeRunner
         float from = 0f;
         if (_anim is not null && !_strip.Value.IsNull && _anim.TryGetTrackValue(_strip.Value, AnimChannel.TranslateX, out float x)) from = x;
         float dist = MathF.Abs(from);
-        if (dist < 0.5f || _anim is null) { Settle(); return; }
+        if (dist < 0.5f || _anim is null)
+        {
+            // Already at the start, but a pass row may still be on the strip: one seeded this very frame (its first frame holds the
+            // start), whose overflow ended before it moved. Settling alone left that row to run its whole pass on the render thread over
+            // a line that now fits (a crossing that widened the player bar's title scrolled "Nothing playing" out of its box). Put the
+            // strip at its start for good: the snap replaces the row.
+            Snap();
+            Settle();
+            return;
+        }
         float ms = Math.Clamp(dist / MathF.Max(1f, _sty.Speed * 4f) * 1000f, 120f, 450f);
         _anim.Keyframes(_strip.Value, AnimChannel.TranslateX, [new Keyframe(0f, from, Easing.Linear), new Keyframe(1f, 0f, Easing.SmoothOut)], ms);
         _phase = Phase.Home;
