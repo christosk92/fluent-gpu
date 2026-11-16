@@ -48,6 +48,15 @@ public enum ConnectedNavSource : byte
 public readonly record struct ConnectedNavRequest(string Key, bool Back, ConnectedNavSpec Spec,
     ConnectedNavSource Source = ConnectedNavSource.Activated);
 
+/// <summary>Where a navigation that flies nothing grows out of (<see cref="ConnectedAnimation.NavOriginRect"/>): a page of a kind whose
+/// header picture is not the card's (an artist) scales up from the item the user activated, and back into it on Back.
+/// <paramref name="Key"/> names the page (its entity's uri). <paramref name="Remembered"/> false: the element the user just activated,
+/// remembered under the key; true: the element remembered for the key (Back to it, or mouse Forward from it). <paramref name="Frame"/> is
+/// the box the page is laid out in now (window DIP): a remembered element on a page that is not on the live tree (a parked page Back
+/// restores exactly) keeps the rect it had only while that box is unchanged. An element under <paramref name="MinVisible"/> of its area
+/// on screen gives none.</summary>
+public readonly record struct ConnectedOriginRequest(string Key, bool Remembered, RectF Frame, float MinVisible);
+
 /// <summary>Where a connected navigation flight stands (the probe, <see cref="ConnectedAnimation.TryGetNavFlight"/>).</summary>
 public enum ConnectedNavPhase : byte { Pending, Flying, Landed, HandingOff, Abandoned }
 
@@ -133,6 +142,10 @@ public sealed partial class ConnectedAnimation
     /// Forward from it) while it is live and still shows that picture (a recycled row now shows another item).</summary>
     private readonly record struct NavReturn(NodeHandle Node, string? Picture);
 
+    /// <summary>The element a navigation grew out of, per key (<see cref="NavOriginRect"/>), its visible rect then and the frame it was
+    /// measured in.</summary>
+    private readonly record struct OriginReturn(NodeHandle Node, RectF Rect, RectF Frame);
+
     private const int MaxChain = 96;
     private const int SlotClimb = 3;                            // image → the same-sized boxes round it, at most this many levels
     private const float SlotSameSize = 0.5f;
@@ -155,6 +168,8 @@ public sealed partial class ConnectedAnimation
     private readonly Dictionary<string, NavReturn> _navReturn = new(StringComparer.Ordinal);
     private readonly HashSet<NodeHandle> _whole = new();
     private readonly List<string> _deadReturns = new();
+    private readonly Dictionary<string, OriginReturn> _originReturn = new(StringComparer.Ordinal);
+
 
     /// <summary>The element the user just activated (the host hands the input dispatcher's <c>ActivatingNode</c>, else the focused
     /// node): a forward flight's source is the tagged picture inside it.</summary>
@@ -261,6 +276,45 @@ public sealed partial class ConnectedAnimation
         return true;
     }
 
+    /// <summary>The rect (window DIP) a navigation that flies nothing grows out of, or an empty rect for none
+    /// (<see cref="ConnectedOriginRequest"/>): the visible part of the element the user activated, remembered under the key, or the element
+    /// remembered for the key. Asked on a route commit, before the route is written. Allocation-free but for a new key's entry.</summary>
+    public RectF NavOriginRect(in ConnectedOriginRequest r)
+    {
+        string key = r.Key ?? "";
+        if (key.Length == 0) return default;
+        if (r.Remembered)
+        {
+            if (!_originReturn.TryGetValue(key, out OriginReturn ret) || !_scene.IsLive(ret.Node)) return default;
+            // A parked page comes back exactly as it was left: its element is where it was, while the page's box is the same.
+            if (!OnLiveTree(ret.Node))
+            {
+                RectF was = ret.Frame, now = r.Frame;
+                return RectDiffers(in was, in now, RetargetEps) ? default : ret.Rect;
+            }
+            return VisibleOrigin(ret.Node, r.MinVisible, out RectF live) ? live : default;
+        }
+        NodeHandle origin = NavOrigin?.Invoke() ?? NodeHandle.Null;
+        if (origin.IsNull || !_scene.IsLive(origin) || !OnLiveTree(origin) || !VisibleOrigin(origin, r.MinVisible, out RectF rect))
+        {
+            _originReturn.Remove(key);
+            return default;
+        }
+        _deadReturns.Clear();
+        foreach (var kv in _originReturn) if (!_scene.IsLive(kv.Value.Node)) _deadReturns.Add(kv.Key);
+        for (int i = 0; i < _deadReturns.Count; i++) _originReturn.Remove(_deadReturns[i]);
+        _originReturn[key] = new OriginReturn(origin, rect, r.Frame);
+        return rect;
+    }
+
+    // The part of a laid-out element on screen, when it is at least minVisible of it.
+    private bool VisibleOrigin(NodeHandle node, float minVisible, out RectF rect)
+    {
+        rect = EffectiveVisibleRect(node);
+        VisibleArea(node, out float fraction);
+        return !rect.IsEmpty && !rect.IsInfinite && fraction > 0f && fraction >= minVisible;
+    }
+
     // The source of a new flight, or null: forward per the request's source rule, Back the largest visible tagged end with a picture.
     private NodeHandle PickSource(in ConnectedNavRequest r, string key)
     {
@@ -361,7 +415,7 @@ public sealed partial class ConnectedAnimation
                     if (better.IsNull) { AbandonNav(f); continue; }
                     if (better != f.Dest) Refind(f, better);
                 }
-                // A box that was a plate takes a picture when its image mounts (the artist header's photograph, a few frames in).
+                // A box that was a plate takes a picture when its image mounts (a cold header's picture, a few frames in).
                 if (f.DestKind == EndKind.Plate && !PictureOf(f.Dest).IsNull) f.DestKind = EndKind.Picture;
                 RectF rest = RestRect(f.Dest, out _, out _);
                 if (RectDiffers(in rest, in f.Model, RetargetEps))

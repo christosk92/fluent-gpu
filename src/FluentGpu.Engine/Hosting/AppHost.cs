@@ -5817,6 +5817,7 @@ public sealed partial class AppHost : IDisposable
         _reconciler.SetAmbient(SharedTransition.BeginConfigured, new Signal<object?>((Action<FluentGpu.Animation.ConnectedTransitionRequest>)_connected.Begin));
         _reconciler.SetAmbient(SharedTransition.SetMotion, new Signal<object?>((Action<FluentGpu.Animation.ConnectedMotion>)(m => _connected.FlyMotion = m)));   // live fly-curve switcher (app A/B)
         _reconciler.SetAmbient(SharedTransition.BeginNav, new Signal<object?>((Func<FluentGpu.Animation.ConnectedNavRequest, bool>)(r => _connected.BeginNav(in r))));   // connected navigation flight (a card's cover into its page)
+        _reconciler.SetAmbient(SharedTransition.NavOriginRect, new Signal<object?>((Func<FluentGpu.Animation.ConnectedOriginRequest, RectF>)(r => _connected.NavOriginRect(in r))));   // where a page that flies nothing grows from
         _connected.NavOrigin = () => _dispatcher.ActivatingNode is { IsNull: false } acting ? acting : _dispatcher.Focused;   // the element the user acted on
         // Window-visibility ambient: the channel value IS the visibility signal (an IReadSignal<bool>, never re-published),
         // so UseIsActive resolves it once and subscribes to the INNER signal — see Activation.IsActive.
