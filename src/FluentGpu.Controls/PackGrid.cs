@@ -73,6 +73,10 @@ public sealed record PackGridOptions<T>
     public Action<T, HoldEventArgs>? OnHoldReleased { get; init; }
     /// <summary>The grid's own node key.</summary>
     public string? Key { get; init; }
+    /// <summary>How far an item's clip reaches outside its packed box, per edge (default none: the tile clips at its box). For ink that
+    /// overhangs the box on purpose: a full-row band whose heading sits on the page gutter, where a light display glyph ("j") reaches
+    /// left of the line's origin. The box, the pack and every neighbour are unchanged; only the paint may reach the outset.</summary>
+    public Func<T, Edges4>? InkOutset { get; init; }
 }
 
 /// <summary>What a tile announces itself as. The engine has no accessible-name channel on a box yet: the grid applies
@@ -87,10 +91,13 @@ public readonly record struct PackAutomation(string Name, AutomationRole Role, i
 /// </summary>
 public static class PackGrid
 {
-    /// <summary>Bounds, a 250 ms tween on cubic-bezier(0.25, 1, 0.5, 1), SizeMode.Reveal. Reduced motion: a 120 ms fade.</summary>
+    /// <summary>Bounds, a 250 ms tween on cubic-bezier(0.25, 1, 0.5, 1). The size runs as <see cref="SizeMode.Relayout"/>: the tile's own
+    /// subtree (a fixed-size boundary) re-solves at the interpolated size each tick, so its content glides with its box. (Reveal laid the
+    /// content out at the final size at once and eased a clip over it: every right-aligned part, a card's ⋯ corner, a clock column,
+    /// jumped.) Reduced motion: a 120 ms fade.</summary>
     public static LayoutTransition Reflow => Motion.ReducedMotion
-        ? new LayoutTransition(TransitionChannels.Opacity, TransitionDynamics.Tween(120f, EasingSpec.Named(Easing.Linear)), SizeMode.Reveal)
-        : new LayoutTransition(TransitionChannels.Bounds, TransitionDynamics.Tween(250f, EasingSpec.CubicBezier(0.25f, 1f, 0.5f, 1f)), SizeMode.Reveal);
+        ? new LayoutTransition(TransitionChannels.Opacity, TransitionDynamics.Tween(120f, EasingSpec.Named(Easing.Linear)), SizeMode.Relayout)
+        : new LayoutTransition(TransitionChannels.Bounds, TransitionDynamics.Tween(250f, EasingSpec.CubicBezier(0.25f, 1f, 0.5f, 1f)), SizeMode.Relayout);
 
     /// <summary>An added item: fades in from 96 % (reduced motion: the fade only).</summary>
     public static EnterExit FadeIn => new(Opacity: 0f, Sx: Motion.ReducedMotion ? 1f : 0.96f, Sy: Motion.ReducedMotion ? 1f : 0.96f, Active: true);
@@ -229,6 +236,7 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
     Props? _p;
     IReadOnlyList<T> _items = Array.Empty<T>();
     ulong _packStamp;
+    ulong _structStamp;
     ScrollObservation _scroll;
     ScrollHandle? _scrollHandle;
     InputHooks? _hooks;
@@ -313,11 +321,17 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
             stamp = Mix(stamp, (ulong)e.Kind | (ulong)e.Cols << 8 | (ulong)e.Rows << 16 | (ulong)e.Flags << 24 | (ulong)e.OpenMinCols << 32);
             stamp = Mix(stamp, BitConverter.SingleToUInt32Bits(e.Extent));
         }
-        stamp = Mix(stamp, BitConverter.SingleToUInt32Bits(width));
         stamp = Mix(stamp, (ulong)(uint)metrics.GetHashCode());
+        ulong structure = stamp;                    // the order, the entries and the metrics: what a re-flow animates
+        stamp = Mix(stamp, BitConverter.SingleToUInt32Bits(width));
         var r = Result;
         bool repacked = stamp != _packStamp || shown != r.Count;
+        // A plain width change (the same structure at another width: a window resize inside one tier) is not a re-flow: the tiles
+        // follow the width at once, with their content, as the page around them does. Animating the box while its content lays out
+        // at the new width at once would make every right-aligned part jump inside a box still easing.
+        bool widthOnly = repacked && structure == _structStamp && shown == r.Count && r.Width > 0f && width > 0f;
         _packStamp = stamp;
+        _structStamp = structure;
         _metrics = metrics;
         if (repacked)
         {
@@ -380,10 +394,13 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
                 }
             }
             anim = anim with { Exit = o.Exit };
+            LayoutTransition? animate = widthOnly ? null : anim;
             T item = ItemAt(_show[i]);
             bool tileLike = _entries[i].Kind is PackEntryKind.Tile or PackEntryKind.Band;
             bool canLift = reorderOn && tileLike && phase != PackItemPhase.Provisional && (Reorder!.CanLift?.Invoke(item) ?? true);
             bool kbLifted = phase == PackItemPhase.KeyboardLifted;
+            Edges4 outset = o.InkOutset is { } ink ? ink(item) : default;
+            bool hasOutset = outset.Left > 0f || outset.Top > 0f || outset.Right > 0f || outset.Bottom > 0f;
             bool holds = (canLift || o.OnHoldReleased is not null) && phase != PackItemPhase.Provisional;
             bool isFocusable = focusable && tileLike;
             float liftScale = kbLifted ? Reorder!.LiftStyle.Scale : 1f;
@@ -393,8 +410,11 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
                 Width = q.W, Height = q.H,
                 Margin = new Edges4(q.X, q.Y, 0f, 0f),
                 AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
-                Grow = 0f, Shrink = 0f, ClipToBounds = true, Direction = 1,
-                Animate = anim,
+                Grow = 0f, Shrink = 0f, Direction = 1,
+                // clipped at the box: a fixed-size relayout boundary; with an ink outset the clip moves to the layer below and the
+                // wrapper stays a boundary by IsolateLayout
+                ClipToBounds = !hasOutset, IsolateLayout = hasOutset, ZStack = hasOutset,
+                Animate = animate,
                 Focusable = isFocusable,
                 OnKeyDown = isFocusable ? cell.OnKey : null,
                 OnFocusChanged = isFocusable ? cell.OnFocus : null,
@@ -415,7 +435,7 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
                 Shadow = kbLifted ? Elevation.Flyout : null,
                 ScaleX = liftScale, ScaleY = liftScale,
                 HitTestVisible = phase != PackItemPhase.Provisional,
-                Children = [p.Template(item, cell)],
+                Children = [hasOutset ? InkLayer(p.Template(item, cell), outset) : p.Template(item, cell)],
             });
         }
         // forget cells of keys that left the list
@@ -462,6 +482,17 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
     }
 
     static ulong Mix(ulong h, ulong v) => (h ^ v) * 1099511628211UL;
+
+    /// <summary>The clip layer of an item with an ink outset: it fills the wrapper and reaches <paramref name="o"/> beyond it (negative
+    /// margins), clips there, and pads its content back by the same amount, so the content lays out in exactly the packed box.</summary>
+    static BoxEl InkLayer(Element content, Edges4 o) => new()
+    {
+        Direction = 1, ClipToBounds = true, HitTestVisible = true,
+        Margin = new Edges4(-o.Left, -o.Top, -o.Right, -o.Bottom),
+        Padding = o,
+        Children = [content],
+    };
+
 
     // ── shown order ──
 

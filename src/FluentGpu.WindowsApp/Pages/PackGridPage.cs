@@ -9,7 +9,8 @@ using FluentGpu.Signals;
 // The engine's own look at PackGrid (pinned Home's bento): 500 mixed tiles in six groups inside the page's own scroller,
 // a column slider, the tool strip, reorder (pointer, keyboard lift mode), and resize / add / remove / open on the selected
 // tile. DEBUG builds print "[pack] fault ..." to stderr for any pack that breaks the bento (PackLayout.Verify).
-// Screenshot arms (CLI, read once at mount): --pack-columns N, --pack-strip, --pack-open (opens the third tile of group 1).
+// Screenshot arms (CLI, read once at mount): --pack-columns N, --pack-strip, --pack-open (opens the third tile of group 1),
+// --pack-ink (full rows get a 6 DIP ink outset on the left and their title overhangs it: the ink must show, the layout must not move).
 //   FluentGpu.WindowsApp.exe --screenshot out.png --shot page-content:pack-grid --w 1200 --h 900 --pack-columns 4
 [GalleryPage("pack-grid", "Pack grid", "Fundamentals", Icon = Icons.Grid)]
 sealed class PackGridPage : Component
@@ -34,6 +35,7 @@ sealed class PackGridPage : Component
     readonly PackReorder<Item> _reorder;
     int _nextId = 1000;
     bool _argsRead;
+    bool _ink;
 
     public PackGridPage()
     {
@@ -90,6 +92,7 @@ sealed class PackGridPage : Component
         {
             if (args[i] == "--pack-columns" && i + 1 < args.Length && int.TryParse(args[i + 1], out int c)) _columns.Value = Math.Clamp(c, 1, 12);
             if (args[i] == "--pack-strip") _strip.Value = true;
+            if (args[i] == "--pack-ink") _ink = true;
             if (args[i] == "--pack-open") Update(list => SetAt(list, IndexOfFirst(list, 0) + 2, it => it with { Open = true }));
         }
     }
@@ -170,7 +173,7 @@ sealed class PackGridPage : Component
                 Grow = 1f, Direction = 1, Justify = FlexJustify.End, Padding = new Edges4(4, 0, 0, 8),
                 Children = [new TextEl(it.Title) { Size = 20f, Weight = 600, Color = Tok.TextPrimary }],
             };
-        return Embed.Comp(new TileFace.Props(it, cell, _selected, GroupFill[it.Group % GroupFill.Length]), () => new TileFace());
+        return Embed.Comp(new TileFace.Props(it, cell, _selected, GroupFill[it.Group % GroupFill.Length], _ink && it.Size == Size.Full), () => new TileFace());
     }
 
     public override Element Render()
@@ -184,6 +187,7 @@ sealed class PackGridPage : Component
             Controller = _grid,
             Reorder = _reorder,
             Key = "pack-demo:grid",
+            InkOutset = _ink ? static it => it.Size == Size.Full && !it.Head ? new Edges4(6f, 0f, 0f, 0f) : default : null,
         });
         var bar = new BoxEl
         {
@@ -214,7 +218,7 @@ sealed class PackGridPage : Component
 
     sealed class TileFace : Component
     {
-        public sealed record Props(Item Item, PackCell Cell, Signal<string?> Selected, ColorF Fill);
+        public sealed record Props(Item Item, PackCell Cell, Signal<string?> Selected, ColorF Fill, bool Overhang = false);
 
         public override Element Render()
         {
@@ -231,7 +235,8 @@ sealed class PackGridPage : Component
                 OnClick = () => p.Selected.Value = it.Id,
                 Children =
                 [
-                    new TextEl(it.Title) { Size = 14f, Weight = 600, Color = ColorF.FromRgba(0xFF, 0xFF, 0xFF), MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f },
+                    new TextEl(it.Title) { Size = 14f, Weight = 600, Color = ColorF.FromRgba(0xFF, 0xFF, 0xFF), MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f,
+                        Margin = p.Overhang ? new Edges4(-14f, 0f, 0f, 0f) : default },   // --pack-ink: the title reaches 4 DIP past the tile's left edge
                     new TextEl($"{it.Size}{(it.Auto ? " auto" : "")} · {box.Cols}x{box.Rows:0.##}{(it.Open ? " · open" : "")}{(phase != PackItemPhase.Rest ? " · " + phase : "")}")
                         { Size = 12f, Color = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xC0), MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f },
                 ],

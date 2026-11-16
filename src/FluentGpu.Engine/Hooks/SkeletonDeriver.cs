@@ -22,7 +22,10 @@ namespace FluentGpu.Hooks;
 /// </summary>
 internal static class SkeletonDeriver
 {
-    public static Element Derive(Element real, in SkeletonStyle s)
+    public static Element Derive(Element real, in SkeletonStyle s) => Derive(real, s, inZStack: false);
+
+    /// <param name="inZStack">The parent is a ZStack: a childless box there with no declared extent is a LAYER that fills the stack.</param>
+    private static Element Derive(Element real, in SkeletonStyle s, bool inZStack)
     {
         if (real.SkeletonOverride is { } custom) return custom;            // bespoke shimmer for this subtree
         if (real.SkeletonMode == SkeletonMode.Off) return Spacer(real, s); // keep the slot, no shimmer
@@ -42,7 +45,7 @@ internal static class SkeletonDeriver
                 // remove authored chrome. Copying a card fill, hero scrim, gradient, or border turns the whole container
                 // into a giant tinted slab and obscures the image/text placeholders inside it.
                 var kids = new Element[b.Children.Length];
-                for (int i = 0; i < kids.Length; i++) kids[i] = Derive(b.Children[i], s);
+                for (int i = 0; i < kids.Length; i++) kids[i] = Derive(b.Children[i], s, b.ZStack);
                 return b with
                 {
                     Children = kids,
@@ -86,6 +89,16 @@ internal static class SkeletonDeriver
                 // gradient are not content. They must remain zero/transparent; mapping them to the default 14px bar
                 // creates phantom full-width rows, while a full-size gradient becomes a second image-sized slab.
                 bool noDeclaredExtent = !wBound && !hBound && float.IsNaN(w) && float.IsNaN(h) && float.IsNaN(b.Basis) && b.Grow <= 0f;
+                bool paintsFlat = b.Fill.IsBound || b.Fill.ValueOr(ColorF.Transparent).A > 0f;
+                // A painted, sizeless layer in a ZStack fills its stack: the plate under a cover (a card's art slot with no art yet) is the
+                // largest shape of its card. As an empty spacer the cover vanished and a shelf read as captions over nothing.
+                if (noDeclaredExtent && inZStack && paintsFlat && b.Gradient is null && b.Acrylic is null)
+                    return new BoxEl
+                    {
+                        Fill = s.BarColor, Corners = b.Corners.ValueOr(default), Margin = b.Margin,
+                        AlignSelf = b.AlignSelf, JustifySelf = b.JustifySelf,
+                        IsEnabled = false, HitTestVisible = false, MorphId = b.MorphId,
+                    };
                 if (noDeclaredExtent || b.Gradient is not null || b.Acrylic is not null)
                     return EmptySpacer(b.Margin, b.AlignSelf);
 

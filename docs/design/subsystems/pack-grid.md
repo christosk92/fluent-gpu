@@ -44,7 +44,14 @@ The result depends on entries, metrics and width only. Nothing a tile has loaded
   only when the realized range no longer covers half the overscan, or reaches past two and a half of it.
 - Every change of entries, metrics or width re-packs once. Wrappers keep their keys and nodes; their new margins and sizes
   are layout changes the FLIP pass animates (`PackGrid.Reflow`: bounds, 250 ms tween on cubic-bezier(0.25, 1, 0.5, 1),
-  `SizeMode.Reveal`; reduced motion: a 120 ms fade). A column-count change is the same path: no remount at a tier crossing.
+  `SizeMode.Relayout`, so a tile's own subtree re-solves at the eased size and its content glides with its box; Reveal laid
+  the content out at the final size at once and every right-aligned part jumped; reduced motion: a 120 ms fade). A
+  column-count change is the same path: no remount at a tier crossing.
+- A plain width change (the same entries and metrics at another width: a resize inside the board's column tier) is not a
+  re-flow: the tiles follow the width at once, with their content, as the page around them does.
+- The wrapper clips at the packed box. `PackGridOptions.InkOutset(item)` lets an item's paint reach beyond it (a full row's
+  heading on the page gutter whose display glyph overhangs): the wrapper stays a boundary by `IsolateLayout` and one clip
+  layer reaches the outset with negative margins, padding its content back, so box, pack and neighbours are unchanged.
 - Entering: a key new to the list fades in (`Enter`); a key the window reaches mounts in place; a known key a re-pack brought
   into the window enters from its previous rect (an `EnterExit` offset, opacity 1), so it slides in. On a re-pack every
   item that was realized stays realized for that render, so it slides to its new place instead of vanishing.
