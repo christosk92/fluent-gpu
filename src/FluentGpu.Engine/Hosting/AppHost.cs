@@ -315,6 +315,10 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// <summary>The panel's refresh interval (ms) as the host paced this frame — 8.33 at 120 Hz, 16.67 at 60 Hz. The
     /// frame budget every "slow frame" judgement is made against; a consumer never hard-codes 16.</summary>
     public double RefreshIntervalMs { get; init; }
+    /// <summary>ALWAYS-ON: JIT compile time spent on the UI thread inside this frame (ms; the
+    /// <c>System.Runtime.JitInfo.GetCompilationTime(currentThread: true)</c> delta across the Paint). A JIT build pays it the first
+    /// time a path runs; NativeAOT ships none (0 there), so a cost judge subtracts it to read the shipped frame.</summary>
+    public double JitMs { get; init; }
     /// <summary>Monotonic count of scene publications the render thread never adopted (a newer publication superseded
     /// them before it woke). Ordinary and cheap — record-dirty bits and the pending-removal ledger accumulate until a
     /// publication is CONSUMED, so a skipped one loses nothing. A sustained climb means the render thread is behind.</summary>
@@ -1813,6 +1817,10 @@ public sealed partial class AppHost : IDisposable
     /// (phase times included). A struct argument, so the invoke allocates nothing; handlers must be cheap — they run
     /// inside the frame, after present has been handed off.</summary>
     public event Action<FrameStats>? FrameCompleted;
+    /// <summary>Opt-in (null: off, the default, and free): every relayout scope the frames solve is appended here (the root a
+    /// scoped pass re-solved, an escape absorbed in place, the window solve), with the measures it cost. A profiler sets a list,
+    /// reads it after each frame and clears it; the engine never clears it.</summary>
+    public List<RelayoutScope>? RelayoutScopeLog { get => _invalidator.ScopeLog; set => _invalidator.ScopeLog = value; }
     public event Action? SystemColorsChanged;
 
     /// <summary>
@@ -6731,6 +6739,7 @@ public sealed partial class AppHost : IDisposable
             DeliverPendingPlatformEvents(includeSystemColors: true);
 
             long frameStart = Stopwatch.GetTimestamp();
+            TimeSpan jitAtFrameStart = System.Runtime.JitInfo.GetCompilationTime(currentThread: true);   // FrameStats.JitMs
             if (FrameLedger.Enabled) _ledgerAlloc = new LedgerPaintAlloc { Start = GC.GetAllocatedBytesForCurrentThread() };
             MountProf.FrameBegin();
             GapPaintStart(frameStart);                         // close + classify the UI gap since the last Paint (AppHost.UiGap.cs)
@@ -7112,7 +7121,9 @@ public sealed partial class AppHost : IDisposable
                 if (_needFullLayout || !_everLaidOut)
                 {
                     layoutPath = "full";
+                    int fullMeasures0 = _layout.DiagMeasure;
                     _layout.Run(_scene.Root, layoutSize);      // 6 full layout: first frame / resize / DPI / root change
+                    _invalidator.ScopeLog?.Add(new RelayoutScope(_scene.Root, _layout.DiagMeasure - fullMeasures0, RelayoutScopeKind.Full));
                     _needFullLayout = false;
                     _everLaidOut = true;
                     _navThrottleFrames = NavThrottleWindowFrames;   // P1b: a full layout is the nav shape → open the upload-throttle window
@@ -8001,6 +8012,7 @@ public sealed partial class AppHost : IDisposable
                 Gc2Delta = gc2,
                 Census = censusLine,
                 RefreshIntervalMs = refreshIntervalMs,
+                JitMs = (System.Runtime.JitInfo.GetCompilationTime(currentThread: true) - jitAtFrameStart).TotalMilliseconds,
             };
             GapPaintEnd(frameStart);                           // the next UI gap starts here (AppHost.UiGap.cs)
             if (FrameLedger.Enabled) _ledgerPaint = new LedgerPaintStamps(frameStart, tFlush, tLayout, tAnim, tRecord, tSubmit);
