@@ -663,6 +663,8 @@ public sealed partial class ConnectedAnimation
         if (lp.ImageFit != _scene.Paint(destPicture).ImageFit) return false;
         ref readonly NodePaintCold lc = ref _scene.PaintCold(f.Image);
         ref readonly NodePaintCold dc = ref _scene.PaintCold(destPicture);
+        // A picture drawn with another saturation or tint is another picture to the eye (a hero that saturates its cover): dissolve.
+        if (!Grade(f.Image).Equals(Grade(destPicture))) return false;
         return MathF.Abs(lc.ImageFocusX - dc.ImageFocusX) < 0.001f && MathF.Abs(lc.ImageFocusY - dc.ImageFocusY) < 0.001f
                && MathF.Abs(lc.ImageFrameX - dc.ImageFrameX) < 0.001f && MathF.Abs(lc.ImageFrameY - dc.ImageFrameY) < 0.001f;
     }
@@ -1118,9 +1120,16 @@ public sealed partial class ConnectedAnimation
             c.ImageFocusX = pc.ImageFocusX; c.ImageFocusY = pc.ImageFocusY;
             c.ImageFrameX = pc.ImageFrameX; c.ImageFrameY = pc.ImageFrameY;
             _scene.SetPaintCold(layer, in c);
+            (float sat, ColorF tint) = Grade(picture);
+            if (sat != 1f || tint.A > 0f) _scene.SetImageEffects(layer, new ImageVisualEffects(0, tint, default, sat));
+            else _scene.ClearImageEffects(layer);
         }
         _scene.Mark(layer, NodeFlags.PaintDirty);
     }
+
+    // How a picture node grades its image: its saturation and its tint overlay (ImageVisualEffects), so a layer draws it as it does.
+    private (float Saturation, ColorF Tint) Grade(NodeHandle picture)
+        => _scene.TryGetImageEffects(picture, out ImageVisualEffects e) ? (e.Saturation, e.Overlay) : (1f, default);
 
     // A mirror layer: a fill-less box that draws a whole picture's subtree (SceneStore.SetMirror) scaled into its presented rect.
     private NodeHandle CreateMirrorLayer(NodeHandle target, CornerRadius4 corners, RectF at, float opacity)
