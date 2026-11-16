@@ -361,6 +361,8 @@ public sealed partial class ConnectedAnimation
                     if (better.IsNull) { AbandonNav(f); continue; }
                     if (better != f.Dest) Refind(f, better);
                 }
+                // A box that was a plate takes a picture when its image mounts (the artist header's photograph, a few frames in).
+                if (f.DestKind == EndKind.Plate && !PictureOf(f.Dest).IsNull) f.DestKind = EndKind.Picture;
                 RectF rest = RestRect(f.Dest, out _, out _);
                 if (RectDiffers(in rest, in f.Model, RetargetEps))
                 {
@@ -497,14 +499,16 @@ public sealed partial class ConnectedAnimation
         _anim.Spring(node, AnimChannel.ClipB, target.Bottom, f.Spring, initial: at.Bottom);
     }
 
-    // The dest's visible part, local to its rest rect (the whole rect when it all shows).
+    // The dest's visible part, local to its own box (the whole rect when it all shows). Measured where the dest stands now, not at
+    // its rest rect: a dest still rising into place is not cut by the distance it has left to travel.
     private RectF DestLocalClip(NavFlight f, in RectF rest)
     {
         RectF full = new(0f, 0f, rest.W, rest.H);
         if (!_scene.IsLive(f.Dest)) return full;
+        RectF at = _scene.AbsoluteRect(f.Dest);
         RectF v = EffectiveVisibleRect(f.Dest);
-        if (v.IsInfinite || v.IsEmpty || !RectDiffers(in v, in rest, RetargetEps)) return full;
-        return new RectF(v.X - rest.X, v.Y - rest.Y, v.W, v.H);
+        if (v.IsInfinite || v.IsEmpty || !RectDiffers(in v, in at, RetargetEps)) return full;
+        return new RectF(v.X - at.X, v.Y - at.Y, v.W, v.H);
     }
 
     // Re-aim the flyer at a new model rect where it stands: the box moves to the new rect, the translate rows are re-based so
