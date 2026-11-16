@@ -59,8 +59,12 @@ The result depends on entries, metrics and width only. Nothing a tile has loaded
   mid-gesture, a sync adding a row) carries the projection over by key; only a lifted item that left the list ends the lift.
 - Pointer: tiles are `Draggable` (mouse past `MouseSlop`; touch after a 500 ms hold, see below). The rule for a hit, the
   concept's `moveRel`: onto a later entry the item lands after it, onto an earlier one before it, onto a group head after it.
-  A target triggers once, cannot trigger again until the pointer has left it, and never sooner than `DwellMs` after the last.
-  A 40 ms interval re-runs the hit while lifted (a resting pointer, the edge auto-scroll moving content under it). While
+  A target triggers once, cannot trigger again until the pointer has left it, never sooner than `DwellMs` after the last (on
+  the frame clock), and never without new travel: after a trigger the pointer must move half `MouseSlop` in GRID space. A
+  re-flow slides other tiles under a resting pointer and must not walk the order; the edge auto-scroll carries the content
+  under a resting pointer (the grid-space point moves) and does walk it, which is how a drag reaches a far place. A 40 ms
+  interval re-runs the hit while lifted for that case. A pointer resting within the auto-scroll zone (100 DIP of the
+  viewport's edge, `DragDropContext`) therefore keeps scrolling and moving the slot: that is the edge scroll, not the dwell. While
   lifted the re-flow animates during scroll (`AnimateDuringScroll`). `Slot(rect)` draws under the tiles at the packed rect.
 - Keyboard: `PackKeyboard.LiftMode` (Space lifts, arrows move, Space/Enter drop, Esc cancels, focus loss drops).
   `MoveBy` and `MoveToward` commit one step at once when nothing is lifted. Left/right: one step in order; up/down: onto the

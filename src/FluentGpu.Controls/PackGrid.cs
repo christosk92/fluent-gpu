@@ -247,7 +247,9 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
     bool _liftKb, _liftForeign;
     int _projCount;
     int _lastTargetSrc = -1;
-    long _lastTriggerMs;
+    double _lastTriggerMs;
+    Point2 _triggerAt;          // grid-space pointer at the last trigger (scroll moves it; a re-flow does not)
+    bool _triggered;
     Point2 _pointerAbs;
     object? _foreignPayload;
     T? _provisional;
@@ -740,7 +742,7 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
     {
         if (_liftKey is not null || !CanReorder(key, out int i)) return;
         StartProjection();
-        _liftKey = key; _liftSrc = _show[i]; _liftKb = false; _liftForeign = false; _lastTargetSrc = -1; _lastTriggerMs = 0;
+        _liftKey = key; _liftSrc = _show[i]; _liftKb = false; _liftForeign = false; _lastTargetSrc = -1; _lastTriggerMs = double.NegativeInfinity; _triggered = false;
         _pointerAbs = abs;
         AnnounceAt(PackAnnounceKind.Grab, key, _proj, _projCount);
         _edge.Value = 0;
@@ -870,8 +872,10 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
     }
 
     /// <summary>The pointer lift's step: hit-test the shown (projected) pack under the pointer; a target triggers once, cannot
-    /// trigger again until the pointer has left it, and never sooner than the dwell after the last. Runs on drag moves and on a
-    /// 40 ms interval while lifted (a pointer resting inside a tile, the page auto-scrolling under it). No allocation.</summary>
+    /// trigger again until the pointer has left it, never sooner than the dwell after the last (on the frame clock), and never
+    /// without new travel: after a trigger the pointer must have moved, in GRID space, half the mouse slop. A re-flow slides
+    /// other tiles under a resting pointer and must not walk the order; an auto-scroll carrying the content under it moves the
+    /// grid-space point and does. Runs on drag moves and on a 40 ms interval while lifted (the auto-scroll case). No allocation.</summary>
     void DragTick()
     {
         if (_liftKey is null || _liftKb || Context.Scene is not { } s || _root.IsNull || !s.IsLive(_root)) return;
@@ -885,14 +889,20 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
             for (int k = 0; k < shownCount; k++) if (_show[k] == _lastTargetSrc) { lt = k; break; }
             if (lt < 0 || !r.Rects[lt].Contains(new Point2(x, y))) _lastTargetSrc = -1;
         }
-        long now = Environment.TickCount64;
-        if (now - _lastTriggerMs < (long)(Reorder?.DwellMs ?? 140f)) return;
+        if (_triggered)
+        {
+            float tx = x - _triggerAt.X, ty = y - _triggerAt.Y, slop = MathF.Max(1f, (Reorder?.MouseSlop ?? 6f) * 0.5f);
+            if (tx * tx + ty * ty < slop * slop) return;   // a resting pointer never retriggers
+        }
+        double now = _revealTimer.NowMs;
+        if (now - _lastTriggerMs < (Reorder?.DwellMs ?? 140f)) return;
         int hit = PackLayout.HitTest(r, x, y);
         if (hit < 0 || hit >= shownCount) return;
         int targetSrc = _show[hit];
         if (targetSrc == _liftSrc || targetSrc == _lastTargetSrc) return;
         if (!MoveRel(_liftSrc, targetSrc, _entries[hit].Kind == PackEntryKind.GroupHead)) return;
         _lastTargetSrc = targetSrc; _lastTriggerMs = now;
+        _triggerAt = new Point2(x, y); _triggered = true;
         AnnounceAt(PackAnnounceKind.Move, _liftKey, _proj, _projCount);
         _edge.Value = 0;
     }
@@ -910,7 +920,7 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
         StartProjection();
         _liftSrc = _items.Count;
         _proj[_projCount++] = _liftSrc;   // the provisional item, at the end until the pointer places it
-        _liftKey = _p.Options.KeyOf(item); _liftKb = false; _liftForeign = true; _lastTargetSrc = -1; _lastTriggerMs = 0;
+        _liftKey = _p.Options.KeyOf(item); _liftKb = false; _liftForeign = true; _lastTargetSrc = -1; _lastTriggerMs = double.NegativeInfinity; _triggered = false;
         _pointerAbs = s.Position;
         _edge.Value = 0;
     }
