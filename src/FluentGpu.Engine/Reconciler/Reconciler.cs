@@ -6325,6 +6325,9 @@ public sealed partial class TreeReconciler
                     _scene.SetContextRequested(node, null);
                 }
 
+                // Press and hold (BoxEl.OnHold): a sparse side table + HoldBit, read by the touch arena and the mouse hold timer.
+                _scene.SetHold(node, b.Hold, b.OnHold, b.OnHoldReleased);
+
                 // Focus-change notification (WinUI GotFocus/LostFocus): no hit-test participation — the dispatcher
                 // delivers it on SetFocus; the bit only lets it skip the handler-column lookup.
                 if (onFocusChanged is not null)

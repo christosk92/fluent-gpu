@@ -838,6 +838,10 @@ public record struct InteractionInfo
                                                     // drag, so this bit STOPS that walk at itself. Discriminator only:
                                                     // never a hit/press/focus target, deliberately outside
                                                     // AnyInteractiveMask. Clear as `~BlocksDragArmBit`.
+    public const uint HoldBit = 1u << 23;                   // BoxEl.OnHold (pinned Home): a press-and-hold handler (SceneStore.SetHold). Hit-testable
+                                                            // in its own right; the touch arena enrolls a Hold member on it with the node's own
+                                                            // dwell, the mouse path runs a hold timer when its spec names one, and a Draggable
+                                                            // node carrying it drags only after the hold ("hold, then drag").
     public const uint FocusRingHostBit = 1u << 22;          // BoxEl.FocusRingHost: paints its nearest focused ancestor's keyboard-focus ring on its
                                                             // own rect (the recorder's ring emission looks for it). Paint-only discriminator: never a
                                                             // hit-test or handler bit.
@@ -873,7 +877,7 @@ public record struct InteractionInfo
     /// HandlerMask bit (it lives in ScrollState/NodeFlags.Scrollable) — the touch press site additionally excludes a pan
     /// candidate. Widened to uint (was ushort) so it can also carry <see cref="RowCellsBit"/> (bit 21).</summary>
     public const uint AnyInteractiveMask =
-        ClickBit | PointerBit | PressedBit | ContextBit | DragBit | SelectableTextBit | SpanLinksBit | WheelBit | GestureBit | RowCellsBit;
+        ClickBit | PointerBit | PressedBit | ContextBit | DragBit | SelectableTextBit | SpanLinksBit | WheelBit | GestureBit | RowCellsBit | HoldBit;
 
     /// <summary>WinUI RepeatButton Delay/Interval (ms) for <see cref="RepeatBit"/> nodes. NaN (or non-positive) = the
     /// WinUI DP defaults (500/33, DependencyProperty.cpp:714-720); ScrollBar template arrows use Interval=50.</summary>
@@ -932,3 +936,7 @@ public readonly record struct CornerMorph(float FromRadius, float ToRadius, floa
         return MathF.Max(0f, MathF.Min(r, MathF.Min(presentedW, presentedH) * 0.5f));
     }
 }
+
+/// <summary>A node's press-and-hold declaration (<c>BoxEl.Hold</c> / <c>OnHold</c> / <c>OnHoldReleased</c>), stored sparsely in
+/// <see cref="SceneStore"/>.</summary>
+public readonly record struct HoldDecl(HoldSpec Spec, Action<HoldEventArgs> OnHold, Action<HoldEventArgs>? OnReleased);

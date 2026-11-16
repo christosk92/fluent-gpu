@@ -145,6 +145,7 @@ internal struct PointerFsm
     public int TapCount;           // double/triple-tap accumulation
     public VelocitySampler Velocity;   // ring of recent (dt, dPos) for the fling
     public ArenaVote Vote;         // the FSM's current vote into its arena (§7A)
+    public long HoldThresholdUs;   // a Hold member's own dwell (BoxEl.Hold's TouchMs); 0 = HoldUs
 
     /// <summary>Initialize this FSM as a fresh member for <paramref name="kind"/> (called at enrollment). Idle/Pending.</summary>
     public void Init(GestureKind kind)
@@ -156,6 +157,7 @@ internal struct PointerFsm
         TapCount = 0;
         Velocity = default;
         Vote = ArenaVote.Pending;
+        HoldThresholdUs = 0;
     }
 
     /// <summary>Reset to Idle on a synthetic GestureRejected (a swept loser, §7A.5): the FSM emits nothing and rearms its
@@ -277,7 +279,7 @@ internal struct PointerFsm
     public ArenaVote OnFrameTick(long nowUs)
     {
         if (Kind == GestureKind.Hold && Phase == GesturePhase.Pressed
-            && Vote == ArenaVote.Pending && DownTimeUs != 0 && (nowUs - DownTimeUs) >= HoldUs)
+            && Vote == ArenaVote.Pending && DownTimeUs != 0 && (nowUs - DownTimeUs) >= (HoldThresholdUs > 0 ? HoldThresholdUs : HoldUs))
         {
             Phase = GesturePhase.Manipulating;
             Vote = ArenaVote.EagerAccept;

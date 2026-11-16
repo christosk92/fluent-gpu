@@ -619,6 +619,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_dropSpotlightRoots.Count != 0) _dropSpotlightRoots.Remove(idx);
         if (_dropSpotlightOver == node) _dropSpotlightOver = NodeHandle.Null;
         if (_gestureSubs.Count != 0) _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)
+        if (_holds.Count != 0) _holds.Remove(idx);               // BoxEl.OnHold side table
         if (DragGhost == node) { DragGhost = NodeHandle.Null; DragGhostBackplate = null; }   // a freed ghost must not linger in the recorder's top band
         if (DragOverlay == node) DragOverlay = NodeHandle.Null;   // …nor a freed preview-layer root in the overlay band
         if ((flags & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
@@ -2684,6 +2685,31 @@ public sealed partial class SceneStore : ISceneBackend
         _dropSpotlightRoots.Clear();
         _dropSpotlightOver = NodeHandle.Null;
         _dropSpotlightActive = false;
+    }
+
+    // ── BoxEl.Hold / OnHold / OnHoldReleased (pinned Home): a sparse side table, only holding nodes have a row ──
+    private readonly Dictionary<int, HoldDecl> _holds = new();
+
+    /// <summary>Install or clear a node's press-and-hold declaration (the reconciler, from <c>BoxEl.OnHold</c>). Sets or clears
+    /// <see cref="InteractionInfo.HoldBit"/>.</summary>
+    public void SetHold(NodeHandle h, HoldSpec? spec, Action<HoldEventArgs>? onHold, Action<HoldEventArgs>? onReleased)
+    {
+        int idx = LiveIndex(h);
+        if (onHold is null)
+        {
+            if (_holds.Count != 0) _holds.Remove(idx);
+            _interaction[idx].HandlerMask &= ~InteractionInfo.HoldBit;
+            return;
+        }
+        _holds[idx] = new HoldDecl(spec ?? new HoldSpec(), onHold, onReleased);
+        _interaction[idx].HandlerMask |= InteractionInfo.HoldBit;
+    }
+
+    /// <summary>The node's hold declaration (false when it has none or the handle is stale).</summary>
+    public bool TryGetHold(NodeHandle h, out HoldDecl decl)
+    {
+        decl = default;
+        return _holds.Count != 0 && !h.IsNull && IsLive(h) && _holds.TryGetValue((int)h.Raw.Index, out decl);
     }
 
     // ── UseGesture subscriptions (input-a11y.md §13; the Hooks⇄Input seam) ──────────────────────────────────────
