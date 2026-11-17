@@ -7345,10 +7345,16 @@ public sealed partial class AppHost : IDisposable
                 }
                 _scene.PlaceFollowRects();
             }
-            if (hasFollowers || _anim.HasFollowAnchors)   // the second term releases the anchors the frame the last follower goes
+            // A visible video surface's geometry chain is held the same way: its owner's pump places and clips the surface from this frame's
+            // UI-side pose (MediaPlayerElement: the node's transformed rect, cut by its clipping ancestors' presented extents), so a FLIP or
+            // a Reveal clip on that chain must not run render-owned (a video in a hover-widening tile trailed its tile, and its clip lagged
+            // into a dark band).
+            bool videoAnchors = _videoSurfaces.HasGeometryNodes;
+            if (hasFollowers || videoAnchors || _anim.HasFollowAnchors)   // the last term releases the anchors the frame the last one goes
             {
                 _followAnchors.Clear();
                 if (hasFollowers) _scene.CollectFollowAnchors(_followAnchors);
+                if (videoAnchors) _videoSurfaces.CollectGeometryAnchors(_scene, _followAnchors);
                 _anim.SetFollowAnchors(_followAnchors);
             }
             // 7.2 video pump: event/geometry/transport requests are coalesced into one post-layout turn per surface.

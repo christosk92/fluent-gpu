@@ -420,6 +420,26 @@ public sealed partial class AnimEngine
                     break;
             }
         }
+        // ONE CLOCK PER COMMIT for springs. A spring already in flight is re-aimed without a seed-frame hold (it keeps moving: Spring,
+        // ReframePosition), while a fresh seed held its first frame, so a commit that re-aims some rows and starts others ran them one frame
+        // apart. Rows that must add up (the widths and positions of a row of tiles, a picture centred in a resizing box) then drifted by a
+        // frame of motion: a quick hover sweep opened 4 DIP gaps between song tiles. The fresh spring rows of a projection advance from
+        // this commit like the re-aimed ones (their first frame is the first small step from rest, never a jump).
+        if (dyn.Kind == DynamicsKind.Spring) StartWithCommit(node);
+    }
+
+    /// <summary>Clear the seed-frame hold on <paramref name="node"/>'s fresh projection rows (translate, scale, presented size): see the end of
+    /// <see cref="AnimateBounds(NodeHandle, in RectF, in RectF, in LayoutTransition, bool)"/>. Allocation-free.</summary>
+    private void StartWithCommit(NodeHandle node)
+    {
+        for (int s = _slab.HeadOnNode((int)node.Raw.Index); s >= 0; s = _slab.At(s).NextOnNode)
+        {
+            ref AnimValue r = ref _slab.At(s);
+            if (!r.Has(AnimFlags.JustSeeded) || r.Has(AnimFlags.StartPending) || r.Kind != GenKind.Spring) continue;
+            if (r.Channel is AnimChannel.TranslateX or AnimChannel.TranslateY or AnimChannel.ScaleX or AnimChannel.ScaleY
+                or AnimChannel.SizeW or AnimChannel.SizeH)
+                r.Flags &= ~AnimFlags.JustSeeded;
+        }
     }
 
     // Position FLIP. Spring: shift a running spring's frame by the layout delta (keep velocity — analytical rebase),

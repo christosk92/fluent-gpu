@@ -2868,6 +2868,28 @@ public sealed partial class SceneStore : ISceneBackend
     public RectF AbsoluteTransformedRect(NodeHandle h)
         => AbsoluteTransformedRect(h, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
 
+    /// <summary><paramref name="rect"/> (window DIP) cut by every clipping ancestor of <paramref name="node"/> as it is PRESENTED now: an
+    /// ancestor's presented extent (<c>PresentedW</c>/<c>PresentedH</c>, a <see cref="SizeMode.Reveal"/> row easing it) mapped through its
+    /// full transform. What a composited surface placed outside the UI back buffer (a video visual) must clip itself to, since no scissor the
+    /// UI draws with reaches it. Zero-alloc.</summary>
+    public RectF ClipToClippingAncestors(NodeHandle node, RectF rect)
+    {
+        for (NodeHandle p = Parent(node); !p.IsNull && IsLive(p); p = Parent(p))
+        {
+            if ((Flags(p) & NodeFlags.ClipsToBounds) == 0) continue;
+            ref NodePaint pp = ref Paint(p);
+            RectF lb = Bounds(p);
+            float cw = float.IsNaN(pp.PresentedW) ? lb.W : pp.PresentedW;
+            float ch = float.IsNaN(pp.PresentedH) ? lb.H : pp.PresentedH;
+            RectF c = AbsoluteTransformedRect(p, cw, ch);
+            float x0 = MathF.Max(rect.X, c.X), y0 = MathF.Max(rect.Y, c.Y);
+            float x1 = MathF.Min(rect.X + rect.W, c.X + c.W), y1 = MathF.Min(rect.Y + rect.H, c.Y + c.H);
+            rect = new RectF(x0, y0, MathF.Max(0f, x1 - x0), MathF.Max(0f, y1 - y0));
+            if (rect.W <= 0f || rect.H <= 0f) return rect;
+        }
+        return rect;
+    }
+
     /// <summary><see cref="AbsoluteTransformedRect(NodeHandle)"/> for an explicit LOCAL size instead of the node's laid-out
     /// W/H: a <see cref="SizeMode.Reveal"/> ancestor presents <c>PresentedW</c>/<c>PresentedH</c> while its bounds stay
     /// final, and a clip walk wants the presented extent mapped through the same transform.</summary>
