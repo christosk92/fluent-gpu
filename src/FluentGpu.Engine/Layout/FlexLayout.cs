@@ -55,6 +55,10 @@ public sealed partial class FlexLayout
     private bool _breakTextAtLanding;
     private const float LandingBreakSlack = 1f / 64f;
 
+    /// <summary>Host-set per frame: a multi-line run re-measured into another number of lines notes a structure step
+    /// (<see cref="SceneStore.NoteStructureChanged"/>). On while the host lays out a frame the window resized.</summary>
+    public bool NoteLineSteps { get; set; }
+
     // `--fg layout` (EngineSwitches.LayoutDiag): per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
     // measure≫arrange flags a redundant-measure blow-up. Gated to a single bool check (zero work/alloc) when off.
@@ -466,6 +470,9 @@ public sealed partial class FlexLayout
         }
         for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c)) PrefetchText(c);
     }
+
+    private static bool LineStep(in TextMeasureEntry was, StringId text, in TextStyle style, int fontEpoch, float h)
+        => SameShape(in was, text, in style, fontEpoch) && MathF.Abs(was.Size.Height - h) > 0.5f;
 
     private static bool SameShape(in TextMeasureEntry e, StringId text, in TextStyle style, int fontEpoch)
         => e.Valid && e.Text == text && e.FontEpoch == fontEpoch && e.Style == style;
@@ -1028,6 +1035,11 @@ public sealed partial class FlexLayout
                 var m = mc.Valid ? _fonts.Measure(paint.Text, eff, maxW) : MeasureTextShared(paint.Text, in eff, maxW, fontEpoch, fit > 0f);
                 FluentGpu.Hosting.MountProf.Exit();
                 w = m.Size.Width; h = m.Size.Height;
+                // The same run at another width that breaks into another number of lines: a step of its structure, which a part that animates
+                // through a resize eases (SceneStore.NoteStructureChanged). Only while the host collects them (a frame the window resized).
+                if (NoteLineSteps && !Verifying && mc.Valid && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap
+                    && LineStep(mc.Last, paint.Text, in li.TextStyle, fontEpoch, h))
+                    _scene.NoteStructureChanged(node);
                 // Retain the face's decoration metrics alongside the size: the recorder places underline/strikethrough
                 // bars (NodePaint.TextDecorations) from this row at record time without re-touching the font seam.
                 mc.Store(new TextMeasureEntry

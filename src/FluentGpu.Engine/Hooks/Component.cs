@@ -129,6 +129,8 @@ public abstract class Component
     /// <summary>The arranged width of this component's rendered root as a read signal; <paramref name="quantum"/> &gt; 0
     /// rounds the value to that grid before the write (kills sub-quantum churn). See <see cref="RenderContext.UseMeasuredWidth(float,string?,int)"/>.</summary>
     protected IReadSignal<float> UseMeasuredWidth(float quantum = 0f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseMeasuredWidth(quantum, __hf, __hl);
+    /// <inheritdoc cref="RenderContext.UseStructureWidth(float, string?, int)"/>
+    protected IReadSignal<float> UseStructureWidth(float quantum = 0f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseStructureWidth(quantum, __hf, __hl);
     /// <summary>E17c — keyed measured bounds: start from the rect remembered for <paramref name="key"/> (a region role, composed
     /// onto the ambient <see cref="MeasureMemory.Scope"/>) and remember every arranged rect, so a remount renders its first frame at
     /// its laid-out size. See <see cref="RenderContext.UseMeasuredBounds(string,string?,int)"/>.</summary>

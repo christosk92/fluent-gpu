@@ -451,6 +451,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     // Private posted message: apply the size step held while the previous one painted ahead (PaintAheadOfSize). Posted when the step
     // arrives, so it runs after the previous step's SetWindowPos completed and before any step queued after it.
     private const uint WM_FG_APPLYHELDSTEP = 0x8000 + 0x0F53;
+    // Private posted message: run a driven size loop (DriveSizeLoop). Posted, so it runs from the pump outside any frame, where a user's
+    // press on the frame enters DefWindowProc's own loop.
+    private const uint WM_FG_DRIVESIZELOOP = 0x8000 + 0x0F54;
 
     // `--fg nc` (EngineSwitches.NcDiag): trace custom-frame caption-button non-client input — which WM_NC* messages actually arrive over a
     // button and whether synthesis runs — to stderr. Off by default (zero cost); diagnoses "no hover / clicks don't
@@ -1472,6 +1475,60 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         _engineWindowPos++;
         try { SetWindowPos(_hwnd, HWND.NULL, x, y, cx, cy, flags); }
         finally { _engineWindowPos--; }
+    }
+
+    // DriveSizeLoop's request (UI thread only): the client size to reach in physical px, and over how long.
+    private int _driveLoopW, _driveLoopH, _driveLoopMs;
+
+    /// <summary>Drive this window's own move/size loop the way a user's edge drag does, without the mouse or the cursor (no
+    /// SendInput, no SetCursorPos): from the pump (posted), WM_ENTERSIZEMOVE, then a <c>SetWindowPos</c> every ~16 ms that eases the
+    /// client size to <paramref name="widthDip"/> x <paramref name="heightDip"/> DIP over <paramref name="ms"/> (the right/bottom edge
+    /// dragged; each raises WM_SIZE synchronously inside the loop, as the user's own steps do), the loop's messages dispatched between
+    /// steps (its keep-alive WM_TIMER beats, WM_PAINT: what DefWindowProc's loop dispatches while the mouse moves), then WM_EXITSIZEMOVE.
+    /// Every host path a real drag takes runs: InModalLoop and the WindowResize suppression, the composited defer of the resize to the
+    /// loop's end, the deferred tier commit, the keep-alive throttles. Not exercised: DefWindowProc's own mouse tracking and WM_SIZING
+    /// (the engine handles neither), and the DWM stretch of the held frame (a compositor matter). Returns at once; the loop runs on
+    /// the next pump and blocks the frame loop for its length, as a real drag does. UI thread only.</summary>
+    public void DriveSizeLoop(float widthDip, float heightDip, int ms)
+    {
+        if (_hwnd == HWND.NULL) return;
+        _driveLoopW = (int)MathF.Round(MathF.Max(1f, widthDip) * _rawDpiScale);
+        _driveLoopH = (int)MathF.Round(MathF.Max(1f, heightDip) * _rawDpiScale);
+        _driveLoopMs = Math.Max(0, ms);
+        PostMessageW(_hwnd, WM_FG_DRIVESIZELOOP, 0, 0);
+    }
+
+    private void RunDrivenSizeLoop(HWND hWnd)
+    {
+        RECT c0; GetClientRect(hWnd, &c0);
+        int w0 = c0.right - c0.left, h0 = c0.bottom - c0.top, w1 = _driveLoopW, h1 = _driveLoopH;
+        int steps = Math.Max(1, _driveLoopMs / 16);
+        Diag.Line($"[window.loop] driven {w0}x{h0} -> {w1}x{h1} px over {_driveLoopMs} ms ({steps} steps)");
+        SendMessageW(hWnd, WM_ENTERSIZEMOVE, 0, 0);
+        long start = Environment.TickCount64;
+        MSG msg;
+        for (int i = 1; i <= steps; i++)
+        {
+            float t = (float)i / steps;
+            float e = t * t * (3f - 2f * t);   // a hand's ease in and out
+            RECT rc = new() { left = 0, top = 0, right = (int)MathF.Round(w0 + (w1 - w0) * e), bottom = (int)MathF.Round(h0 + (h1 - h0) * e) };
+            AdjustForFrame(&rc);
+            // The user's step, not the engine's: no SetOwnWindowPos, no _hostResizing (the WM_SIZE counts as the loop's).
+            SetWindowPos(hWnd, HWND.NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            long due = start + (long)i * _driveLoopMs / steps;
+            while (Environment.TickCount64 < due)
+            {
+                if (PeekMessageW(&msg, HWND.NULL, 0, 0, PM_REMOVE))
+                {
+                    if (msg.message == 0x0012 /* WM_QUIT */) { PostQuitMessage((int)(nint)msg.wParam); goto end; }
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+                else MsgWaitForMultipleObjectsEx(0, null, (uint)Math.Max(1L, due - Environment.TickCount64), QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            }
+        }
+    end:
+        SendMessageW(hWnd, WM_EXITSIZEMOVE, 0, 0);
     }
 
     /// <summary>WM_WINDOWPOSCHANGING of a <see cref="LiveResize"/> window (after USER32's min/max clamp): when the window is about
@@ -3093,6 +3150,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
             case WM_FG_SHOWSYSMENU:   // IPlatformWindow.ShowSystemMenu (posted: runs from the pump, outside the frame)
                 ShowSystemMenuCore(hWnd, (short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
+                result = 0;
+                return true;
+
+            case WM_FG_DRIVESIZELOOP:   // DriveSizeLoop (posted: runs from the pump, outside the frame, where a real loop starts)
+                RunDrivenSizeLoop(hWnd);
                 result = 0;
                 return true;
 

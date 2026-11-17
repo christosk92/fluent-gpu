@@ -85,6 +85,9 @@ public struct TextMeasureCache
 
     public readonly bool Valid => E0.Valid || E1.Valid;
 
+    /// <summary>The entry most recently stored or hit (the lines the run was last laid out with).</summary>
+    public readonly TextMeasureEntry Last => _last == 0 ? E0 : E1;
+
     /// <summary>Probe both entries. A hit also becomes the ring's "last used" entry, so the recorder's fallback follows
     /// the width the layout pass most recently resolved at (the arranged width).</summary>
     public bool TryGet(StringId text, in TextStyle style, float maxW, out TextMeasureEntry hit, int fontEpoch = 0)

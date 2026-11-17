@@ -171,7 +171,12 @@ public readonly record struct LayoutTransition(
     // A SizeMode.Reflow node clips to its bounds while its size animates (its content may still be arranged at the far size,
     // and would paint over its neighbours). True keeps painting its overflow: for content laid out AT the animated size that
     // draws outside its own box on purpose (a Chrome tab's flared selected plate, which overhangs the cell by its flares).
-    bool ReflowUnclipped = false)
+    bool ReflowUnclipped = false,
+    // This transition keeps animating while the window (or a splitter) is being resized. A resize lands every other FLIP on its layout so
+    // bounds track the drag; a box whose HEIGHT the width decides in steps (a grid that gains or loses a row as its columns change) opts in
+    // with a SizeMode.Reflow height, which runs through real layout every tick and so can never hold a stale size: it eases each step while
+    // the drag goes on, and everything after it rides the re-solve instead of jumping by the step.
+    bool AnimateDuringResize = false)
 {
     /// <summary>Translate-only reflow (the default for reordered / moved items). Springs.</summary>
     public static LayoutTransition Slide => new(TransitionChannels.Position, TransitionDynamics.Default);

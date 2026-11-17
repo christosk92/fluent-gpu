@@ -26,6 +26,10 @@ public enum PackFlags : byte
     Open = 2,
     /// <summary>Keeps its place in the order, takes no room, is never realized.</summary>
     Hidden = 4,
+    /// <summary>Its <see cref="PackEntry.Extent"/> follows a body that eases its own height (a measured full row whose body reflows when its
+    /// rows change): a change of that extent alone re-packs at once, every tile following the body frame by frame, never a re-flow of its own
+    /// over the body's (which would trail it, the body's content drawn past its box into the next tile).</summary>
+    Follows = 8,
 }
 
 /// <summary>One entry of a pack, in order. Order is the truth: the packer never places an entry ahead of an earlier one.</summary>
