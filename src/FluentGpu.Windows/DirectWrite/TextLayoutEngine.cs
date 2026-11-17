@@ -553,9 +553,12 @@ public sealed unsafe partial class TextLayoutEngine : IDisposable
                     {
                         // Line budget reached at a hard break: emit this line as-is and DROP the rest — WinUI
                         // MaxLines clips whole lines past the cap; it never runs the next paragraph on.
+                        // The overflow suffix ("... More") ends THIS line's body: the body stops at the hard break (i), never at the
+                        // paragraph's end (gc ran the next paragraph onto the clamped line, so a clamp landing on the blank line between
+                        // two paragraphs drew the next paragraph's start where the blank line was).
                         if (canEmitOverflowSuffix)
                         {
-                            EmitOverflowSuffixLine(lineStart, gc, suffixGlyph, allGc, overflowSuffixStart,
+                            EmitOverflowSuffixLine(lineStart, i, suffixGlyph, allGc, overflowSuffixStart,
                                 line, lineHeight, maxWidth, ref maxLineW);
                             emittedOverflowSuffix = true;
                             Cut = true;
