@@ -65,6 +65,7 @@ public sealed class VideoSurfaceRegistry
         public NodeHandle GeomNode;
         public RectF GeomRect;
         public RectF GeomClip;   // GeomRect cut by its clipping ancestors as presented (a Reveal row easing one moves only this)
+        public bool GeomMoved;   // the geometry scan saw it move since the last pump (a full pump may ride along: see IsGeometryMovedPump)
     }
 
     private readonly Entry[] _entries = new Entry[MaxSurfaces];
@@ -81,6 +82,7 @@ public sealed class VideoSurfaceRegistry
     private int _presentingCount;   // diagnostic census of slots a media player is actively presenting into
     private int _pendingPumpCount;  // slots with one coalesced pump awaiting the next host frame
     private int _geometryOnlyToken;  // the token whose geometry-only pump is running right now (0 outside one); see IsGeometryOnlyPump
+    private int _geometryMovedToken; // the token whose pump running right now follows a geometry move (full or not); see IsGeometryMovedPump
 
     // ── per-binding pump callbacks (engine-invoked each frame; replaces the control's side-effecting Render) ──────────
     private struct PumpReg { public bool InUse; public int Token; public object? Owner; public VideoPump? Pump; }
@@ -495,6 +497,11 @@ public sealed class VideoSurfaceRegistry
     /// outside a pump invocation.</summary>
     public bool IsGeometryOnlyPump(int token) => token > 0 && _geometryOnlyToken == token;
 
+    /// <summary>True while the pump for <paramref name="token"/> running RIGHT NOW was requested (also) because the surface's rect or clip
+    /// moved this frame: a geometry motion is under way even when a full request rode along (a session that asks for a pump every frame).
+    /// The owner treats it as motion (no unsettled geometry logged). False outside a pump invocation.</summary>
+    public bool IsGeometryMovedPump(int token) => token > 0 && _geometryMovedToken == token;
+
     /// <summary>The stream size (device px) last written for <paramref name="token"/> by the session that owns the
     /// surface — <see cref="SizeI.Zero"/> until one has (the surface is not bound / sized yet). A geometry-only pump
     /// reads it to decide that the stream is still sized right for the rect it is placing.</summary>
@@ -606,8 +613,25 @@ public sealed class VideoSurfaceRegistry
             if (now == e.GeomRect && clip == e.GeomClip) continue;
             e.GeomRect = now;
             e.GeomClip = clip;
+            e.GeomMoved = true;
             RequestGeometryPump(i + 1);
         }
+    }
+
+    /// <summary>Diagnostics (an inspector's film): each live, visible surface's published placement, window DIP: the content rect and the
+    /// viewport it is cut to. Returns how many were written. Zero-alloc.</summary>
+    public int DescribeVisible(Span<RectF> rects, Span<RectF> viewports)
+    {
+        int n = 0;
+        for (int i = 0; i < MaxSurfaces && n < rects.Length && n < viewports.Length; i++)
+        {
+            ref Entry e = ref _entries[i];
+            if (!e.InUse || e.ReleasePending || !e.Visible) continue;
+            rects[n] = e.RectDip;
+            viewports[n] = e.ViewportDip;
+            n++;
+        }
+        return n;
     }
 
     /// <summary>True while a visible surface follows a scene node (<see cref="SetGeometryNode"/>).</summary>
@@ -653,7 +677,9 @@ public sealed class VideoSurfaceRegistry
             e.PumpPending = false;
             _pendingPumpCount--;
             bool geometryOnly = !e.PumpFull;   // only RequestGeometryPumps asked for this turn
+            bool geometryMoved = e.GeomMoved;
             e.PumpFull = false;
+            e.GeomMoved = false;
 
             int ownerIndex = -1;
             int alternates = 0;
@@ -671,8 +697,9 @@ public sealed class VideoSurfaceRegistry
             }
             if (ownerIndex < 0) continue;    // registration vanished; a later mount will request again
             _geometryOnlyToken = geometryOnly ? ti + 1 : 0;
+            _geometryMovedToken = geometryMoved ? ti + 1 : 0;
             try { _pumps[ownerIndex].Pump!(scale); }
-            finally { _geometryOnlyToken = 0; }
+            finally { _geometryOnlyToken = 0; _geometryMovedToken = 0; }
             _pumpInvocations++;
         }
     }
@@ -996,6 +1023,9 @@ public readonly struct VideoBinding
     /// <summary>True while the pump running now was requested only because this surface's rect moved (see
     /// <see cref="VideoSurfaceRegistry.IsGeometryOnlyPump"/>). False for an inert binding or outside a pump.</summary>
     public bool IsGeometryOnlyPump => _registry is { } r && r.IsGeometryOnlyPump(Token);
+    /// <summary>True while the pump running now follows a move of this surface's rect or clip (see
+    /// <see cref="VideoSurfaceRegistry.IsGeometryMovedPump"/>).</summary>
+    public bool IsGeometryMovedPump => _registry is { } r && r.IsGeometryMovedPump(Token);
     /// <summary>The stream size last written to this slot, or <see cref="SizeI.Zero"/> when none has been.</summary>
     public SizeI StreamSize => _registry?.StreamSize(Token) ?? SizeI.Zero;
     /// <summary>True when that stream size is pinned to the natural size (see <see cref="VideoSurfaceRegistry.StreamPinned"/>).</summary>
