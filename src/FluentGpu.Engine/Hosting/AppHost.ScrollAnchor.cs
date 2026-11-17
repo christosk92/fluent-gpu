@@ -81,9 +81,12 @@ public sealed partial class AppHost
             handle.EvalAt(_lastScrollPresentSec, out _, out bool settled);
             if (!settled || sc.Motion.UserDriven) continue;                                      // a scroll in motion owns the offset
             NodeHandle content = sc.ContentNode;
-            // The deepest box of the chain still where it was in the tree (a re-formed subtree keeps the boxes around it).
+            // The deepest box of the chain still where it was in the tree (a re-formed subtree keeps the boxes around it) and still shown: a box
+            // hidden this frame is out of the layout, its rect stale (a capped grid's last card hidden for the frame a window steps across a tier
+            // edge: its words' stale top read 412 below where they were, and the page was shifted by it).
             int k = 0;
-            while (k < a.Count && _scene.IsLive(a.Chain[k]) && _scene.Parent(a.Chain[k]) == (k == 0 ? content : a.Chain[k - 1])) k++;
+            while (k < a.Count && _scene.IsLive(a.Chain[k]) && (_scene.Flags(a.Chain[k]) & NodeFlags.Visible) != 0
+                   && _scene.Parent(a.Chain[k]) == (k == 0 ? content : a.Chain[k - 1])) k++;
             if (k == 0) continue;                                                                // the whole chain left the content
             k--;
             // A box drawn through a live vertical scale (a size FLIP easing a re-formed card) holds by its own top: what is inside it is drawn
@@ -188,13 +191,18 @@ public sealed partial class AppHost
     /// drawn top; returns the chain's length (<paramref name="depth"/>: nothing found). In reading order, the first child that starts in the
     /// window is the anchor. A child that straddles the window's top is descended into, and passed over when nothing inside it reaches the
     /// window (its visible part is padding or a backdrop: what follows it is what shows). A straddling leaf or nested scroller is the anchor
-    /// only when nothing after it in the row starts in the window; so is one drawn through a live vertical scale (<see cref="ScalingY"/>).</summary>
+    /// only when nothing after it starts in the window; so is one drawn through a live vertical scale (<see cref="ScalingY"/>), and so is a
+    /// straddling box whose only part in the window is such a leaf: a later sibling that starts in the window is what the user looks at. (A
+    /// Zune Home section whose last line of card titles poked 10 into the window's top held the page while it grew at a tier commit, and the
+    /// spotlight under it, which the user was looking at, glided 450 down and out of the window.)</summary>
     private int PickAnchor(NodeHandle cur, float curTop, int depth, float viewTop, float viewBottom, ScrollAnchor a)
     {
+        _pickStarts = false;
         if (depth >= MaxAnchorDepth) return depth;
         float shift = _scene.Paint(cur).ChildShiftY;
         NodeHandle fallback = NodeHandle.Null;
         float fallbackTop = 0f;
+        int fallbackFound = 0;   // > 0: the fallback is a straddling box whose chain below it is written (to this length)
         for (var c = _scene.FirstChild(cur); !c.IsNull; c = _scene.NextSibling(c))
         {
             if ((_scene.Flags(c) & NodeFlags.Visible) == 0) continue;
@@ -202,23 +210,41 @@ public sealed partial class AppHost
             if (b.H <= 0f) continue;
             float t = curTop + b.Y + PresentedShiftY(c) + shift;
             if (t + b.H <= viewTop || t >= viewBottom) continue;
-            a.Chain[depth] = c;
-            a.Tops[depth] = t;
-            a.RelY[depth] = RelYOf(c);
-            if (t >= viewTop) return depth + 1;   // starts in the window
+            if (t >= viewTop)   // starts in the window
+            {
+                a.Chain[depth] = c;
+                a.Tops[depth] = t;
+                a.RelY[depth] = RelYOf(c);
+                _pickStarts = true;
+                return depth + 1;
+            }
             bool leaf = _scene.FirstChild(c).IsNull || (_scene.Flags(c) & NodeFlags.Scrollable) != 0 || ScalingY(c);
             if (!leaf)
             {
+                // After a straddling box already kept as the fallback, a later straddling box is not descended (its chain would write over the
+                // fallback's): only a sibling that starts in the window takes the anchor from it.
+                if (fallbackFound > 0) continue;
+                a.Chain[depth] = c;
+                a.Tops[depth] = t;
+                a.RelY[depth] = RelYOf(c);
                 int found = PickAnchor(c, t, depth + 1, viewTop, viewBottom, a);
-                if (found > depth + 1) return found;
-                continue;   // nothing inside it reaches the window
+                if (found > depth + 1)
+                {
+                    if (_pickStarts) return found;
+                    fallback = c; fallbackTop = t; fallbackFound = found;   // only a straddling leaf inside it shows
+                }
+                continue;   // nothing inside it starts in the window
             }
             if (fallback.IsNull) { fallback = c; fallbackTop = t; }
         }
+        _pickStarts = false;
         if (fallback.IsNull) return depth;
         a.Chain[depth] = fallback;
         a.Tops[depth] = fallbackTop;
         a.RelY[depth] = RelYOf(fallback);
-        return depth + 1;
+        return fallbackFound > 0 ? fallbackFound : depth + 1;
     }
+
+    /// <summary>Whether the anchor the last <see cref="PickAnchor"/> found starts in the window (false: a straddling fallback).</summary>
+    private bool _pickStarts;
 }
