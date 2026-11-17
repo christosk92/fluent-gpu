@@ -8903,7 +8903,12 @@ public sealed partial class AppHost : IDisposable
             if (!_anim.TryGetTransition(n, out var spec) || spec.Size != SizeMode.Reflow || (spec.Channels & TransitionChannels.Size) == 0) continue;
             if (_reflowOwnedRoots.Contains(n) || IsBelowProjectionSuppressionRoot(n)) continue;
             if (!TryProjectionRects(n, kv.Value, posEps, sizeEps, out RectF from, out RectF to)) continue;
-            if (MathF.Abs(from.W - to.W) < sizeEps && MathF.Abs(from.H - to.H) < sizeEps) continue;
+            // On the axes the reflow animates only: a width reflow's box that only grew taller (a page gutter stretched down the content
+            // as a shelf below stands up) has nothing to start, and seeding it anyway re-presented the flying width row and re-probed the
+            // destinations on every such commit (the probe's second arrange of the page each frame of a window drag).
+            bool wChanged = (spec.Axes & SizeAxes.Width) != 0 && MathF.Abs(from.W - to.W) >= sizeEps;
+            bool hChanged = (spec.Axes & SizeAxes.Height) != 0 && MathF.Abs(from.H - to.H) >= sizeEps;
+            if (!wChanged && !hChanged) continue;
             if (s_motionDiag) LogMotionNode(n.Raw.Index, "reflow-first", from, to);
             // Size only: the main pass FLIPs the node's own move against the re-solved layout, and finds this row aimed already (its guards).
             _anim.AnimateBounds(n, from, to, spec with { Channels = TransitionChannels.Size });
