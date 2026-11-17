@@ -174,6 +174,16 @@ public static class FluentApp
     /// Works on a window that is not <see cref="AppOptions.Resizable"/>. UI-thread only.</summary>
     public static void ResizeWindow(float widthDip, float heightDip) => s_window?.SetClientSizeDip(widthDip, heightDip);
 
+    /// <summary>Resize the main window's client area to <paramref name="widthDip"/>x<paramref name="heightDip"/> DIP over
+    /// <paramref name="ms"/> through the window's own move/size loop, as a user's edge drag does, without moving the cursor or sending
+    /// input (Win32Window.DriveSizeLoop: WM_ENTERSIZEMOVE, eased SetWindowPos steps with the loop's messages dispatched between them,
+    /// WM_EXITSIZEMOVE). Starts on the next message pump and holds the frame loop for its length, as a real drag does. A diagnostic
+    /// driver's path into the modal-loop resize (the composited defer, the deferred tier commit); UI-thread only.</summary>
+    public static void ResizeWindowThroughSizeLoop(float widthDip, float heightDip, int ms)
+    {
+        if (s_window is { IsClosed: false } w) w.DriveSizeLoop(widthDip, heightDip, ms);
+    }
+
     internal static void QueueInput(in InputEvent e)
     {
         if (s_window is { IsClosed: false } w) w.QueueInput(in e);
