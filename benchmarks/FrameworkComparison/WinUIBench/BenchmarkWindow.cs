@@ -69,7 +69,8 @@ internal sealed partial class BenchmarkWindow : Window
         AppWindow.ResizeClient(new SizeInt32(
             (int)Math.Round(BenchWorkload.WindowWidth * _dpiScale),
             (int)Math.Round(BenchWorkload.WindowHeight * _dpiScale)));
-        _root = WithFrameIdProbe(BuildScenario());
+        _root = options.Scenario == BenchScenarios.WindowResize ? BuildResizeRoot() : WithFrameIdProbe(BuildScenario());
+        if (options.Scenario == BenchScenarios.ThemeSwitch) ApplyThemeAwareness(_root);
         Content = _root;
         _root.Loaded += OnLoaded;
     }
@@ -80,6 +81,24 @@ internal sealed partial class BenchmarkWindow : Window
         if (_list is not null)
             _listScrollViewer = FindScrollViewer(_list)
                 ?? throw new InvalidOperationException("WinUI ListView did not create its ScrollViewer.");
+        if (BenchScenarios.IsDesktopDriven(_options.Scenario))
+        {
+            // Desktop-driven: the shared driver thread resizes / re-themes the window and judges the composed desktop;
+            // this host just runs its ordinary XAML loop, exactly as a shipping app does.
+            DispatcherQueue queue = DispatcherQueue;
+            string version = typeof(Application).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "3.0.0-dev";
+            LiveWindowDriver.Start(_options, new LiveWindowTarget
+            {
+                Framework = "WinUI 3",
+                FrameworkVersion = version,
+                Hwnd = _hwnd,
+                PostToUi = action => queue.TryEnqueue(() => action()),
+                CloseOnUi = Close,
+                ApplyThemeOnUi = ApplyTheme,
+            });
+            return;
+        }
         if (BenchScenarios.IsColdLoad(_options.Scenario) ||
             string.Equals(_options.Pass, "cadence", StringComparison.OrdinalIgnoreCase))
         {
@@ -303,6 +322,7 @@ internal sealed partial class BenchmarkWindow : Window
         BenchScenarios.LocalizedText => BuildLocalizedTree(transform: false),
         BenchScenarios.TreeChurn => BuildChurnHost(),
         BenchScenarios.PageNavigation => BuildNavigationHost(),
+        BenchScenarios.ThemeSwitch => BuildThemeHost(),
         _ => throw new InvalidOperationException(_options.Scenario),
     };
 

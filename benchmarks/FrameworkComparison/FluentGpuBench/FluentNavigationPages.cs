@@ -16,9 +16,14 @@ namespace FluentGpuBench;
 internal static class FluentNavigationPages
 {
     /// <summary>Page A: hero header, a 6 x 4 grid of 24 cards, and a 40-row three-column list.</summary>
-    internal static Element BuildDetail(int iteration)
+    /// <param name="resizable">window-resize variant: the same page laid out responsively - the main column takes the
+    /// width left beside the docked side list and the 24 cards re-wrap into it - instead of the fixed 1200 x 720 geometry.
+    /// The cards, hero and list rows are the identical elements.</param>
+    internal static Element BuildDetail(int iteration, bool resizable = false)
     {
         var cardRows = new Element[BenchWorkload.NavCardRows];
+        // Only the resizable variant collects the flat card list, so the navigation path allocates exactly what it did.
+        Element[]? allCards = resizable ? new Element[BenchWorkload.NavCardCount] : null;
         int card = 0;
         for (int r = 0; r < cardRows.Length; r++)
         {
@@ -56,6 +61,7 @@ internal static class FluentNavigationPages
                         },
                     ],
                 };
+                if (allCards is not null) allCards[card] = cards[c];
             }
             cardRows[r] = new BoxEl
             {
@@ -138,6 +144,36 @@ internal static class FluentNavigationPages
                 },
             ],
         };
+
+        if (resizable)
+        {
+            return new BoxEl
+            {
+                Key = "detail-resizable",
+                Direction = 0,
+                Grow = 1f,
+                Basis = 0f,
+                Padding = Edges4.All(BenchWorkload.NavPagePadding),
+                Gap = BenchWorkload.NavColumnGap,
+                ClipToBounds = true,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Direction = 1,
+                        Grow = 1f,
+                        Basis = 0f,
+                        Gap = BenchWorkload.NavHeroSectionGap,
+                        Children =
+                        [
+                            hero,
+                            new BoxEl { Direction = 0, Wrap = true, Gap = BenchWorkload.NavCardGap, Children = allCards! },
+                        ],
+                    },
+                    new BoxEl { Direction = 1, Width = BenchWorkload.NavSideListWidth, Children = listRows },
+                ],
+            };
+        }
 
         return Page("detail",
             new BoxEl

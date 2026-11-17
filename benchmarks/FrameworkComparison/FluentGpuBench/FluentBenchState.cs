@@ -106,9 +106,13 @@ internal static class FluentBenchState
             BenchScenarios.LocalizedText => BuildLocalizedTree(transform: false),
             BenchScenarios.TreeChurn => BuildChurnHost(),
             BenchScenarios.PageNavigation => BuildNavigationHost(),
+            // The resize root fills the window at any size and carries its own size probes, so it skips the fixed
+            // 1200 x 720 canvas and the corner frame-ID probe.
+            BenchScenarios.WindowResize => BuildResizeRoot(),
+            BenchScenarios.ThemeSwitch => BuildThemeHost(),
             _ => throw new InvalidOperationException(Options.Scenario),
         };
-        return WithFrameIdProbe(content);
+        return Options.Scenario == BenchScenarios.WindowResize ? content : WithFrameIdProbe(content);
     }
 
     private static Element WithFrameIdProbe(Element content) => Canvas.Create(
@@ -168,7 +172,6 @@ internal static class FluentBenchState
             Controller = Scroll,
             SelectionMode = ItemsSelectionMode.None,
             Selector = SelectorVisual.None,
-            Overscan = 4,
             RepaintBoundary = true,
         });
 
@@ -273,6 +276,91 @@ internal static class FluentBenchState
     };
 
     private static void Noop() { }
+
+    /// <summary>
+    /// window-resize root, a pure flex layout that fills the window: the probe row, then the page beside the right edge
+    /// strip, then the bottom edge strip. The strips are layout children, so they sit on the edge of whatever size the
+    /// content was laid out at; the probes paint that size. Mirrors the WinUI host's Grid (rows 64/*/6, columns */6).
+    /// </summary>
+    private static Element BuildResizeRoot()
+    {
+        ColorF strip = ColorF.FromRgba(BenchWorkload.ResizeEdgeR, BenchWorkload.ResizeEdgeG, BenchWorkload.ResizeEdgeB);
+        return new BoxEl
+        {
+            Direction = 1,
+            Grow = 1f,
+            Children =
+            [
+                Embed.Comp(() => new ResizeProbes()),
+                new BoxEl
+                {
+                    Direction = 0,
+                    Grow = 1f,
+                    Basis = 0f,
+                    Children =
+                    [
+                        FluentNavigationPages.BuildDetail(0, resizable: true),
+                        new BoxEl { Width = BenchWorkload.ResizeEdgeStrip, Fill = strip },
+                    ],
+                },
+                new BoxEl { Height = BenchWorkload.ResizeEdgeStrip, Fill = strip },
+            ],
+        };
+    }
+
+    /// <summary>The two size probes: the laid-out client width and height (DIP), read from the host's
+    /// <see cref="Viewport.Size"/> - the size the same frame's layout runs at. Only this component re-renders on a
+    /// resize; the page below is a stable subtree that the resize only re-lays-out.</summary>
+    private sealed class ResizeProbes : FluentGpu.Hooks.Component
+    {
+        public override Element Render()
+        {
+            Size2 size = UseContext(Viewport.Size);
+            return new BoxEl
+            {
+                Direction = 0,
+                Height = BenchWorkload.ResizeProbeRowHeight,
+                Padding = Edges4.All(BenchWorkload.ResizeProbeMargin),
+                Gap = BenchWorkload.ResizeProbeMargin,
+                Children = [Probe((int)MathF.Round(size.Width)), Probe((int)MathF.Round(size.Height))],
+            };
+        }
+
+        private static Element Probe(int value)
+        {
+            FrameIdProbe.Encode(value, out byte r, out byte g, out byte b);
+            return new BoxEl
+            {
+                Width = BenchWorkload.ResizeProbeSize,
+                Height = BenchWorkload.ResizeProbeSize,
+                Fill = ColorF.FromRgba(r, g, b),
+            };
+        }
+    }
+
+    /// <summary>theme-switch: the detail page built inside a component's Render, so the host's live re-theme (which
+    /// re-renders every mounted component in place) re-reads every token - FluentGpu's idiomatic theme path.</summary>
+    private static Element BuildThemeHost() => new BoxEl
+    {
+        Width = BenchWorkload.WindowWidth,
+        Height = BenchWorkload.WindowHeight,
+        ClipToBounds = true,
+        Children = [Embed.Comp(() => new ThemeSlot())],
+    };
+
+    private sealed class ThemeSlot : FluentGpu.Hooks.Component
+    {
+        public override Element Render() => FluentNavigationPages.BuildDetail(0);
+    }
+
+    /// <summary>UI thread: the theme-switch step. The probe id and the theme change land in the same frame; the switch
+    /// snaps (0 ms) like WinUI's RequestedTheme does, instead of the engine's default 250 ms cross-fade.</summary>
+    internal static void ApplyTheme(FluentGpu.Hosting.AppHost host, int probeId, bool dark)
+    {
+        ProbeId.Value = probeId;
+        Tok.Use(dark ? ThemeKind.Dark : ThemeKind.Light);
+        host.RequestThemeTransition(0f);
+    }
 
     private sealed class ChurnSlot : FluentGpu.Hooks.Component
     {

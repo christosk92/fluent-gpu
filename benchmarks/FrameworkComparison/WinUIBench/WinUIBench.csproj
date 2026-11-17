@@ -14,6 +14,10 @@
     <WindowsAppSdkVersion Condition="'$(WindowsAppSdkVersion)' == ''">2.3.1</WindowsAppSdkVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <!-- The .NET 11 SDK's AOT "optimized publish" runs PrepareResources;Compile without the full Build, so the WinUI
+         XAML compiler (MarkupCompilePass1 reads @(ReferencePath)) runs before references are resolved and fails with
+         WMC1007, and PublishAppXamlAssets below needs the build output anyway. Keep the full Build before ILC. -->
+    <UseOptimizedPublish>false</UseOptimizedPublish>
   </PropertyGroup>
   <ItemGroup>
     <!-- Public, production Windows App SDK baseline. Its exact version and published binary hash are archived with every run. -->

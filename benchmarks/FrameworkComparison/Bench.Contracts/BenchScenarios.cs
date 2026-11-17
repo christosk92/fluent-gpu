@@ -11,6 +11,11 @@ public static class BenchScenarios
     public const string LocalizedText = "localized-text";
     public const string TreeChurn = "tree-churn";
     public const string PageNavigation = "page-navigation";
+    /// <summary>Live window resize: the window is resized every composed frame along a fixed trajectory while the
+    /// desktop is sampled; measures whether the presented content matches the window it sits in.</summary>
+    public const string WindowResize = "window-resize";
+    /// <summary>Light/Dark theme switch on the realistic detail page; measures switch to first fully re-themed frame.</summary>
+    public const string ThemeSwitch = "theme-switch";
 
     /// <summary>Every scenario a pass enumerates by default, in run order.</summary>
     public static readonly string[] All =
@@ -24,9 +29,19 @@ public static class BenchScenarios
         LocalizedText,
         TreeChurn,
         PageNavigation,
+        WindowResize,
+        ThemeSwitch,
     ];
 
     public static bool IsKnown(string value) => Array.IndexOf(All, value) >= 0;
+
+    /// <summary>
+    /// Scenarios driven and observed from the desktop by <see cref="LiveWindowDriver"/> rather than by a per-frame
+    /// mutation loop. They only exist display-paced (the observation IS the composed desktop), so the runner runs them
+    /// on the cadence pass only, and the hosts run them through their ordinary interactive loop.
+    /// </summary>
+    public static bool IsDesktopDriven(string value)
+        => value is WindowResize or ThemeSwitch;
 
     public static bool IsColdLoad(string value)
         => value is Startup or Buttons225 or Text1125;
@@ -164,6 +179,61 @@ public static class BenchWorkload
     public static string NavLibraryCell(int row, int column, int iteration) => column == 0
         ? $"Playlist {row:00} i{iteration:0000}"
         : $"{iteration:0000}/{row:00}";
+    // ---------------------------------------------------------------------------------------------------------------
+    // window-resize: the detail page laid out responsively (main column grows, the card grid re-wraps, the side list
+    // stays docked right), framed by two edge strips that are part of the layout and two size probes that paint the size
+    // the content was LAID OUT at. The trajectory is a corner drag: width and height move together every composed frame.
+    // ---------------------------------------------------------------------------------------------------------------
+
+    public const int ResizeMinWidth = 960;
+    public const int ResizeMaxWidth = 1440;
+    public const int ResizeMinHeight = 600;
+    public const int ResizeMaxHeight = 840;
+    /// <summary>Steps from the smallest to the largest size (and back): one full cycle is twice this.</summary>
+    public const int ResizeHalfCycleSteps = 80;
+    /// <summary>6 DIP per composed frame (9 px at 150 %): ~720 DIP/s at 120 Hz, a brisk but ordinary edge drag.</summary>
+    public const int ResizeStepWidth = (ResizeMaxWidth - ResizeMinWidth) / ResizeHalfCycleSteps;
+    public const int ResizeStepHeight = (ResizeMaxHeight - ResizeMinHeight) / ResizeHalfCycleSteps;
+    /// <summary>Phase offset so step 0 is the shared 1200 x 720 start size.</summary>
+    public const int ResizeStartPhase = (WindowWidth - ResizeMinWidth) / ResizeStepWidth;
+    /// <summary>Top row holding the two size probes: margin + probe + margin.</summary>
+    public const int ResizeProbeRowHeight = 64;
+    public const int ResizeProbeSize = 48;
+    public const int ResizeProbeMargin = 8;
+    /// <summary>Client-space X of the height probe (the width probe sits at <see cref="ResizeProbeMargin"/>).</summary>
+    public const int ResizeProbe2X = ResizeProbeMargin * 2 + ResizeProbeSize;
+    /// <summary>Width of the right and bottom edge strips; they are layout children, so they sit exactly on the edge
+    /// of whatever size the content was laid out at.</summary>
+    public const int ResizeEdgeStrip = 6;
+    public const byte ResizeEdgeR = 0xE0, ResizeEdgeG = 0x20, ResizeEdgeB = 0xB0;
+    /// <summary>Card grid cell pitch: the wrap grid places a 128 x 130 card every 132 x 134 DIP.</summary>
+    public const int ResizeCardCellWidth = NavCardWidth + NavCardGap;
+    public const int ResizeCardCellHeight = NavCardHeight + NavCardGap;
+    /// <summary>Window minimum the resize scenario allows (below the trajectory's minimum).</summary>
+    public const int ResizeWindowMinWidth = 640;
+    public const int ResizeWindowMinHeight = 400;
+
+    /// <summary>Client size (DIP) of trajectory step <paramref name="step"/>; step 0 is 1200 x 720.</summary>
+    public static (int Width, int Height) ResizeSizeDip(int step)
+    {
+        int period = 2 * ResizeHalfCycleSteps;
+        int p = ((step + ResizeStartPhase) % period + period) % period;
+        int tri = p <= ResizeHalfCycleSteps ? p : period - p;
+        return (ResizeMinWidth + ResizeStepWidth * tri, ResizeMinHeight + ResizeStepHeight * tri);
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // theme-switch: the detail page (page A, built once, theme-aware colours on both hosts) flips Light <-> Dark.
+    // ---------------------------------------------------------------------------------------------------------------
+
+    /// <summary>Measured switches per process (alternating direction); each waits for its fully re-themed frame plus a
+    /// hold, so a switch costs ~10 composed frames and 1,000 of them would only repeat the same distribution.</summary>
+    public const int ThemeMaxSwitches = 200;
+    public const int ThemeWarmupSwitches = 10;
+    /// <summary>Composed frames a switch must stay fully re-themed after it first is (catches flicker-back).</summary>
+    public const int ThemeHoldFrames = 6;
+    public const int ThemeTimeoutMs = 2000;
+
     public const int DefaultWarmupFrames = 60;
     public const int DefaultIterations = 1_000;
     public const int FrameIdProbeSize = FrameIdProbe.SizePx;

@@ -17,8 +17,6 @@ internal static class FluentPacingTrace
     private static Sample[]? _samples;
     private static int _count;
     private static string? _path;
-    private static long _gatedAtBegin;
-    private static long _escapesAtBegin;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Sample
@@ -55,8 +53,7 @@ internal static class FluentPacingTrace
         _path = Path.GetFullPath(path);
         _samples = new Sample[capacity];
         _count = 0;
-        _gatedAtBegin = host.PhaseGatedFrames;
-        _escapesAtBegin = host.PhaseGateCeilingEscapes;
+        // The phase gate was retired from the engine (compositor-tick pacing, 2026-08-18): its two columns stay 0.
     }
 
     internal static void Record(
@@ -71,7 +68,7 @@ internal static class FluentPacingTrace
         Sample[]? samples = _samples;
         if (samples is null || _count >= samples.Length) return;
 
-        PresentStats ps = device.LastPresentStats;
+        PresentStats ps = (device as FluentGpu.Rhi.D3D12.D3D12Device)?.LastPresentStats ?? default;
         samples[_count++] = new Sample
         {
             MutationQpc = mutationQpc,
@@ -95,8 +92,8 @@ internal static class FluentPacingTrace
             DwmLateDelta = ps.DwmFramesLateDelta,
             DwmSampleSeq = ps.DwmSampleSeq,
             LatencyWaitMs = ps.LatencyWaitMs,
-            PhaseGatedFramesDelta = host.PhaseGatedFrames - _gatedAtBegin,
-            PhaseGateCeilingEscapesDelta = host.PhaseGateCeilingEscapes - _escapesAtBegin,
+            PhaseGatedFramesDelta = 0,
+            PhaseGateCeilingEscapesDelta = 0,
             PresentStatsValid = ps.Valid ? (byte)1 : (byte)0,
         };
     }

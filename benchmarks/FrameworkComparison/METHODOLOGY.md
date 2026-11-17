@@ -7,7 +7,7 @@
 - WinUI 3: the pinned public, production `Microsoft.WindowsAppSDK` NuGet package. A result is publishable only when
   the evidence manifest records its package version and the published `Microsoft.UI.Xaml.dll` hash. This intentionally
   replaces the unreleasable local source snapshot, whose pinned FrameworkUdk package lacks a required public header.
-- Both hosts: Windows desktop, 1200 x 720 client area, .NET 10, ARM64, self-contained NativeAOT, opaque window, no
+- Both hosts: Windows desktop, 1200 x 720 DIP client area (window-resize: a trajectory around it), .NET 11, ARM64, self-contained NativeAOT, opaque window, no
   Wavee code, network, images, audio, or application services.
 
 ## Workloads
@@ -22,6 +22,8 @@
 | Localized update | one leaf in a 1,000-node fixed tree | transform-only and text/layout subcases, CPU p50/p99, allocation/op |
 | Tree churn | alternate two prebuilt 500-node subtrees for 1,000 presented swaps | CPU p50/p99, cadence, allocation/op, memory stability |
 | Page navigation | navigate between two structurally different pages, each **built from scratch** per navigation: page A = hero (34 px title, 14 px subtitle, 300x160 accent box) + 6 x 4 grid of 24 cards (rounded container, 96x96 placeholder, 2 text runs) + 40-row three-column list; page B = two-line header + 5 x 8 grid of 40 tiles + 20-row two-column list | CPU p50/p99 (page construction + layout + render), cadence, allocation/op, memory stability |
+| Window resize | page A laid out responsively; `SetWindowPos` one corner-drag step per composed frame, 960-1440 x 600-840 DIP, 1,000 steps | share of composed frames whose content matches the window, content lag, resize-to-content latency (desktop duplication) |
+| Theme switch | page A, theme-aware on both sides; 200 alternating Light/Dark switches | switch to first fully re-themed composed frame, mixed (half-themed) frames (desktop duplication) |
 
 The FluentGPU scrolling host uses its signals-first bound recycler; WinUI uses a virtualizing `ListView` with a compiled
 data template. The static fields in a row are static on both sides; only the row label is data-bound.
@@ -54,14 +56,14 @@ destinations rather than a property diff of the page already up.
   technique its other scenarios use, and strictly stronger than `NavigationCacheMode.Disabled`. `ContentTransitions` is
   explicitly null; the FluentGPU host has no transition either.
 - **Every string is stamped with the iteration** (`Card 07 - i0421`, `Tile 23 i0421`, `Track 15 i0421`), so no
-  navigation can be served out of a text/shaping cache that a previous navigation populated. A test asserts that no two
-  navigations to the same page show the same strings.
+  navigation can be served out of a text/shaping cache that a previous navigation populated.
 - **The FluentGPU host drives the page identity through a signal read inside the component's `Render`**, per the
   component-props-freeze contract (`docs/design/subsystems/component-props-contract.md`): an iteration passed as a field
   would freeze at mount and no navigation would ever happen.
 - Every count, size and string format is a `BenchWorkload.Nav*` constant that both hosts consume — there are no magic
-  numbers in either host — and `Bench.Tests` asserts that both pages' explicit geometry adds up to the shared
-  1200 x 720 DIP client area, so neither framework's text metrics can push content out of the viewport.
+  numbers in either host — and both pages' explicit geometry adds up to the shared 1200 x 720 DIP client area (checked in
+  the parity screenshots; the `Bench.Tests` assertions were deleted with every test project on 2026-10-20), so neither
+  framework's text metrics can push content out of the viewport.
 
 The one structural asymmetry is unavoidable and is a framework property, not a harness choice: a WinUI `Border` cannot
 lay out a stack of children, so a card is `Border` + `StackPanel` where FluentGPU's is a single `BoxEl`. Both hosts
@@ -76,6 +78,83 @@ the `Transform` prop (`Affine2D.Translation`) and lets its dirty tracking propag
 on the target `Border`'s `RenderTransform`. It deliberately does **not** set a hand-obtained
 `ElementCompositionPreview` `Visual.Offset` — that bypasses XAML entirely and measures the compositor rather than the
 framework, which made the WinUI number artificially small in schema-v3 results.
+
+## Desktop-driven scenarios: live window resize and theme switch (added 2026-11-14)
+
+The single-mutation and navigation scenarios time each framework's own frame loop. Two of the pain points desktop users
+actually report are not visible there: what a window shows **while it is being resized**, and how long a **Light/Dark
+theme switch** takes to reach the screen. Both are measured by `Bench.Contracts/LiveWindowDriver.cs`, the SAME code in
+both hosts, running on a background thread of the host process. It drives the window with plain Win32 and judges only
+what DWM composed; nothing a framework reports about itself enters these numbers.
+
+**The instrument: DXGI desktop duplication.** `Bench.Contracts/DesktopDuplication.cs` duplicates the monitor the window
+is on. Every frame DWM composes arrives once, with the QPC time it was presented (`DXGI_OUTDUPL_FRAME_INFO.LastPresentTime`);
+small regions are copied on the GPU into a staging texture and read after the frame is released. A GDI `BitBlt` of the
+screen DC was tried first and rejected: on the bench machine each call blocks for one full composition (8.3 ms at
+120 Hz, 16.7 ms for a full client), so it could not keep up with one sample per frame and slowed the drive loop to
+~24 steps/s.
+
+**window-resize.** The detail page (page A, iteration 0, built once) is laid out responsively on both hosts: the main
+column takes the width left beside the docked 380-DIP side list and the 24 cards re-wrap into it (FluentGPU: a `Wrap` row
+with `Gap = 4`; WinUI: a `VariableSizedWrapGrid` with 132 x 134 cells and a -4 right margin, which fits exactly the same
+number of cards per row); the hero and list rows are the navigation page's own elements. Around it, a root that fills
+the window (FluentGPU: a column flex; WinUI: a Grid with rows 64 / * / 6 and columns * / 6) holds two **size probes** in
+the top row and two magenta **edge strips** on the right and bottom edges. The strips are layout children, so they sit
+exactly on the edge of whatever size the content was laid out at. The probes paint the laid-out client width and height
+in DIP with the frame-ID colour code: FluentGPU from `Viewport.Size` (published by the host before that frame's layout),
+WinUI from the root's `SizeChanged` (raised after the layout pass, before that frame renders).
+
+The driver places the window at (32, 32) px, topmost (an occluded pixel would be judged as the framework's; the run
+aborts if `WindowFromPoint` finds another window), waits until step 0 (1200 x 720) is on screen and correct, then for
+each step k: takes the first composed frame presented after the previous `SetWindowPos` returned, judges it, and calls
+`SetWindowPos` (cross-thread, synchronous: the window's UI thread must process the size change, as for any external
+resize) to trajectory step k. The trajectory is a corner drag, 960 - 1440 x 600 - 840 DIP at 6 x 3 DIP per step
+(9 x 4.5 px at 150 %, ~1,080 px/s at one step per 120 Hz frame), 1,000 measured steps after 60 warmup steps, five runs
+per framework, alternating launch order. Each judged frame is classified:
+
+- **in sync**: both probes decode to the size the window has, and the strip colour is on the window's actual right and
+  bottom edge (client columns W-6 and W-3 px at five heights; rows H-6 and H-3 at five widths);
+- **stretched**: the strips are on the edge but the probes carry an older size (an old frame scaled to the window);
+- **unpainted edge**: some edge pixel is pure black or pure white (an area nothing has painted yet);
+- **stale**: anything else (old content clipped, or not reaching the edge).
+
+Reported: the share of in-sync frames, the class histogram, **content lag** in frames (the step whose size the content
+shows versus the step the window is at; sizes are unique within a half-cycle, so a lag under 80 steps resolves exactly),
+**resize-to-content latency** (`SetWindowPos` call to the present time of the first frame laid out at that step or
+later; this is `frameMs`), content updates per second, the achieved step rate, and how long `SetWindowPos` blocked the
+driver (the time the UI thread took to accept each size).
+
+Two caveats, stated wherever the numbers are used. (1) The resize is programmatic. A user's edge drag runs the OS modal
+size loop (`WM_ENTERSIZEMOVE`) on the window's own thread, and frameworks may treat that differently; starting a real drag
+needs synthetic input that would move the owner's pointer, so it is not done. The test models programmatic resizes
+(snap layouts, window managers, an app resizing itself) and the per-step cost of a size change in each framework.
+(2) FluentGPU's main window, by design, defers re-layout during an OS edge drag (`WindowDesc.LiveResize` is off and not
+exposed through `AppOptions`), so on the modal-loop path it shows its pre-drag content until mouse-up; the programmatic
+path measured here is the one where it does re-lay-out every size it receives.
+
+**theme-switch.** The detail page (page A, built once) in the shared 1200 x 720 frame, theme-aware the idiomatic way on
+each side: FluentGPU builds it inside a component whose `Render` reads the `Tok` tokens (a theme change re-renders every
+mounted component in place); WinUI swaps every surface and text brush for a Style whose setter is a `{ThemeResource}`
+from App.xaml `ThemeDictionaries` (Dark = the navigation scenario's colours, Light = the FluentGPU warm palette's light
+tokens; the accent is WinUI's own `AccentFillColorDefaultBrush`, the same OS-accent ramp rule FluentGPU follows). The
+switch runs on each host's UI thread through its own marshal (`AppHost.Post` / `DispatcherQueue.TryEnqueue`), stamping
+QPC immediately before it, and in the same turn paints the switch's id into the frame-ID probe:
+FluentGPU `Tok.Use(kind)` + `RequestThemeTransition(0)`; WinUI `root.RequestedTheme = kind`. FluentGPU's default theme
+switch is a 250 ms cross-fade; the bench snaps it (0 ms) because WinUI's `RequestedTheme` change is instant and a
+cross-fade would be timed as "not finished yet".
+
+Calibration first: each host is switched to Dark and to Light (unmeasured), and six regions are recorded in each (window
+background, card, thumbnail, accent hero, the hero title's text block, the side list's text block; the two text regions
+are block averages, so they track text colour, not one glyph's anti-aliasing). A region is used only if its two
+references differ (L1 >= 24); the run aborts if fewer than four do. Then 200 measured switches (+10 warmup), alternating
+direction. A switch is complete at the first composed frame presented after the stamp in which the probe carries its id
+and every used region is within a quarter of the reference distance of the new theme. Reported: switch-to-complete
+latency (`frameMs`), frames composed after the stamp that were still entirely in the old theme, **mixed frames**
+(partly re-themed), frames that fell back out of the new theme within the next six frames, and timeouts (2 s).
+
+Both scenarios are cadence-pass only (the runner skips them on the `cpu` pass): the observation is the composed desktop.
+Screenshots (`*.resize-start|inflight|end.bmp`, `*.theme-dark|light.bmp`) are written beside every raw result as parity
+evidence, together with the per-frame logs (`*.resize.jsonl`, `*.theme.jsonl`).
 
 ## Cold-load anchoring and stop points
 
@@ -249,8 +328,13 @@ Per-process results are `fluentgpu-framework-bench/v2` (adds the optional `coldS
   run: scenario external median minus startup external median, per framework. It isolates workload cost from fixed
   bring-up and is explicitly labelled as derived.
 
-Aggregation lives in `Bench.Contracts/SummaryAggregation.cs` (plain data in, rows and outcomes out) and is unit-tested
-in `Bench.Tests/SummaryAggregationTests.cs`.
+Aggregation lives in `Bench.Contracts/SummaryAggregation.cs` (plain data in, rows and outcomes out). Desktop-driven
+scenarios add their own rows (the primary latency series, every extra per-step series, and the median over runs of every
+per-run scalar) with no CPU-definition caveat: one driver measures both sides.
+
+The suite is run **one runner invocation per scenario** (`--scenarios x --summary-name summary-x`), so a machine-wide
+GPU lock can be held per invocation instead of around a whole pass; `--aggregate` then merges every `summary-*.json` of
+the output directory into `summary.json`, re-reading each successful run's raw result and keeping every failed run.
 
 ## Statistics and publication gate
 

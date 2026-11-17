@@ -21,7 +21,9 @@ internal static class Program
         int StartupRepetitions,
         int LoadRepetitions,
         int TimeoutSeconds,
-        string? BuildEvidence);
+        string? BuildEvidence,
+        string SummaryName,
+        bool Aggregate);
 
     private sealed record Completed(RunRecord Run, BenchResult? Result);
 
@@ -31,9 +33,17 @@ internal static class Program
         {
             Options options = Parse(args);
             Directory.CreateDirectory(options.Output);
+            if (options.Aggregate) return AggregateOnly(options);
             var completed = new List<Completed>();
             foreach (string scenario in options.Scenarios)
             {
+                // Desktop-driven scenarios observe the composed desktop, which only exists display-paced.
+                if (BenchScenarios.IsDesktopDriven(scenario) &&
+                    !string.Equals(options.Pass, SummaryAggregation.CadencePass, StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"SKIP {scenario} on the {options.Pass} pass (desktop-driven: cadence pass only)");
+                    continue;
+                }
                 int repetitions = scenario == BenchScenarios.Startup
                     ? options.StartupRepetitions
                     : BenchScenarios.IsColdLoad(scenario) ? options.LoadRepetitions : options.Repetitions;
@@ -191,9 +201,39 @@ internal static class Program
             Outcomes = aggregated.Outcomes,
             Runs = completed.Select(static x => x.Run).ToArray(),
         };
-        File.WriteAllText(Path.Combine(options.Output, "summary.json"),
+        File.WriteAllText(Path.Combine(options.Output, options.SummaryName + ".json"),
             JsonSerializer.Serialize(summary, BenchJsonContext.Default.BenchmarkSummary));
-        File.WriteAllText(Path.Combine(options.Output, "summary.md"), Markdown(summary));
+        File.WriteAllText(Path.Combine(options.Output, options.SummaryName + ".md"), Markdown(summary));
+    }
+
+    /// <summary>
+    /// <c>--aggregate</c>: merge the per-invocation summaries (<c>summary-*.json</c>) of one output directory into
+    /// <c>summary.json</c>. The suite is run one runner invocation per scenario so the machine-wide GPU lock can be held
+    /// per invocation rather than around the whole batch; every run record - failures included - comes from those
+    /// summaries, and every successful run's raw result is re-read from disk, so the merge loses nothing.
+    /// </summary>
+    private static int AggregateOnly(Options options)
+    {
+        var completed = new List<Completed>();
+        string[] parts = Directory.GetFiles(options.Output, "summary-*.json").Order(StringComparer.Ordinal).ToArray();
+        if (parts.Length == 0) throw new InvalidOperationException($"No summary-*.json in {options.Output}.");
+        foreach (string part in parts)
+        {
+            BenchmarkSummary partial = JsonSerializer.Deserialize(File.ReadAllText(part), BenchJsonContext.Default.BenchmarkSummary)
+                ?? throw new JsonException(part);
+            foreach (RunRecord run in partial.Runs)
+            {
+                BenchResult? result = null;
+                if (run.Success)
+                    result = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(options.Output, run.ResultPath)),
+                        BenchJsonContext.Default.BenchResult);
+                completed.Add(new Completed(run, result));
+            }
+        }
+        WriteEvidence(options, completed);
+        int failures = completed.Count(static x => !x.Run.Success);
+        Console.WriteLine($"Aggregated {completed.Count} runs from {parts.Length} summaries; {failures} failure(s).");
+        return 0;
     }
 
     /// <summary>Projects the completed processes onto the plain-data shape the (unit-tested) aggregator consumes.</summary>
@@ -210,6 +250,8 @@ internal static class Program
         Iterations = x.Result?.Iterations ?? 0,
         WorkingSetBytes = x.Result?.WorkingSetBytes ?? 0L,
         PrivateBytes = x.Result?.PrivateBytes ?? 0L,
+        Metrics = x.Result?.Metrics,
+        Series = x.Result?.Series,
     }).ToArray();
 
     private static string Markdown(BenchmarkSummary summary)
@@ -320,6 +362,8 @@ internal static class Program
             Int(args, "--startup-repetitions", 30),
             Int(args, "--load-repetitions", 10),
             Int(args, "--timeout-seconds", 120),
-            Get(args, "--build-evidence") is { } evidence ? Path.GetFullPath(evidence) : null);
+            Get(args, "--build-evidence") is { } evidence ? Path.GetFullPath(evidence) : null,
+            Get(args, "--summary-name") ?? "summary",
+            Array.IndexOf(args, "--aggregate") >= 0);
     }
 }
