@@ -7172,7 +7172,11 @@ public sealed partial class AppHost : IDisposable
             int viewportArrivals = ScrollHandle.ViewportArrivals;
             bool viewportArrived = viewportArrivals != _viewportArrivalsSeen;
             _viewportArrivalsSeen = viewportArrivals;
-            if (!_scene.Root.IsNull && ((scrolledMidFrame && _reconciler.ReRealizeVirtuals()) || (viewportArrived && _runtime.HasPending)))
+            // So does state a measured size wrote: a part that re-renders from its own laid-out width (a bento grid packing its tiles to it, a
+            // board choosing its rhythm) drew a frame behind the width on every frame of a window drag, and caught up two widths at once
+            // whenever another cause re-ran this pass (a width step, then a still frame). Once, in this frame: what it lays out next waits.
+            bool boundsWrote = _layout.BoundsDeliveries > 0 && _runtime.HasPending;
+            if (!_scene.Root.IsNull && ((scrolledMidFrame && _reconciler.ReRealizeVirtuals()) || ((viewportArrived || boundsWrote) && _runtime.HasPending)))
             {
                 if (_runtime.HasPending) FlushRebindsToQuiescence();
                 _reconciler.ConsumeReconciled();
@@ -8812,6 +8816,8 @@ public sealed partial class AppHost : IDisposable
             // AnimateBounds consumes only deltas, so parent-relative rects feed it directly; for a purely local
             // move this is bit-identical to the old absolute pair (the ancestor sum cancels).
             _anim.AnimateBounds(n, from, to, spec, followLive);
+            // A vertical FLIP hold this frame: the scroll anchoring keeps it where it was drawn if it shifts the content (AppHost.ScrollAnchor.cs).
+            if ((spec.Channels & TransitionChannels.Position) != 0 && MathF.Abs(from.Y - to.Y) >= PosEps) _freshHolds.Add(n);
         }
         _projectionSuppressionRoots.Clear();
         _liveReflowScratch.Clear();
@@ -8906,7 +8912,12 @@ public sealed partial class AppHost : IDisposable
             if (!_anim.TryGetTransition(n, out var spec) || spec.Size != SizeMode.Reflow || (spec.Channels & TransitionChannels.Size) == 0) continue;
             if (_reflowOwnedRoots.Contains(n) || IsBelowProjectionSuppressionRoot(n)) continue;
             if (!TryProjectionRects(n, kv.Value, posEps, sizeEps, out RectF from, out RectF to)) continue;
-            if (MathF.Abs(from.W - to.W) < sizeEps && MathF.Abs(from.H - to.H) < sizeEps) continue;
+            // On the axes the reflow animates only: a width reflow's box that only grew taller (a page gutter stretched down the content
+            // as a shelf below stands up) has nothing to start, and seeding it anyway re-presented the flying width row and re-probed the
+            // destinations on every such commit (the probe's second arrange of the page each frame of a window drag).
+            bool wChanged = (spec.Axes & SizeAxes.Width) != 0 && MathF.Abs(from.W - to.W) >= sizeEps;
+            bool hChanged = (spec.Axes & SizeAxes.Height) != 0 && MathF.Abs(from.H - to.H) >= sizeEps;
+            if (!wChanged && !hChanged) continue;
             if (s_motionDiag) LogMotionNode(n.Raw.Index, "reflow-first", from, to);
             // Size only: the main pass FLIPs the node's own move against the re-solved layout, and finds this row aimed already (its guards).
             _anim.AnimateBounds(n, from, to, spec with { Channels = TransitionChannels.Size });
