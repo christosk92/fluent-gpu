@@ -3236,8 +3236,15 @@ public sealed partial class SliceRecorder
             _frameSpans.AsSpan(0, _frameSpanCount), _itemLayers.AsSpan(0, _itemCount),
             _rasterDone.AsSpan(0, _rasterCount), _itemInherited.AsSpan(0, 2 * _itemCount),
             EvRasterFlags(_rasterCount), EvItemFlags(_itemCount), table.TrimmedSurfaces,   // the textures the table released (§13.1g)
-            table.OwnerId, _inlineOps.AsSpan(0, _inlineOpCount), _rowInlineRange.AsSpan(0, 2 * _rowCount));
+            table.OwnerId, _inlineOps.AsSpan(0, _inlineOpCount), _rowInlineRange.AsSpan(0, 2 * _rowCount), _glyphPrep.Bytes);
     }
+
+    private readonly DrawList _glyphPrep = new(1024);
+
+    /// <summary>The glyph runs of text the recorder walked but culled outside its clip since the last composite (<see cref="CompositeFrame.GlyphPrep"/>):
+    /// written by the record pass, handed to the backend by the next composite, cleared by <see cref="EndComposite(SliceTable, in CompositeFrame)"/>.
+    /// The record pass and the composite run on the same thread (the UI thread inline, the render thread when it records).</summary>
+    internal DrawList GlyphPrep => _glyphPrep;
 
     /// <summary>The composite ERASE item of video plan entry <paramref name="e"/>. F078 + pixel rule R (F073): the erase quad is the
     /// hole's rect cut to the composite clip, each edge rounded to the nearest device pixel (the same rule the DirectComposition
@@ -3590,6 +3597,7 @@ public sealed partial class SliceRecorder
     public void EndComposite(SliceTable table, ReadOnlySpan<byte> rasterDone, ReadOnlySpan<byte> rasterFlags = default,
         ReadOnlySpan<byte> itemFlags = default)
     {
+        _glyphPrep.Reset();
         int done = 0;
         long bytes = 0;
         for (int i = 0; i < _rasterCount; i++)

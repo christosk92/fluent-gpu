@@ -93,6 +93,8 @@ public sealed partial class SceneRecordingSnapshot
     public NodeHandle Root { get; private set; }
     public int Capacity => _handles.Length;
     public float DeviceScale { get; private set; }
+    /// <summary>The captured frame's <see cref="SceneStore.TextMeasureStamp"/>.</summary>
+    public int TextMeasureStamp { get; private set; }
     public NodeHandle DragGhost { get; private set; }
     public ColorF? DragGhostBackplate { get; private set; }
     public NodeHandle DragOverlay { get; private set; }
@@ -425,6 +427,7 @@ public sealed partial class SceneRecordingSnapshot
     {
         Root = source.Root;
         DeviceScale = source.DeviceScale;
+        TextMeasureStamp = source.TextMeasureStamp;
         DragGhost = source.DragGhost;
         DragGhostBackplate = source.DragGhostBackplate;
         DragOverlay = source.DragOverlay;

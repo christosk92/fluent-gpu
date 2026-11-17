@@ -165,7 +165,12 @@ public sealed class DragEventArgs
 /// <summary>Press-and-hold timing for <c>BoxEl.Hold</c>: the dwell per pointer kind (<see cref="MouseMs"/> 0: the mouse does
 /// not hold), the slop the press must stay inside (DIP), and how long after the hold a move past the slop still promotes the
 /// node's own drag ("hold, then drag").</summary>
-public readonly record struct HoldSpec(float TouchMs = 500f, float MouseMs = 0f, float SlopDip = 8f, float DragWindowMs = 500f);
+public readonly record struct HoldSpec(float TouchMs = 500f, float MouseMs = 0f, float SlopDip = 8f, float DragWindowMs = 500f)
+{
+    /// <summary>The stock hold. A struct's <c>new HoldSpec()</c> skips the primary constructor's defaults: an <c>OnHold</c> without a
+    /// <c>Hold</c> spec got a 0 ms touch dwell, a 0 DIP slop and no drag window.</summary>
+    public HoldSpec() : this(500f, 0f, 8f, 500f) { }
+}
 
 /// <summary>A hold on a node (<c>BoxEl.OnHold</c> / <c>OnHoldReleased</c>): the press point in window space, the device and
 /// the node that holds the handler.</summary>

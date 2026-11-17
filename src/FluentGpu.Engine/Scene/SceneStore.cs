@@ -99,6 +99,8 @@ public sealed partial class SceneStore : ISceneBackend
     // change re-read). Scroll transform rounding and recorder-side self-blur support geometry share it so both land on
     // the same physical grid while their logical offsets/bounds remain float.
     public float DeviceScale = 1f;
+    /// <summary>The host's frame number for text measures (<see cref="TextMeasureEntry.Stamp"/>), advanced once per frame before its layout.</summary>
+    public int TextMeasureStamp;
 
     // topology (int indices; 0 = none)
     private int[] _parent, _firstChild, _lastChild, _prevSib, _nextSib, _childCount;

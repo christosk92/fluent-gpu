@@ -8,7 +8,12 @@ namespace FluentGpu.Controls;
 
 /// <summary>The press lean of <see cref="TileMotion.Tilt"/>: the scale while pressed, the largest lean (a fraction of the box
 /// the tile travels toward the press point, at most 2 DIP), and the release time.</summary>
-public readonly record struct TiltSpec(float Scale = 0.97f, float MaxLean = 0.02f, float ReleaseMs = 120f);
+public readonly record struct TiltSpec(float Scale = 0.97f, float MaxLean = 0.02f, float ReleaseMs = 120f)
+{
+    /// <summary>The stock lean. A struct's <c>new TiltSpec()</c> skips the primary constructor's defaults, so without this every tile tilted
+    /// with the default spec shrank toward scale 0 for the 90 ms press ease (a quarter-size tile on the press frame) and snapped back.</summary>
+    public TiltSpec() : this(0.97f, 0.02f, 120f) { }
+}
 
 /// <summary>Zune's tile motion in 2-D (the engine's transform is a 2x3 affine; perspective is out of scope, owner call 2 of the
 /// pinned-Home plan).</summary>
