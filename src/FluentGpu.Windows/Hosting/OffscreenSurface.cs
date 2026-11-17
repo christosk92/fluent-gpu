@@ -207,6 +207,18 @@ public sealed partial class OffscreenSurface : IDisposable
         return _device.CaptureBgra(out width, out height);
     }
 
+    /// <summary><see cref="CaptureBgra(out int, out int)"/> into <paramref name="buffer"/>, reused when big enough (else replaced): the
+    /// many-frame capture (a film) keeps one buffer instead of a large-object-heap array per frame.</summary>
+    public void CaptureBgraInto(ref byte[]? buffer, out int width, out int height)
+    {
+        ThrowIfDisposed();
+        if (_stackExhausted)
+            throw new InvalidOperationException("The scene recorder ran out of stack on this thread and dropped the deepest subtrees, "
+                + "so the capture would show the chrome and a blank page. Create the host's thread with OffscreenSurface.UiThreadStackBytes "
+                + $"({UiThreadStackBytes / (1024 * 1024)} MB) of stack.");
+        _device.CaptureBgraInto(ref buffer, out width, out height);
+    }
+
     /// <summary>Capture and write a PNG. <paramref name="backdrop"/> set: opaque RGB flattened over that colour (what the window
     /// shows over a solid ground, the review form). Null: RGBA with the translucency kept (un-premultiplied).</summary>
     public void WritePng(string path, ColorF? backdrop = null)

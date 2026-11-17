@@ -5169,6 +5169,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// </summary>
     public byte[] CaptureBgra(out int width, out int height)
     {
+        byte[]? outp = null;
+        CaptureBgraCore(ref outp, out width, out height);
+        return outp!;
+    }
+
+    /// <summary><see cref="CaptureBgra(out int, out int)"/> into <paramref name="buffer"/> (width × height × 4 bytes, reused when it
+    /// is big enough, else replaced): a caller capturing many frames (the inspector's film) keeps ONE large buffer instead of a new
+    /// large-object-heap array per frame, whose churn ran full GCs on the frames being measured.</summary>
+    public void CaptureBgraInto(ref byte[]? buffer, out int width, out int height) => CaptureBgraCore(ref buffer, out width, out height);
+
+    private void CaptureBgraCore(ref byte[]? outp, out int width, out int height)
+    {
         AssertDeviceOwner();
         if (_primarySwapchain is null) throw new InvalidOperationException("CreateSwapchain must be called before CaptureBgra.");
         BeginTargetFrame(_primarySwapchain.Frame);
@@ -5224,7 +5236,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.ExecuteCommandLists(_queue, 1, (void**)&execList);   // GEN-COM (wired)
         WaitForGpu();
 
-        byte[] outp = new byte[(long)width * height * 4];
+        long need = (long)width * height * 4;
+        if (outp is null || outp.Length < need) outp = new byte[need];
         void* mapped;
         D3D12_RANGE rr = default; rr.Begin = 0; rr.End = (nuint)total;
         Check(readback->Map(0, &rr, &mapped), "capture.Map");
@@ -5239,7 +5252,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         D3D12MemoryDiagnostics.Release(readback, "Capture.Readback");
         readback->Release();
         EndTargetFrame();
-        return outp;
     }
 
     internal void Resize(D3D12Swapchain target, uint w, uint h)
