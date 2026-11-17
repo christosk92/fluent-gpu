@@ -267,7 +267,7 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     // Renderer-owned quad-array free-list (bucketed by pow2 size). A virtualization storm shapes thousands of fresh
     // runs whose arrays the cache holds for many frames — the SHARED ArrayPool drains and falls back to allocating;
     // this list retains returned arrays (up to a per-bucket cap), so steady-state churn reuses instead of allocating.
-    private readonly Stack<ShapedGlyph[]>[] _quadPool = new Stack<ShapedGlyph[]>[14];   // buckets 1<<0 .. 1<<13
+    private readonly Stack<ShapedGlyph[]>[] _quadPool = Pools<ShapedGlyph>();   // buckets 1<<0 .. 1<<13
     // Retention bounds (audit mem-02): without them the free-list ratchets to the session-peak run count and never gives
     // memory back. The BYTE cap (MaxPooledQuadBytes) is the bound: the pool never holds more than 1 MiB of quads. Within it
     // the per-bucket depth follows the churn (audit PERF r3 RASTER): a navigation shapes a new page's runs (tens of arrays
@@ -282,6 +282,22 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     // cap the two pools share. Returns beyond a cap drop the reference (managed arrays — the GC reclaims them); the only cost
     // of dropping is that the NEXT miss at that size re-allocates one array.
     private const int MaxPooledQuadArraysPerBucket = 512;
+
+    /// <summary>The deepest bucket <paramref name="bucket"/> of a pool of <typeparamref name="T"/> arrays can ever stand: the per-bucket cap, or
+    /// fewer when the shared byte cap fits fewer arrays of that size (1 MiB of 2^13-glyph runs is 3 of them).</summary>
+    private static int PoolDepth<T>(int bucket) where T : struct
+        => (int)Math.Min(MaxPooledQuadArraysPerBucket, MaxPooledQuadBytes / ((long)Unsafe.SizeOf<T>() << bucket));
+
+    /// <summary>The 14 buckets of a pool, each stack created at the depth it can ever reach (<see cref="PoolDepth{T}"/>), so a push never grows
+    /// one: an eviction sweep (every 64 frames, at rest) returned a batch of runs into a stack that was still growing its array, and that
+    /// growth landed on whatever frame the sweep ran on, an animation's steady frame included (1,168 B, then 2,184 B 64 frames later).
+    /// About 32 KB of references for the quad pool and 37 KB for the colour pool, once per renderer.</summary>
+    private static Stack<T[]>[] Pools<T>() where T : struct
+    {
+        var pools = new Stack<T[]>[14];
+        for (int b = 0; b < pools.Length; b++) pools[b] = new Stack<T[]>(PoolDepth<T>(b));
+        return pools;
+    }
     private const int RestingPooledArraysPerBucket = 8;
     private const int DemandSweeps = 4;
     private readonly int[] _quadDemand = new int[14 * DemandSweeps], _colorDemand = new int[14 * DemandSweeps];
@@ -291,7 +307,7 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private const int QuietTrimMs = 2000;
     // The colour twin of the quad pool: a span or colour-emoji run's per-quad colours (ShapedRun.Colors), returned with
     // its quads. Same buckets and depth, inside the SAME byte cap; empty at rest (before it there was no colour pool).
-    private readonly Stack<ColorF[]>[] _colorPool = new Stack<ColorF[]>[14];
+    private readonly Stack<ColorF[]>[] _colorPool = Pools<ColorF>();
     private long _pooledColorBytes;
     // Liveness source for the run cache: a reclaimed text id resolves to "" (StringTable), so its runs can never be
     // hit again — evict them promptly instead of waiting out the age backstop (keeps the free-list small under storms).
@@ -1055,8 +1071,8 @@ float4 PSMain(VSOutG i) : SV_Target
         if (bucket >= _quadPool.Length || arr.Length != 1 << bucket) return;
         long bytes = (long)arr.Length * Unsafe.SizeOf<ShapedGlyph>();
         if (bytes > MaxPooledQuadBytes - _pooledQuadBytes - _pooledColorBytes) return;
-        var stack = _quadPool[bucket] ??= new Stack<ShapedGlyph[]>();
-        if (stack.Count >= MaxPooledQuadArraysPerBucket) return;   // cap reached → drop the reference (GC reclaims)
+        var stack = _quadPool[bucket];
+        if (stack.Count >= PoolDepth<ShapedGlyph>(bucket)) return;   // cap reached (the stack never grows past its pre-sized depth)   // cap reached → drop the reference (GC reclaims)
         stack.Push(arr);
         _pooledQuadBytes += bytes;
     }
@@ -1082,8 +1098,8 @@ float4 PSMain(VSOutG i) : SV_Target
         if (bucket >= _colorPool.Length || arr.Length != 1 << bucket) return;
         long bytes = (long)arr.Length * Unsafe.SizeOf<ColorF>();
         if (bytes > MaxPooledQuadBytes - _pooledQuadBytes - _pooledColorBytes) return;
-        var stack = _colorPool[bucket] ??= new Stack<ColorF[]>();
-        if (stack.Count >= MaxPooledQuadArraysPerBucket) return;
+        var stack = _colorPool[bucket];
+        if (stack.Count >= PoolDepth<ColorF>(bucket)) return;
         stack.Push(arr);
         _pooledColorBytes += bytes;
     }
