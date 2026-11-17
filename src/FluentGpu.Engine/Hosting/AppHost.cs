@@ -5736,6 +5736,7 @@ public sealed partial class AppHost : IDisposable
         _reconciler.Anim = _anim;
         _anim.ReflowSizeWritten = _reconciler.FollowReflowSize;   // an easing template root moves its parent (the anchors mirror it live)
         _reconciler.OnBoundsTransitionGained = CaptureGainedProjection;   // `Animate = cond ? X : null`: the first flip eases too
+        _scene.OnStructureChanged = CaptureStructureStep;   // a structure step on a resized frame: the parts under it that animate through it
         _reconciler.Connected = _connected;   // shared-element (connected-animation) participant registry, fed by Element.MorphId
         _reconciler.RequestFrame = WakeFrame;      // wake-only seam: mutate retained scene state, wake, DON'T re-render
         // KeepAlive park/un-park → quiesce/resume the parked subtree's animation + scroll tickers so a backgrounded tab's
@@ -6897,6 +6898,9 @@ public sealed partial class AppHost : IDisposable
             long db = 0, dt0 = 0;
             if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt0 = Stopwatch.GetTimestamp(); }
             _projectionCaptureOpen = false;
+            _resizeStructureFrame = false;
+            _layout.NoteLineSteps = false;
+            _scene.StructureChanged.Clear();
             if (willReconcile && _everLaidOut && !_scene.Root.IsNull && !resized)
             {
                 _projectBefore.Clear();
@@ -6922,10 +6926,16 @@ public sealed partial class AppHost : IDisposable
                 // width reflow in flight is probed again at the new size (the destination probe's resize arm).
                 _anim.CancelStructuralAll(_scene.BoundsAnimatedNodes, keepReflows: true);
                 // A transition that animates through a resize (LayoutTransition.AnimateDuringResize: a height reflow a width
-                // step changes): its height row was kept above (KeptThroughResize), and it is captured alone, so its step this frame eases like any commit's.
+                // step changes): its rows were kept above (KeptThroughResize), and only such parts are captured. Whether one starts or re-aims an
+                // animation this frame is decided after the layout (ApplyProjections): only when a structure it declares changed under it (a form
+                // a grid chose, a run's line count: SceneStore.NoteStructureChanged, collected while this frame lays out), or its row is in
+                // flight. A size that only follows the width (a card's cover growing with its column) lands with the drag.
+                _projectBefore.Clear();
+                _scene.StructureChanged.Clear();
+                _resizeStructureFrame = true;
+                _layout.NoteLineSteps = true;
                 if (willReconcile)
                 {
-                    _projectBefore.Clear();
                     CaptureResizeProjections();
                     capturedProjections = _projectBefore.Count > 0;
                 }
@@ -7222,6 +7232,9 @@ public sealed partial class AppHost : IDisposable
                 reconciled = true;
                 if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             }
+            // A resized frame's structure steps captured the parts under them as they were noted (CaptureStructureStep).
+            if (_resizeStructureFrame && _projectBefore.Count > 0) capturedProjections = true;
+            _layout.NoteLineSteps = false;
             // 6.6 SizeToContent (AppHost.SizeToContent.cs): only on frames whose layout ran; zero work when Manual.
             FitWindowToContent(layoutNeeded && !_scene.Root.IsNull, layoutSize);
             long tLayoutEffects = Stopwatch.GetTimestamp();
@@ -8661,7 +8674,10 @@ public sealed partial class AppHost : IDisposable
     }
 
     /// <summary>The capture of a frame a resize owns: only the nodes whose transition animates through it
-    /// (<see cref="LayoutTransition.AnimateDuringResize"/>); every other node lands on the geometry the resize solves.</summary>
+    /// (<see cref="LayoutTransition.AnimateDuringResize"/>) and whose size the layout solves (a <see cref="SizeMode.Reflow"/> body: what a
+    /// structure step under it changes), plus any such node whose animation is in flight (it is re-aimed). A part that only MOVES when a
+    /// structure changes (a grid's card) is captured when the step is noted (<see cref="CaptureStructureStep"/>). Every other node lands on the
+    /// geometry the resize solves.</summary>
     private void CaptureResizeProjections()
     {
         var nodes = _scene.BoundsAnimatedNodes;
@@ -8669,8 +8685,56 @@ public sealed partial class AppHost : IDisposable
         {
             NodeHandle n = nodes[i];
             if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
-            if (_anim.TryGetTransition(n, out var t) && t.AnimateDuringResize) CaptureProjection(n);
+            if (_anim.TryGetTransition(n, out var t) && t.AnimateDuringResize && (t.Size == SizeMode.Reflow || _anim.HasStructuralRow(n)))
+                CaptureProjection(n);
         }
+    }
+
+    /// <summary>Set on a frame the window resized: a structure step noted while it lays out (<see cref="SceneStore.NoteStructureChanged"/>)
+    /// captures the parts under it that animate through a resize (<see cref="CaptureStructureStep"/>), and only the parts such a step lies under,
+    /// or whose animation flies, start or re-aim one (<see cref="KeepResizeCapture"/>).</summary>
+    private bool _resizeStructureFrame;
+
+    /// <summary>The nodes the frame's structure steps lie under (each step's node and its ancestors), built by <see cref="KeepResizeCapture"/>.</summary>
+    private readonly HashSet<NodeHandle> _structureStepAncestors = new();
+    private readonly List<NodeHandle> _resizeKeepScratch = new();
+
+    /// <summary>A structure step noted while a resized frame lays out (a grid chose other columns: its form box notes it from its bounds callback,
+    /// before it re-renders): its subtree still holds the rects this frame laid it out at, so the parts under it that animate through a resize
+    /// (a card that moves to its new cell) are captured from there and glide to where the new structure puts them.</summary>
+    private void CaptureStructureStep(NodeHandle node)
+    {
+        if (!_resizeStructureFrame || !_scene.IsLive(node)) return;
+        CaptureStepSubtree(node);
+    }
+
+    private void CaptureStepSubtree(NodeHandle n)
+    {
+        for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c))
+        {
+            if ((_scene.Flags(c) & NodeFlags.BoundsAnimated) != 0 && !_projectBefore.ContainsKey(c)
+                && _anim.TryGetTransition(c, out var t) && t.AnimateDuringResize)
+                CaptureProjection(c);
+            CaptureStepSubtree(c);
+        }
+    }
+
+    /// <summary>On a frame the window resized, does the captured <paramref name="n"/> start or re-aim its animation? Yes when it is a structure
+    /// step's part, or a step lies under it or above it (<see cref="SceneStore.StructureChanged"/>: a body whose grid chose other columns, a card
+    /// that grid moves), or when its animation is already in flight.</summary>
+    private bool KeepResizeCapture(NodeHandle n)
+    {
+        if (_anim.HasStructuralRow(n)) return true;
+        var steps = _scene.StructureChanged;
+        if (steps.Count == 0) return false;
+        if (_structureStepAncestors.Count == 0)
+            for (int i = 0; i < steps.Count; i++)
+                for (NodeHandle a = steps[i]; !a.IsNull && _scene.IsLive(a) && _structureStepAncestors.Add(a); a = _scene.Parent(a)) { }
+        if (_structureStepAncestors.Contains(n)) return true;
+        for (NodeHandle a = _scene.Parent(n); !a.IsNull && _scene.IsLive(a); a = _scene.Parent(a))
+            for (int i = 0; i < steps.Count; i++)
+                if (steps[i] == a) return true;
+        return false;
     }
 
     private void CaptureProjection(NodeHandle n)
@@ -8714,6 +8778,20 @@ public sealed partial class AppHost : IDisposable
         //  • ReducedMotion is a separate ACCESSIBILITY preference (gate-covered): it keeps its 1ms-tween snap and still
         //    lets opacity/etc. animate — behaviour left exactly as before.
         bool suppressed = Motion.LayoutTransitionsSuppressed || keepAliveSuppressed || _snapDepth > 0;   // SnapScope: every FLIP lands on the laid-out bounds
+        // A frame the window resized captured only the parts that animate through it (CaptureResizeProjections, CaptureStructureStep): one starts
+        // or re-aims its animation only when a structure step lies under or above it, or its row flies (KeepResizeCapture). The rest follow the
+        // drag: nothing of theirs flies, so there is nothing to land.
+        if (_resizeStructureFrame)
+        {
+            _structureStepAncestors.Clear();
+            foreach (var kv in _projectBefore)
+                if (_scene.IsLive(kv.Key) && _anim.TryGetTransition(kv.Key, out var kt) && kt.AnimateDuringResize && !KeepResizeCapture(kv.Key))
+                    _resizeKeepScratch.Add(kv.Key);
+            for (int i = 0; i < _resizeKeepScratch.Count; i++) _projectBefore.Remove(_resizeKeepScratch[i]);
+            _resizeKeepScratch.Clear();
+            _structureStepAncestors.Clear();
+            if (_projectBefore.Count == 0) return;   // a drag frame that steps nothing: no projection pass
+        }
         // Suppressed by a resize alone (the modal size loop, a splitter drag): the nodes whose transition animates through it are this commit's
         // whole capture; every other captured node lands on its layout now, as under any suppression.
         if (suppressed && Motion.LayoutTransitionsSuppressedByResizeOnly && !keepAliveSuppressed && _snapDepth == 0)
@@ -8800,9 +8878,10 @@ public sealed partial class AppHost : IDisposable
             // that packs its tiles to its own width): it re-renders at it in this frame, as after the commit's own pass (RelayoutBoundsWrites).
             // Left to the next frame, it drew this one at the TARGET width the commit's pass delivered (Zune Home crossing W1008: its full rows
             // 48 wider for one frame, then back at the start beside a page whose margins had only begun to ease).
-            // Not on a frame the window resized: there the only reflows seeded are the opted-in heights (AnimateDuringResize), whose start
-            // changes no width a part sizes itself from, and the re-render cost a board flush and relayout on every drag frame.
-            if (!_frameResized && _layout.BoundsDeliveries != seedDelivered && _runtime.HasPending)
+            // On a frame the window resized, only when this pass runs at all: a structure step or a row in flight (KeepResizeCapture; a drag frame
+            // that steps nothing returned above), whose start a box that follows its body (a board's row) hears here, in this frame. Run on
+            // every drag frame, it cost a board flush and relayout each.
+            if (_layout.BoundsDeliveries != seedDelivered && _runtime.HasPending)
             {
                 RelayoutBoundsWrites(layoutSize);
                 DiscoverProjectionRoots(PosEps, SizeEps);

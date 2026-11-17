@@ -98,11 +98,44 @@ public static class Responsive
     /// row), so a width that keeps the form re-lays the child out and re-renders nothing: every tick of a docking pane's reflow
     /// used to rebuild the box's whole subtree (audit B3bc). <paramref name="key"/> remembers the width (<see cref="MeasureMemory"/>)
     /// as <see cref="Of(string,Func{float,Element},float,float)"/> does. Both delegates are live closures: a parent re-render
-    /// pushes new ones and rebuilds the child, exactly as the ungated overload.</summary>
-    public static Element Of<TForm>(string key, Func<float, TForm> formOf, Func<TForm, Element> build, float fallback = 0f, float grow = 0f)
+    /// pushes new ones and rebuilds the child, exactly as the ungated overload.
+    /// <para>A form change is a step of the box's STRUCTURE (<see cref="FluentGpu.Scene.SceneStore.NoteStructureChanged"/>): on a frame the window
+    /// resized, the parts around it that animate through a resize (<see cref="LayoutTransition.AnimateDuringResize"/>: the body whose height its
+    /// rows decide, the cards it moves) ease that step while every other size follows the drag. <paramref name="sameStructure"/>, when given,
+    /// says which form changes are no such step (a form that only re-bases the cards' widths and keeps their lines).</para></summary>
+    public static Element Of<TForm>(string key, Func<float, TForm> formOf, Func<TForm, Element> build, float fallback = 0f, float grow = 0f,
+        Func<TForm, TForm, bool>? sameStructure = null)
     {
         ArgumentNullException.ThrowIfNull(key);
-        var props = new FormBox<TForm>.Props(formOf, build, fallback, grow, key);
+        return Of<TForm>(key, (structure, _) => formOf(structure), build, fallback, grow, sameStructure);
+    }
+
+    /// <summary><see cref="Of{TForm}(string,Func{float,TForm},Func{TForm,Element},float,float,Func{TForm,TForm,bool}?)"/> whose
+    /// <paramref name="formOf"/> also reads the LIVE width (its second argument): the structure width (the first) chooses what the form shows,
+    /// the live width what it may be built at (a grid's cards built under the width they are laid out at, so their lines hold while a width
+    /// reflow eases the box toward the width its columns were chosen for).</summary>
+    public static Element Of<TForm>(string key, Func<float, float, TForm> formOf, Func<TForm, Element> build, float fallback = 0f, float grow = 0f,
+        Func<TForm, TForm, bool>? sameStructure = null)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return Of(new FormBox<TForm>.Props(formOf, build, fallback, grow, key, sameStructure));
+    }
+
+    /// <summary>The form-gated box whose child also follows the LIVE width without a rebuild: <paramref name="build"/> receives the form and a
+    /// signal of the box's laid-out width, which the child binds (a bound <c>Width</c> re-lays its scope out; nothing re-renders). So only a new
+    /// form rebuilds the child, and every other width (each frame of a window drag) moves bound sizes alone. The structure width (the first
+    /// argument of <paramref name="formOf"/>) chooses the form; see
+    /// <see cref="Of{TForm}(string,Func{float,float,TForm},Func{TForm,Element},float,float,Func{TForm,TForm,bool}?)"/>.</summary>
+    public static Element Of<TForm>(string key, Func<float, float, TForm> formOf, Func<TForm, IReadSignal<float>, Element> build, float fallback = 0f,
+        float grow = 0f, Func<TForm, TForm, bool>? sameStructure = null)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return Of(new FormBox<TForm>.Props(formOf, static _ => null!, fallback, grow, key, sameStructure) { BuildLive = build });
+    }
+
+    static Element Of<TForm>(FormBox<TForm>.Props props)
+    {
+        string key = props.MemoryKey;
         return Embed.Comp(props, static () => new FormBox<TForm>())
            with
            {
@@ -228,14 +261,20 @@ public sealed class FormBox<TForm> : Component
 {
     /// <summary>The re-pushed props. The delegates compare as delegates (a fresh closure rebuilds the child with its parent, as
     /// the ungated <see cref="ResponsiveBox"/>); the fallback, the grow and the memory role by value.</summary>
-    public sealed record Props(Func<float, TForm> FormOf, Func<TForm, Element> Build, float Fallback, float Grow, string MemoryKey);
+    public sealed record Props(Func<float, float, TForm> FormOf, Func<TForm, Element> Build, float Fallback, float Grow, string MemoryKey,
+        Func<TForm, TForm, bool>? SameStructure = null)
+    {
+        /// <summary>When set, builds the child from the form and the box's live-width signal instead of <see cref="Build"/>.</summary>
+        public Func<TForm, IReadSignal<float>, Element>? BuildLive { get; init; }
+    }
 
     readonly Signal<int> _edge = Signal.AlwaysNotify(0);
+    readonly FloatSignal _liveSig = new(0f);   // the laid-out width, for a child that binds it (Props.BuildLive)
     readonly Action<RectF> _onBounds;
     readonly Action<NodeHandle> _onRealized;
     NodeHandle _node;
     Props? _p;
-    float _w;
+    float _w, _live;
     bool _seeded;
     TForm? _rendered;
     string? _memKey;
@@ -245,12 +284,19 @@ public sealed class FormBox<TForm> : Component
         _onBounds = r =>
         {
             if (_memKey is not null && r.W > 0f) MeasureMemory.Capture(_memKey, new Size2(r.W, r.H));
+            if (r.W > 0f && MathF.Abs(r.W - _liveSig.Peek()) > 0.01f) _liveSig.Value = r.W;
             // The form is chosen at the structure width: the width the box lands at while a width reflow resizes it, so a docking panel's
             // slide changes the form once, on its first frame, never in the middle.
             float w = Context.Scene is { } scene ? scene.StructureWidth(_node, r.W) : r.W;
-            if (w <= 0f || MathF.Abs(w - _w) <= 0.5f) return;
+            if (w <= 0f || (MathF.Abs(w - _w) <= 0.5f && MathF.Abs(r.W - _live) <= 0.5f)) return;
             _w = w;
-            if (_p is { } p && !EqualityComparer<TForm>.Default.Equals(p.FormOf(_w), _rendered)) _edge.Value = 0;
+            _live = r.W;
+            if (_p is not { } p) return;
+            var next = p.FormOf(_w, _live);
+            if (EqualityComparer<TForm>.Default.Equals(next, _rendered)) return;
+            // A new form is a structure step (unless the caller says it keeps the structure): noted while the subtree still holds this frame's rects.
+            if (_rendered is { } was && !(p.SameStructure?.Invoke(was, next) ?? false) && !_node.IsNull) Context.Scene?.NoteStructureChanged(_node);
+            _edge.Value = 0;
         };
         _onRealized = h => _node = h;
     }
@@ -262,17 +308,18 @@ public sealed class FormBox<TForm> : Component
         {
             _seeded = true;
             _memKey = MeasureMemory.Compose(UseContext(MeasureMemory.Scope), props.MemoryKey);
-            if (MeasureMemory.TryGetSize(_memKey, out var remembered)) _w = remembered.Width;
+            if (MeasureMemory.TryGetSize(_memKey, out var remembered)) _w = _live = remembered.Width;
         }
         _ = _edge.Value;
         _p = props;
-        var form = props.FormOf(_w > 0.5f ? _w : props.Fallback);
+        var form = _w > 0.5f ? props.FormOf(_w, _live > 0.5f ? _live : _w) : props.FormOf(props.Fallback, props.Fallback);
         _rendered = form;
+        if (_liveSig.Peek() <= 0f) _liveSig.Value = _live > 0.5f ? _live : props.Fallback;   // the first build's width (before any measure)
         return new BoxEl
         {
             Direction = 1, Grow = props.Grow,   // as ResponsiveBox: the parent sizes this box, the child cross-stretches to it
             OnBoundsChanged = _onBounds, OnRealized = _onRealized,
-            Children = [props.Build(form)],
+            Children = [props.BuildLive is { } live ? live(form, _liveSig) : props.Build(form)],
         };
     }
 }

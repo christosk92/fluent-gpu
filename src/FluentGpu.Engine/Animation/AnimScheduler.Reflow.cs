@@ -191,6 +191,17 @@ public sealed partial class AnimEngine
             }
     }
 
+    /// <summary>True when <paramref name="node"/> has a structural row in flight (a move, a scale, a size or a reflow: what a resize keeps for a
+    /// part that animates through it, and re-aims). O(1) for a node with no rows.</summary>
+    public bool HasStructuralRow(NodeHandle node)
+    {
+        int idx = (int)node.Raw.Index;
+        if (!_slab.NodeHasRows(idx)) return false;
+        for (int s = _slab.HeadOnNode(idx); s >= 0; s = _slab.At(s).NextOnNode)
+            if (IsStructuralChannel(_slab.At(s).Channel) && !_slab.At(s).Has(AnimFlags.Loop)) return true;
+        return false;
+    }
+
     /// <summary>True when <paramref name="node"/> has an advancing width (LayoutW) reflow row. O(1) for a node with no rows.</summary>
     public bool HasLiveWidthReflow(NodeHandle node)
     {
@@ -812,12 +823,14 @@ public sealed partial class AnimEngine
     /// mutates the passed list (it indexes SceneStore nodes, not slab slots), so the walk is stable across the frees.</summary>
     /// <summary>A size row that is a layout input and has one owner through a live resize (see <see cref="SnapStructuralToLayout(NodeHandle, bool)"/>):
     /// a width reflow (LayoutW), a declared box's relayout row (re-aimed by RecordDeclaredSize), and a height reflow (LayoutH) whose transition opts in
-    /// with <see cref="LayoutTransition.AnimateDuringResize"/> (a body whose rows the width decides: its owner re-aims it each drag frame, since the
-    /// resized frame captures it alone and its Reflow solves real layout every tick).</summary>
+    /// with <see cref="LayoutTransition.AnimateDuringResize"/> (a body whose rows the width decides: the resized frame re-aims it while it flies, and
+    /// its Reflow solves real layout every tick), and the move of a part that opts in the same way (a card a grid's new columns moved: it slides
+    /// to its cell while the drag goes on, relative to its parent, which the drag places).</summary>
     private bool KeptThroughResize(int idx, in AnimValue r)
         => r.Channel == AnimChannel.LayoutW
            || (r.Channel is AnimChannel.SizeW or AnimChannel.SizeH && r.Has(AnimFlags.RestoreLayout) && !float.IsNaN(r.RestoreTo))
-           || (r.Channel == AnimChannel.LayoutH && _transitions.TryGetValue(idx, out var t) && t.AnimateDuringResize);
+           || (r.Channel is AnimChannel.LayoutH or AnimChannel.TranslateX or AnimChannel.TranslateY
+               && _transitions.TryGetValue(idx, out var t) && t.AnimateDuringResize);
 
     public void CancelStructuralAll(List<NodeHandle> flipNodes, bool keepReflows = false)
     {
