@@ -197,6 +197,9 @@ public sealed class ShelfController
 /// </summary>
 public static class PagedShelf
 {
+    /// <summary>The pages shelves built with a <c>pageMemoryKey</c> were left on (UI thread, in memory for the process).</summary>
+    internal static readonly Dictionary<string, int> PageMemory = new(StringComparer.Ordinal);
+
     // ── Template parts (::part). Each part's doc lists props the control OWNS (re-asserted after a modifier). ──
     /// <summary>The shelf root (header + strip column). Owned: Direction, Children, OnBoundsChanged (self-measure).</summary>
     public const string PartRoot = "Root";
@@ -316,6 +319,9 @@ public static class PagedShelf
         // eased over the page slide, so the page leaving dims as it slides out and the page arriving brightens as it slides in (frozen mount
         // configuration).
         float offPageDim = 0f,
+        // The page memory (null = none, the default): the shelf remembers its page under this key (in memory, for the process) and a shelf
+        // mounted under the same key starts on it (a section scrolled away or navigated from comes back on the page it was left on). Frozen.
+        string? pageMemoryKey = null,
         // The shelf's WIDTH MEMORY key (audit FU2c): the call site, never passed. A shelf mounts at the width its call site's last shelf
         // measured, so its cards realize at their cell's width in the mount frame instead of at a provisional fit corrected a frame later.
         // A call site is a stable identity with no tier, form or count in it; a shelf whose width differs is corrected as before.
@@ -327,7 +333,7 @@ public static class PagedShelf
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
                                                headerGap, edgeFade, prevGlyph, nextGlyph, parts, overscan, measured,
                                                cardWidthAgnostic, maxColumns, snap, controller, lift, leadMinColumns, selectionMode, selection,
-                                               new ShelfWidthKey(widthSite, widthLine), cardWidthBound, offPageDim))
+                                               new ShelfWidthKey(widthSite, widthLine), cardWidthBound, offPageDim, pageMemoryKey))
            // SkeletonProxy: the deriver can't see into this component, so hand it the header + a few real cards to derive
            // — the shelf shimmers as real cards instead of one default bar. The cards are fitted to the MEASURED slot
            // exactly as the live strip fits them (the same Fit, through Responsive's rendered-output proxy idiom): handing
@@ -1268,7 +1274,8 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                           ShelfSnap snap = ShelfSnap.None, ShelfController? controller = null,
                           ShelfLift lift = ShelfLift.Elevate, int leadMinColumns = 0,
                           ItemsSelectionMode selectionMode = ItemsSelectionMode.None, SelectionModel? selection = null,
-                          ShelfWidthKey widthKey = default, bool cardWidthBound = false, float offPageDim = 0f)
+                          ShelfWidthKey widthKey = default, bool cardWidthBound = false, float offPageDim = 0f,
+                          string? pageMemoryKey = null)
     {
         _widthKey = widthKey;
         _offPageDim = snap == ShelfSnap.Page ? Math.Clamp(offPageDim, 0f, 1f) : 0f;
@@ -1344,7 +1351,12 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // construction, not a live binding (the shelf owns _page after this; Publish below is the only later writer
         // the controller ever sees). No controller ⇒ _page keeps its 0 default, byte-identical to before E18.
         if (controller is not null) _page.Value = controller.Page.Peek();
+        // The page memory: a shelf mounted under a remembered key starts on its page (clamped by the render's own range effect).
+        _pageMemoryKey = pageMemoryKey;
+        if (pageMemoryKey is not null && PagedShelf.PageMemory.TryGetValue(pageMemoryKey, out int rememberedPage) && rememberedPage > 0) _page.Value = rememberedPage;
     }
+
+    readonly string? _pageMemoryKey;
 
     // ── The ONE pager navigation entry point (the cached delegates + the stock chevrons/pips all route here). Bumps the
     // NAV intent even when the clamped page is unchanged — clicking ‹ at a free-scrolled fractional offset within page 0
@@ -1536,6 +1548,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
 
         // Keep the stored page in range when a resize shrinks the page count (effect — never write a signal in render).
         UseEffect(() => { if (_page.Peek() > maxPage) _page.Value = maxPage; }, maxPage);
+        // The page memory follows every page the shelf settles on (a pager action, a swipe, a wheel).
+        // Only while the shelf pages at all: a fit that has not measured yet (one page) never writes over the remembered page.
+        if (_pageMemoryKey is not null) UseEffect(() => { if (maxPage > 0) PagedShelf.PageMemory[_pageMemoryKey] = Math.Min(page, maxPage); },
+            DepKey.From(page, maxPage));
 
         // ── PAGE SNAP (opt-in) — the interval is the LIVE page stride, so it re-fits on every resize. That is exactly why
         // it is a SCENE write and not a declarative ScrollEl/ScrollOptions.Snap: the options record is unpacked and frozen
