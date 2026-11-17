@@ -374,7 +374,7 @@ public sealed partial class FlexLayout
         MixF(ref h, li.MinW); MixF(ref h, li.MinH); MixF(ref h, li.MaxW); MixF(ref h, li.MaxH);
         MixF(ref h, li.FlexGrow); MixF(ref h, li.FlexShrink); MixF(ref h, li.FlexBasis);
         MixU(ref h, (uint)li.AlignSelf); MixU(ref h, (uint)li.Justify); MixU(ref h, (uint)li.AlignItems);
-        MixU(ref h, li.Wrap ? 1u : 0u);
+        MixU(ref h, li.Wrap ? 1u : 0u); MixU(ref h, li.WrapLive ? 1u : 0u);
         return h;
     }
 
@@ -2468,8 +2468,11 @@ public sealed partial class FlexLayout
     private (float w, float h) MeasureWrap(NodeHandle node, in LayoutInput li, bool row, float mainLimit)
     {
         float availMain = MathF.Max(0f, mainLimit - (row ? li.Padding.Horizontal : li.Padding.Vertical));
-        // A row's lines break at the width its structure is chosen for (StructureW: the landing width while a reflow resizes it).
-        float breakMain = row ? MathF.Max(0f, ClampMain(in li, row, StructureW(node, mainLimit)) - li.Padding.Horizontal) : availMain;
+        // A row's lines break at the width its structure is chosen for (StructureW: the landing width while a reflow resizes it), unless its
+        // cells are shares of its live width (WrapLive).
+        float breakMain = !row ? availMain
+            : li.WrapLive ? availMain
+            : MathF.Max(0f, ClampMain(in li, row, StructureW(node, mainLimit)) - li.Padding.Horizontal);
         // Text (MaxLines=1 + Trim) must measure against the LINE width so a lone over-long item ellipsizes
         // instead of overflowing. Never the leftover: leftover would crush a shrinkable run instead of wrapping.
         float childAvailW = row ? availMain : float.PositiveInfinity;
@@ -2523,7 +2526,7 @@ public sealed partial class FlexLayout
         float padMainStart = row ? li.Padding.Left : li.Padding.Top;
         float padCrossStart = row ? li.Padding.Top : li.Padding.Left;
         float availMain = (row ? finalW : finalH) - (row ? li.Padding.Horizontal : li.Padding.Vertical);
-        float breakMain = row ? ClampMain(in li, row, StructureW(node, finalW)) - li.Padding.Horizontal : availMain;   // as MeasureWrap
+        float breakMain = row && !li.WrapLive ? ClampMain(in li, row, StructureW(node, finalW)) - li.Padding.Horizontal : availMain;   // as MeasureWrap
         // MeasureWrap's childAvailW: the line width on a row (text MaxLines=1 + Trim ellipsizes against it), unbounded on a column.
         float childAvailW = row ? MathF.Max(0f, availMain) : float.PositiveInfinity;
         float lineTop = padCrossStart;

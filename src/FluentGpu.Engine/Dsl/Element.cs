@@ -621,6 +621,11 @@ public sealed record BoxEl : Element
     public FlexJustify Justify { get; init; } = FlexJustify.Start;
     public FlexAlign AlignItems { get; init; } = FlexAlign.Stretch;
     public bool Wrap { get; init; }
+    /// <summary>A wrap row whose children are sized as shares of its live width (a grid that picks its columns itself, at the structure
+    /// width, and binds its cells to the live width) breaks its lines at its live width. By default a wrap row breaks at its STRUCTURE
+    /// width while a width reflow resizes it (the width it lands at: it rewraps once), which suits children of fixed widths; cells that are
+    /// a share of the live width would not fit that many to a line there and break early for the slide's frames.</summary>
+    public bool WrapLive { get; init; }
     /// <summary>Lay the children in a row (<c>Direction</c> is ignored) while they fit, and otherwise stack them with these
     /// spacings. See <see cref="Foundation.StackFallback"/>.</summary>
     public StackFallback? StackFallback { get; init; }

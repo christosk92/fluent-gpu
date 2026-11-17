@@ -2004,8 +2004,8 @@ public sealed partial class TreeReconciler
         if (p.IsNull) return false;
         ref readonly LayoutInput src = ref _scene.Layout(p);
         ref LayoutInput a = ref _scene.Layout(anchor);
-        if (a.Direction == src.Direction && a.Gap == src.Gap && a.Wrap == src.Wrap && a.AlignItems == src.AlignItems) return false;
-        a.Direction = src.Direction; a.Gap = src.Gap; a.Wrap = src.Wrap; a.AlignItems = src.AlignItems;
+        if (a.Direction == src.Direction && a.Gap == src.Gap && a.Wrap == src.Wrap && a.WrapLive == src.WrapLive && a.AlignItems == src.AlignItems) return false;
+        a.Direction = src.Direction; a.Gap = src.Gap; a.Wrap = src.Wrap; a.WrapLive = src.WrapLive; a.AlignItems = src.AlignItems;
         return true;
     }
 
@@ -6056,6 +6056,7 @@ public sealed partial class TreeReconciler
                 li.Justify = b.Justify;
                 li.AlignItems = b.AlignItems;
                 li.Wrap = b.Wrap;
+                li.WrapLive = b.WrapLive;
                 _scene.SetStackFallback(node, b.StackFallback);
                 li.MeasureUnboundedWidth = b.MeasureUnboundedWidth;
                 li.AspectRatio = b.AspectRatio;   // CSS aspect-ratio: FlexLayout.Measure derives the missing extent (Ui.AspectRatio)
@@ -6876,7 +6877,7 @@ public sealed partial class TreeReconciler
            && a.FlexGrow.Equals(b.FlexGrow) && a.FlexShrink.Equals(b.FlexShrink) && a.FlexBasis.Equals(b.FlexBasis)
            && a.AlignSelf == b.AlignSelf && a.JustifySelf == b.JustifySelf
            && a.Justify == b.Justify && a.AlignItems == b.AlignItems
-           && a.Wrap == b.Wrap
+           && a.Wrap == b.Wrap && a.WrapLive == b.WrapLive
            && a.MeasureUnboundedWidth == b.MeasureUnboundedWidth
            && a.TextStyle == b.TextStyle;
 
