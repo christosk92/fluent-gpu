@@ -313,6 +313,10 @@ public sealed class FormBox<TForm> : Component
         _ = _edge.Value;
         _p = props;
         var form = _w > 0.5f ? props.FormOf(_w, _live > 0.5f ? _live : _w) : props.FormOf(props.Fallback, props.Fallback);
+        // A form the new props choose at the same width (a tier commit's record: a band with other columns) is a structure step like one a new
+        // width chooses: the scroll anchoring then holds this box by its top, not a part inside it that the new form moved.
+        if (_rendered is { } was && !EqualityComparer<TForm>.Default.Equals(form, was) && !(props.SameStructure?.Invoke(was, form) ?? false) && !_node.IsNull)
+            Context.Scene?.NoteStructureChanged(_node);
         _rendered = form;
         if (_liveSig.Peek() <= 0f) _liveSig.Value = _live > 0.5f ? _live : props.Fallback;   // the first build's width (before any measure)
         return new BoxEl

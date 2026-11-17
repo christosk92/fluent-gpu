@@ -53,7 +53,6 @@ public sealed partial class AppHost
         public readonly NodeHandle[] Chain = new NodeHandle[MaxAnchorDepth];
         public readonly float[] Tops = new float[MaxAnchorDepth];
         public readonly float[] RelY = new float[MaxAnchorDepth];     // each box's layout top in its parent (with the parent's flow shift)
-        public readonly float[] Widths = new float[MaxAnchorDepth];   // each box's layout width
         public readonly float[] Unheld = new float[MaxAnchorDepth];   // scratch: the layout moves below each level no FLIP hold took up
         public int Count;          // 0: no anchor
         public double Offset;      // the scroll offset when chosen: a different one next pass means somebody else scrolled
@@ -94,15 +93,13 @@ public sealed partial class AppHost
             // through the scale, which the layout places under it do not show.
             for (int q = 0; q < k; q++)
                 if (ScalingY(a.Chain[q])) { k = q; break; }
-            // So does a box that re-formed against its parent (its width moved more than its parent's did: a grid cell that a column count change
-            // widened at once): what is inside it was laid out afresh at the new width, so the places in it say nothing of where the page went.
-            // (A WinUI capped card going from eight columns to six at a tier commit pushed its title 75 down under a taller cover, and the page
-            // was shifted 75 at once to hold the title.) A box that only follows its parent's width (a reflow easing the page's margins) does not.
-            for (int q = 1; q < k; q++)
-            {
-                float dw = MathF.Abs(_scene.Bounds(a.Chain[q]).W - a.Widths[q]), dp = MathF.Abs(_scene.Bounds(a.Chain[q - 1]).W - a.Widths[q - 1]);
-                if (dw > dp + 0.5f) { k = q; break; }
-            }
+            // So does a box whose structure stepped this frame (SceneStore.StructureChanged: a grid that chose other columns): what is inside it
+            // was laid out afresh in the new form, so the places in it say nothing of where the page went. (A WinUI capped card going from eight
+            // columns to six at a tier commit pushed its title 75 down under a taller cover, and the page was shifted 75 at once to hold the title.)
+            var steps = _scene.StructureChanged;
+            if (steps.Count > 0)
+                for (int q = 0; q < k; q++)
+                    if (steps.Contains(a.Chain[q])) { k = q; break; }
             if (!TopInContent(a.Chain[k], content, out float top)) continue;
             float moved = top - a.Tops[k];
             float viewportMoved = _scene.AbsoluteRect(node).Y - a.ViewportY;
@@ -225,7 +222,6 @@ public sealed partial class AppHost
                 a.Chain[depth] = c;
                 a.Tops[depth] = t;
                 a.RelY[depth] = RelYOf(c);
-                a.Widths[depth] = b.W;
                 _pickStarts = true;
                 return depth + 1;
             }
@@ -238,7 +234,6 @@ public sealed partial class AppHost
                 a.Chain[depth] = c;
                 a.Tops[depth] = t;
                 a.RelY[depth] = RelYOf(c);
-                a.Widths[depth] = b.W;
                 int found = PickAnchor(c, t, depth + 1, viewTop, viewBottom, a);
                 if (found > depth + 1)
                 {
@@ -254,7 +249,6 @@ public sealed partial class AppHost
         a.Chain[depth] = fallback;
         a.Tops[depth] = fallbackTop;
         a.RelY[depth] = RelYOf(fallback);
-        a.Widths[depth] = _scene.Bounds(fallback).W;
         return fallbackFound > 0 ? fallbackFound : depth + 1;
     }
 
