@@ -6910,7 +6910,11 @@ public sealed partial class AppHost : IDisposable
                 // the modal loop: maximize / restore / snap / programmatic resizes arrive as a plain WM_SIZE with no
                 // InModalLoop, so gating the cancel on `resized` (not just _window.InModalLoop) covers them too. Capture
                 // is already skipped on a resize (above), so no NEW projection starts this frame either.
-                _anim.CancelStructuralAll(_scene.BoundsAnimatedNodes);
+                // A SizeMode.Reflow WIDTH row (LayoutW) is no such track: it is a layout input, and the (re)layout below solves the
+                // subtree at its interpolated width at the new window size (a height row follows the width and is landed). So the reflows a tier commit started (a nav pane folding away,
+                // the page margins narrowing) keep easing through a live drag instead of landing in one frame at the next drag step; a
+                // width reflow in flight is probed again at the new size (the destination probe's resize arm).
+                _anim.CancelStructuralAll(_scene.BoundsAnimatedNodes, keepReflows: true);
             }
             if (s_allocDiag) { db = Probe(SegFlip, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
