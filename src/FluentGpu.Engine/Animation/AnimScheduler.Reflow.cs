@@ -333,6 +333,30 @@ public sealed partial class AnimEngine
     /// slot's pinned height climbs back toward the with-drawer extent while the drawer's content is already faded out,
     /// so the row reserves a band nothing paints in (and, mid-flight, paints content past a band that stopped
     /// growing).</para></summary>
+    private readonly record struct Redeclared(NodeHandle Node, AnimChannel Channel);
+    private readonly List<Redeclared> _redeclared = new(32);
+
+    /// <summary>The declared sizes re-written under a live SizeMode.Relayout row this frame (<see cref="RecordDeclaredSize"/>) that no projection
+    /// re-aimed: each row moves by the change at once and eases on what is left of its own motion over the time it has left. A re-declaration
+    /// with no FLIP is a size that follows its owner at once (a bento grid's width-only re-pack: the tiles follow the board's width as the page
+    /// does), so the row carries that change as the layout does and keeps only the structural part it was seeded for (a tile easing to its new
+    /// cell keeps easing while the board's width moves under it, instead of trailing the width over the row's remaining time). The host calls it
+    /// after the frame's projections, before the tick. Allocates nothing.</summary>
+    public void FollowRedeclaredSizes()
+    {
+        for (int i = 0; i < _redeclared.Count; i++)
+        {
+            var d = _redeclared[i];
+            if (!_scene.IsLive(d.Node)) continue;
+            int s = Find(d.Node, d.Channel);
+            if (s < 0 || !_slab.At(s).Has(AnimFlags.RestoreLayout) || _slab.At(s).Has(AnimFlags.Done)) continue;
+            float to = _slab.At(s).RestoreTo;
+            if (float.IsNaN(to) || MathF.Abs(to - _slab.At(s).To) < 0.5f) continue;   // a projection re-aimed it (RelayoutSize)
+            ShiftRelayout(d.Node, d.Channel, to);
+        }
+        _redeclared.Clear();
+    }
+
     public bool RecordDeclaredSize(NodeHandle node, AnimChannel ch, float declared)
     {
         if (!_slab.NodeHasRows((int)node.Raw.Index)) return false;   // O(1) — the common case, per reconciled node
@@ -348,9 +372,10 @@ public sealed partial class AnimEngine
             {
                 _slab.At(rs).RestoreTo = declared;
                 // A declared size re-written while the row flies (a bento tile following a window drag after its re-pack seeded the row):
-                // the row eases on to it over the time it has left instead of landing on the size the seeding commit declared.
+                // decided after this frame's projections (FollowRedeclaredSizes). A commit that FLIPs the node re-aims the row itself; one that
+                // does not (a width-only re-pack, a drag frame) moves the row by the change at once and keeps easing what is left of its own.
                 if (!float.IsNaN(declared) && !_slab.At(rs).Has(AnimFlags.Done) && MathF.Abs(declared - _slab.At(rs).To) >= 0.5f)
-                    RetargetRelayout(node, rch, declared);
+                    _redeclared.Add(new Redeclared(node, rch));
             }
             return false;
         }

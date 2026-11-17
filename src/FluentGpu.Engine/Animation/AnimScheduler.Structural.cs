@@ -681,6 +681,33 @@ public sealed partial class AnimEngine
         return true;
     }
 
+    /// <summary>Move a live SizeMode.Relayout row by its target's change at once (<paramref name="to"/> - its target), keeping what is left of its own
+    /// motion: a tween eases that rest over the time it has left, a spring from the shifted value. Allocates only the re-seed's keyframes.</summary>
+    private void ShiftRelayout(NodeHandle node, AnimChannel ch, float to)
+    {
+        int ex = Find(node, ch);
+        if (ex < 0) return;
+        AnimValue cur = _slab.At(ex);   // copy: Animate/Spring may grow the slab's backing array
+        if (cur.Has(AnimFlags.Driven) || cur.Has(AnimFlags.Additive)) return;
+        float restore = cur.RestoreTo;
+        float shifted = cur.Position + (to - cur.To);
+        if (!TryGetTransition(node, out var spec)) spec = default;
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if (cur.Kind == GenKind.Spring)
+            Spring(node, ch, to, SpringParams.FromResponse(dyn.Kind == DynamicsKind.Spring ? dyn.Response : 0.30f,
+                dyn.Kind == DynamicsKind.Spring ? dyn.DampingRatio : 1f), initial: shifted);
+        else if (cur.Kind is GenKind.Eased or GenKind.Keyframes)
+            Animate(node, ch, shifted, to, MathF.Max(1f, cur.Gen.DurationMs - cur.ElapsedMs), dyn.Easing, delayMs: cur.DelayRemainingMs);
+        else return;
+        int s = Find(node, ch);
+        if (s < 0) return;
+        ref AnimValue r = ref _slab.At(s);
+        r.RestoreTo = restore;
+        r.Flags |= AnimFlags.RestoreLayout;
+        r.Flags &= ~AnimFlags.JustSeeded;
+        MarkSeedRelative(s, shifted);
+    }
+
     /// <summary>A live SizeMode.Relayout row: its node, axis (SizeW / SizeH), target and the declared value its settle restores (NaN: auto).</summary>
     internal readonly record struct LiveRelayout(NodeHandle Node, AnimChannel Channel, float To, float RestoreTo);
 

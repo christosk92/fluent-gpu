@@ -7103,6 +7103,7 @@ public sealed partial class AppHost : IDisposable
             }
             finally { if (themeChanged) _reconciler.SetThemeTransition(float.NaN); }
             // The capture window closes before layout; a node that gained a transition in the flush counts as captured.
+            bool captureWindow = _projectionCaptureOpen;   // this frame captured its "before": the bounds passes below re-open it
             if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
             // A commit that answers the record in place while a width reflow flies (SceneStore.ConsumeRecordAnswered: a page that takes the sizes
@@ -7210,17 +7211,14 @@ public sealed partial class AppHost : IDisposable
                 // packs to its own width): the inner one measures its new width only on the pass the outer one re-laid it, so it lays out again
                 // while a pass delivered a size that wrote state, a few times at most. One pass left the inner grid a width behind on every
                 // frame of a drag (its full rows' last card wrapped onto a line of its own: the grid stood a row taller).
-                for (int pass = 0; pass < BoundsRelayoutPasses; pass++)
-                {
-                    int delivered = _layout.BoundsDeliveries;
-                    if (_runtime.HasPending) FlushRebindsToQuiescence();
-                    _reconciler.ConsumeReconciled();
-                    reconciled = true;
-                    _invalidator.RunDirty(layoutSize);
-                    _scene.ClearLayoutDirty();
-                    DrainLayoutEffects();                      // the rows this pass mounted queued theirs after the 6.5 drain: run them before they paint
-                    if (_layout.BoundsDeliveries == delivered || !_runtime.HasPending) break;
-                }
+                // A part these passes re-render is this commit's like one the flush re-rendered: on a frame that captured its "before", a reused
+                // node that gains a bounds transition here (a bento grid's tile, whose re-flow animation a re-pack at a new structure turns back
+                // on after width-only re-packs held it off) is captured from the rect it still holds, so it eases from where it was drawn instead
+                // of standing at the new size for this frame (Zune Home crossing W1008: its full rows drawn 48 wider, then put back by the re-flow).
+                _projectionCaptureOpen = captureWindow;
+                RelayoutBoundsWrites(layoutSize);
+                reconciled = true;
+                if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             }
             // 6.6 SizeToContent (AppHost.SizeToContent.cs): only on frames whose layout ran; zero work when Manual.
             FitWindowToContent(layoutNeeded && !_scene.Root.IsNull, layoutSize);
@@ -7300,6 +7298,7 @@ public sealed partial class AppHost : IDisposable
             _anim.HoldPendingStarts = entranceHeld;
             MountProf.Enter(MountProf.Anim);
             long tAnimTick0 = Stopwatch.GetTimestamp();
+            _anim.FollowRedeclaredSizes();                     // relayout rows whose declared size moved with no FLIP: shifted, not trailed
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             long tAnimTick1 = Stopwatch.GetTimestamp();
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
@@ -8792,8 +8791,18 @@ public sealed partial class AppHost : IDisposable
             // title bar's and the play bar's reflows at 3200: the detail page's columns under it) was skipped as below a root; seeded in the
             // main pass instead, the commit laid its subtree out at its target (the list's rows at their final width for one frame).
             // A seeded node is laid out at its start by then, so a later pass finds it unchanged and seeds only what became free.
+            int seedDelivered = _layout.BoundsDeliveries;
             for (int pass = 0; pass < SeedReflowPasses && SeedReflowsFirst(layoutSize, reduced, PosEps, SizeEps); pass++)
                 DiscoverProjectionRoots(PosEps, SizeEps);
+            // The commit is laid out at its reflows' start now, and a part that sizes itself from a measured width heard the start (a bento grid
+            // that packs its tiles to its own width): it re-renders at it in this frame, as after the commit's own pass (RelayoutBoundsWrites).
+            // Left to the next frame, it drew this one at the TARGET width the commit's pass delivered (Zune Home crossing W1008: its full rows
+            // 48 wider for one frame, then back at the start beside a page whose margins had only begun to ease).
+            if (_layout.BoundsDeliveries != seedDelivered && _runtime.HasPending)
+            {
+                RelayoutBoundsWrites(layoutSize);
+                DiscoverProjectionRoots(PosEps, SizeEps);
+            }
             // A width reflow this commit re-aimed (the panel toggled back mid-slide) or seeded beside another one in flight lands where no layout
             // has solved yet: probe it before any FLIP is measured, so a structure that re-decides for the new destination glides there.
             if (_anim.DestinationStale && ProbeReflowDestinations(layoutSize)) DiscoverProjectionRoots(PosEps, SizeEps);
@@ -8964,6 +8973,23 @@ public sealed partial class AppHost : IDisposable
     /// is the moving visual), so its row projects like any other: a reorder's live projection moves it to its new slot with the same
     /// slide its displaced siblings take, instead of snapping there (the frames lane, 2026-11-07). Null when no ghost drag is live.</summary>
     private NodeHandle PointerOwnedNode => _dispatcher.Drag.ActiveLift == DragLift.Stationary ? NodeHandle.Null : _dispatcher.Drag.ActiveNode;
+
+    /// <summary>Flush and lay out again while a pass delivered a measured size that wrote state, <see cref="BoundsRelayoutPasses"/> times at most
+    /// (a measured grid inside a measured board re-renders one level per pass). Cost: one flush of the components the deliveries dirtied and one
+    /// scoped re-solve of their subtrees per pass; a frame whose deliveries write nothing pays one counter compare.</summary>
+    private void RelayoutBoundsWrites(Size2 layoutSize)
+    {
+        for (int pass = 0; pass < BoundsRelayoutPasses; pass++)
+        {
+            int delivered = _layout.BoundsDeliveries;
+            if (_runtime.HasPending) FlushRebindsToQuiescence();
+            _reconciler.ConsumeReconciled();
+            _invalidator.RunDirty(layoutSize);
+            _scene.ClearLayoutDirty();
+            DrainLayoutEffects();                      // the rows this pass mounted queued theirs after the 6.5 drain: run them before they paint
+            if (_layout.BoundsDeliveries == delivered || !_runtime.HasPending) break;
+        }
+    }
 
     private bool SeedReflowsFirst(Size2 layoutSize, bool reduced, float posEps, float sizeEps)
     {
