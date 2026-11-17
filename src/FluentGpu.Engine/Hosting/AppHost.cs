@@ -584,6 +584,7 @@ public sealed partial class AppHost : IDisposable
     // forced full is a one-shot: a motion re-present of the same publication must not re-raster the whole window again.
     private ulong _publicationRepaintSubmittedSeq;
     private long _lastRenderedTargetEpoch = -1;
+    private Size2 _lastRenderedFrameSize;   // render thread: the size of the last recorded publication (a change repaints whole)
     // UI→render mirror of _popupWindows.Count. The render thread must never present a skip candidate while a popup
     // window rides the same turn (RecordPopups submits its own swapchain from the same publication).
     private int _popupWindowCount;
@@ -2221,7 +2222,7 @@ public sealed partial class AppHost : IDisposable
             // This host's OWN swapchain (the primary's or a detached child's), once, at the newest size.
             _ownResizesApplied++;
             long r0 = Stopwatch.GetTimestamp();
-            try { _swapchain.Resize(ownSize); }
+            try { _swapchain.Reserve(ownSize); }
             catch (Exception) when (_device.NoteIfDeviceLost()) { }
             NoteRenderResize(ownSize, ToMs(r0 - ownPostedQpc), ToMs(Stopwatch.GetTimestamp() - r0), ownCollapsed);
         }
@@ -2489,6 +2490,16 @@ public sealed partial class AppHost : IDisposable
         // presents it, without the UI ever parking this loop for it (the old Quiesce per pointer move).
         DrainPopupRenderActions();
         if (!_renderSeam.IsCurrentTarget(rf)) return;
+        // The swapchain takes the size this frame was laid out for (EnsureSize): a frame one step behind a live drag is shown at its own
+        // size rather than dropped. Within the buffers' room that is a source-size change only (D3D12: SetSourceSize).
+        Size2 frameSize = rf.Submit.SizePx;
+        if (frameSize.Width >= 1f && frameSize.Height >= 1f && frameSize != _swapchain.SizePx)
+        {
+            long r0 = Stopwatch.GetTimestamp();
+            try { _swapchain.Resize(frameSize); }
+            catch (Exception) when (_device.NoteIfDeviceLost()) { return; }
+            NoteRenderResize(frameSize, 0, ToMs(Stopwatch.GetTimestamp() - r0), 0);
+        }
         VideoApplier.DeferAll = rf.Freeze == Threading.FreezeKind.Hold;   // E2: a frozen frame defers every video placement and release until the thaw frame
         try
         {
@@ -2628,8 +2639,9 @@ public sealed partial class AppHost : IDisposable
                 repaint.Union(PublicationRepaintForTurn(rf.Submit.RepaintDamage,
                     alreadySubmitted: !fresh && rf.PublishSeq == _publicationRepaintSubmittedSeq,
                     crossfadesLive: sceneFrame.Images.HasCrossfades(imageClockMs)));
-                if (rf.TargetEpoch != _lastRenderedTargetEpoch)
+                if (rf.TargetEpoch != _lastRenderedTargetEpoch || rf.Submit.SizePx != _lastRenderedFrameSize)
                 {
+                    _lastRenderedFrameSize = rf.Submit.SizePx;   // a frame at another size than the last one: the swapchain was sized to it
                     // First frame on this target, or the UI re-created/resized it: nothing on the target is trustworthy.
                     // The publisher forces the same thing off its own LastConsumedTargetEpoch; ForceFull keeps the FIRST
                     // reason, so agreeing twice is idempotent — and this arm also covers the very first frame.
@@ -10447,15 +10459,13 @@ public sealed partial class AppHost : IDisposable
         // render loop is still Resumed on both outcomes.
         if (OwningRenderThread is not null)
         {
-            // The swapchain resize rides this host's mailbox (F207), applied on the render thread - the swapchain's sole owner - at
-            // the top of its next turn: a bare wake runs it at once (DrainChildRenderSources), so it overlaps this frame's layout, and
-            // the turn that presents this frame's publication drains it again first (SubmitPresentOnRenderThread), so that
-            // publication can never meet the old buffers. The UI never parks the loop for it: the park (Quiesce) waited for the
-            // render thread to finish its turn, present slot included, and stalled every present for that long (40-55 ms at a
-            // full-screen exit). Latest wins (F093): the resizes a live drag posts between two turns collapse into one ResizeBuffers.
-            // Invalidate FIRST, then post: the turn that applies the op sees the new epoch, so a frame published at the old size is
-            // dropped there and can never be presented against the resized swapchain. A pop-out (its parent's thread) is the same.
-            _renderSeam.InvalidateTarget();
+            // The swapchain follows the PUBLICATIONS, not the window: each frame is drawn at the size it was laid out for, and the
+            // turn that presents it sizes the swapchain to it first (SubmitPresentOnRenderThread). A live drag posts a new size every
+            // frame; when a resize dropped every frame published at the size before it (the old epoch rule), a render thread one
+            // frame behind the UI presented almost nothing while the window moved (20 presents a second on a 100 Hz panel). The
+            // mailbox (F207, latest wins F093) only makes ROOM for the newest size (ISwapchain.Reserve) on the render thread, at once
+            // on a bare wake, so a growing drag's reallocation overlaps this frame's layout instead of the present. The UI never parks
+            // the loop for it (the old Quiesce stalled every present for a whole turn). A pop-out (its parent's thread) is the same.
             PostOwnResize(s);
         }
         else
