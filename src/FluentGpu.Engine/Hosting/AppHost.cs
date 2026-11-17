@@ -6898,6 +6898,7 @@ public sealed partial class AppHost : IDisposable
             long db = 0, dt0 = 0;
             if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt0 = Stopwatch.GetTimestamp(); }
             _projectionCaptureOpen = false;
+            _layout.BeginFrameRects();   // a part that gains a transition after this frame's layout moved it is captured from the rect it was drawn at
             _resizeStructureFrame = false;
             _layout.NoteLineSteps = false;
             _scene.StructureChanged.Clear();
@@ -8761,6 +8762,15 @@ public sealed partial class AppHost : IDisposable
     {
         if (!_projectionCaptureOpen || !_scene.IsLive(n) || _projectBefore.ContainsKey(n)) return;
         CaptureProjection(n);
+        // Gained after a layout pass of this frame placed it (the bounds passes after the commit's layout: a grid that re-packs at the width
+        // that layout delivered, then turns its re-flow on at a new structure): that layout is not where the user saw it, the frame's start is.
+        // (Zune Home crossing W1016 with the releases in view: a tile captured from the board's target-width pack, 240 above where it was drawn,
+        // held there by a FLIP the scroll anchoring then took back: the page jumped 240.)
+        if (_projectBefore.TryGetValue(n, out var cap) && _layout.TryFrameStartRect(n, out RectF start) && cap.Parent == _scene.Parent(n))
+        {
+            ref readonly NodePaint p = ref _scene.Paint(n);
+            _projectBefore[n] = cap with { Rel = new RectF(start.X + p.LocalTransform.Dx, start.Y + p.LocalTransform.Dy, start.W, start.H) };
+        }
     }
 
     // --fg motion per-node line (one word of OUTCOME + the captured/live rects). Static → zero capture, and only ever

@@ -269,6 +269,7 @@ public sealed partial class FlexLayout
         // way (it is keyed by generation).
         if (_memo.Length < cap) System.Array.Resize(ref _memo, cap);
         if (_arranged.Length < cap) System.Array.Resize(ref _arranged, cap);
+        if (_frameStartRect.Length < cap) { System.Array.Resize(ref _frameStartRect, cap); System.Array.Resize(ref _frameStartStamp, cap); }
         if (_arrangedVer.Length < cap) System.Array.Resize(ref _arrangedVer, cap);
         if (_measuredPass.Length < cap) System.Array.Resize(ref _measuredPass, cap);
         if (_gridCellW.Length < cap) System.Array.Resize(ref _gridCellW, cap);
@@ -746,6 +747,26 @@ public sealed partial class FlexLayout
     // (which Measure also scribbles hypothetical W/H into for a not-yet-arranged pass). AuxFlags.ArrangedValid says
     // whether the slot holds a real value yet (false for a fresh/recycled node index — cleared on CreateNode).
     private RectF[] _arranged = System.Array.Empty<RectF>();
+
+    // The rect each node had when the frame began (the one the last frame presented), kept on its first placement in a frame: a part that
+    // gains a bounds transition after this frame's layout already moved it (a bento grid re-packed at the commit's target width, then
+    // re-flowed at a new structure in the same frame) is captured from where it was drawn, not from a rect no frame showed.
+    private RectF[] _frameStartRect = System.Array.Empty<RectF>();
+    private uint[] _frameStartStamp = System.Array.Empty<uint>();
+    private uint _frameStamp = 1;
+
+    /// <summary>A new frame: the next placement of each node keeps the rect it had before it (<see cref="TryFrameStartRect"/>).</summary>
+    public void BeginFrameRects() => _frameStamp++;
+
+    /// <summary>The rect <paramref name="node"/> had when the frame began, when a layout pass of this frame has placed it since. False when
+    /// nothing placed it this frame: its bounds are still the ones the frame began with.</summary>
+    public bool TryFrameStartRect(NodeHandle node, out RectF rect)
+    {
+        uint ai = node.Raw.Index;
+        if (ai < (uint)_frameStartStamp.Length && _frameStartStamp[ai] == _frameStamp) { rect = _frameStartRect[ai]; return true; }
+        rect = default;
+        return false;
+    }
     // The node's SubtreeVersion when that rect was placed. The Arrange early-out requires it unchanged: the frame-scoped clean
     // bit only says nothing below was marked THIS frame, and a mark can be cleared at the frame's end without any solve having
     // visited the node - a bind firing on a row of a detached, KeepAlive-parked subtree (its dirty chain stops at the detached
@@ -788,6 +809,12 @@ public sealed partial class FlexLayout
         _scene.NoteCaptureChanged((int)node.Raw.Index);
         if (s_layoutOverflow) ReportOverflow(node, in next);
         uint ai = node.Raw.Index;
+        if (ai < (uint)_frameStartStamp.Length && _frameStartStamp[ai] != _frameStamp)
+        {
+            // The first placement this frame: keep the rect the frame started with (the one the last frame presented).
+            _frameStartStamp[ai] = _frameStamp;
+            _frameStartRect[ai] = ai < (uint)_arranged.Length && _scene.IsArrangedValid(node) ? _arranged[ai] : next;
+        }
         if (ai < (uint)_arranged.Length) { _arranged[ai] = next; _arrangedVer[ai] = _scene.SubtreeVersion(node); }
         _scene.SetArrangedValid(node);
         NoteVerifySig(node);   // DEBUG tripwire baseline: the layout inputs this placement was computed from
