@@ -7171,7 +7171,11 @@ public sealed partial class AppHost : IDisposable
             int viewportArrivals = ScrollHandle.ViewportArrivals;
             bool viewportArrived = viewportArrivals != _viewportArrivalsSeen;
             _viewportArrivalsSeen = viewportArrivals;
-            if (!_scene.Root.IsNull && ((scrolledMidFrame && _reconciler.ReRealizeVirtuals()) || (viewportArrived && _runtime.HasPending)))
+            // So does state a measured size wrote: a part that re-renders from its own laid-out width (a bento grid packing its tiles to it, a
+            // board choosing its rhythm) drew a frame behind the width on every frame of a window drag, and caught up two widths at once
+            // whenever another cause re-ran this pass (a width step, then a still frame). Once, in this frame: what it lays out next waits.
+            bool boundsWrote = _layout.BoundsDeliveries > 0 && _runtime.HasPending;
+            if (!_scene.Root.IsNull && ((scrolledMidFrame && _reconciler.ReRealizeVirtuals()) || ((viewportArrived || boundsWrote) && _runtime.HasPending)))
             {
                 if (_runtime.HasPending) FlushRebindsToQuiescence();
                 _reconciler.ConsumeReconciled();

@@ -30,6 +30,12 @@ public sealed partial class FlexLayout
     /// baseline those edges compare against.</summary>
     public bool SuppressBoundsDelivery { get; set; }
 
+    /// <summary>How many arranged rects this frame's passes delivered to an <c>Element.OnBoundsChanged</c> handler or a measured-bounds hook
+    /// (<c>UseMeasuredBounds</c>/<c>UseMeasuredWidth</c>). The host reads it after the frame's layout: a delivery that wrote state (a grid packing
+    /// to its measured width) re-renders and lays out once more in the same frame, so what reads a measured size never draws a frame behind it.
+    /// Reset with the frame's counters.</summary>
+    public int BoundsDeliveries { get; private set; }
+
     /// <summary>Host-set per frame: a run of more than one line breaks at the width it LANDS at while a width reflow resizes it (see the text
     /// measure). True from the frame AFTER the reflow's destination was first recorded: the slide's first frame is the one the tree answers the
     /// landing width on (a page that swaps its form for it re-renders on the next commit), so a run whose tree is about to be replaced never
@@ -172,7 +178,7 @@ public sealed partial class FlexLayout
 
     /// <summary>Host-driven per-frame reset: zero the diag counters at the top of a frame so DiagMeasure/Arrange/TextMiss
     /// read that frame's total after all layout (full + scoped + phase-7 reflow) has run. Cheap; no-op meaning when off.</summary>
-    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dTextSharedHit = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = _dMeasureFlatHit = 0; if (MeasureCensusEnabled) CensusFrameStart(); }
+    public void ResetFrameDiagCounters() { BoundsDeliveries = 0; _dMeasure = _dTextHit = _dTextMiss = _dTextSharedHit = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = _dMeasureFlatHit = 0; if (MeasureCensusEnabled) CensusFrameStart(); }
 
     // Within-pass Measure memo. Measure(node, availW) is a PURE function of the node's subtree content + availW within
     // ONE layout solve (it has no external mutable input; its only side effect is writing the node's Bounds W/H). But the
@@ -795,6 +801,7 @@ public sealed partial class FlexLayout
         {
             if (pending) _scene.Unmark(node, NodeFlags.BoundsChangedPending);
             delivered = next;
+            BoundsDeliveries++;
             handler?.Invoke(next);
             hook?.Invoke(next);
         }
@@ -812,6 +819,7 @@ public sealed partial class FlexLayout
         _scene.Unmark(node, NodeFlags.BoundsChangedPending);
         ref RectF delivered = ref _scene.BoundsDeliveredRef(node);
         delivered = current;
+        if (handler is not null || hook is not null) BoundsDeliveries++;
         handler?.Invoke(current);
         hook?.Invoke(current);
     }
