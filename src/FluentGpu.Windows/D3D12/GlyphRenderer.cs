@@ -216,6 +216,16 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private const int InitialStagingRows = GlyphStagingPolicy.InitialRows;
     private const int MaxStagingRows = GlyphStagingPolicy.MaxRows;
     private readonly int[] _stagingRows = new int[FrameCount];
+    // The staging banks' resource names, made once: a bank is re-created on a frame (a shrink after idle, a growth for a
+    // big dirty band), and formatting its name there allocated 128 B on that frame, a steady animation frame included.
+    private static readonly string[] s_atlasUploadNames = AtlasUploadNames();
+    private static string[] AtlasUploadNames()
+    {
+        var names = new string[FrameCount];
+        for (int f = 0; f < FrameCount; f++) names[f] = "Glyph.AtlasUpload[" + f.ToString(System.Globalization.CultureInfo.InvariantCulture) + "]";
+        return names;
+    }
+    private static string AtlasUploadName(int f) => s_atlasUploadNames[f];
     private int _wantStagingRows = InitialStagingRows;
     /// <summary>Submitted frames since the atlas was last dirty. Drives the staging reserve back down — the same
     /// tier-gated idle-window shape LayerTargetPool uses for its render targets, and generous for the same reason.</summary>
@@ -331,17 +341,21 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private const int FrameCount = D3D12Device.FrameBankDepth;   // banked per frame-in-flight (depth = D3D12Device.FrameBankDepth) so frame N's CPU writes never race the GPU reads of the frames still in flight
     private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];
     private readonly GlyphInstance*[] _mapped = new GlyphInstance*[FrameCount];
-    // The per-frame glyph instance bank STARTS at 8192 quads and GROWS on demand: a frame that overflows it records
-    // the tail as dropped (Record), remembers the size it needed (_wantCapacity), and each bank re-allocates itself the
-    // next time BeginFrame lands on it — that bank is fenced at BeginFrame, so no in-flight reader can see the swap.
-    // The device turns a dropped frame into an un-skippable full repaint (TextRepaintPending), so an overflow costs one
-    // frame with a blank tail and then heals. It used to be a hard cap: a 600-line log preview scrolled into a dialog
-    // silently blanked every glyph recorded after it (the checkbox + command-row labels) for as long as the stream
-    // stayed byte-identical. Capped at MaxGlyphCapacity (80 B × 262144 = 20 MB per bank).
+    // The per-frame glyph instance bank STARTS at 8192 quads and GROWS in the frame that needs more, so no glyph is ever
+    // dropped: a run that does not fit makes every bank anew at the next power of two that holds it (GrowBanks), and the
+    // run and the rest of the frame draw from the new active bank (each draw binds its own root SRV address, so the draws
+    // already recorded keep reading the old one). A replaced bank is never released in the frame: it is retired to its
+    // slot (_retired) and released when BeginFrame next lands on that slot, which is fenced there, so no GPU read of it can
+    // still be in flight. It used to drop the frame's tail and grow each bank over the next three frames: text missing for
+    // a frame. Capped at MaxGlyphCapacity (80 B × 262144 = 20 MB per bank); only beyond the cap is a tail dropped, and
+    // counted (RenderDrops, which the inspector's perf gate fails on).
     private const int InitialGlyphCapacity = 8192;
     private const int MaxGlyphCapacity = 262144;
     private readonly int[] _capacity = new int[FrameCount];
-    private int _wantCapacity = InitialGlyphCapacity;
+    // Banks a growth replaced, per slot, released at that slot's next (fenced) BeginFrame. A growth retires one bank per
+    // slot, and a frame can grow at most log2(MaxGlyphCapacity / InitialGlyphCapacity) = 5 times.
+    private const int RetiredPerSlot = 8;
+    private readonly nint[] _retired = new nint[FrameCount * RetiredPerSlot];
     /// <summary>Quads the active bank can hold this frame (grows across frames after an overflow).</summary>
     public int GlyphCapacity => _capacity[_active];
     private int _cursor;
@@ -1652,8 +1666,8 @@ float4 PSMain(VSOutG i) : SV_Target
         // No copy has been recorded yet. Allocate BEFORE releasing the valid bank; all dirty rows must fit
         // this first paint even if a previous idle window reduced the warm reserve.
         int rows = Math.Min(ATLAS, (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)needed));
-        var replacement = CreateUpload(_device, (uint)(ATLAS * rows), $"Glyph.AtlasUpload[{_active}]");
-        D3D12MemoryDiagnostics.Release(_texUpload[_active], $"Glyph.AtlasUpload[{_active}]");
+        var replacement = CreateUpload(_device, (uint)(ATLAS * rows), AtlasUploadName(_active));
+        D3D12MemoryDiagnostics.Release(_texUpload[_active], AtlasUploadName(_active));
         _texUpload[_active]->Release();
         _texUpload[_active] = replacement;
         _stagingRows[_active] = rows;
@@ -1698,7 +1712,7 @@ float4 PSMain(VSOutG i) : SV_Target
                 _device->CreateShaderResourceView(texture, &sd, heap->GetCPUDescriptorHandleForHeapStart());
                 for (int f = 0; f < FrameCount; f++)
                     uploads[f] = CreateUpload(_device, (uint)(MaximumAtlasEdge *
-                        (f == _active ? MaximumAtlasEdge : GlyphStagingPolicy.WarmRows)), $"Glyph.AtlasUpload[{f}]");
+                        (f == _active ? MaximumAtlasEdge : GlyphStagingPolicy.WarmRows)), AtlasUploadName(f));
             }
             catch (Exception ex) when (ex is OutOfMemoryException or InvalidOperationException)
             {
@@ -1716,7 +1730,7 @@ float4 PSMain(VSOutG i) : SV_Target
             _srvGpu = _srvHeap->GetGPUDescriptorHandleForHeapStart();
             for (int f = 0; f < FrameCount; f++)
             {
-                D3D12MemoryDiagnostics.Release(_texUpload[f], $"Glyph.AtlasUpload[{f}]");
+                D3D12MemoryDiagnostics.Release(_texUpload[f], AtlasUploadName(f));
                 _texUpload[f]->Release();
                 _texUpload[f] = uploads[f]; uploads[f] = null;
                 _stagingRows[f] = f == _active ? MaximumAtlasEdge : GlyphStagingPolicy.WarmRows;
@@ -1733,7 +1747,7 @@ float4 PSMain(VSOutG i) : SV_Target
             if (texture != null) { D3D12MemoryDiagnostics.Release(texture, "Glyph.AtlasTexture"); texture->Release(); }
             if (heap != null) { D3D12MemoryDiagnostics.Release(heap, "Glyph.SrvHeap"); heap->Release(); }
             for (int f = 0; f < FrameCount; f++)
-                if (uploads[f] != null) { D3D12MemoryDiagnostics.Release(uploads[f], $"Glyph.AtlasUpload[{f}]"); uploads[f]->Release(); }
+                if (uploads[f] != null) { D3D12MemoryDiagnostics.Release(uploads[f], AtlasUploadName(f)); uploads[f]->Release(); }
         }
     }
 
@@ -1762,7 +1776,7 @@ float4 PSMain(VSOutG i) : SV_Target
         for (int f = 0; f < FrameCount; f++)
         {
             _stagingRows[f] = InitialStagingRows;
-            _texUpload[f] = CreateUpload(device, (uint)(ATLAS * InitialStagingRows), $"Glyph.AtlasUpload[{f}]");
+            _texUpload[f] = CreateUpload(device, (uint)(ATLAS * InitialStagingRows), AtlasUploadName(f));
         }
 
         D3D12_DESCRIPTOR_HEAP_DESC hd = default;
@@ -2008,7 +2022,7 @@ float4 PSMain(VSOutG i) : SV_Target
     public void BeginFrame(int slot)
     {
         _active = ((slot % FrameCount) + FrameCount) % FrameCount;   // this frame's instance buffer — already fenced, so no CPU↔GPU race
-        if (_capacity[_active] < _wantCapacity) GrowBank(_active);          // fenced here ⇒ the only safe moment to swap it
+        ReleaseRetired(_active);   // fenced here: the banks a growth replaced while this slot's last frame was in flight
         // The atlas has been clean for a long stretch ⇒ hand the grown reserve back. Counted in SUBMITTED frames and
         // deliberately generous: a shrink immediately followed by a big reset costs one stagingShort frame, which the
         // existing AtlasResetPending → forced-repaint machinery already handles and gate.atlas.upload.clamp/.drain
@@ -2049,11 +2063,12 @@ float4 PSMain(VSOutG i) : SV_Target
     /// see RoundRectPipeline.Record). Returns false when full (state untouched).</summary>
     public bool Record(ID3D12GraphicsCommandList* cmd, List<GlyphInstance> instances, float vpW, float vpH, bool rebind = true, bool stencilTest = false)
     {
+        if (instances.Count > _capacity[_active] - _cursor) GrowBanks(_cursor + instances.Count);   // grow now: never drop the tail
         int start = _cursor;
         int count = Math.Min(instances.Count, _capacity[_active] - start);
-        if (count < instances.Count) NoteOverflow(start + instances.Count);
-        if (count <= 0) { _dropped += instances.Count; return false; }
+        if (count <= 0) { _dropped += instances.Count; FluentGpu.Render.RenderDrops.AddGlyphs(instances.Count); return false; }
         _dropped += instances.Count - count;
+        FluentGpu.Render.RenderDrops.AddGlyphs(instances.Count - count);
         for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
         _cursor += count;
 
@@ -2129,13 +2144,51 @@ float4 PSMain(VSOutG i) : SV_Target
         Diag.Event("text.grad", $"gradient-glyph budget exhausted: dropped {dropped} instance(s) (budget {MaxGradGlyphs}) — the karaoke wipe is TRUNCATED this frame");
     }
 
-    // An overflow this frame: remember the capacity the frame needed (next power of two, capped), so every bank grows
-    // to it as BeginFrame reaches it. Beyond the cap the tail stays dropped and counted — visible, never silent.
-    private void NoteOverflow(int needed)
+    /// <summary>This frame needs <paramref name="needed"/> quads in its bank: make every bank anew at the next power of two
+    /// that holds them (capped at <see cref="MaxGlyphCapacity"/>) and continue the frame in the new active bank from its
+    /// start. Every slot's old bank is retired, never released here: the active one holds this frame's earlier draws, the
+    /// others may be read by frames still in flight; each goes at its slot's next fenced BeginFrame. Beyond the cap the
+    /// caller drops the tail and counts it (RenderDrops).</summary>
+    private void GrowBanks(int needed)
     {
-        int want = _capacity[_active];
+        int cap = _capacity[_active];
+        int want = cap;
         while (want < needed && want < MaxGlyphCapacity) want <<= 1;
-        if (want > _wantCapacity) { _wantCapacity = want; Diag.Count("text.glyphs", "bankOverflow"); }
+        if (want <= cap) return;
+        for (int f = 0; f < FrameCount; f++)
+        {
+            Retire(f, _instances[f]);
+            _instances[f] = CreateUpload(_device, (uint)(sizeof(GlyphInstance) * want), "Glyph.InstanceUpload");
+            void* ip; _instances[f]->Map(0, null, &ip); _mapped[f] = (GlyphInstance*)ip;   // persistently mapped, like the ctor
+            _capacity[f] = want;
+        }
+        _activeGva = _instances[_active]->GetGPUVirtualAddress();
+        _cursor = 0;
+        Diag.Count("text.glyphs", "bankGrowInFrame");
+    }
+
+    private void Retire(int slot, ID3D12Resource* bank)
+    {
+        int at = slot * RetiredPerSlot;
+        for (int i = 0; i < RetiredPerSlot; i++)
+            if (_retired[at + i] == 0) { _retired[at + i] = (nint)bank; return; }
+        // Unreachable within the cap (one retirement per slot per growth, at most five growths a frame). Keep the bank
+        // alive rather than release one the GPU may still read.
+        Debug.Fail("glyph instance bank retirement ring full");
+    }
+
+    private void ReleaseRetired(int slot)
+    {
+        int at = slot * RetiredPerSlot;
+        for (int i = 0; i < RetiredPerSlot; i++)
+        {
+            if (_retired[at + i] == 0) continue;
+            var bank = (ID3D12Resource*)_retired[at + i];
+            _retired[at + i] = 0;
+            bank->Unmap(0, null);
+            D3D12MemoryDiagnostics.Release(bank, "Glyph.InstanceUpload");
+            bank->Release();
+        }
     }
 
     /// <summary>Re-allocate one atlas staging bank at the new row target. Called ONLY from <see cref="BeginFrame"/>,
@@ -2150,24 +2203,13 @@ float4 PSMain(VSOutG i) : SV_Target
     private void ResizeStagingBank(int f)
     {
         bool shrinking = _stagingRows[f] > _wantStagingRows;
-        var replacement = CreateUpload(_device, (uint)(ATLAS * _wantStagingRows), $"Glyph.AtlasUpload[{f}]");
-        D3D12MemoryDiagnostics.Release(_texUpload[f], $"Glyph.AtlasUpload[{f}]");
+        var replacement = CreateUpload(_device, (uint)(ATLAS * _wantStagingRows), AtlasUploadName(f));
+        D3D12MemoryDiagnostics.Release(_texUpload[f], AtlasUploadName(f));
         _texUpload[f]->Release();
         _texUpload[f] = replacement;
         _stagingRows[f] = _wantStagingRows;
         Diag.Count("text.atlas", shrinking ? "stagingShrink" : "stagingGrow");
         Diag.Set("text.atlas", "stagingBytes", AtlasStagingBytes);   // all banks together — the memory story, not a per-frame value
-    }
-
-    private void GrowBank(int f)
-    {
-        _instances[f]->Unmap(0, null);
-        D3D12MemoryDiagnostics.Release(_instances[f], "Glyph.InstanceUpload");
-        _instances[f]->Release();
-        _instances[f] = CreateUpload(_device, (uint)(sizeof(GlyphInstance) * _wantCapacity), "Glyph.InstanceUpload");
-        void* ip; _instances[f]->Map(0, null, &ip); _mapped[f] = (GlyphInstance*)ip;   // persistently mapped, like the ctor
-        _capacity[f] = _wantCapacity;
-        Diag.Count("text.glyphs", "bankGrow");
     }
 
     private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)
@@ -2204,9 +2246,10 @@ float4 PSMain(VSOutG i) : SV_Target
         _engine?.Dispose();
         for (int f = 0; f < FrameCount; f++)
         {
+            ReleaseRetired(f);
             if (_instances[f] != null) { _instances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances[f], "Glyph.InstanceUpload"); _instances[f]->Release(); _instances[f] = null; }
             if (_gradInstances[f] != null) { _gradInstances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_gradInstances[f], "Glyph.GradInstanceUpload"); _gradInstances[f]->Release(); _gradInstances[f] = null; }
-            if (_texUpload[f] != null) { D3D12MemoryDiagnostics.Release(_texUpload[f], $"Glyph.AtlasUpload[{f}]"); _texUpload[f]->Release(); _texUpload[f] = null; }
+            if (_texUpload[f] != null) { D3D12MemoryDiagnostics.Release(_texUpload[f], AtlasUploadName(f)); _texUpload[f]->Release(); _texUpload[f] = null; }
         }
         if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "Glyph.QuadUpload"); _quad->Release(); _quad = null; }
         if (_psoGrad != null) { _psoGrad->Release(); _psoGrad = null; }
