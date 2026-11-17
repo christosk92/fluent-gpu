@@ -1552,6 +1552,8 @@ public sealed partial class AppHost : IDisposable
     private readonly List<NodeHandle> _projectionSuppressionRoots = new();          // changed projected containers that own descendant motion this commit
     private readonly List<NodeHandle> _liveReflowScratch = new(8);                  // nodes with a live LayoutW/H reflow row this commit (ApplyProjections shove suppression)
     private readonly Dictionary<int, int> _reflowShoveFrames = new(16);             // parent idx → the child idx on a reflowing node's ancestor path ("the reflow-carrying child under this parent")
+    /// <summary>The most layout passes a frame runs after its layout for sizes its layout delivered (a measured width a part re-renders from).</summary>
+    private const int BoundsRelayoutPasses = 3;
     private readonly List<NodeHandle> _resizeLandScratch = new(64);                   // ApplyProjections: the captured nodes a resize-only suppression lands
     private readonly List<NodeHandle> _reflowOwnedRoots = new(4);                   // SuppressDescendantTransitions containers a live sibling reflow resizes this commit: they land, they suppress nothing
     private readonly List<int> _positionScratch = new(64);                          // nodes with a position transition (RunReflowLayout's wrap watch)
@@ -7204,12 +7206,21 @@ public sealed partial class AppHost : IDisposable
             bool boundsWrote = _layout.BoundsDeliveries > 0 && _runtime.HasPending;
             if (!_scene.Root.IsNull && ((scrolledMidFrame && _reconciler.ReRealizeVirtuals()) || ((viewportArrived || boundsWrote) && _runtime.HasPending)))
             {
-                if (_runtime.HasPending) FlushRebindsToQuiescence();
-                _reconciler.ConsumeReconciled();
-                reconciled = true;
-                _invalidator.RunDirty(layoutSize);
-                _scene.ClearLayoutDirty();
-                DrainLayoutEffects();                          // the rows this pass mounted queued theirs after the 6.5 drain: run them before they paint
+                // A part that reads a measured size can sit inside another (a grid that fits its columns to its width, in a board tile the board
+                // packs to its own width): the inner one measures its new width only on the pass the outer one re-laid it, so it lays out again
+                // while a pass delivered a size that wrote state, a few times at most. One pass left the inner grid a width behind on every
+                // frame of a drag (its full rows' last card wrapped onto a line of its own: the grid stood a row taller).
+                for (int pass = 0; pass < BoundsRelayoutPasses; pass++)
+                {
+                    int delivered = _layout.BoundsDeliveries;
+                    if (_runtime.HasPending) FlushRebindsToQuiescence();
+                    _reconciler.ConsumeReconciled();
+                    reconciled = true;
+                    _invalidator.RunDirty(layoutSize);
+                    _scene.ClearLayoutDirty();
+                    DrainLayoutEffects();                      // the rows this pass mounted queued theirs after the 6.5 drain: run them before they paint
+                    if (_layout.BoundsDeliveries == delivered || !_runtime.HasPending) break;
+                }
             }
             // 6.6 SizeToContent (AppHost.SizeToContent.cs): only on frames whose layout ran; zero work when Manual.
             FitWindowToContent(layoutNeeded && !_scene.Root.IsNull, layoutSize);
