@@ -2158,6 +2158,7 @@ public sealed partial class AppHost : IDisposable
     // the next drain however many were requested since (at most one ResizeBuffers per render tick, F093).
     private bool _ownResizePending;
     private Size2 _ownResizeSize;
+    private bool _ownTrimPending;       // drop the own swapchain's live-resize headroom (TrimSizeHeadroom); a pending resize supersedes it
     private int _ownResizesApplied;
     private long _ownResizePostedQpc;   // when the first still-pending resize was posted (guarded by _popupActionLock)
     private int _ownResizeCollapsed;    // posts that replaced a pending one since the last apply (guarded by _popupActionLock)
@@ -2189,23 +2190,33 @@ public sealed partial class AppHost : IDisposable
         OwningRenderThread?.WakeAsync();
     }
 
+    /// <summary>UI thread: ask the render thread to reallocate THIS host's own swapchain at exactly its size, dropping the headroom a
+    /// live resize allocated (ISwapchain.TrimSizeHeadroom). The caller invalidated the target first and publishes a whole frame.</summary>
+    private void PostOwnTrim()
+    {
+        lock (_popupActionLock) _ownTrimPending = true;
+        OwningRenderThread?.WakeAsync();
+    }
+
     /// <summary>Render thread: apply every popup swapchain mutation the UI posted since the last turn, in order.</summary>
     private void DrainPopupRenderActions()
     {
         DrainPresentationMotion();
-        bool ownResize;
+        bool ownResize, ownTrim;
         Size2 ownSize;
         long ownPostedQpc;
         int ownCollapsed;
         lock (_popupActionLock)
         {
             ownResize = _ownResizePending;
+            ownTrim = _ownTrimPending;
             ownSize = _ownResizeSize;
             ownPostedQpc = _ownResizePostedQpc;
             ownCollapsed = _ownResizeCollapsed;
             _ownResizeCollapsed = 0;
             _ownResizePending = false;
-            if (_popupActionsIn.Count == 0 && !ownResize) return;
+            _ownTrimPending = false;
+            if (_popupActionsIn.Count == 0 && !ownResize && !ownTrim) return;
             if (_popupActionsIn.Count != 0) (_popupActionsIn, _popupActionsOut) = (_popupActionsOut, _popupActionsIn);
         }
         if (ownResize)
@@ -2216,6 +2227,14 @@ public sealed partial class AppHost : IDisposable
             try { _swapchain.Resize(ownSize); }
             catch (Exception) when (_device.NoteIfDeviceLost()) { }
             NoteRenderResize(ownSize, ToMs(r0 - ownPostedQpc), ToMs(Stopwatch.GetTimestamp() - r0), ownCollapsed);
+        }
+        else if (ownTrim)
+        {
+            // The size settled after a live resize: give back the headroom (one exact reallocation; the frame that follows is whole).
+            long r0 = Stopwatch.GetTimestamp();
+            try { _swapchain.TrimSizeHeadroom(); }
+            catch (Exception) when (_device.NoteIfDeviceLost()) { }
+            NoteRenderResize(_swapchain.SizePx, 0, ToMs(Stopwatch.GetTimestamp() - r0), 0, trim: true);
         }
         for (int i = 0; i < _popupActionsOut.Count; i++)
         {
@@ -2261,7 +2280,7 @@ public sealed partial class AppHost : IDisposable
     /// <summary>The <c>[window.resize]</c> line of a resize applied on the render thread (the mailbox path): <c>quiesceMs</c> is 0 (no
     /// park), <c>postedMs</c> is how long the size waited in the mailbox, <c>collapsed</c> how many later posts replaced it. Rate-limited
     /// like the UI side's line. Render thread.</summary>
-    private void NoteRenderResize(Size2 px, double postedMs, double resizeMs, int collapsed)
+    private void NoteRenderResize(Size2 px, double postedMs, double resizeMs, int collapsed, bool trim = false)
     {
         long now = Stopwatch.GetTimestamp();
         if (_renderResizeLogQpc != 0 && now - _renderResizeLogQpc < Stopwatch.Frequency / 10) { _renderResizeLogSuppressed++; return; }
@@ -2269,8 +2288,9 @@ public sealed partial class AppHost : IDisposable
         int suppressed = _renderResizeLogSuppressed;
         _renderResizeLogSuppressed = 0;
         var (waitGpuMs, buffersMs) = _swapchain.LastResizeSplit;
+        var (reallocs, sourceSteps, buf) = _swapchain.ResizeCounters;
         Diag.Line(string.Create(System.Globalization.CultureInfo.InvariantCulture,
-            $"[window.resize] px={px.Width:F0}x{px.Height:F0} path={(_isDetachedChild ? "render-child" : "render")} quiesceMs=0.00 waitGpuMs={waitGpuMs:F2} buffersMs={buffersMs:F2} resizeMs={resizeMs:F2} postedMs={postedMs:F2} collapsed={collapsed} suppressed={suppressed}"));
+            $"[window.resize] px={px.Width:F0}x{px.Height:F0} path={(_isDetachedChild ? "render-child" : "render")}{(trim ? " trim" : "")} quiesceMs=0.00 waitGpuMs={waitGpuMs:F2} buffersMs={buffersMs:F2} resizeMs={resizeMs:F2} postedMs={postedMs:F2} collapsed={collapsed} suppressed={suppressed} buffers={buf.Width:F0}x{buf.Height:F0} reallocs={reallocs} sourceSteps={sourceSteps}"));
     }
 
     /// <summary>Render thread: build a leased popup's swapchain. A failure must not escape (this runs outside the submit's
@@ -4539,6 +4559,7 @@ public sealed partial class AppHost : IDisposable
         w = ClampWaitToAnimatedImages(w, _lastWaitKind);   // ImageEl.Animate: wake exactly for the next animation frame
         w = ClampWaitToColdMaintenance(w);
         w = ClampWaitToPopupPool(w);                       // the popup pool's idle prewarm / stale drop wakes itself (TickPopupPool)
+        w = ClampWaitToResizeTrim(w);                      // a live resize's swapchain headroom is trimmed once the size settles
         // Render-owned exits normally wake us through completion feedback. Keep their wall-clock
         // reclaim backstop reachable even when no UI timer or input will ever arrive.
         if (!IsParked && _anim.RenderOwnsCompositor && _scene.OrphanCount > 0)
@@ -5181,6 +5202,8 @@ public sealed partial class AppHost : IDisposable
         // A theme mutation (Tok.Use / Tok.SetAccent, from anywhere: a settings click, an async album accent) is work the
         // next Paint re-renders for: it wakes that frame itself instead of waiting on an unrelated wake. One int compare.
         if (Tok.Epoch != _lastThemeEpoch) r |= WakeReasons.FrameNeeded;
+        // A live resize's settle (the swapchain headroom trim) owes the frame that runs it.
+        if (SwapchainSettleDue()) r |= WakeReasons.FrameNeeded;
         // A stored UseTier crossing (E22) is work: it owes the frame that commits it. FrameNeeded is in ModalLoopEssentialWake, so the
         // modal-loop keep-alive idle skip cannot swallow that frame. Not while parked: a minimized window paints nothing to commit on.
         if (_tiers.HasPending && !_wasParked) r |= WakeReasons.FrameNeeded;
@@ -10382,7 +10405,7 @@ public sealed partial class AppHost : IDisposable
         // tree must re-lay-out (glyph re-rasterization keys on the per-frame FrameInfo scale by itself).
         var s = _window.ClientSizePx;
         float scale = _window.Scale;
-        if (s.Width == _lastSize.Width && s.Height == _lastSize.Height && scale == _lastScale) return false;
+        if (s.Width == _lastSize.Width && s.Height == _lastSize.Height && scale == _lastScale) return SettleSwapchainSize(keepAlive);
         if (DeferModalResize(keepAlive)) return false;   // pending until WM_EXITSIZEMOVE (InModalLoop cleared before Paint)
         _lastSize = s;
         if (scale != _lastScale)
@@ -10427,9 +10450,46 @@ public sealed partial class AppHost : IDisposable
             catch (Exception) when (_device.NoteIfDeviceLost()) { }
             NoteWindowResize(s, "inline", 0, ToMs(Stopwatch.GetTimestamp() - r0));
         }
+        // A live resize leaves the buffers with headroom (ISwapchain.HasSizeHeadroom): give it back once the size has been still
+        // for ResizeTrimDelayMs (SettleSwapchainSize). Re-armed by every size change, so a drag pays nothing until it stops.
+        _resizeTrimDueQpc = Stopwatch.GetTimestamp() + ResizeTrimDelayMs * Stopwatch.Frequency / 1000;
         _needFullLayout = true;
         return true;
     }
+
+    // The settle of a live resize (EnsureSize): when the swapchain's live-resize headroom is given back. 0 = nothing armed. UI thread.
+    private long _resizeTrimDueQpc;
+    private const int ResizeTrimDelayMs = 400;
+
+    /// <summary>EnsureSize's unchanged-size arm, UI thread: a live resize's swapchain headroom outlived the drag by
+    /// <see cref="ResizeTrimDelayMs"/>, so the buffers are trimmed to the exact size and a resting window holds what it always held.
+    /// The trim reallocates, so it invalidates the target and reports a resize: this frame publishes whole into the new buffers.</summary>
+    private bool SettleSwapchainSize(bool keepAlive)
+    {
+        if (DeferModalResize(keepAlive) || _fzPhase != FreezePhase.None) return false;   // a freeze's frames stay on the buffers it captured
+        if (_resizeTrimDueQpc == 0 || Stopwatch.GetTimestamp() < _resizeTrimDueQpc) return false;
+        _resizeTrimDueQpc = 0;
+        if (!_swapchain.HasSizeHeadroom) return false;
+        if (OwningRenderThread is not null) { _renderSeam.InvalidateTarget(); PostOwnTrim(); }
+        else
+        {
+            try { _swapchain.TrimSizeHeadroom(); }
+            catch (Exception) when (_device.NoteIfDeviceLost()) { }
+        }
+        return true;
+    }
+
+    /// <summary>The loop wakes for the headroom trim even when nothing else would.</summary>
+    private int ClampWaitToResizeTrim(int w)
+    {
+        if (_resizeTrimDueQpc == 0) return w;
+        int dueIn = (int)Math.Ceiling(Math.Max(1.0, (_resizeTrimDueQpc - Stopwatch.GetTimestamp()) * 1000.0 / Stopwatch.Frequency));
+        return w < 0 ? dueIn : Math.Min(w, dueIn);
+    }
+
+    /// <summary>The headroom trim is due: a frame is needed to run it (ComputeWakeReasons).</summary>
+    private bool SwapchainSettleDue()
+        => _fzPhase == FreezePhase.None && _resizeTrimDueQpc != 0 && Stopwatch.GetTimestamp() >= _resizeTrimDueQpc;
 
     // [window.resize] rate limit (UI thread): at most one line per 100 ms, the lines it stood in for counted on the next.
     private long _resizeLogQpc;

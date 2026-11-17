@@ -101,7 +101,16 @@ public sealed unsafe partial class D3D12Device
             int slot = BeginDissolveList();
             if (slot < 0) { ReleaseSnapshotResources(snap); return null; }
             FdBarrier(back, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
-            _fdList->CopyResource(tex, back);
+            // The presented W x H of the back buffer (a live resize's headroom can make the buffer larger than the snapshot).
+            D3D12_TEXTURE_COPY_LOCATION dstLoc = default;
+            dstLoc.pResource = tex;
+            dstLoc.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            D3D12_TEXTURE_COPY_LOCATION srcLoc = default;
+            srcLoc.pResource = back;
+            srcLoc.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            D3D12_BOX box = default;
+            box.right = sc.W; box.bottom = sc.H; box.back = 1;
+            _fdList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &box);
             FdBarrier(back, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
             FdBarrier(tex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             ulong v = EndDissolveList(slot);

@@ -1357,6 +1357,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.BuildPending = false;
         target.BuildFailed = false;
         DXGI_SWAP_CHAIN_DESC1 sd = default;
+        target.BufW = target.W;   // a (re)build allocates exactly the presented size: headroom is only ever a live resize's
+        target.BufH = target.H;
         sd.Width = target.W;
         sd.Height = target.H;
         sd.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -1451,6 +1453,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
         long icT3 = System.Diagnostics.Stopwatch.GetTimestamp();
         CreateRtvs(target);
+        target.NoteBufferState();
         // ONE command list per target (Phase 1 §3.1 — was ONE device-global list, created once in InitDevice). Any
         // ring allocator is fine here: the first real submit's Reset() supplies the actual bank. This runs on the
         // creating thread (UI ctor, or the render thread inside RecoverDevice) — cold path, never mid-record.
@@ -1664,7 +1667,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             ID3D12Resource* buf;
             Check(target.SwapChain->GetBuffer(i, __uuidof<ID3D12Resource>(), (void**)&buf), "GetBuffer");
             target.BackBuffers[i] = buf;
-            D3D12MemoryDiagnostics.Track(buf, $"Swapchain.BackBuffer[{i}] {target.W}x{target.H}", (ulong)target.W * target.H * 4UL);
+            D3D12MemoryDiagnostics.Track(buf, $"Swapchain.BackBuffer[{i}] {target.BufW}x{target.BufH}", (ulong)target.BufW * target.BufH * 4UL);
             _device->CreateRenderTargetView(buf, null, rtv);
             rtv.ptr += _rtvSize;
         }
@@ -1896,7 +1899,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // release + let it recreate lazily on the next stencil scope — done HERE, eagerly, before ANYTHING stamps a
         // fence-gated retirement this frame (PrepareGlyphs' atlas growth, ImageTextureStore.FlushUploads via
         // `_fenceValue + 1`). The wait is THIS target's own in-flight fence value, never a device-wide WaitForGpu.
-        int needW = Math.Max((int)sc.W, _stencilFloorW), needH = Math.Max((int)sc.H, _stencilFloorH);
+        int needW = Math.Max((int)sc.BufW, _stencilFloorW), needH = Math.Max((int)sc.BufH, _stencilFloorH);   // the BUFFER size: a live resize's SetSourceSize steps then never outgrow it
         if (f.StencilDsv != null && StencilDsvPolicy.NeedsRecreate(f.StencilW, f.StencilH, needW, needH))
         {
             WaitForFenceValue(f.LastSubmitFence);
@@ -2897,7 +2900,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             // catch up. Counted on _frameStencilFallback exactly like that path (see the caller).
             return false;
         }
-        int cw = Math.Max(Math.Max(w, (int)_w), _stencilFloorW), ch = Math.Max(Math.Max(h, (int)_h), _stencilFloorH);
+        int cw = Math.Max(Math.Max(w, (int)_f!.Target.BufW), _stencilFloorW), ch = Math.Max(Math.Max(h, (int)_f!.Target.BufH), _stencilFloorH);
 
         D3D12_HEAP_PROPERTIES hp = default;
         hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
@@ -5211,7 +5214,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         src.pResource = back;
         src.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         src.Anonymous.SubresourceIndex = 0;
-        _cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, null);
+        // The presented W x H of the buffer: a live resize's headroom makes the buffer larger than the footprint.
+        D3D12_BOX srcBox = default;
+        srcBox.right = _w; srcBox.bottom = _h; srcBox.back = 1;
+        _cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, &srcBox);
         Rec(RecordedOp.CopyTexture, (uint)(nint)back, (uint)total);
 
         Barrier(back, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
@@ -5238,12 +5244,111 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         return outp;
     }
 
+    // ── Live resize: buffer headroom + source size ─────────────────────────────────────────────────────────────────
+    // A ResizeBuffers is not a cheap call: it waits for this target's frames, releases three flip-model buffers DWM may still be
+    // composing, and allocates three new SHARED (DWM-visible) resources. Measured on the Adreno X1-85 (framework bench window-resize,
+    // 2026-11-14): 25-70 ms per call (one 207 ms), and a live resize posting one per composed frame churned ~1 GB/s of shared
+    // allocations until CreateSharedResource returned E_OUTOFMEMORY inside ResizeBuffers (debug layer: "ID3D12Device::
+    // CreateSharedResource: Returning E_OUTOFMEMORY") and the unhandled throw killed the process (1 of 5 bench runs, 4 of 4 local
+    // repros). Meanwhile every publication made before the newest size was dropped (stale target epoch), so the content updated
+    // ~3 times a second and trailed the window by 20 frames.
+    // Now a size change in quick succession of the previous one (LiveResizeWindowMs: a drag, a programmatic animation, the mini
+    // player's edge) allocates the buffers with headroom (HeadroomSize) and every later step that fits is IDXGISwapChain2::
+    // SetSourceSize: DWM presents [0,0,W,H] of the buffer, no allocation, no wait, no released buffer. A lone change (maximize,
+    // restore, snap, DPI hop) keeps the exact-size ResizeBuffers it always had, and the host trims a live resize's headroom once the
+    // size has settled (TrimSizeHeadroom, AppHost.EnsureSize), so the resting memory is what it was.
+    private const long LiveResizeWindowMs = 250;
+    private const int ReallocOomRetries = 3;
+
     internal void Resize(D3D12Swapchain target, uint w, uint h)
     {
         AssertDeviceOwner();
         if (w < 1) w = 1; if (h < 1) h = 1;
         if (target.Disposed || (w == target.W && h == target.H)) return;
         if (target.BuildPending || target.BuildFailed) { target.W = w; target.H = h; return; }   // built at this size later
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        // Popups (the WUC acrylic path sizes its visuals to the buffers) keep exact buffers.
+        bool live = !target.DesktopAcrylic && target.LastSizeChangeQpc != 0
+            && now - target.LastSizeChangeQpc < LiveResizeWindowMs * System.Diagnostics.Stopwatch.Frequency / 1000;
+        target.LastSizeChangeQpc = now;
+        if (live && w <= target.BufW && h <= target.BufH && SetSourceSizeOnly(target, w, h, now)) return;
+        uint bw = w, bh = h;
+        if (live) (bw, bh) = HeadroomSize(target, w, h);
+        ReallocateBuffers(target, w, h, bw, bh);
+    }
+
+    /// <summary>Drop a live resize's headroom: reallocate the buffers at exactly the presented size. The host calls it once the size
+    /// has settled and presents a whole frame right after (the new buffers hold nothing). Render-owner thread.</summary>
+    internal void TrimSizeHeadroom(D3D12Swapchain target)
+    {
+        AssertDeviceOwner();
+        if (target.Disposed || target.BuildPending || target.BuildFailed || (target.BufW == target.W && target.BufH == target.H)) return;
+        ReallocateBuffers(target, target.W, target.H, target.W, target.H);
+    }
+
+    /// <summary>A size change that fits the allocated buffers: only the DXGI source size moves. Nothing is released or allocated
+    /// and no GPU work is waited for (the source size is read at each Present: frames already queued keep the size they were
+    /// presented with). The next frame composites and presents whole (the epoch bump), as after a reallocation.</summary>
+    private bool SetSourceSizeOnly(D3D12Swapchain target, uint w, uint h, long t0)
+    {
+        int hr = (int)target.SwapChain->SetSourceSize(w, h);
+        if (hr < 0)
+        {
+            Diag.Line($"[window.resize] SetSourceSize({w}x{h}) on {target.BufW}x{target.BufH} buffers failed: 0x{(uint)hr:X8}; reallocating");
+            return false;
+        }
+        target.W = w; target.H = h;
+        ApplySourceScale(target);
+        target.PpEpoch++;
+        target.SourceSizeCount++;
+        target.NoteBufferState();
+        target.LastResizeWaitGpuMs = 0;
+        target.LastResizeBuffersMs = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        return true;
+    }
+
+    /// <summary>A COMPOSITION swapchain (the DComp / Mica path) stretches its source region over the whole buffer size in its
+    /// visual (measured: a 1809 px source on 2272 px buffers drew 1.256x too large). Its matrix transform scales it back by
+    /// source/buffer, so the content stays 1:1 in the window; identity again at exact buffers. Applied with the next Present, so the
+    /// frame and its scale reach DWM together. An HWND swapchain presents its source region 1:1 (DXGI_SCALING_STRETCH to the
+    /// client area, which is that size) and takes no matrix.</summary>
+    private static void ApplySourceScale(D3D12Swapchain target)
+    {
+        if (!target.Composited || target.BufW == 0 || target.BufH == 0) return;
+        DXGI_MATRIX_3X2_F m = default;
+        m._11 = (float)target.W / target.BufW;
+        m._22 = (float)target.H / target.BufH;
+        Check(target.SwapChain->SetMatrixTransform(&m), "SetMatrixTransform");
+    }
+
+    /// <summary>The buffer size a live resize allocates for a presented size of <paramref name="w"/> x <paramref name="h"/>: a
+    /// quarter more (at least 128 px) in each axis, so the steps that follow fit, capped at the larger of the size itself and the
+    /// window's monitor (headroom past the monitor is never presented) and at the D3D12 texture limit.</summary>
+    private static (uint W, uint H) HeadroomSize(D3D12Swapchain target, uint w, uint h)
+    {
+        uint capW = 16384, capH = 16384;
+        HMONITOR mon = MonitorFromWindow(target.Hwnd, MonitorDefaultToNearest);
+        MONITORINFO mi = default;
+        mi.cbSize = (uint)sizeof(MONITORINFO);
+        if (mon != HMONITOR.NULL && GetMonitorInfoW(mon, &mi))
+        {
+            capW = Math.Min(capW, Math.Max(w, (uint)Math.Max(1, mi.rcMonitor.right - mi.rcMonitor.left)));
+            capH = Math.Min(capH, Math.Max(h, (uint)Math.Max(1, mi.rcMonitor.bottom - mi.rcMonitor.top)));
+        }
+        uint bw = Math.Min(capW, w + Math.Max(w / 4, 128u));
+        uint bh = Math.Min(capH, h + Math.Max(h / 4, 128u));
+        return (Math.Max(bw, w), Math.Max(bh, h));
+    }
+
+    /// <summary>ResizeBuffers to <paramref name="bw"/> x <paramref name="bh"/>, presenting <paramref name="w"/> x <paramref name="h"/>
+    /// of them. Out of memory is not fatal. The buffer generations a resize releases are reclaimed lazily (measured: adapter shared
+    /// usage +3.6 GB over ~170 back-to-back reallocations, none of it this process's), so the call is retried at the exact size after a
+    /// GPU drain and a composition (DwmFlush: DWM lets go of the generation it was still composing). A failed ResizeBuffers leaves the
+    /// swapchain with NO usable buffers (GetBuffer then returns DXGI_ERROR_INVALID_CALL), so when the retries fail too the swapchain
+    /// cannot present at all: the device is removed on purpose (InjectDeviceLost, the fence-stall watchdog's escalation) and the
+    /// throw lands in the callers' device-loss gate, whose recovery rebuilds every target. Any other failure still throws.</summary>
+    private void ReallocateBuffers(D3D12Swapchain target, uint w, uint h, uint bw, uint bh)
+    {
         BeginTargetFrame(target.Frame);
         // Phase 1 (§3.4, pal-rhi.md §5.4 as designed): CPU-wait only the fence values THIS target's in-flight work
         // stamped — its submits AND its last present (TargetFenceHorizon) — never a full device drain: a detached child's
@@ -5255,7 +5360,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // §1.4): the old no-arg release freed only the working copy — this clears the target's own storage directly
         // (Phase 1 removes the working-copy concept structurally, so there is no reload to guard against any more).
         ReleaseStencilDsv(target.Frame);
-        D3D12MemoryDiagnostics.Resize("Swapchain", w, h);
+        D3D12MemoryDiagnostics.Resize("Swapchain", bw, bh);
         for (uint i = 0; i < FRAME_COUNT; i++)
         {
             if (target.BackBuffers[i] != null)
@@ -5265,15 +5370,59 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 target.BackBuffers[i] = null;
             }
         }
-        Check(target.SwapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, target.SwapChainFlags), "ResizeBuffers");
+        const uint E_OUTOFMEMORY_HR = 0x8007000E;
+        HRESULT hr = target.SwapChain->ResizeBuffers(FRAME_COUNT, bw, bh, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, target.SwapChainFlags);
+        uint firstHr = (uint)(int)hr;
+        int attempts = 1;
+        while ((uint)(int)hr == E_OUTOFMEMORY_HR && attempts <= ReallocOomRetries)
+        {
+            WaitForGpu();
+            _ = DwmFlush();
+            bw = w; bh = h;   // ask for the least
+            hr = target.SwapChain->ResizeBuffers(FRAME_COUNT, bw, bh, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, target.SwapChainFlags);
+            attempts++;
+        }
+        if (firstHr == E_OUTOFMEMORY_HR) LogFailedRealloc(target, w, h, firstHr, attempts, recovered: (int)hr >= 0);
+        if ((uint)(int)hr == E_OUTOFMEMORY_HR && !NoteIfDeviceLost())
+        {
+            InjectDeviceLost();   // a swapchain with no buffers: the recovery path rebuilds it (and everything else) from scratch
+            NoteIfDeviceLost();
+        }
+        Check(hr, "ResizeBuffers");
+        target.BufW = bw; target.BufH = bh;
+        target.ReallocCount++;
         target.PpEpoch++;   // new buffers hold nothing: the next frame composites and presents whole
         target.W = w; target.H = h;
         CreateRtvs(target);
+        // ResizeBuffers resets the source region to the whole buffer; a buffer with headroom presents only W x H of it.
+        if (target.BufW != w || target.BufH != h) Check(target.SwapChain->SetSourceSize(w, h), "SetSourceSize");
+        ApplySourceScale(target);
+        target.NoteBufferState();
         target.Backdrop?.SetBounds(w, h);   // resize the WUC backdrop/content visuals to match
         long resizeT2 = System.Diagnostics.Stopwatch.GetTimestamp();
         target.LastResizeWaitGpuMs = (resizeT1 - resizeT0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         target.LastResizeBuffersMs = (resizeT2 - resizeT1) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         EndTargetFrame();
+    }
+
+    /// <summary>The always-on line of a ResizeBuffers that ran out of memory (rate-limited to one a second per target), with the
+    /// adapter's video-memory picture at that moment: the evidence a later reader needs to tell a leak from a full segment.</summary>
+    private void LogFailedRealloc(D3D12Swapchain target, uint w, uint h, uint hr, int attempts, bool recovered)
+    {
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (target.FailedReallocLogQpc != 0 && now - target.FailedReallocLogQpc < System.Diagnostics.Stopwatch.Frequency) return;
+        target.FailedReallocLogQpc = now;
+        string mem = "";
+        if (_adapter3 != null)
+        {
+            DXGI_QUERY_VIDEO_MEMORY_INFO local, nonLocal;
+            if ((int)_adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP.DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local) >= 0
+                && (int)_adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP.DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonLocal) >= 0)
+                mem = $" localMB={local.CurrentUsage / 1048576.0:F1}/{local.Budget / 1048576.0:F1} nonLocalMB={nonLocal.CurrentUsage / 1048576.0:F1}/{nonLocal.Budget / 1048576.0:F1}";
+        }
+        Diag.Line($"[window.resize] ResizeBuffers({w}x{h}) failed: 0x{hr:X8} target={target.Ordinal} " +
+                  (recovered ? $"recovered at the exact size after {attempts - 1} drain(s)" : $"still failing after {attempts - 1} drain(s): the device is removed for recovery") +
+                  $" reallocations={target.ReallocCount} sourceSizeSteps={target.SourceSizeCount}{mem}");
     }
 
     public Size2 SizePx => _primarySwapchain is { } sc ? sc.SizePx : default;   // no primary yet: no size
@@ -5657,10 +5806,26 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal readonly RECT[] PpPresentRects = new RECT[RepaintDamageRegion.MaxRects];
     internal int PpPresentCount;
     internal bool PpNeedFullPresent;
+    // W x H is the PRESENTED size (the window's client px, what every frame renders into and the swapchain's DXGI source size).
+    // BufW x BufH is the size the buffers were ALLOCATED at (D3D12Device.Resize): larger than W x H only while a live resize keeps
+    // headroom, so a step that fits is a SetSourceSize instead of a ResizeBuffers. Render thread.
     internal uint W, H;
+    internal uint BufW, BufH;
+    internal long LastSizeChangeQpc;    // the last Resize that changed W x H (the live-resize detector, D3D12Device.Resize)
+    internal int ReallocCount;          // ResizeBuffers calls since creation (the [window.resize] line)
+    internal int SourceSizeCount;       // size changes served by SetSourceSize alone
+    internal long FailedReallocLogQpc;  // the failed-reallocation line's rate limit
+    private int _headroom;              // BufW x BufH exceeds W x H (read by the UI thread: HasSizeHeadroom)
+    internal void NoteBufferState() => System.Threading.Volatile.Write(ref _headroom, BufW > W || BufH > H ? 1 : 0);
+    /// <inheritdoc/>
+    public bool HasSizeHeadroom => System.Threading.Volatile.Read(ref _headroom) != 0;
+    /// <inheritdoc/>
+    public void TrimSizeHeadroom() => Device.TrimSizeHeadroom(this);
     // The last size-changing Resize's split (D3D12Device.Resize): the fence wait and the ResizeBuffers + RTV rebuild, ms.
     internal double LastResizeWaitGpuMs, LastResizeBuffersMs;
     public (double WaitGpuMs, double BuffersMs) LastResizeSplit => (LastResizeWaitGpuMs, LastResizeBuffersMs);
+    /// <inheritdoc/>
+    public (int Reallocations, int SourceSizeSteps, Size2 BufferPx) ResizeCounters => (ReallocCount, SourceSizeCount, new Size2(BufW, BufH));
     // FrameIndex, StencilDsv/StencilDsvHeap/StencilDsvW/StencilDsvH DELETED (Phase 1, detached-window-render-
     // isolation-implementation.md §3.1/§3.5): they were the Activate/StoreActive per-target mirror of state that now
     // lives ONLY on Frame (below) — never copied into (or back out of) a device working field, so a detached child's
