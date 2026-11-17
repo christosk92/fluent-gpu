@@ -1530,12 +1530,15 @@ internal sealed partial class SceneRecordingContext
     /// <summary>How many frames after its measure a culled run is still shaped (see <see cref="PrepCulledText"/>).</summary>
     private const uint PrepCulledFrames = 2;
 
-    private static void PrepCulledText(SceneRecordingSnapshot scene, NodeHandle node, in RectF b, in RectF local, in Affine2D world, DrawList prep)
+    private static void PrepCulledText(SceneRecordingSnapshot scene, NodeHandle node, in RectF b, in RectF local, in Affine2D world, DrawList prep,
+        bool inMotion)
     {
         TextMeasureEntry mc = scene.ResolveMeasureForWidth(node, b.W);
         // Measured on this frame or within the last two: a mount is often first recorded a frame or two after its measure (an entrance held
         // at t = 0 on a frame that is not shown, a cascade's first unit). Older runs were shaped when they were new, or are never drawn.
-        if (!mc.Valid || (uint)(scene.TextMeasureStamp - mc.Stamp) > PrepCulledFrames) return;
+        // Or carried by a moving ancestor (a pager's page sliding in, a panel sliding out): it is shaped on the motion's first recorded frame, the
+        // one that started it, not on a later frame of the motion where it first crosses into the clip.
+        if (!mc.Valid || (!inMotion && (uint)(scene.TextMeasureStamp - mc.Stamp) > PrepCulledFrames)) return;
         TextStyle style = scene.RecordingTextStyle(node);
         float effSize = mc.FitSize > 0f ? mc.FitSize : style.SizeDip;
         float effLine = mc.FitSize > 0f ? style.AtFitSize(mc.FitSize).LineHeight : style.LineHeight;
@@ -2497,7 +2500,7 @@ internal sealed partial class SceneRecordingContext
         // slides or scrolls in is then shaped with its mount, not first on a frame of the motion that brings it in (CompositeFrame.GlyphPrep).
         // A run measured earlier shapes nothing it does not draw, as before.
         if (hasOwnVisual && !ownVisible && p.VisualKind == VisualKind.Text && stats.Slicing && !p.Text.IsEmpty && b.W > 0f && b.H > 0f)
-            PrepCulledText(scene, node, in b, in local, in world, stats.Slices!.GlyphPrep);
+            PrepCulledText(scene, node, in b, in local, in world, stats.Slices!.GlyphPrep, inMotion);
 
         GradientSpec nodeGradient = default;
         bool hasNodeGradient = maybeSparsePaint && scene.TryGetGradient(node, out nodeGradient) && nodeGradient.Stops is { Length: > 0 };
