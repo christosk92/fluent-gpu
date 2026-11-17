@@ -153,6 +153,7 @@ public struct LayoutInput
     public FlexJustify Justify;   // container: main-axis distribution
     public FlexAlign AlignItems;  // container: default child cross alignment
     public bool Wrap;             // container: wrap children to multiple lines when the main axis is constrained
+    public bool WrapLive;         // container: a wrap row breaks its lines at its live width, never its structure width (BoxEl.WrapLive)
     // ZStack overlay child only (A3/layout.md MeasureZStack): ignore the stack's own constrained childAvail and
     // measure at PositiveInfinity instead, reporting the child's natural content width — e.g. a rail tooltip that
     // must report its real text width even though the rail itself stays pinned to a fixed, narrower ZStack. Packed

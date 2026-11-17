@@ -20,6 +20,9 @@ namespace FluentGpu.Hosting;
 //   • By its top, as CSS does. (Not by the bottom of a box straddling the window's top: in a bento board the tile beside it does
 //     not follow its bottom, and a clip reveal moves that bottom a frame after the layout did.)
 //   • When the anchor is gone (a tier crossing re-forms its subtree), by the deepest box of its chain still in place.
+//   • Never inside a box drawn through a live vertical scale (a size FLIP holding a re-formed card at its old size): its children are drawn
+//     through the scale, so their layout tops jump where the user sees them ease. That box is held by its own top. (A Zune capped card going
+//     from four columns to five at a tier commit moved the words under its cover 49 up in layout, and the page was shifted 49 at once.)
 //
 //  A shift moves every node by the same amount, and a FLIP seeded this frame holds its node where it was drawn in CONTENT space,
 //  which the shift would then carry away by the part of the anchor's move that is layout no hold took up (rows above the anchor
@@ -83,6 +86,10 @@ public sealed partial class AppHost
             while (k < a.Count && _scene.IsLive(a.Chain[k]) && _scene.Parent(a.Chain[k]) == (k == 0 ? content : a.Chain[k - 1])) k++;
             if (k == 0) continue;                                                                // the whole chain left the content
             k--;
+            // A box drawn through a live vertical scale (a size FLIP easing a re-formed card) holds by its own top: what is inside it is drawn
+            // through the scale, which the layout places under it do not show.
+            for (int q = 0; q < k; q++)
+                if (ScalingY(a.Chain[q])) { k = q; break; }
             if (!TopInContent(a.Chain[k], content, out float top)) continue;
             float moved = top - a.Tops[k];
             float viewportMoved = _scene.AbsoluteRect(node).Y - a.ViewportY;
@@ -171,12 +178,17 @@ public sealed partial class AppHost
     /// the last pose fed back while the render thread owns it.</summary>
     private float PresentedShiftY(NodeHandle n) => _anim.TryGetTrackValue(n, AnimChannel.TranslateY, out float v) ? v : 0f;
 
+    /// <summary>Whether <paramref name="n"/> is drawn through a live vertical scale (a size FLIP holding a re-formed box at its old size while
+    /// it eases to its new one): the boxes inside it are drawn through that scale, so their layout tops say nothing of where the user sees
+    /// them, and the anchor neither descends into it nor follows a box inside it.</summary>
+    private bool ScalingY(NodeHandle n) => _anim.TryGetTrackValue(n, AnimChannel.ScaleY, out float s) && MathF.Abs(s - 1f) > 1e-4f;
+
     /// <summary>The anchor for the window [<paramref name="viewTop"/>, <paramref name="viewBottom"/>) under <paramref name="cur"/> (its top
     /// <paramref name="curTop"/> in content space), written to <paramref name="a"/>'s chain from <paramref name="depth"/> on with each box's
     /// drawn top; returns the chain's length (<paramref name="depth"/>: nothing found). In reading order, the first child that starts in the
     /// window is the anchor. A child that straddles the window's top is descended into, and passed over when nothing inside it reaches the
     /// window (its visible part is padding or a backdrop: what follows it is what shows). A straddling leaf or nested scroller is the anchor
-    /// only when nothing after it in the row starts in the window.</summary>
+    /// only when nothing after it in the row starts in the window; so is one drawn through a live vertical scale (<see cref="ScalingY"/>).</summary>
     private int PickAnchor(NodeHandle cur, float curTop, int depth, float viewTop, float viewBottom, ScrollAnchor a)
     {
         if (depth >= MaxAnchorDepth) return depth;
@@ -194,7 +206,7 @@ public sealed partial class AppHost
             a.Tops[depth] = t;
             a.RelY[depth] = RelYOf(c);
             if (t >= viewTop) return depth + 1;   // starts in the window
-            bool leaf = _scene.FirstChild(c).IsNull || (_scene.Flags(c) & NodeFlags.Scrollable) != 0;
+            bool leaf = _scene.FirstChild(c).IsNull || (_scene.Flags(c) & NodeFlags.Scrollable) != 0 || ScalingY(c);
             if (!leaf)
             {
                 int found = PickAnchor(c, t, depth + 1, viewTop, viewBottom, a);
