@@ -205,6 +205,10 @@ public readonly ref struct CompositeFrame
     public readonly ReadOnlySpan<TileOpRec> InlineOps;
     /// <summary>Two per row of <see cref="Slices"/>: the start and count of its range in <see cref="InlineOps"/> (count −1 = none).</summary>
     public readonly ReadOnlySpan<int> InlineOpRanges;
+    /// <summary>Glyph runs the backend SHAPES this turn without drawing them (<c>DrawGlyphRun</c> ops, SliceRecorder.GlyphPrep): text the
+    /// recorder walked but culled outside its clip. Text that slides or scrolls in is then shaped on the frame it was recorded (a render
+    /// frame), never first on a frame of the motion that brings it in (a shaping miss rents and bakes: SKILL rule 7). Never drawn.</summary>
+    public readonly ReadOnlySpan<byte> GlyphPrep;
 
     public CompositeFrame(in FrameInfo info, ReadOnlySpan<SliceRow> slices, ReadOnlySpan<byte> sliceStreams,
         ReadOnlySpan<TileRaster> rasters, ReadOnlySpan<TilePlacement> placements, ReadOnlySpan<CompositeItem> items,
@@ -216,13 +220,14 @@ public readonly ref struct CompositeFrame
         PresentParams present, ReadOnlySpan<SliceSpan> sliceSpans,
         ReadOnlySpan<PushLayerCmd> itemLayers, Span<byte> rasterDone, ReadOnlySpan<PushLayerCmd> itemInherited = default,
         Span<byte> rasterFlags = default, Span<byte> itemFlags = default, ReadOnlySpan<int> trimSurfaces = default,
-        int ownerToken = 0, ReadOnlySpan<TileOpRec> inlineOps = default, ReadOnlySpan<int> inlineOpRanges = default)
+        int ownerToken = 0, ReadOnlySpan<TileOpRec> inlineOps = default, ReadOnlySpan<int> inlineOpRanges = default,
+        ReadOnlySpan<byte> glyphPrep = default)
     {
         Info = info; Slices = slices; SliceStreams = sliceStreams; Rasters = rasters; Placements = placements;
         Items = items; Present = present; SliceSpans = sliceSpans;
         ItemLayers = itemLayers; RasterDone = rasterDone; ItemInherited = itemInherited;
         RasterFlags = rasterFlags; ItemFlags = itemFlags; TrimSurfaces = trimSurfaces; OwnerToken = ownerToken;
-        InlineOps = inlineOps; InlineOpRanges = inlineOpRanges;
+        InlineOps = inlineOps; InlineOpRanges = inlineOpRanges; GlyphPrep = glyphPrep;
     }
 
     /// <summary>Row <paramref name="row"/>'s inline op records (slice px relative to its grid, offset by

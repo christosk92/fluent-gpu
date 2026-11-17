@@ -56,6 +56,9 @@ public struct TextMeasureEntry
     /// (<c>SceneStore.StructureWidth</c>), not at its box: the recorder draws them at that width (aligned in the box), so the run keeps
     /// its landing breaks while its box eases.</summary>
     public bool Structured;
+    /// <summary>The frame this row was measured on (<see cref="SceneStore.TextMeasureStamp"/>): the recorder shapes a culled run measured on
+    /// the frame it records (SceneRecorder.PrepCulledText).</summary>
+    public int Stamp;
 
     public readonly bool Matches(StringId text, in TextStyle style, float maxW, int fontEpoch = 0)
         => Valid && Text == text && MaxW == maxW && FontEpoch == fontEpoch && Style == style;

@@ -1525,6 +1525,34 @@ internal sealed partial class SceneRecordingContext
     private static bool ScaledCompositeLayer(in RecordAccumulator stats, bool isSliceSelf, int selfSlot)
         => isSliceSelf && stats.Slicing && selfSlot > SliceRecorder.RootSlot && stats.Slices!.IsScalable(selfSlot);
 
+    /// <summary>A culled text node's glyph run, as the text branch of <see cref="WalkCore"/> would shape it (the fit size, the line box, a
+    /// structured run's landing width), written to <paramref name="prep"/> for the backend to shape without drawing.</summary>
+    /// <summary>How many frames after its measure a culled run is still shaped (see <see cref="PrepCulledText"/>).</summary>
+    private const uint PrepCulledFrames = 2;
+
+    private static void PrepCulledText(SceneRecordingSnapshot scene, NodeHandle node, in RectF b, in RectF local, in Affine2D world, DrawList prep)
+    {
+        TextMeasureEntry mc = scene.ResolveMeasureForWidth(node, b.W);
+        // Measured on this frame or within the last two: a mount is often first recorded a frame or two after its measure (an entrance held
+        // at t = 0 on a frame that is not shown, a cascade's first unit). Older runs were shaped when they were new, or are never drawn.
+        if (!mc.Valid || (uint)(scene.TextMeasureStamp - mc.Stamp) > PrepCulledFrames) return;
+        TextStyle style = scene.RecordingTextStyle(node);
+        float effSize = mc.FitSize > 0f ? mc.FitSize : style.SizeDip;
+        float effLine = mc.FitSize > 0f ? style.AtFitSize(mc.FitSize).LineHeight : style.LineHeight;
+        RectF run = local;
+        if (mc.Structured && MathF.Abs(mc.MaxW - local.W) > 0.01f)
+        {
+            float slack = local.W - mc.MaxW;
+            float shift = style.Align == TextAlign.Center ? slack * 0.5f : style.Align == TextAlign.End ? slack : 0f;
+            run = new RectF(local.X + shift, local.Y, mc.MaxW, local.H);
+        }
+        ref readonly NodePaint p = ref scene.Paint(node);
+        prep.DrawGlyphRun(run, default, p.Text, style.FontFamily, effSize, style.Weight,
+            (int)style.Wrap, (int)style.Trim, style.MaxLines,
+            style.CharSpacing, effLine, (int)style.Stacking, (int)style.LineBounds,
+            world, 0f, 0, style.SpanRunId, typography: TextTypography.Pack(in style));
+    }
+
     private SpanRecordResult WalkCore(SceneRecordingSnapshot scene, DrawList dl, ImageRecordingSnapshot? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                                          int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
                                          float parentScaleX, float parentScaleY, bool parentInMotion,
@@ -2464,6 +2492,12 @@ internal sealed partial class SceneRecordingContext
         // it has none). One handle compare per node per frame, and DragGhost is Null except during a lifted drag.
         if (node == scene.DragGhost && scene.DragGhostBackplate is { } dragBackplate && overlapsRecordClip)
             dl.FillRoundRect(local, p.Corners, dragBackplate, world, opacity, key);
+
+        // Text culled outside the clip is still SHAPED (never drawn) when it was just measured (a mount, a new text or width): a run that
+        // slides or scrolls in is then shaped with its mount, not first on a frame of the motion that brings it in (CompositeFrame.GlyphPrep).
+        // A run measured earlier shapes nothing it does not draw, as before.
+        if (hasOwnVisual && !ownVisible && p.VisualKind == VisualKind.Text && stats.Slicing && !p.Text.IsEmpty && b.W > 0f && b.H > 0f)
+            PrepCulledText(scene, node, in b, in local, in world, stats.Slices!.GlyphPrep);
 
         GradientSpec nodeGradient = default;
         bool hasNodeGradient = maybeSparsePaint && scene.TryGetGradient(node, out nodeGradient) && nodeGradient.Stops is { Length: > 0 };

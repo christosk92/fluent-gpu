@@ -324,6 +324,7 @@ public sealed unsafe partial class D3D12Device
         _glyphs!.SyncBodyFontNow();   // a body-font change evicts every run: the skip below must already see it
         int epoch = _glyphs.RunCacheEpoch;
         PrepareCompositeRows(in frame, stamp, allDirect, epoch, skipPrepared: true);
+        if (!frame.GlyphPrep.IsEmpty) PrepareGlyphs(frame.GlyphPrep);   // culled text, shaped on the frame it was recorded (never drawn)
         if (_glyphs.RunCacheEpoch != epoch)
             PrepareCompositeRows(in frame, -stamp, allDirect, _glyphs.RunCacheEpoch, skipPrepared: false);   // runs left mid-pass
     }

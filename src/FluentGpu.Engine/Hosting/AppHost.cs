@@ -6912,6 +6912,7 @@ public sealed partial class AppHost : IDisposable
                 _renderSeam.TryReclaimSceneCapacity(_scene, _images, _strings,
                     _connected.Detached, _popupWindows, _anim);
 
+            _scene.TextMeasureStamp++;   // this frame's text measures (TextMeasureEntry.Stamp): the recorder shapes the culled ones now
             long before = GC.GetAllocatedBytesForCurrentThread();
             _rebindFlushAllocBytesThisFrame = 0;   // P0: FrameStats.RebindFlushAllocBytes accumulates across this Paint's FlushRebindsToQuiescence call(s)
             _rxUnitsThisFrame = 0; _rxLongestTicksThisFrame = 0; _rxLongestUnitThisFrame = null;   // FrameStats.Reactive* (every flush of this Paint)

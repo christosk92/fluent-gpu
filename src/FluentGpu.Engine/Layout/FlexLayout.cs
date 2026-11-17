@@ -1027,7 +1027,7 @@ public sealed partial class FlexLayout
                     Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h),
                     FitSize = fit, FontEpoch = fontEpoch,
                     UnderlineY = m.UnderlineY, UnderlineThickness = m.UnderlineThickness, StrikeY = m.StrikeY,
-                    FirstLineWidth = m.FirstLineWidth, Structured = structured,
+                    FirstLineWidth = m.FirstLineWidth, Structured = structured, Stamp = _scene.TextMeasureStamp,
                 });
             }
             // C1: unbounded maxW = the run does not depend on the offer; otherwise it is the same at any maxW in [laid width, maxW]. A run
