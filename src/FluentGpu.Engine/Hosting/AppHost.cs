@@ -2876,6 +2876,7 @@ public sealed partial class AppHost : IDisposable
         }
         _renderPresentCount++;
         NotePresented(rf.PublishSeq);
+        _device.TurnPresented();   // after the present: restock what the turn drew down (IGpuDevice.TurnPresented)
         // Per target: this host's own GPU sample feeds this host's own depth policy, applied to this host's own
         // swapchain (a pop-out's GPU time never retunes the main window's present queue).
         ChoosePresentQueueDepth();
@@ -7812,6 +7813,8 @@ public sealed partial class AppHost : IDisposable
                 }
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmit = Stopwatch.GetTimestamp();
+                // The inline host presented on this thread (no render thread): restock once the hot phases are closed.
+                if (_renderThread is null && _parentRenderThread is null) _device.TurnPresented();
             }
             if (FrameLedger.Enabled) _ledgerAlloc.Submit = GC.GetAllocatedBytesForCurrentThread();
             if (s_allocDiag) { db = Probe(SegSubmit, db, dt0); dt0 = Stopwatch.GetTimestamp(); }

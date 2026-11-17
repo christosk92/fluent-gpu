@@ -309,6 +309,30 @@ internal sealed unsafe class GlyphRenderer : IDisposable
         return pools;
     }
     private const int RestingPooledArraysPerBucket = 8;
+    // After a present (D3D12Device.TurnPresented), the buckets text runs come in (1..64 glyphs) are topped back up to their resting
+    // depth, a few arrays a turn: a burst of new text (a mount, a page sliding in for the first time) drains them, and the next
+    // first-shown text used to allocate its quads mid-frame, on a steady animation frame. Restocking after the present moves
+    // that allocation off the frame; a bigger run (a paragraph) still allocates on its first shape.
+    private const int RestockBuckets = 7, RestockPerTurn = 16;
+
+    /// <summary>Top the small quad buckets back up to their resting depth, at most <see cref="RestockPerTurn"/> arrays a call (after a
+    /// present, D3D12Device.TurnPresented). Inside the pool's byte cap; a no-op once stocked.</summary>
+    internal void RestockQuadPool()
+    {
+        int budget = RestockPerTurn;
+        for (int b = 0; b < RestockBuckets && budget > 0; b++)
+        {
+            var stack = _quadPool[b];
+            while (stack.Count < RestingPooledArraysPerBucket && budget > 0)
+            {
+                long bytes = (long)(1 << b) * Unsafe.SizeOf<ShapedGlyph>();
+                if (bytes > MaxPooledQuadBytes - _pooledQuadBytes - _pooledColorBytes) return;
+                stack.Push(new ShapedGlyph[1 << b]);
+                _pooledQuadBytes += bytes;
+                budget--;
+            }
+        }
+    }
     private const int DemandSweeps = 4;
     private readonly int[] _quadDemand = new int[14 * DemandSweeps], _colorDemand = new int[14 * DemandSweeps];
     private readonly int[] _quadRentsSince = new int[14], _colorRentsSince = new int[14];
