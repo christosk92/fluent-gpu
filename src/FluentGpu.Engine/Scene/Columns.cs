@@ -490,6 +490,7 @@ public record struct ScrollState
     public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
     public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
     public bool  FitContentWidth;         // horizontal: content measured against the viewport width; viewport hugs min(content, avail)
+    public bool  Anchoring;               // ScrollEl.Anchoring: hold what is in view in place when layout above it changes (AppHost.ScrollAnchor.cs)
     /// <summary>The scroller's row pitch in DIP (a <c>Virtual.List</c> stamps its item extent; 0 = no hint). Written
     /// by the reconciler from <c>Element.ScrollLineDip</c>; a config column.</summary>
     public float LineDip;

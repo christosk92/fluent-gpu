@@ -7433,6 +7433,7 @@ public sealed partial class AppHost : IDisposable
             // self-gates mouse/pen + a valid position + no touch pan/item-drag, and no-ops unless the hit actually CHANGED.
             else if (layoutNeeded) _dispatcher.RefreshHoverAfterLayoutMove();
 
+            AnchorScrolls();                                   // 7.65 scroll anchoring on the frame's live layout (AppHost.ScrollAnchor.cs)
             PoseScrollUi();                                    // 7.7 UI-side content pose + scroll effects (hit-test/publish truth; the render poser re-poses per tick)
             // 7.8 drop-spotlight re-collect. AFTER reconcile/layout/realize + the scroll writes above and BEFORE record,
             // so the scrim's cutouts describe the bindings and the geometry THIS frame paints. A recycling virtual list
