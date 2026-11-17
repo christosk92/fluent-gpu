@@ -76,7 +76,7 @@ public sealed class LedgerSnapshot
 /// little-endian as they sit in memory. Compact (no text) and lossless; <see cref="LedgerSnapshot.WriteCsv"/> is the readable form.</summary>
 public static class FrameLedgerFile
 {
-    public const int Version = 4;   // v3 (UI: the UI frame's work drivers) + v3 (COMP: the GPU frame's work census) merged
+    public const int Version = 5;   // v5: the UI frame's capture split   // v3 (UI: the UI frame's work drivers) + v3 (COMP: the GPU frame's work census) merged
     private static ReadOnlySpan<byte> Magic => "FGLEDGER"u8;
 
     public static void Write(Stream s, LedgerSnapshot snap)
@@ -154,7 +154,7 @@ public static class FrameLedgerCsv
     public static string Ui(LedgerSnapshot s)
     {
         var sb = new StringBuilder(64 + s.Ui.Length * 220);
-        sb.AppendLine("seq,startMs,pumpMs,paintMs,flushMs,layoutMs,animMs,recordMs,submitMs,endMs,frameMs,waitStartMs,waitMs,waitRequestedMs,waitKind,exit,flags,publishSeq,uiCpuMs,processCpuMs,allocBytes,gc0,gc1,gc2,gcPauseMs,nodes,drawNodes,slices,components,damageCoverage,damageRects,fullReason,presentedTotal,missedVsyncsTotal,wakeMask,uiCpuTimeMs,allocFlush,allocLayout,allocAnim,allocRecord,allocSubmit,nodesCreated,nodesFreed,compsMounted,measures,arranges,textShapes,textMisses,rxUnits,bindFires,bindWrites,scopedRelayouts,rootEscapes,capReachable,capCopied,captureMs,captureFull,captureParity");
+        sb.AppendLine("seq,startMs,pumpMs,paintMs,flushMs,layoutMs,animMs,recordMs,submitMs,endMs,frameMs,waitStartMs,waitMs,waitRequestedMs,waitKind,exit,flags,publishSeq,uiCpuMs,processCpuMs,allocBytes,gc0,gc1,gc2,gcPauseMs,nodes,drawNodes,slices,components,damageCoverage,damageRects,fullReason,presentedTotal,missedVsyncsTotal,wakeMask,uiCpuTimeMs,allocFlush,allocLayout,allocAnim,allocRecord,allocSubmit,nodesCreated,nodesFreed,compsMounted,measures,arranges,textShapes,textMisses,rxUnits,bindFires,bindWrites,scopedRelayouts,rootEscapes,capReachable,capCopied,captureMs,captureFull,captureParity,capSceneMs,capConfigMs,capImagesMs,capAnimMs,clientW");
         LedgerUiFrame prev = default;
         for (int i = 0; i < s.Ui.Length; i++)
         {
@@ -183,7 +183,8 @@ public static class FrameLedgerCsv
               .Append(r.ReactiveUnits).Append(',').Append(r.BindFires).Append(',').Append(r.BindWrites).Append(',').Append(r.ScopedRelayouts).Append(',')
               .Append(r.RootEscapes).Append(',').Append(r.CaptureReachable).Append(',').Append(r.CaptureCopied).Append(',');
             T(sb, r.CaptureMs);
-            sb.Append(((FluentGpu.Scene.CaptureFullReason)r.CaptureFull).ToString()).Append(',').Append(r.CaptureParity);
+            sb.Append(((FluentGpu.Scene.CaptureFullReason)r.CaptureFull).ToString()).Append(',').Append(r.CaptureParity).Append(',');
+            T(sb, r.CaptureSceneMs); T(sb, r.CaptureConfigMs); T(sb, r.CaptureImagesMs); T(sb, r.CaptureAnimMs); sb.Append(r.ClientW);
             sb.AppendLine();
             prev = r;
         }
