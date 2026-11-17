@@ -6414,6 +6414,7 @@ public sealed partial class TreeReconciler
                 ss.Orientation = s.Horizontal ? (byte)1 : (byte)0;
                 ss.ContentSized = s.ContentSized;
                 ss.FitContentWidth = s.FitContentWidth;
+                ss.Anchoring = s.Anchoring;
                 ss.LineDip = s.ScrollLineDip > 0f ? s.ScrollLineDip : 0f;   // wheel line height hint (S6); 0 = viewport rule
                 // Pinch-zoom opt-in (Input owns the live ZoomFactor — re-reconciling the element must NOT reset a
                 // mid-gesture / committed zoom, so only the declared opt-in + clamp bounds are written here).

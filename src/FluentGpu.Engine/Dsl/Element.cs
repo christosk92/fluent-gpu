@@ -1172,6 +1172,12 @@ public sealed record ScrollEl : Element
     /// table frame (layout.md §7.2).</summary>
     public bool FitContentWidth { get; init; }
 
+    /// <summary>Scroll anchoring (CSS <c>overflow-anchor</c>), vertical, non-virtual scrollers: when layout ABOVE what the user is
+    /// looking at changes size (a section that grows at a tier edge, a shelf that stands up, content that lands late), the offset
+    /// follows so the first thing in view stays where it is on screen. Never while the user scrolls, drags or flings, never against a
+    /// programmatic scroll, never at the top. Default off: a scroller opts in.</summary>
+    public bool Anchoring { get; init; }
+
     /// <summary>Opt into pinch-zoom (WinUI <c>ScrollingZoomMode.Enabled</c> — default off, mirroring
     /// ScrollPresenter's <c>s_defaultZoomMode = Disabled</c>). When set, a SECOND touch contact over the viewport scales
     /// the content about the gesture midpoint (transform-only; never a relayout) and a single-finger remainder continues
