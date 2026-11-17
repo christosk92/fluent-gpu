@@ -463,6 +463,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
     private const uint WsMaximize = 0x01000000;
     private const uint WsMaximizeBox = 0x00010000, WsSysMenu = 0x00080000, WsExTopmost = 0x00000008, WsExToolWindow = 0x00000080;
+    private const uint WsExNoActivate = 0x08000000, WsExAppWindow = 0x00040000;
+    /// <summary>WindowDesc.NoActivate: shows never activate, an activation redirect never brings the window up.</summary>
+    private bool _noActivate;
+    /// <summary>The window was created never to take the foreground (WindowDesc.NoActivate).</summary>
+    internal bool NeverActivates => _noActivate;
     private const int GWL_STYLE = -16;
     private const int GWL_EXSTYLE = -20;
     private const uint WM_GETMINMAXINFO = 0x0024;
@@ -829,8 +834,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
         // A custom-frame TOOL window keeps no system menu: DWM otherwise draws its small caption close button over the
         // reclaimed caption strip (the client's top-right corner) — the engine draws all the chrome there is.
         _style = StyleFor(desc.Resizable, desc.ToolWindow, desc.CustomFrame);
+        _noActivate = desc.NoActivate;
+        // NoActivate: WS_EX_NOACTIVATE keeps a click (and the system) from activating it; WS_EX_APPWINDOW keeps its taskbar button.
         _exStyle = (desc.Composited ? (uint)WS_EX_NOREDIRECTIONBITMAP : 0u)
-            | (desc.Topmost ? WsExTopmost : 0u) | (desc.ToolWindow ? WsExToolWindow : 0u);
+            | (desc.Topmost ? WsExTopmost : 0u) | (desc.ToolWindow ? WsExToolWindow : 0u)
+            | (desc.NoActivate ? WsExNoActivate | WsExAppWindow : 0u);
         _self = GCHandle.Alloc(this);
 
         HINSTANCE hinst = GetModuleHandleW(null);
@@ -1077,7 +1085,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
 
     public void Show()
     {
-        ShowWindow(_hwnd, SW_SHOW);
+        ShowWindow(_hwnd, _noActivate ? SW_SHOWNOACTIVATE : SW_SHOW);
         UpdateWindow(_hwnd);
     }
 
@@ -2846,7 +2854,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow, IInputPacingSo
                     string uri = cds->cbData >= sizeof(char)
                         ? new string((char*)cds->lpData, 0, (int)(cds->cbData / sizeof(char)))
                         : string.Empty;
-                    SetForegroundWindow(hWnd);   // bring our window up (the sender granted us foreground via ASFW_ANY)
+                    if (!_noActivate) SetForegroundWindow(hWnd);   // bring our window up (the sender granted us foreground via ASFW_ANY); never a NoActivate window
                     Win32App.RaiseActivationRedirected(uri);
                     result = (LRESULT)1;   // TRUE = handled (WM_COPYDATA convention)
                     return true;
