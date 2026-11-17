@@ -8,7 +8,7 @@ namespace FluentGpu.Hosting;
 //  Scroll anchoring (ScrollEl.Anchoring, in the spirit of CSS overflow-anchor): what the user is looking at stays where it is
 //  in the window when layout above it changes size. Per opted-in vertical scroller the host keeps one ANCHOR: the first node in
 //  reading order that starts inside the viewport (descending through the node that straddles its top, never into a nested
-//  scroller), with the chain of boxes from the content down to it and each one's drawn top in content space. Once per frame
+//  scroller; a straddling box with nothing inside it in view is passed over), with the chain of boxes from the content down to it and each one's drawn top in content space. Once per frame
 //  after the frame's layout, the anchor's new place is compared with the remembered one and the scroll's frame is shifted by the
 //  difference (ScrollHandle.ShiftFrame: a structural rebase that moves with any plan, never a motion), then a fresh anchor is chosen.
 //
@@ -17,8 +17,8 @@ namespace FluentGpu.Hosting;
 //     at its old place has not moved for the user, so it is not compensated; a glide that carries it is followed.
 //   • In the WINDOW: a viewport whose top moved (a header above it changing height at the same tier edge) carries the content
 //     with it, so that move is taken back too.
-//   • By its bottom edge when it starts above the window (only its lower part shows; a list that adds a row above the one in
-//     view grows at its top), else by its top.
+//   • By its top, as CSS does. (Not by the bottom of a box straddling the window's top: in a bento board the tile beside it does
+//     not follow its bottom, and a clip reveal moves that bottom a frame after the layout did.)
 //   • When the anchor is gone (a tier crossing re-forms its subtree), by the deepest box of its chain still in place.
 //
 //  A shift moves every node by the same amount, and a FLIP seeded this frame holds its node where it was drawn in CONTENT space,
@@ -41,7 +41,7 @@ public sealed partial class AppHost
 {
     /// <summary>How deep the anchor search descends. A Home tile is 30-odd wrappers deep before its rows (Zune's releases list: 32), so the
     /// bound is a guard against a cycle, not a budget: the walk stops at the first node that starts in the window.</summary>
-    private const int MaxAnchorDepth = 256;
+    private const int MaxAnchorDepth = 256;   // recursion depth too: 256 frames of a small method
 
     /// <summary>One scroller's anchor: the chain from the content's child down to the anchor, each box's drawn top in content space when
     /// chosen, and the edge the anchor is held by.</summary>
@@ -51,10 +51,7 @@ public sealed partial class AppHost
         public readonly float[] Tops = new float[MaxAnchorDepth];
         public readonly float[] RelY = new float[MaxAnchorDepth];     // each box's layout top in its parent (with the parent's flow shift)
         public readonly float[] Unheld = new float[MaxAnchorDepth];   // scratch: the layout moves below each level no FLIP hold took up
-        public float AnchorH;      // the anchor's drawn height when chosen
         public int Count;          // 0: no anchor
-        public bool ByBottom;      // the anchor (Chain[Count - 1]) is held by its bottom edge
-        public float Edge;         // the anchor's held edge in content space
         public double Offset;      // the scroll offset when chosen: a different one next pass means somebody else scrolled
         public float ViewportY;    // the scroller's window-space top when chosen
     }
@@ -87,10 +84,7 @@ public sealed partial class AppHost
             if (k == 0) continue;                                                                // the whole chain left the content
             k--;
             if (!TopInContent(a.Chain[k], content, out float top)) continue;
-            bool anchorItself = k == a.Count - 1;
-            float moved = anchorItself
-                ? (a.ByBottom ? top + DrawnH(a.Chain[k]) : top) - a.Edge
-                : top - a.Tops[k];
+            float moved = top - a.Tops[k];
             float viewportMoved = _scene.AbsoluteRect(node).Y - a.ViewportY;
             float delta = moved + viewportMoved;
             if (MathF.Abs(delta) < 0.01f) continue;   // every fraction: the anchor is chosen afresh each frame, so a skipped one is lost and the content drifts
@@ -101,7 +95,7 @@ public sealed partial class AppHost
             // each level of the chain, the sum of those unheld moves. A glide's own step on the chain (a hold easing home) is no such part:
             // the held node beside it glides alike.
             if (_freshHolds.Count == 0) continue;
-            float unheld = anchorItself && a.ByBottom ? DrawnH(a.Chain[k]) - a.AnchorH : 0f;
+            float unheld = 0f;
             for (int c = k; c >= 0; c--)
             {
                 NodeHandle m = a.Chain[c];
@@ -127,13 +121,7 @@ public sealed partial class AppHost
             a.Offset = sc.Offset;
             a.ViewportY = _scene.AbsoluteRect(node).Y;
             float viewTop = (float)sc.Offset, viewBottom = viewTop + sc.ViewportH;
-            a.Count = PickAnchor(sc.ContentNode, viewTop, viewBottom, a);
-            if (a.Count == 0) continue;
-            NodeHandle anchor = a.Chain[a.Count - 1];
-            float t = a.Tops[a.Count - 1], bottom = t + DrawnH(anchor);
-            a.ByBottom = t < viewTop && bottom <= viewBottom;
-            a.AnchorH = bottom - t;
-            a.Edge = a.ByBottom ? bottom : t;
+            a.Count = PickAnchor(sc.ContentNode, 0f, 0, viewTop, viewBottom, a);
         }
         return shifted;
     }
@@ -178,57 +166,47 @@ public sealed partial class AppHost
         return _scene.Bounds(n).Y + (p.IsNull ? 0f : _scene.Paint(p).ChildShiftY);
     }
 
-    /// <summary>The height <paramref name="n"/> is drawn at: a size reveal's presented height while one runs, else its layout height.</summary>
-    private float DrawnH(NodeHandle n)
-    {
-        float ph = _scene.Paint(n).PresentedH;
-        return float.IsNaN(ph) ? _scene.Bounds(n).H : ph;
-    }
-
     /// <summary>How far <paramref name="n"/>'s live translate row holds it from its layout place: a FLIP seeded this frame holds a moved node
     /// where it was drawn (and that is where the user sees it), a glide carries it from there. The row's UI value: exact on its seed frame,
     /// the last pose fed back while the render thread owns it.</summary>
     private float PresentedShiftY(NodeHandle n) => _anim.TryGetTrackValue(n, AnimChannel.TranslateY, out float v) ? v : 0f;
 
-    /// <summary>The anchor for the window [<paramref name="viewTop"/>, <paramref name="viewBottom"/>) of the content, written to
-    /// <paramref name="a"/>'s chain (the content's child first) with each box's drawn top; returns the chain's length (0: nothing in view).
-    /// At each level, of the children that reach into the window: the first with content of its own, else a leaf that starts in the
-    /// window, else a straddling leaf; while the choice straddles the window's top the walk descends into it, stopping at a node that
-    /// starts inside the window, a leaf, or a nested scroller.</summary>
-    private int PickAnchor(NodeHandle content, float viewTop, float viewBottom, ScrollAnchor a)
+    /// <summary>The anchor for the window [<paramref name="viewTop"/>, <paramref name="viewBottom"/>) under <paramref name="cur"/> (its top
+    /// <paramref name="curTop"/> in content space), written to <paramref name="a"/>'s chain from <paramref name="depth"/> on with each box's
+    /// drawn top; returns the chain's length (<paramref name="depth"/>: nothing found). In reading order, the first child that starts in the
+    /// window is the anchor. A child that straddles the window's top is descended into, and passed over when nothing inside it reaches the
+    /// window (its visible part is padding or a backdrop: what follows it is what shows). A straddling leaf or nested scroller is the anchor
+    /// only when nothing after it in the row starts in the window.</summary>
+    private int PickAnchor(NodeHandle cur, float curTop, int depth, float viewTop, float viewBottom, ScrollAnchor a)
     {
-        int count = 0;
-        NodeHandle cur = content;
-        float curTop = 0f;
-        for (int depth = 0; depth < MaxAnchorDepth; depth++)
+        if (depth >= MaxAnchorDepth) return depth;
+        float shift = _scene.Paint(cur).ChildShiftY;
+        NodeHandle fallback = NodeHandle.Null;
+        float fallbackTop = 0f;
+        for (var c = _scene.FirstChild(cur); !c.IsNull; c = _scene.NextSibling(c))
         {
-            NodeHandle next = NodeHandle.Null;
-            float nextTop = 0f;
-            int nextRank = -1;
-            float shift = _scene.Paint(cur).ChildShiftY;
-            for (var c = _scene.FirstChild(cur); !c.IsNull; c = _scene.NextSibling(c))
+            if ((_scene.Flags(c) & NodeFlags.Visible) == 0) continue;
+            ref RectF b = ref _scene.Bounds(c);
+            if (b.H <= 0f) continue;
+            float t = curTop + b.Y + PresentedShiftY(c) + shift;
+            if (t + b.H <= viewTop || t >= viewBottom) continue;
+            a.Chain[depth] = c;
+            a.Tops[depth] = t;
+            a.RelY[depth] = RelYOf(c);
+            if (t >= viewTop) return depth + 1;   // starts in the window
+            bool leaf = _scene.FirstChild(c).IsNull || (_scene.Flags(c) & NodeFlags.Scrollable) != 0;
+            if (!leaf)
             {
-                if ((_scene.Flags(c) & NodeFlags.Visible) == 0) continue;
-                ref RectF b = ref _scene.Bounds(c);
-                if (b.H <= 0f) continue;
-                float t = curTop + b.Y + PresentedShiftY(c) + shift;
-                if (t + b.H <= viewTop || t >= viewBottom) continue;
-                // A childless box that straddles the window's top is air or a plate (a page gutter, a card's backdrop): what is drawn over
-                // it can move while it stays. So a box with content of its own wins; then a leaf that starts in the window (a line of text);
-                // a straddling leaf only when nothing else in this row reaches the window.
-                bool container = !_scene.FirstChild(c).IsNull;
-                int rank = container ? 2 : t >= viewTop ? 1 : 0;
-                if (next.IsNull || rank > nextRank) { next = c; nextTop = t; nextRank = rank; }
-                if (container) break;
+                int found = PickAnchor(c, t, depth + 1, viewTop, viewBottom, a);
+                if (found > depth + 1) return found;
+                continue;   // nothing inside it reaches the window
             }
-            if (next.IsNull) break;
-            a.Chain[count] = next;
-            a.Tops[count] = nextTop;
-            a.RelY[count] = RelYOf(next);
-            count++;
-            if (nextTop >= viewTop || (_scene.Flags(next) & NodeFlags.Scrollable) != 0 || _scene.FirstChild(next).IsNull) break;
-            cur = next; curTop = nextTop;
+            if (fallback.IsNull) { fallback = c; fallbackTop = t; }
         }
-        return count;
+        if (fallback.IsNull) return depth;
+        a.Chain[depth] = fallback;
+        a.Tops[depth] = fallbackTop;
+        a.RelY[depth] = RelYOf(fallback);
+        return depth + 1;
     }
 }
