@@ -64,6 +64,7 @@ public sealed class VideoSurfaceRegistry
         // pumped at. Held as opaque data — the registry never interprets them; RequestGeometryPumps does the compare.
         public NodeHandle GeomNode;
         public RectF GeomRect;
+        public RectF GeomClip;   // GeomRect cut by its clipping ancestors as presented (a Reveal row easing one moves only this)
     }
 
     private readonly Entry[] _entries = new Entry[MaxSurfaces];
@@ -578,6 +579,7 @@ public sealed class VideoSurfaceRegistry
         if (e.GeomNode == node) return;
         e.GeomNode = node;
         e.GeomRect = default;   // force the next compare to fire, so a re-pointed node re-places immediately
+        e.GeomClip = default;
     }
 
     /// <summary>Request a pump for every tracked surface whose absolute rect MOVED since its last pump. Called by the
@@ -598,9 +600,39 @@ public sealed class VideoSurfaceRegistry
             // The TRANSFORMED rect: a scale on the node or an ancestor (an entrance, a page transition, a zoom FLIP) moves
             // and resizes the painted hole with no layout change, and the owner places the surface from this same rect.
             RectF now = scene.AbsoluteTransformedRect(e.GeomNode);
-            if (now == e.GeomRect) continue;
+            // A clip that moves while the node does not (an ancestor's Reveal row easing its presented width) changes what the surface may
+            // show just as much: the owner's pump writes the viewport from this same walk.
+            RectF clip = scene.ClipToClippingAncestors(e.GeomNode, now);
+            if (now == e.GeomRect && clip == e.GeomClip) continue;
             e.GeomRect = now;
+            e.GeomClip = clip;
             RequestGeometryPump(i + 1);
+        }
+    }
+
+    /// <summary>True while a visible surface follows a scene node (<see cref="SetGeometryNode"/>).</summary>
+    public bool HasGeometryNodes
+    {
+        get
+        {
+            for (int i = 0; i < MaxSurfaces; i++)
+                if (_entries[i].InUse && !_entries[i].ReleasePending && _entries[i].Visible && !_entries[i].GeomNode.IsNull) return true;
+            return false;
+        }
+    }
+
+    /// <summary>Add every visible surface's geometry node and its ancestors to <paramref name="into"/>: the chains whose painted pose (their
+    /// transforms, their presented clips) the owner's pump reads on the UI thread to place and clip the surface. Handed to the animation
+    /// engine with the follow-rect anchors, it keeps those chains' transform and presented-size rows UI-owned, so a video under a moving or
+    /// resizing box (a FLIP, a Reveal clip) is placed from the pose this frame paints, not from a render-thread row's last feedback. Zero-alloc
+    /// past the set's capacity.</summary>
+    public void CollectGeometryAnchors(FluentGpu.Scene.SceneStore scene, HashSet<NodeHandle> into)
+    {
+        for (int i = 0; i < MaxSurfaces; i++)
+        {
+            ref Entry e = ref _entries[i];
+            if (!e.InUse || e.ReleasePending || !e.Visible || e.GeomNode.IsNull || !scene.IsLive(e.GeomNode)) continue;
+            for (NodeHandle n = e.GeomNode; !n.IsNull; n = scene.Parent(n)) if (!into.Add(n)) break;
         }
     }
 

@@ -1494,7 +1494,7 @@ public sealed class MediaPlayerElement : Component
         // OWN composition visual BELOW the UI swapchain — it is not inside any scissor the UI draws with — so a
         // viewport of the element's own rect keeps presenting at full size while the element scrolls out of its
         // scroller. That is how a video in a list ended up painted across the tab strip and the title bar.
-        RectF viewport = ClipToAncestors(scene, h, area);
+        RectF viewport = scene.ClipToClippingAncestors(h, area);
         if (viewport.W <= 0.5f || viewport.H <= 0.5f) { ShowSlot(b, false); NoteInView(false); return; }
         NoteInView(true);
         b.SetViewport(viewport);
@@ -1649,25 +1649,6 @@ public sealed class MediaPlayerElement : Component
     /// outside it. Mirror the exact sentinel the recorder itself uses at the same site
     /// (<c>SceneRecorder.cs:1185-1186</c>, also <c>SceneStore.cs:516-517</c>): not-NaN means a Reveal row is live and
     /// its presented value wins.</summary>
-    private static RectF ClipToAncestors(SceneStore scene, NodeHandle node, RectF rect)
-    {
-        for (NodeHandle p = scene.Parent(node); !p.IsNull && scene.IsLive(p); p = scene.Parent(p))
-        {
-            if ((scene.Flags(p) & NodeFlags.ClipsToBounds) == 0) continue;
-            ref NodePaint pp = ref scene.Paint(p);
-            RectF lb = scene.Bounds(p);
-            float cw = float.IsNaN(pp.PresentedW) ? lb.W : pp.PresentedW;
-            float ch = float.IsNaN(pp.PresentedH) ? lb.H : pp.PresentedH;
-            // Mapped through the ancestor's full transform (a scaled clipping ancestor clips a scaled rect), with the
-            // presented extent as its local size.
-            RectF c = scene.AbsoluteTransformedRect(p, cw, ch);
-            float x0 = MathF.Max(rect.X, c.X), y0 = MathF.Max(rect.Y, c.Y);
-            float x1 = MathF.Min(rect.X + rect.W, c.X + c.W), y1 = MathF.Min(rect.Y + rect.H, c.Y + c.H);
-            rect = new RectF(x0, y0, MathF.Max(0f, x1 - x0), MathF.Max(0f, y1 - y0));
-            if (rect.W <= 0f || rect.H <= 0f) return rect;
-        }
-        return rect;
-    }
 
 
     // ── default transport (pure FluentGpu: two rows — a full-width seek row above a control row) ─────────────────────

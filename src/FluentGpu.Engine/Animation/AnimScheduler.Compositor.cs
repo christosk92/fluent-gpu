@@ -128,7 +128,9 @@ public sealed partial class AnimEngine
         // their ancestor chains) stays UI-owned: phase 7.15 reads those nodes' painted pose THIS frame, and a render-owned
         // row never advances the UI-side transform between feedbacks, so the follower would trail the slide. Live check
         // like Relayouting above, so it needs no candidate-cache invalidation of its own.
-        if (_followAnchors.Count != 0 && row.Channel <= AnimChannel.Rotation && _followAnchors.Contains(row.Node)) return false;
+        // The presented size (a Reveal row's clip) too: a video pump cuts its surface with the anchors' presented extents.
+        if (_followAnchors.Count != 0 && (row.Channel <= AnimChannel.Rotation || row.Channel is AnimChannel.SizeW or AnimChannel.SizeH)
+            && _followAnchors.Contains(row.Node)) return false;
         return true;
     }
 
