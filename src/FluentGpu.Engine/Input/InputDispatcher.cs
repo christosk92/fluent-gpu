@@ -149,6 +149,18 @@ public sealed partial class InputDispatcher
     // un-hovered until the user jiggles the mouse. Drained by the next frame's hover refresh (layout-move or scroll).
     private bool _hoverResolvePending;
 
+    // HOVER INTENT (owner, 2026-11-17: a Spine Shelf card that opened under a resting pointer started the preview of the song tile that slid
+    // under it). The stationary re-resolves (RefreshHoverAfterScroll, RefreshHoverAfterLayoutMove) keep the hover STATE true at once (the
+    // Hovered/HoverWithin flags, the cursor, the exits), but an enter they make was made by content moving, not by the pointer: the
+    // bare-hover handlers (OnHoverMove, the "pointer came onto me" intent that dwells, previews and tooltips arm on) are HELD until the pointer
+    // really moves (to another device pixel), then delivered to whichever held node the pointer is still in. _synthResolve is set while a
+    // stationary resolve runs; _heldEnters is a fixed set (no allocation).
+    private bool _synthResolve;
+    private bool _hoverIntentHeld;
+    private Point2 _hoverIntentAt;
+    private readonly NodeHandle[] _heldEnters = new NodeHandle[16];
+    private int _heldEnterCount;
+
     // ── pinch-zoom session (Phase-4; a singleton across the TWO pinching contacts — the DragController precedent) ──────
     // Opened when a second touch contact lands over the same Zoomable viewport a still-down contact is over; both contacts'
     // moves drive ZoomFor (the magnification about the gesture midpoint), and the FIRST up/cancel commits the scale and
@@ -530,6 +542,44 @@ public sealed partial class InputDispatcher
         if (!_lastPointerValid || oldScale <= 0f || newScale <= 0f || oldScale == newScale) return;
         float k = oldScale / newScale;
         _lastPointerPx = new Point2(_lastPointerPx.X * k, _lastPointerPx.Y * k);
+        _hoverIntentAt = new Point2(_hoverIntentAt.X * k, _hoverIntentAt.Y * k);
+    }
+
+    /// <summary>True while the current hover was made by content moving under a STILL pointer (a relayout or a scroll slid a node under it):
+    /// the Hovered flags are set, but no bare-hover handler (<c>BoxEl.OnHoverMove</c>) has been told yet. The pointer's first real move
+    /// delivers the held enters. Features that arm on "the pointer came onto me" (a dwell, a preview, a tooltip) ride OnHoverMove, so they get
+    /// this rule for free; a feature that reads the Hovered state instead can read this.</summary>
+    public bool HoverIntentHeld => _hoverIntentHeld;
+
+    /// <summary>A bare-hover enter edge on <paramref name="n"/>: delivered now when the pointer made it, held (see <see cref="HoverIntentHeld"/>)
+    /// when a stationary resolve did.</summary>
+    private void DeliverHoverEnter(NodeHandle n, Point2 px)
+    {
+        if (_scene.GetHoverMove(n) is not { } hm) return;
+        if (!_synthResolve) { hm(LocalPos(n, px)); return; }
+        if (!_hoverIntentHeld) { _hoverIntentHeld = true; _hoverIntentAt = px; }
+        for (int i = 0; i < _heldEnterCount; i++) if (_heldEnters[i] == n) return;
+        if (_heldEnterCount < _heldEnters.Length) _heldEnters[_heldEnterCount++] = n;
+        if (Diag.Enabled) Diag.Event("hover", $"intent held node={n.Raw.Index} (content moved under a still pointer)");
+    }
+
+    /// <summary>The pointer really moved (<paramref name="px"/> is another device pixel than where the held hover began): deliver the held
+    /// enters, outermost first as the subtree-enter walk does, to the nodes the pointer is still inside. False while it has not moved.</summary>
+    private bool ReleaseHoverIntent(Point2 px)
+    {
+        if (!_hoverIntentHeld) return true;
+        if (MathF.Abs(px.X - _hoverIntentAt.X) < 1f && MathF.Abs(px.Y - _hoverIntentAt.Y) < 1f) return false;
+        _hoverIntentHeld = false;
+        int count = _heldEnterCount;
+        _heldEnterCount = 0;
+        for (int i = count - 1; i >= 0; i--)
+        {
+            NodeHandle n = _heldEnters[i];
+            _heldEnters[i] = NodeHandle.Null;
+            if (!_hovered.IsNull && _scene.IsLive(n) && IsSelfOrAncestorOf(n, _hovered) && _scene.GetHoverMove(n) is { } hm)
+                hm(LocalPos(n, px));
+        }
+        return true;
     }
 
     /// <summary>
@@ -991,6 +1041,9 @@ public sealed partial class InputDispatcher
                         handled++;
                         break;
                     }
+                    // A hover a stationary resolve made becomes intent on the pointer's first real move (the held enters are delivered
+                    // first, to the chain the pointer was resting in; this move's own enters then follow as usual).
+                    bool intent = ReleaseHoverIntent(e.PositionPx);
                     SetState(ref _hovered, HitTest(e.PositionPx), NodeFlags.Hovered);
                     // Hyperlink spans re-resolve the cursor on EVERY move over the same text node — the span boundary
                     // crossings happen inside one node, which the on-hover-change walk alone can't see (WinUI flips to
@@ -1040,7 +1093,7 @@ public sealed partial class InputDispatcher
                         _scene.GetDrag(_dragTarget)?.Invoke(PointToLocal(_dragTarget, e.PositionPx));
                         handled++;
                     }
-                    else if (!_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)   // bare-hover preview (RatingControl)
+                    else if (intent && !_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)   // bare-hover preview (RatingControl); none while a still pointer's hover is held
                     {
                         if (Diag.Enabled)
                         {
@@ -3379,6 +3432,7 @@ public sealed partial class InputDispatcher
     {
         if (!_lastPointerValid || _lastPointerKind == PointerKind.Touch || _panClaimed || Drag.IsActive) return;
         _hoverResolvePending = false;   // this path re-resolves unconditionally — it IS the arming's service
+        _synthResolve = true;   // content moved, the pointer did not: enters are held (HoverIntentHeld)
         NodeHandle before = _hovered;
         NodeHandle next = HitTest(_lastPointerPx);
         // Recycled virtual-list slot: a boundary-crossing scroll rebinds the slot HANDLE still under the cursor to a new
@@ -3401,10 +3455,10 @@ public sealed partial class InputDispatcher
         UpdateScrollHover(_lastPointerPx);   // scrollbar-reveal target follows the content (early-outs with no subscribers)
         // Bare-hover preview (OnHoverMove) ONLY when the hovered node actually CHANGED this refresh — never re-fire it for
         // an unchanged target (SetState's early-out already covers the flag/enter/leave).
-        if (before != _hovered && !_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)
-            hm(LocalPos(_hovered, _lastPointerPx));
+        if (before != _hovered && !_hovered.IsNull) DeliverHoverEnter(_hovered, _lastPointerPx);
         if (_down.IsNull && _dragTarget.IsNull && _scrollDragNode.IsNull && !_selDragging)
             DeliverPointerMoveWithin(_hovered, _lastPointerPx);
+        _synthResolve = false;
     }
 
     /// <summary>Layout-move companion to <see cref="RefreshHoverAfterScroll"/> (input-a11y.md §5.4/§15/§1056: hover re-resolves
@@ -3478,6 +3532,7 @@ public sealed partial class InputDispatcher
     /// CHANGED) and the container-aware move. Zero managed allocation — scalar walks over the existing chokepoints.</summary>
     private void ResolveHoverAt(Point2 px)
     {
+        _synthResolve = true;   // a stationary resolve: content moved, the pointer did not (HoverIntentHeld)
         NodeHandle before = _hovered;
         NodeHandle next = HitTest(px);
         SetState(ref _hovered, next, NodeFlags.Hovered);
@@ -3485,10 +3540,10 @@ public sealed partial class InputDispatcher
             && (_scene.Interaction(_hovered).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
             UpdateSpanCursor(_hovered, px);
         UpdateScrollHover(px);   // scrollbar-reveal target follows the moved content (early-outs with no subscribers)
-        if (before != _hovered && !_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)
-            hm(LocalPos(_hovered, px));
+        if (before != _hovered && !_hovered.IsNull) DeliverHoverEnter(_hovered, px);
         if (_down.IsNull && _dragTarget.IsNull && _scrollDragNode.IsNull && !_selDragging)
             DeliverPointerMoveWithin(_hovered, px);
+        _synthResolve = false;
     }
 
     /// <summary>Is <paramref name="n"/> inside a subtree the reconciler has orphaned? <c>SceneStore.Orphan</c> detaches
@@ -3683,7 +3738,7 @@ public sealed partial class InputDispatcher
                 OnHoverChanged?.Invoke(n, true);
                 // Subtree-enter → the node's own bare-hover handler (the ToolTip.Wrap trigger). n == prev means the
                 // pointer moved from this node DOWN onto a child — it was already hovered, no re-enter.
-                if (n != prev) _scene.GetHoverMove(n)?.Invoke(LocalPos(n, _lastPointerPx));
+                if (n != prev) DeliverHoverEnter(n, _lastPointerPx);
             }
         }
     }
