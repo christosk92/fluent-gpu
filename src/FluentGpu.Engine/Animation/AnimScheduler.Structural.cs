@@ -260,6 +260,16 @@ public sealed partial class AnimEngine
         if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, rest.ScaleX, dyn, initial: rest.ScaleX * e.Sx, delayMs: delay);
         if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, rest.ScaleY, dyn, initial: rest.ScaleY * e.Sy, delayMs: delay);
         if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, rest.Blur, dyn, initial: rest.Blur + e.Blur, delayMs: delay);
+        // From another size, through layout: only a node whose transition sizes it by relayout and whose size is declared (the row eases the
+        // declared value, and a later re-declaration re-aims it: RecordDeclaredSize).
+        if ((e.Dw != 0f || e.Dh != 0f) && spec.Size == SizeMode.Relayout && (spec.Channels & TransitionChannels.Size) != 0 && _scene.IsLive(node))
+        {
+            ref LayoutInput li = ref _scene.Layout(node);
+            bool seeded = false;
+            if (e.Dw != 0f && float.IsFinite(li.Width) && li.Width + e.Dw > 0f) { RelayoutSize(node, AnimChannel.SizeW, li.Width + e.Dw, li.Width, dyn, delay); seeded = true; }
+            if (e.Dh != 0f && float.IsFinite(li.Height) && li.Height + e.Dh > 0f) { RelayoutSize(node, AnimChannel.SizeH, li.Height + e.Dh, li.Height, dyn, delay); seeded = true; }
+            if (seeded) _scene.Mark(node, NodeFlags.Relayouting);
+        }
         MarkStartPending(node);
     }
 

@@ -396,9 +396,11 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
                 if (_docKeys.Count > 0 && !_docKeys.Contains(key)) anim = anim with { Enter = o.Enter };
                 else if (repacked && _prev.Width > 0f && _prevIndex.TryGetValue(key, out int pi) && pi < _prev.Count && _prev.BandOf[pi] >= 0)
                 {
+                    // from its previous box, as the realized tiles beside it re-flow from theirs: its place AND its size (a tile the re-pack of a
+                    // tier commit brought into the window would otherwise stand at its new width beside tiles still at their old one)
                     var pq = _prev.Rects[pi];
-                    if (MathF.Abs(pq.X - q.X) > 0.5f || MathF.Abs(pq.Y - q.Y) > 0.5f)
-                        anim = anim with { Enter = new EnterExit(Dx: pq.X - q.X, Dy: pq.Y - q.Y, Active: true) };
+                    if (MathF.Abs(pq.X - q.X) > 0.5f || MathF.Abs(pq.Y - q.Y) > 0.5f || MathF.Abs(pq.W - q.W) > 0.5f || MathF.Abs(pq.H - q.H) > 0.5f)
+                        anim = anim with { Enter = new EnterExit(Dx: pq.X - q.X, Dy: pq.Y - q.Y, Active: true, Dw: pq.W - q.W, Dh: pq.H - q.H) };
                 }
             }
             anim = anim with { Exit = leaving ? default : o.Exit };
