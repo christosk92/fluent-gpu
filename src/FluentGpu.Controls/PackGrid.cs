@@ -210,6 +210,7 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
     const string SlotKey = "\u0001pack-slot";
 
     readonly Signal<float> _width = new(0f);
+    readonly Dictionary<string, float> _structExtent = new(StringComparer.Ordinal);   // per key: the extent its last structural pack used
     readonly Signal<int> _edge = Signal.AlwaysNotify(0);   // a window, lift or projection change: re-render
     readonly Action<RectF> _onBounds;
     readonly Action<NodeHandle> _onRootRealized;
@@ -320,10 +321,18 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
             _keys[i] = key;
             _index[key] = i;
             stamp = Mix(stamp, (ulong)(uint)key.GetHashCode());
-            stamp = Mix(stamp, (ulong)e.Kind | (ulong)e.Cols << 8 | (ulong)e.Rows << 16 | (ulong)e.Flags << 24 | (ulong)e.OpenMinCols << 32);
-            // A followed extent (PackFlags.Follows) is no structure: its body eases it, and the tiles follow it frame by frame.
-            if ((e.Flags & PackFlags.Follows) == 0) stamp = Mix(stamp, BitConverter.SingleToUInt32Bits(e.Extent));
-            else followed = Mix(followed, BitConverter.SingleToUInt32Bits(e.Extent));
+            stamp = Mix(stamp, (ulong)e.Kind | (ulong)e.Cols << 8 | (ulong)e.Rows << 16 | (ulong)(e.Flags & ~PackFlags.Follows) << 24 | (ulong)e.OpenMinCols << 32);
+            // A followed extent (PackFlags.Follows) is no structure: its body eases it, and the tiles follow it frame by frame. The structure keeps
+            // the extent the entry had when it last packed as structure, so an entry that starts following (its body's first eased height) is
+            // no re-flow either: the flag and that height arrive on the same pack, and a re-flow there trailed the board's width by its whole
+            // 250 ms tween on every tile (Zune Home, crossing W1008).
+            if ((e.Flags & PackFlags.Follows) == 0) { _structExtent[key] = e.Extent; stamp = Mix(stamp, BitConverter.SingleToUInt32Bits(e.Extent)); }
+            else
+            {
+                if (!_structExtent.TryGetValue(key, out float held)) _structExtent[key] = held = e.Extent;
+                stamp = Mix(stamp, BitConverter.SingleToUInt32Bits(held));
+                followed = Mix(followed, BitConverter.SingleToUInt32Bits(e.Extent));
+            }
         }
         stamp = Mix(stamp, (ulong)(uint)metrics.GetHashCode());
         ulong structure = stamp;                    // the order, the entries and the metrics: what a re-flow animates
