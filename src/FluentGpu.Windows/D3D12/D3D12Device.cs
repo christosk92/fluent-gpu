@@ -134,21 +134,23 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // were working set). Begun once per frame right after WaitForFrame, which is also the only point it may grow.
     private UploadArena? _uploadArena;
     private RoundRectPipeline? _rectPipe;
-    private readonly List<RectInstance> _rectInsts = new();
+    // The per-segment instance lists start at a working capacity (about 140 KB in all, once per device): the first frame that
+    // drew a kind (the first shadow, a segment's ninth rect) grew one mid-frame, on a steady animation frame of a swipe.
+    private readonly List<RectInstance> _rectInsts = new(256);
     private ShadowPipeline? _shadowPipe;
-    private readonly List<ShadowInstance> _shadowInsts = new();
+    private readonly List<ShadowInstance> _shadowInsts = new(64);
     private ArcPipeline? _arcPipe;
-    private readonly List<ArcInstance> _arcInsts = new();
+    private readonly List<ArcInstance> _arcInsts = new(64);
     private PolylineStrokePipeline? _polylinePipe;
-    private readonly List<PolylineStrokeInstance> _polylineInsts = new();
+    private readonly List<PolylineStrokeInstance> _polylineInsts = new(64);
     private GradientPipeline? _gradPipe;
-    private readonly List<GradientInstance> _gradInsts = new();
+    private readonly List<GradientInstance> _gradInsts = new(64);
     private PathPipeline? _pathPipe;
-    private readonly List<PathDrawItem> _pathDraws = new();
+    private readonly List<PathDrawItem> _pathDraws = new(64);
     private SeriesPipeline? _seriesPipe;
-    private readonly List<SeriesInstance> _seriesInsts = new();
+    private readonly List<SeriesInstance> _seriesInsts = new(16);
     private SpritePipeline? _spritePipe;
-    private readonly List<SpriteInstance> _spriteInsts = new();
+    private readonly List<SpriteInstance> _spriteInsts = new(64);
     private readonly List<RectF> _clipStack = new(16);
     // Tier-2 rounded clip (E9), parallel to _clipStack: the innermost rounded-box clip in effect (W <= 0 = none).
     // A rounded PushClip replaces it; a plain (rectangular) PushClip inherits the enclosing rounded clip — a reveal
@@ -174,7 +176,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private ImagePipeline? _imagePipe;
     private BakedBlurCompositor? _bakedBlur;
     private FluentGpu.Hosting.Threading.BakedBlurQueue? _bakedBlurQueue;
-    private readonly List<(ImageInstance inst, int imageId)> _imageDraws = new();
+    private readonly List<(ImageInstance inst, int imageId)> _imageDraws = new(128);
     private readonly List<ImageInstance> _imageRangeScratch = new(64);
     // Painter-order draw runs: a segment's non-glyph primitives in STREAM order (consecutive same-kind ops batched into
     // one draw), so a shadow correctly sits OVER the background drawn before it and UNDER the element it belongs to.
@@ -188,7 +190,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // balanced pairs, so a stream ends SrcOver. _blendBase is the replay's floor: a feedback trail whose fresh content
     // paints Additive (FeedbackSpec.Fresh) holds it, so a nested bracket's closing SetBlend(SrcOver) stays additive.
     private bool _blendAdditive, _blendBase;
-    private readonly List<(PrimKind Kind, int Count)> _runs = new();
+    private readonly List<(PrimKind Kind, int Count)> _runs = new(256);
     // Painter's-order guard for the glyph batch. RecordAll replays every glyph of a segment AFTER the segment's
     // non-glyph primitives ("text on top within a z-context"), which is only correct while nothing opaque is recorded
     // OVER text inside one segment. A modal plate over a page of text, a card fill over a list row's label in one
@@ -203,8 +205,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private int _frameImageCount;
     private int _frameImageSkipped;
     private int _frameImagesInFlight;   // draws that showed a placeholder (or prior pixels) for pixels still on a side queue or behind a held upload
-    private readonly List<GlyphInstance> _glyphInsts = new();
-    private readonly List<GradGlyphInstance> _gradGlyphInsts = new();   // sub-glyph karaoke wipe (active lyric line + glow)
+    private readonly List<GlyphInstance> _glyphInsts = new(1024);
+    private readonly List<GradGlyphInstance> _gradGlyphInsts = new(64);   // sub-glyph karaoke wipe (active lyric line + glow)
     private float _frameScale = 1f;
     private float _imageClockMs;
     private int _frameRectCount;
@@ -2986,6 +2988,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// pool's retired queue, retire idle free scratch, release an idle stencil surface. Everything it frees is rebuilt on demand
     /// and only touches resources nothing has used for seconds, so nothing visible changes. Never waits on the GPU: a resource
     /// whose fence has not passed is simply looked at again soon (the returned delay).</summary>
+    /// <inheritdoc cref="IGpuDevice.TurnPresented"/>
+    public void TurnPresented() => _glyphs?.RestockQuadPool();
+
     public int TrimIdleResources(long nowMs)
     {
         if (_device == null) return -1;

@@ -311,6 +311,12 @@ public partial interface IGpuDevice
     /// <summary>True when <see cref="SubmitComposite"/> is implemented (the headless model and D3D12).</summary>
     bool SupportsComposite => false;
 
+    /// <summary>The thread that presents, right after a turn's present (the frame is on its way to the glass): the device may restock
+    /// what the turn drew down (pools that a burst of new content emptied), so the NEXT turn that needs them takes from stock instead
+    /// of allocating mid-frame. Never on a frame's critical path: the render thread calls it after its present, an inline host after
+    /// its hot phases. Default: nothing to restock.</summary>
+    void TurnPresented() { }
+
     /// <summary>Render thread: raster <see cref="CompositeFrame.Rasters"/> into their surfaces (CLEAR→STORE render pass
     /// each), composite <see cref="CompositeFrame.Items"/> into the PRIMARY back buffer in one CLEAR→STORE pass, and
     /// take <see cref="CompositeFrame.Present"/> for the primary swapchain's next <see cref="ISwapchain.Present"/> (used

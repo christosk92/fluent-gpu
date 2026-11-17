@@ -55,7 +55,9 @@ public sealed unsafe partial class D3D12Device
     private readonly record struct DirectChunk(int Surface, PixelRect Rect);
     private DirectChunk[] _chunks = new DirectChunk[32];
     private int _chunkCount;
-    private D3D12_RESOURCE_BARRIER[] _tileBarriers = new D3D12_RESOURCE_BARRIER[64];
+    // Sized for a burst of new tiles (a page sliding in rasters a few dozen at once): growing it on the frame the burst arrives
+    // allocated on a steady animation frame. Beyond, it still doubles (once).
+    private D3D12_RESOURCE_BARRIER[] _tileBarriers = new D3D12_RESOURCE_BARRIER[512];
     private bool _renderPassesLogged;
 
     /// <summary>Retained-tile census of the last composite (render thread writes, diagnostics read).</summary>
@@ -387,8 +389,8 @@ public sealed unsafe partial class D3D12Device
         Array.Clear(_rastersOfRow, 0, frame.Slices.Length);
         for (int i = 0; i < rasters.Length; i++) { int rr = RowOf(rasters[i].Key.SliceId); if (rr >= 0) _rastersOfRow[rr]++; }
         ulong fence = _fenceValue + 1;
-        if (_tileBarriers.Length < rasters.Length * 2) _tileBarriers = new D3D12_RESOURCE_BARRIER[rasters.Length * 2];
-        if (_tileInits.Length < rasters.Length) _tileInits = new nint[rasters.Length * 2];
+        if (_tileBarriers.Length < rasters.Length * 2) _tileBarriers = new D3D12_RESOURCE_BARRIER[(int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)rasters.Length * 2)];
+        if (_tileInits.Length < rasters.Length) _tileInits = new nint[(int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)rasters.Length)];
         int nb = 0, ni = 0;
         for (int i = 0; i < rasters.Length; i++)
         {
@@ -521,7 +523,7 @@ public sealed unsafe partial class D3D12Device
         return b;
     }
 
-    private nint[] _tileInits = new nint[16];   // tiles placed this raster batch (aliased in, then discarded)
+    private nint[] _tileInits = new nint[256];   // tiles placed this raster batch (aliased in, then discarded)
 
     private void FlushBarriers(int n)
     {
