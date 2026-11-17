@@ -312,6 +312,10 @@ public static class PagedShelf
         // caller-owned model (the ItemsView then does NOT mint its own), so the page can read/clear it.
         ItemsSelectionMode selectionMode = ItemsSelectionMode.None,
         SelectionModel? selection = null,
+        // The off-page dim (0 = none, the default): with ShelfSnap.Page, a card that is not on the current page stands at 1 - offPageDim opacity,
+        // eased over the page slide, so the page leaving dims as it slides out and the page arriving brightens as it slides in (frozen mount
+        // configuration).
+        float offPageDim = 0f,
         // The shelf's WIDTH MEMORY key (audit FU2c): the call site, never passed. A shelf mounts at the width its call site's last shelf
         // measured, so its cards realize at their cell's width in the mount frame instead of at a provisional fit corrected a frame later.
         // A call site is a stable identity with no tier, form or count in it; a shelf whose width differs is corrected as before.
@@ -323,7 +327,7 @@ public static class PagedShelf
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
                                                headerGap, edgeFade, prevGlyph, nextGlyph, parts, overscan, measured,
                                                cardWidthAgnostic, maxColumns, snap, controller, lift, leadMinColumns, selectionMode, selection,
-                                               new ShelfWidthKey(widthSite, widthLine), cardWidthBound))
+                                               new ShelfWidthKey(widthSite, widthLine), cardWidthBound, offPageDim))
            // SkeletonProxy: the deriver can't see into this component, so hand it the header + a few real cards to derive
            // — the shelf shimmers as real cards instead of one default bar. The cards are fitted to the MEASURED slot
            // exactly as the live strip fits them (the same Fit, through Responsive's rendered-output proxy idiom): handing
@@ -1024,6 +1028,11 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         return index / Math.Max(1, cols * _rows);
     }
 
+    readonly float _offPageDim;
+
+    /// <summary>The off-page dim's ease: the page slide's own length (a decelerating 420 ms).</summary>
+    const float OffPageDimMs = 420f;
+
     sealed class ShelfCardSlot(PagedShelfCore<T> owner, BoundItemScope<T> scope) : Component
     {
         // The width this slot's bound card is laid out at (PagedShelf.CardWidth): the shelf's live card width while the card stands on or
@@ -1054,6 +1063,15 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             var d = owner._latest;
             int index = scope.Index.Value;
             var item = scope.Item.Value;
+            if (owner._offPageDim > 0f)
+            {
+                // On the current page or not (the page the chevrons, the pips and a settled swipe publish): the slot root eases to its opacity.
+                int cols = owner._shownCount > 0 ? owner._shownCount : 1;
+                bool on = owner.PageOfItem(index, cols, owner._effSpanSig.Peek()) == owner._page.Value;
+                float dim = 1f - owner._offPageDim;
+                UseTransition(AnimChannel.Opacity, on ? dim : 1f, on ? 1f : dim, Motion.ReducedMotion ? 0f : OffPageDimMs, Easing.FluentDecelerate,
+                    DepKey.From(on ? 1 : 0));
+            }
             if ((uint)index >= (uint)p.VisibleCount) return new BoxEl();
             int effSpan = index == 0 ? owner._effSpanSig.Value : 1;   // subscribe at index 0 only — a span flip re-renders ONLY this slot
             // A bound card (cardWidthBound) takes the live width from PagedShelf.CardWidth, so this slot neither reads nor subscribes it: a
@@ -1099,7 +1117,9 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             if (!owner._cardWidthBound) return root;
             // A single row's cells stand at known places, so a card off the page holds its width (NearWidth); a multi-row grid's follow the live one.
             IReadSignal<float> slotW = owner._rows == 1 ? UseComputed(_nearWidth ??= NearWidth) : owner._cardW;
-            return Ctx.Provide<IReadSignal<float>?>(PagedShelf.CardWidth, bindsWidth ? slotW : null, root);
+            var provided = Ctx.Provide<IReadSignal<float>?>(PagedShelf.CardWidth, bindsWidth ? slotW : null, root);
+            // The off-page dim eases this component's root: a box, not the provider.
+            return owner._offPageDim > 0f ? new BoxEl { Direction = 1, Grow = 1f, Children = [provided] } : provided;
         }
     }
     /// <summary>Does a card animate its own size (a <c>Layout</c> or <c>Animate</c> transition with a Size channel)?</summary>
@@ -1248,9 +1268,10 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
                           ShelfSnap snap = ShelfSnap.None, ShelfController? controller = null,
                           ShelfLift lift = ShelfLift.Elevate, int leadMinColumns = 0,
                           ItemsSelectionMode selectionMode = ItemsSelectionMode.None, SelectionModel? selection = null,
-                          ShelfWidthKey widthKey = default, bool cardWidthBound = false)
+                          ShelfWidthKey widthKey = default, bool cardWidthBound = false, float offPageDim = 0f)
     {
         _widthKey = widthKey;
+        _offPageDim = snap == ShelfSnap.Page ? Math.Clamp(offPageDim, 0f, 1f) : 0f;
         _cardWidthBound = cardWidthBound;
         // The width memory (see ShelfWidthMemory): mount at the width this call site's last shelf measured. Written before any render, so
         // nothing has subscribed: the first render fits it, writes the cards' width hint before they realize, and the first measure that
