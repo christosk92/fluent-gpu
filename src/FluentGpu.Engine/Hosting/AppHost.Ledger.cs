@@ -119,8 +119,12 @@ public sealed partial class AppHost
                 r.CaptureReachable = _renderSeam.LastCaptureReachableCount; r.CaptureCopied = _renderSeam.LastCapturedNodeCount;
                 r.CaptureMs = (float)s.SubmitCaptureMs; r.CaptureFull = (byte)_renderSeam.LastCaptureFullReason;
                 r.CaptureParity = _renderSeam.LastCaptureParityVerified ? (byte)1 : (byte)0;
+                var split = _renderSeam.LastCaptureSplit;
+                r.CaptureSceneMs = (float)split.Scene; r.CaptureConfigMs = (float)split.Config;
+                r.CaptureImagesMs = (float)split.Images; r.CaptureAnimMs = (float)split.Anim;
             }
         }
+        r.ClientW = (ushort)Math.Clamp(_window.ClientSizePx.Width, 0f, ushort.MaxValue);
         r.NodesCreated = (int)(_scene.NodesCreatedTotal - createdStart);
         r.NodesFreed = (int)(_scene.NodesFreedTotal - freedStart);
         r.ComponentsMounted = (int)(_reconciler.ComponentsMountedTotal - mountedStart);

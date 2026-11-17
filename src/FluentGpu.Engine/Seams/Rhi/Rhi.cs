@@ -412,6 +412,11 @@ public interface ISwapchain : IDisposable
     void Resize(Size2 px);
     void Present();
 
+    /// <summary>Make room for <paramref name="px"/> without changing the size frames are drawn and shown at: a backend whose buffers can
+    /// be larger than what it shows (D3D12: SetSourceSize) grows them now, off the turn that will present at that size. The default
+    /// does nothing (the later <see cref="Resize"/> does all of it).</summary>
+    void Reserve(Size2 px) { }
+
     /// <summary>Where the last <see cref="Resize"/> that changed the size spent its time, in ms: the CPU wait for this target's
     /// in-flight GPU work (<c>WaitGpuMs</c>) and the buffer reallocation itself (<c>BuffersMs</c>). Diagnostics only (the
     /// <c>[window.resize]</c> line); the default (a backend that does not measure) is zero.</summary>

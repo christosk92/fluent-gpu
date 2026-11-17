@@ -1396,6 +1396,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Check(sc1->QueryInterface(__uuidof<IDXGISwapChain3>(), (void**)&sc3), "QI IDXGISwapChain3");
         sc1->Release();
         target.SwapChain = sc3;
+        target.BufW = target.W; target.BufH = target.H; target.HeadroomSinceMs = 0;
 
         // IDXGISwapChain3 : IDXGISwapChain2 — cap the queued frames and grab the latency waitable (created above via the flag).
         // The primary follows the device's chosen depth; every other target its OWN (a pop-out's depth policy sets it, and a
@@ -1666,7 +1667,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             ID3D12Resource* buf;
             Check(target.SwapChain->GetBuffer(i, __uuidof<ID3D12Resource>(), (void**)&buf), "GetBuffer");
             target.BackBuffers[i] = buf;
-            D3D12MemoryDiagnostics.Track(buf, $"Swapchain.BackBuffer[{i}] {target.W}x{target.H}", (ulong)target.W * target.H * 4UL);
+            D3D12MemoryDiagnostics.Track(buf, $"Swapchain.BackBuffer[{i}] {target.BufW}x{target.BufH}", (ulong)target.BufW * target.BufH * 4UL);
             _device->CreateRenderTargetView(buf, null, rtv);
             rtv.ptr += _rtvSize;
         }
@@ -2991,6 +2992,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// <inheritdoc cref="IGpuDevice.TurnPresented"/>
     public void TurnPresented() => _glyphs?.RestockQuadPool();
 
+    /// <summary>How long a window must rest at a size before the buffer headroom a live resize left is reallocated away.</summary>
+    internal const long HeadroomRestMs = 1500;
+
     public int TrimIdleResources(long nowMs)
     {
         if (_device == null) return -1;
@@ -3005,6 +3009,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (c >= 0 && c < next) next = c;
         }
         _glyphs?.TrimIdlePools(nowMs);   // the shaped-run pools back to their resting depth once shaping stopped (no wake of its own)
+        for (int i = 0; i < _swapchains.Count; i++)
+        {
+            // A window that rested after a live resize gives back the buffers' headroom (one exact reallocation, off any frame).
+            var sc = _swapchains[i];
+            if (sc.Disposed || sc.HeadroomSinceMs == 0 || sc.BuildPending || sc.BuildFailed) continue;
+            long rest = HeadroomRestMs - (nowMs - sc.HeadroomSinceMs);
+            if (rest > 0) { next = Math.Min(next, rest); continue; }
+            ReallocateBuffers(sc, sc.W, sc.H, sc.W, sc.H);
+        }
         for (int i = 0; i < _swapchains.Count; i++)
         {
             var sc = _swapchains[i];
@@ -5227,7 +5240,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         src.pResource = back;
         src.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         src.Anonymous.SubresourceIndex = 0;
-        _cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, null);
+        D3D12_BOX capBox = new() { left = 0, top = 0, front = 0, right = _w, bottom = _h, back = 1 };   // the source size: the buffers may be larger
+        _cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, &capBox);
         Rec(RecordedOp.CopyTexture, (uint)(nint)back, (uint)total);
 
         Barrier(back, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
@@ -5260,6 +5274,66 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (w < 1) w = 1; if (h < 1) h = 1;
         if (target.Disposed || (w == target.W && h == target.H)) return;
         if (target.BuildPending || target.BuildFailed) { target.W = w; target.H = h; return; }   // built at this size later
+        // Within the buffers: only the source size moves (no fence wait, no reallocation, no RTVs). A live drag that narrows the
+        // window, and one that widens it back within what it had, costs no ResizeBuffers at all.
+        if (w <= target.BufW && h <= target.BufH && TrySetSourceSize(target, w, h))
+        {
+            long s0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            target.W = w; target.H = h;
+            target.PpEpoch++;   // the retained buffers hold the old extent's pixels: the next frame composites and presents whole
+            target.Backdrop?.SetBounds(w, h);
+            target.HeadroomSinceMs = target.BufW != w || target.BufH != h ? Environment.TickCount64 : 0;
+            target.LastResizeWaitGpuMs = 0;
+            target.LastResizeBuffersMs = (System.Diagnostics.Stopwatch.GetTimestamp() - s0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            return;
+        }
+        // Outgrown: reallocate with headroom in the direction it grew (a quarter more), so the rest of the drag fits again.
+        uint bw = w, bh = h;
+        if (!target.SourceSizeUnsupported)
+        {
+            bw = w > target.BufW ? RoundUp64(w + w / 4) : Math.Max(w, target.BufW);
+            bh = h > target.BufH ? RoundUp64(h + h / 4) : Math.Max(h, target.BufH);
+        }
+        ReallocateBuffers(target, bw, bh, w, h);
+    }
+
+    private static uint RoundUp64(uint v) => (v + 63u) & ~63u;
+
+    /// <summary><see cref="ISwapchain.Reserve"/>: grow the buffers (with the same headroom) to hold <paramref name="w"/>x<paramref name="h"/>,
+    /// still showing the current source size. Nothing when they already hold it, or when the swap chain shows its buffers whole.</summary>
+    internal void Reserve(D3D12Swapchain target, uint w, uint h)
+    {
+        AssertDeviceOwner();
+        if (target.Disposed || target.BuildPending || target.BuildFailed || target.SourceSizeUnsupported) return;
+        if (w <= target.BufW && h <= target.BufH) return;
+        uint bw = w > target.BufW ? RoundUp64(w + w / 4) : target.BufW;
+        uint bh = h > target.BufH ? RoundUp64(h + h / 4) : target.BufH;
+        ReallocateBuffers(target, bw, bh, target.W, target.H);
+    }
+
+    /// <summary>The source size the compositor shows of the back buffers (IDXGISwapChain2.SetSourceSize). False, and every later resize
+    /// reallocates at the exact size, when the swap chain refuses it.</summary>
+    private bool TrySetSourceSize(D3D12Swapchain target, uint w, uint h)
+    {
+        if (target.SourceSizeUnsupported) return false;
+        HRESULT hr = target.SwapChain->SetSourceSize(w, h);
+        if (hr.SUCCEEDED && target.Composited)
+        {
+            // A composition swap chain stretches its source region over the whole buffer: scale it back, so the source shows 1:1.
+            DXGI_MATRIX_3X2_F m = default;
+            m._11 = (float)w / target.BufW;
+            m._22 = (float)h / target.BufH;
+            hr = target.SwapChain->SetMatrixTransform(&m);
+        }
+        if (hr.SUCCEEDED) return true;
+        target.SourceSizeUnsupported = true;
+        Diag.Line($"[d3d12.resize] SetSourceSize refused hr=0x{unchecked((uint)hr.Value):X8} target={target.Ordinal}: buffers follow the window exactly");
+        return false;
+    }
+
+    /// <summary>ResizeBuffers to <paramref name="bw"/>x<paramref name="bh"/> and show <paramref name="w"/>x<paramref name="h"/> of them.</summary>
+    private void ReallocateBuffers(D3D12Swapchain target, uint bw, uint bh, uint w, uint h)
+    {
         BeginTargetFrame(target.Frame);
         // Phase 1 (§3.4, pal-rhi.md §5.4 as designed): CPU-wait only the fence values THIS target's in-flight work
         // stamped — its submits AND its last present (TargetFenceHorizon) — never a full device drain: a detached child's
@@ -5281,8 +5355,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 target.BackBuffers[i] = null;
             }
         }
-        Check(target.SwapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, target.SwapChainFlags), "ResizeBuffers");
+        Check(target.SwapChain->ResizeBuffers(FRAME_COUNT, bw, bh, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, target.SwapChainFlags), "ResizeBuffers");
         target.PpEpoch++;   // new buffers hold nothing: the next frame composites and presents whole
+        target.BufW = bw; target.BufH = bh;
+        // Always: a resize keeps neither the source size nor the counter-scale the previous buffers had.
+        if (!TrySetSourceSize(target, w, h) && (bw != w || bh != h))
+        {
+            // Refused: the buffers must be the window's size after all.
+            Check(target.SwapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, target.SwapChainFlags), "ResizeBuffers");
+            target.BufW = w; target.BufH = h;
+        }
+        target.HeadroomSinceMs = target.BufW != w || target.BufH != h ? Environment.TickCount64 : 0;
         target.W = w; target.H = h;
         CreateRtvs(target);
         target.Backdrop?.SetBounds(w, h);   // resize the WUC backdrop/content visuals to match
@@ -5674,6 +5757,12 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal int PpPresentCount;
     internal bool PpNeedFullPresent;
     internal uint W, H;
+    // The back buffers' own size (D3D12Device.Resize). W/H is the SOURCE size the frame draws and the compositor shows
+    // (IDXGISwapChain2.SetSourceSize); the buffers may be larger, so a live resize changes only the source size and reallocates
+    // only when it outgrows them (with headroom). The headroom goes once the window has rested (TrimIdleResources).
+    internal uint BufW, BufH;
+    internal bool SourceSizeUnsupported;   // SetSourceSize failed once: every resize reallocates at the exact size
+    internal long HeadroomSinceMs;         // when buffers larger than W/H were last needed (0: none)
     // The last size-changing Resize's split (D3D12Device.Resize): the fence wait and the ResizeBuffers + RTV rebuild, ms.
     internal double LastResizeWaitGpuMs, LastResizeBuffersMs;
     public (double WaitGpuMs, double BuffersMs) LastResizeSplit => (LastResizeWaitGpuMs, LastResizeBuffersMs);
@@ -5978,6 +6067,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     }
 
     public void Resize(Size2 px) => Device.Resize(this, (uint)px.Width, (uint)px.Height);
+    public void Reserve(Size2 px) => Device.Reserve(this, (uint)px.Width, (uint)px.Height);
     public void Present() => Device.Present(this);
     public bool PresentNoWait()
     {

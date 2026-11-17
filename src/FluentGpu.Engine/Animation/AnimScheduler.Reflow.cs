@@ -703,7 +703,13 @@ public sealed partial class AnimEngine
     /// A looping row (<see cref="AnimFlags.Loop"/>, e.g. a meter bar's ScaleY) is authored continuous motion, not a stale
     /// projection: it is skipped, and never forces the transform reset. Zero-alloc POD-slab walk (no LINQ/enumerator);
     /// the caller runs it BEFORE layout so bounds land clean.</summary>
-    public void SnapStructuralToLayout(NodeHandle node)
+    public void SnapStructuralToLayout(NodeHandle node) => SnapStructuralToLayout(node, keepReflows: false);
+
+    /// <summary><see cref="SnapStructuralToLayout(NodeHandle)"/>; with <paramref name="keepReflows"/> a SizeMode.Reflow WIDTH row (LayoutW) keeps
+    /// running: a width the tier chose (a pane, a margin) is a layout input the next solve re-lays the subtree at, never a stale offset over the
+    /// new geometry. A height row is not kept: a height follows the width the window is still changing, and a kept one fought the size
+    /// projection a board seeds once the width holds (a tile easing from a height it never had).</summary>
+    public void SnapStructuralToLayout(NodeHandle node, bool keepReflows)
     {
         int idx = (int)node.Raw.Index;
         bool live = _scene.IsLive(node);
@@ -715,7 +721,8 @@ public sealed partial class AnimEngine
         {
             int next = _slab.At(s).NextOnNode;   // read the link BEFORE FreeSlot unlinks the row
             AnimChannel ch = _slab.At(s).Channel;
-            if (IsStructuralChannel(ch) && !IsGestureOwnedTransform(idx, ch) && !_slab.At(s).Has(AnimFlags.Loop))
+            if (IsStructuralChannel(ch) && !IsGestureOwnedTransform(idx, ch) && !_slab.At(s).Has(AnimFlags.Loop)
+                && !(keepReflows && ch == AnimChannel.LayoutW))
             {
                 // Ghost-band damage (Fix 1): the FIRST structural row we're about to cancel means this node was drawing
                 // at a translated/reveal-inflated extent LAST frame. Snapshot that last-presented rect NOW — before the
@@ -766,10 +773,10 @@ public sealed partial class AnimEngine
     /// the imminent (re)layout solves (<see cref="SnapStructuralToLayout"/> per node). Zero-alloc — walks the caller's
     /// FLIP-node registry (SceneStore.BoundsAnimatedNodes) and, per node, the POD row chain. Freeing anim rows never
     /// mutates the passed list (it indexes SceneStore nodes, not slab slots), so the walk is stable across the frees.</summary>
-    public void CancelStructuralAll(List<NodeHandle> flipNodes)
+    public void CancelStructuralAll(List<NodeHandle> flipNodes, bool keepReflows = false)
     {
-        if (s_motionDiag) Console.Error.WriteLine($"[motion-diag] CancelStructuralAll flipNodes={flipNodes.Count}");
+        if (s_motionDiag) Console.Error.WriteLine($"[motion-diag] CancelStructuralAll flipNodes={flipNodes.Count} keepReflows={keepReflows}");
         for (int i = 0; i < flipNodes.Count; i++)
-            SnapStructuralToLayout(flipNodes[i]);
+            SnapStructuralToLayout(flipNodes[i], keepReflows);
     }
 }
