@@ -310,7 +310,7 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
 
         // entries, keys and the stamp of what decides the pack
         _index.Clear();
-        ulong stamp = 1469598103934665603UL;
+        ulong stamp = 1469598103934665603UL, followed = 1469598103934665603UL;
         for (int i = 0; i < shown; i++)
         {
             T item = ItemAt(_show[i]);
@@ -321,16 +321,20 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
             _index[key] = i;
             stamp = Mix(stamp, (ulong)(uint)key.GetHashCode());
             stamp = Mix(stamp, (ulong)e.Kind | (ulong)e.Cols << 8 | (ulong)e.Rows << 16 | (ulong)e.Flags << 24 | (ulong)e.OpenMinCols << 32);
-            stamp = Mix(stamp, BitConverter.SingleToUInt32Bits(e.Extent));
+            // A followed extent (PackFlags.Follows) is no structure: its body eases it, and the tiles follow it frame by frame.
+            if ((e.Flags & PackFlags.Follows) == 0) stamp = Mix(stamp, BitConverter.SingleToUInt32Bits(e.Extent));
+            else followed = Mix(followed, BitConverter.SingleToUInt32Bits(e.Extent));
         }
         stamp = Mix(stamp, (ulong)(uint)metrics.GetHashCode());
         ulong structure = stamp;                    // the order, the entries and the metrics: what a re-flow animates
+        stamp = Mix(stamp, followed);
         stamp = Mix(stamp, BitConverter.SingleToUInt32Bits(width));
         var r = Result;
         bool repacked = stamp != _packStamp || shown != r.Count;
         // A plain width change (the same structure at another width: a window resize inside one tier) is not a re-flow: the tiles
         // follow the width at once, with their content, as the page around them does. Animating the box while its content lays out
-        // at the new width at once would make every right-aligned part jump inside a box still easing.
+        // at the new width at once would make every right-aligned part jump inside a box still easing. Nor is a followed extent's change
+        // (PackFlags.Follows): its body already eases it.
         bool widthOnly = repacked && structure == _structStamp && shown == r.Count && r.Width > 0f && width > 0f;
         _packStamp = stamp;
         _structStamp = structure;

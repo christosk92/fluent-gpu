@@ -1552,6 +1552,7 @@ public sealed partial class AppHost : IDisposable
     private readonly List<NodeHandle> _projectionSuppressionRoots = new();          // changed projected containers that own descendant motion this commit
     private readonly List<NodeHandle> _liveReflowScratch = new(8);                  // nodes with a live LayoutW/H reflow row this commit (ApplyProjections shove suppression)
     private readonly Dictionary<int, int> _reflowShoveFrames = new(16);             // parent idx → the child idx on a reflowing node's ancestor path ("the reflow-carrying child under this parent")
+    private readonly List<NodeHandle> _resizeLandScratch = new(64);                   // ApplyProjections: the captured nodes a resize-only suppression lands
     private readonly List<NodeHandle> _reflowOwnedRoots = new(4);                   // SuppressDescendantTransitions containers a live sibling reflow resizes this commit: they land, they suppress nothing
     private readonly List<int> _positionScratch = new(64);                          // nodes with a position transition (RunReflowLayout's wrap watch)
     private readonly List<NodeHandle> _enterReflowsSeeded = new(8);                 // this frame's Reflow ENTERS (SeedReflowsFirst lays them out at 0)
@@ -6912,10 +6913,18 @@ public sealed partial class AppHost : IDisposable
                 // is already skipped on a resize (above), so no NEW projection starts this frame either.
                 // A SizeMode.Reflow WIDTH row (LayoutW) and a declared box's SizeMode.Relayout row are no such tracks: they are layout
                 // inputs, and the (re)layout below solves the subtree at their interpolated size at the new window size (AnimEngine
-                // KeptThroughResize; a height reflow follows the width and is landed). So the reflows a tier commit started (a nav pane folding away,
+                // KeptThroughResize; a height reflow follows the width and is landed unless it opts in). So the reflows a tier commit started (a nav pane folding away,
                 // the page margins narrowing) keep easing through a live drag instead of landing in one frame at the next drag step; a
                 // width reflow in flight is probed again at the new size (the destination probe's resize arm).
                 _anim.CancelStructuralAll(_scene.BoundsAnimatedNodes, keepReflows: true);
+                // A transition that animates through a resize (LayoutTransition.AnimateDuringResize: a height reflow a width
+                // step changes): its height row was kept above (KeptThroughResize), and it is captured alone, so its step this frame eases like any commit's.
+                if (willReconcile)
+                {
+                    _projectBefore.Clear();
+                    CaptureResizeProjections();
+                    capturedProjections = _projectBefore.Count > 0;
+                }
             }
             if (s_allocDiag) { db = Probe(SegFlip, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
@@ -8639,6 +8648,19 @@ public sealed partial class AppHost : IDisposable
         if (w < nodes.Count) nodes.RemoveRange(w, nodes.Count - w);
     }
 
+    /// <summary>The capture of a frame a resize owns: only the nodes whose transition animates through it
+    /// (<see cref="LayoutTransition.AnimateDuringResize"/>); every other node lands on the geometry the resize solves.</summary>
+    private void CaptureResizeProjections()
+    {
+        var nodes = _scene.BoundsAnimatedNodes;
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            NodeHandle n = nodes[i];
+            if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
+            if (_anim.TryGetTransition(n, out var t) && t.AnimateDuringResize) CaptureProjection(n);
+        }
+    }
+
     private void CaptureProjection(NodeHandle n)
     {
         // FLIP relativeTarget: capture relative to the resolved shared-layout anchor (if any) instead of the parent,
@@ -8680,6 +8702,22 @@ public sealed partial class AppHost : IDisposable
         //  • ReducedMotion is a separate ACCESSIBILITY preference (gate-covered): it keeps its 1ms-tween snap and still
         //    lets opacity/etc. animate — behaviour left exactly as before.
         bool suppressed = Motion.LayoutTransitionsSuppressed || keepAliveSuppressed || _snapDepth > 0;   // SnapScope: every FLIP lands on the laid-out bounds
+        // Suppressed by a resize alone (the modal size loop, a splitter drag): the nodes whose transition animates through it are this commit's
+        // whole capture; every other captured node lands on its layout now, as under any suppression.
+        if (suppressed && Motion.LayoutTransitionsSuppressedByResizeOnly && !keepAliveSuppressed && _snapDepth == 0)
+        {
+            _resizeLandScratch.Clear();
+            foreach (var kv in _projectBefore)
+                if (!_scene.IsLive(kv.Key) || !_anim.TryGetTransition(kv.Key, out var rt) || !rt.AnimateDuringResize) _resizeLandScratch.Add(kv.Key);
+            for (int i = 0; i < _resizeLandScratch.Count; i++)
+            {
+                NodeHandle n = _resizeLandScratch[i];
+                _projectBefore.Remove(n);
+                if (_scene.IsLive(n)) _anim.SnapStructuralToLayout(n);
+            }
+            _resizeLandScratch.Clear();
+            suppressed = false;
+        }
         bool reduced = Motion.ReducedMotion;
         // Suppressed by the user scroll alone: only the transitions that opt in (AnimateDuringScroll) still start.
         bool scrollOnly = suppressed && Motion.LayoutTransitionsSuppressedByScrollOnly && !keepAliveSuppressed && _snapDepth == 0;

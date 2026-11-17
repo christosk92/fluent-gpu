@@ -33,6 +33,12 @@ public static class Motion
     /// <see cref="FluentGpu.Foundation.LayoutTransition.AnimateDuringScroll"/> still animates then.</summary>
     public static bool LayoutTransitionsSuppressedByScrollOnly => _layoutSuppressionSources == (int)MotionSuppressionSource.Scroll;
 
+    /// <summary>True when the only live suppressions are a resize's (the window's modal size loop or a splitter drag): a transition that
+    /// <see cref="FluentGpu.Foundation.LayoutTransition.AnimateDuringResize"/> still animates then.</summary>
+    public static bool LayoutTransitionsSuppressedByResizeOnly
+        => _layoutSuppressionSources != 0
+           && (_layoutSuppressionSources & ~(int)(MotionSuppressionSource.WindowResize | MotionSuppressionSource.AppResize)) == 0;
+
     /// <summary>Set or clear one independently-owned layout-transition suppression source.</summary>
     public static void SetLayoutTransitionsSuppressed(MotionSuppressionSource source, bool suppressed)
     {
