@@ -1554,6 +1554,7 @@ public sealed partial class AppHost : IDisposable
     private readonly Dictionary<int, int> _reflowShoveFrames = new(16);             // parent idx → the child idx on a reflowing node's ancestor path ("the reflow-carrying child under this parent")
     /// <summary>The most layout passes a frame runs after its layout for sizes its layout delivered (a measured width a part re-renders from).</summary>
     private const int BoundsRelayoutPasses = 3;
+    private bool _frameResized;                                                   // this frame changed the window size (ApplyProjections: a drag frame re-renders nothing at the reflows' start)
     private readonly List<NodeHandle> _resizeLandScratch = new(64);                   // ApplyProjections: the captured nodes a resize-only suppression lands
     private readonly List<NodeHandle> _reflowOwnedRoots = new(4);                   // SuppressDescendantTransitions containers a live sibling reflow resizes this commit: they land, they suppress nothing
     private readonly List<int> _positionScratch = new(64);                          // nodes with a position transition (RunReflowLayout's wrap watch)
@@ -6777,6 +6778,7 @@ public sealed partial class AppHost : IDisposable
             long segStart = diagTick ? Stopwatch.GetTimestamp() : 0;
             ApplyPendingFullscreen();   // first: its SetWindowPos resizes the window, and THIS frame's EnsureSize + layout follow it
             bool resized = EnsureSize(keepAlive);
+            _frameResized = resized;
             _tiers.FrameResized = resized;   // a measured crossing stored during this frame's layout waits one more layout (TierRegistry.Store)
             if (_fzPhase != FreezePhase.None) FreezeFrameStart(resized);   // E2: a resize / DPI change or the watchdog cuts the freeze (and ends its snap scope) before this frame flushes
             if (_tx is not null || _txPending is not null) TxFrameStart();  // E5: the theme transaction's step (its apply flush is this frame)
@@ -8798,7 +8800,9 @@ public sealed partial class AppHost : IDisposable
             // that packs its tiles to its own width): it re-renders at it in this frame, as after the commit's own pass (RelayoutBoundsWrites).
             // Left to the next frame, it drew this one at the TARGET width the commit's pass delivered (Zune Home crossing W1008: its full rows
             // 48 wider for one frame, then back at the start beside a page whose margins had only begun to ease).
-            if (_layout.BoundsDeliveries != seedDelivered && _runtime.HasPending)
+            // Not on a frame the window resized: there the only reflows seeded are the opted-in heights (AnimateDuringResize), whose start
+            // changes no width a part sizes itself from, and the re-render cost a board flush and relayout on every drag frame.
+            if (!_frameResized && _layout.BoundsDeliveries != seedDelivered && _runtime.HasPending)
             {
                 RelayoutBoundsWrites(layoutSize);
                 DiscoverProjectionRoots(PosEps, SizeEps);
