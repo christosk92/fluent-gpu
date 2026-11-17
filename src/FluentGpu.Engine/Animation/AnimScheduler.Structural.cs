@@ -478,6 +478,50 @@ public sealed partial class AnimEngine
         }
     }
 
+    /// <summary>Shift where a FLIP's translate row seeded THIS FRAME starts by <paramref name="delta"/>, its rest kept, and pose the node there on
+    /// this frame: the row holds its node <paramref name="delta"/> further from its layout place and glides home over the time it has. The scroll
+    /// anchoring's partner (the host knows which rows are fresh: the nodes its projection pass moved this frame): a scroller whose offset the
+    /// host shifts under a FLIP hold would carry the held node with the content, so the hold takes the shift back and the node starts where it
+    /// was drawn. False when the node has no such row (a driven, keyframed, additive or parked row, none). Allocation-free.</summary>
+    internal bool ShiftHold(NodeHandle node, AnimChannel ch, float delta)
+    {
+        int ex = Find(node, ch);
+        if (ex < 0) return false;
+        ref AnimValue r = ref _slab.At(ex);
+        if (r.Has(AnimFlags.Done) || r.Has(AnimFlags.Driven) || r.Has(AnimFlags.Parked) || r.Has(AnimFlags.Additive)) return false;
+        if (!TryGetTransition(node, out LayoutTransition spec)) return false;
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if (r.Kind == GenKind.Spring)
+        {
+            var sp = SpringParams.FromResponse(dyn.Response, dyn.DampingRatio);
+            float uiBase = r.Position;
+            r.Position += delta;
+            r.Gen = Generators.BakeSpring(in sp, x0: r.Position - r.To, v0: r.Velocity);
+            r.ElapsedMs = 0f;
+            StampCompositorSeed(ex, newInstance: false, explicitFrom: true);
+            MarkSeedRelative(ex, uiBase);
+        }
+        else if (r.Kind is GenKind.Eased or GenKind.Keyframes)   // Animate bakes a two-point tween as keyframes
+        {
+            float start = r.Position + delta, to = r.To, pendingDelay = r.DelayRemainingMs;
+            float remaining = MathF.Max(1f, r.Gen.DurationMs - r.ElapsedMs);
+            Animate(node, ch, start, to, remaining, dyn.Easing, delayMs: pendingDelay);
+            ex = Find(node, ch);
+            if (ex < 0) return false;
+            _slab.At(ex).Flags &= ~AnimFlags.JustSeeded;   // this frame was its seed frame: the next tick moves it
+        }
+        else return false;
+        // This frame's pose: the tick has folded the row already.
+        ref AnimValue now = ref _slab.At(ex);
+        if (!(RenderOwnsCompositor && IsCompositorRow(in now)))
+        {
+            Accum acc = Accum.FromPaint(in _scene.Paint(node));
+            acc.Fold(ch, Posed(in now, now.Position, in _scene.Bounds(node), _scene.DeviceScale), replace: true);
+            Compose(node, in acc);
+        }
+        return true;
+    }
+
     /// <summary>Re-aim every live presented-size REVEAL (SizeW / SizeH, not a Relayout's) whose node a re-solve that was no commit (a live reflow's
     /// tick) laid out at another size than the row aims at: the row shifts by the layout's change (start and target alike, over the time it has
     /// left), so the presented extent keeps its offset from the LIVE layout instead of easing toward the size of the commit that seeded it (a part

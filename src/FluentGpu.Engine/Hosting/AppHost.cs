@@ -8813,6 +8813,8 @@ public sealed partial class AppHost : IDisposable
             // AnimateBounds consumes only deltas, so parent-relative rects feed it directly; for a purely local
             // move this is bit-identical to the old absolute pair (the ancestor sum cancels).
             _anim.AnimateBounds(n, from, to, spec, followLive);
+            // A vertical FLIP hold this frame: the scroll anchoring keeps it where it was drawn if it shifts the content (AppHost.ScrollAnchor.cs).
+            if ((spec.Channels & TransitionChannels.Position) != 0 && MathF.Abs(from.Y - to.Y) >= PosEps) _freshHolds.Add(n);
         }
         _projectionSuppressionRoots.Clear();
         _liveReflowScratch.Clear();
