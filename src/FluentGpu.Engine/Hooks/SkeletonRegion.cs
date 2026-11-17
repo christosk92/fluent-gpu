@@ -33,9 +33,13 @@ public enum SkelReveal : byte
 /// <see cref="Expressive.Fast"/> dissolve. For <see cref="SkelReveal.None"/> the engine floors it at
 /// <see cref="Expressive.Slow"/> (the content owns its entrance, so the placeholder has to linger across it). Ignored under
 /// <c>Motion.ReducedMotion</c> — the swap snaps. A page that wants a "this is taking a while" bar counts its pending
-/// regions with a <see cref="LoadingScope"/>.</summary>
+/// regions with a <see cref="LoadingScope"/>.
+/// <para><c>DeriveComponents</c>: every component the shimmer source nests (a slot host, a chrome, a list that fits its box) mounts in the pending
+/// tree and its rendered output is derived (<see cref="ComponentEl.DeriveRenderedOutput"/>), instead of one default bar for each one that set no
+/// <see cref="ComponentEl.SkeletonProxy"/>. For a source whose components are pure for their props (they draw; they register, play or fetch
+/// nothing): a whole view template, chrome and all, shimmers at its loaded shape.</para></summary>
 public readonly record struct SkeletonStyle(
-    ColorF BarColor, float RowGap = 8f, float BarRadius = 4f, float TextRatio = 0.72f, float ExitMs = Expressive.Fast)
+    ColorF BarColor, float RowGap = 8f, float BarRadius = 4f, float TextRatio = 0.72f, float ExitMs = Expressive.Fast, bool DeriveComponents = false)
 {
     public static SkeletonStyle Default => new(Tok.FillSubtleSecondary);
 }

@@ -27,6 +27,14 @@ internal static class SkeletonDeriver
     /// <param name="inZStack">The parent is a ZStack: a childless box there with no declared extent is a LAYER that fills the stack.</param>
     private static Element Derive(Element real, in SkeletonStyle s, bool inZStack)
     {
+        var derived = DeriveNode(real, s, inZStack);
+        // A whole view derived (SkeletonStyle.DeriveComponents) is a stand-in, never its loaded parts' identity: a key it kept would read as that
+        // part rebuilt when the loaded view replaces the stand-in (its menu button, its rows). Its nodes carry none.
+        return s.DeriveComponents && derived.Key is not null ? derived with { Key = null } : derived;
+    }
+
+    private static Element DeriveNode(Element real, in SkeletonStyle s, bool inZStack)
+    {
         if (real.SkeletonOverride is { } custom) return custom;            // bespoke shimmer for this subtree
         if (real.SkeletonMode == SkeletonMode.Off) return Spacer(real, s); // keep the slot, no shimmer
         // P1 presence (layout.md §4.7): a STATICALLY collapsed real node (Visible unbound and false) has nothing to
@@ -231,6 +239,10 @@ internal static class SkeletonDeriver
                 // A size-reactive boundary that exposed its real shape: derive THAT (recursing into any nested boundaries
                 // too) instead of one default bar — so a hero / shelf / band shimmers as its real layout, not a thin line.
                 return Derive(proxy(), s);
+
+            case ComponentEl nested when s.DeriveComponents:
+                // A region that derives its components (SkeletonStyle.DeriveComponents): this one mounts too and its output is derived.
+                return nested with { DeriveRenderedOutput = true, DerivedSkeletonStyle = s };
 
             default:
                 // Unknown dynamic boundaries must not claim all available width/height. Known reusable controls expose a
