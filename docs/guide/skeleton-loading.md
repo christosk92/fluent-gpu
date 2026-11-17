@@ -1,6 +1,6 @@
 # Skeleton loading — one UI, derived shimmer, blur-reveal swap
 
-> **✅ Animation engine — signals-first rework landed + verified.** The reveal/swap and shimmer here ride the unified slab: the blur-reveal is an `Enter` `EnterExit.Blur` terminal and the shimmer pulse an ambient `Hz` cadence row (so a backgrounded tab's shimmer stops for free); `SkeletonDeriver`/`Skel.Region` are unchanged. Design, now implemented: [`../plans/animation-engine-rework-design.md`](../plans/animation-engine-rework-design.md).
+> **✅ Animation engine — signals-first rework landed + verified.** The reveal/swap here rides the unified slab: the blur-reveal is an `Enter` `EnterExit.Blur` terminal (the placeholder itself is flat and carries no track since 2026-11-15); `SkeletonDeriver`/`Skel.Region` are unchanged. Design, now implemented: [`../plans/animation-engine-rework-design.md`](../plans/animation-engine-rework-design.md).
 
 Showing a shimmer while a UI loads usually means building **two UIs** — the skeleton and the real one — and hand-keeping
 them in sync. FluentGpu makes it one source: you author the real UI, wrap the async region in `Skel.Region(...)`, and the
@@ -48,7 +48,7 @@ return new BoxEl { Direction = 1, Gap = 16f, Children = [
 ]};
 ```
 
-While `tracks` is **Pending**, the region derives `count` shimmer rows from `rowTemplate(null)` and pulses them. On
+While `tracks` is **Pending**, the region derives `count` flat placeholder rows from `rowTemplate(null)` (they never move or pulse). On
 **Ready** it mounts `content(value)` and blur-reveals the rows (staggered). On **Failed** it shows `onFailed`. The
 `group:` token coordinates sibling regions' reveals into one settle window.
 
@@ -92,7 +92,7 @@ slot (`SoftReveal`/`SoftRevealStaggered`).
   group is the known effect-layer perf cliff.
 - For `SkelReveal.None` (the content owns its own entrance — e.g. an `ItemsView`'s per-row adds) the engine **floors**
   ExitMs at `Expressive.Slow`, so the shimmer lingers across that entrance instead of leaving a gap. Nothing to tune.
-- The looping pulse is cancelled on the exit so it can't pin the orphan (the engine still quiesces), and the orphan
+- Any looping track in the exiting subtree is cancelled on the exit so it can't pin the orphan (the engine still quiesces), and the orphan
   carries its **own hard deadline** (`SceneStore.OrphanMaxAgeMs` = duration + delay + slack, measured on the animation
   clock, on top of the host's global 2s backstop) — so a wedged exit track is dropped in about one exit duration instead
   of painting half-faded over the live page.
@@ -101,6 +101,29 @@ slot (`SoftReveal`/`SoftRevealStaggered`).
 Honest note: the swap frame is a **reconcile edge** (it allocates the new subtree's elements), so 0-managed-alloc is
 asserted on the steady frames *after* the swap settles, not on the swap frame — the same discipline as any
 mount/`Flow.Show` branch change (bounded Gen0 at the reconcile edge).
+
+## Page loading bar — `LoadingScope`
+
+A placeholder never says "this is taking a while"; a page says it once, with one thin bar. `LoadingScope` is the counter:
+
+```csharp
+readonly LoadingScope _loading = new();                                   // one per page slot, owned by the page host
+var busy = UseDelayedPending(_loading.IsPending, showAfterMs: 500f, minShowMs: 400f);
+UsePendingClaim(!pageMounted, _loading);                                  // pending UI that is not a region
+return Ctx.Provide(LoadingScope.Current, _loading, page);                 // every Skel.Region under it reports here
+```
+
+- Every `Skel.Region` on its placeholder branch holds one claim on the nearest scope (resolved from its node; the nearest
+  wins, nothing bubbles). A region parked by `Flow.KeepAlive` or a parked virtual row holds none and claims again on the
+  un-park; unmount releases. A region outside every scope reports nowhere, so popups and panels drive nothing unless their
+  host provides a scope.
+- `IsPending` is equality-gated: claims going 1 → 2 → 1 notify nobody. Nothing runs per frame.
+- `UseDelayedPending(pending, showAfterMs, minShowMs)` is the indicator's visible state: false until `pending` has held
+  for `showAfterMs` (a shorter wait never shows), then true for at least `minShowMs`, then it follows `pending` down. One
+  watcher effect and one timer on the host timer queue (the headless host's 16 ms frame clock under `--inspect`).
+- `UsePendingClaim(pending, scope = null)` claims from the passive effect drain, after paint, so a parent handing over to
+  its children's claims never lets the count dip to 0.
+- `AppHost.IsSkeletonPending(region)` reads a region's branch for diagnostics (the inspector's settle waits on it).
 
 ## Control-kit shapes
 

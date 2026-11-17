@@ -17,8 +17,8 @@ namespace FluentGpu.Hooks;
 /// statics. Auto-width text gets a finite width estimated from its authored text/font instead of an auto-width empty box
 /// (which flex would stretch across the parent). Empty/decorative boxes stay empty.</item>
 /// </list>
-/// Honours per-node <c>SkeletonOverride</c> / <c>SkeletonMode.Off</c>. The pulse + the swap reveal are wired by the
-/// reconciler (the existing recipes); this only builds Elements.
+/// Honours per-node <c>SkeletonOverride</c> / <c>SkeletonMode.Off</c>. The swap reveal is wired by the reconciler (the
+/// existing recipes); this only builds Elements, and the placeholder they make is flat.
 /// </summary>
 internal static class SkeletonDeriver
 {
@@ -40,7 +40,7 @@ internal static class SkeletonDeriver
             {
                 // A container is layout, not skeleton content. Preserve geometry and recurse into semantic leaves, but
                 // remove authored chrome. Copying a card fill, hero scrim, gradient, or border turns the whole container
-                // into a giant pulsing slab and obscures the image/text placeholders inside it.
+                // into a giant tinted slab and obscures the image/text placeholders inside it.
                 var kids = new Element[b.Children.Length];
                 for (int i = 0; i < kids.Length; i++) kids[i] = Derive(b.Children[i], s);
                 return b with

@@ -314,6 +314,9 @@ public sealed record EntranceOptions
     public Func<int, (float dx, float dy)?>? ItemFlipFrom { get; init; }
     /// <summary>Optional per-row opacity seed (from→1 after a stagger delay) — an added-row ease-in without a slot remount.</summary>
     public Func<int, (float from, float delayMs)?>? ItemFadeFrom { get; init; }
+    /// <summary>Optional delay (ms) of a row's FLIP seed when it has no <see cref="ItemFadeFrom"/> seed: a row that glides may wait for the rows
+    /// leaving above it. Null (the delegate or its result 0) ⇒ the glide starts at once. Consumed on the entrance edge only, like the two above.</summary>
+    public Func<int, float>? ItemDelayMs { get; init; }
 }
 
 /// <summary>Removal choreography for a bound <see cref="ItemsView"/>. The controller first detaches any realized
@@ -327,6 +330,17 @@ public sealed record RemovalOptions
     public MotionTokenId Motion { get; init; } = MotionTokenId.StandardExit;
     /// <summary>Optional per-row deal delay. The composing control chooses the value from its motion vocabulary.</summary>
     public float StaggerMs { get; init; }
+}
+
+/// <summary>A bound list whose model already holds a NEW membership when it hears of it (a remote answer, another device): the owner diffs
+/// the old order against the new one and calls <see cref="ItemsViewController.CommitMembership"/>, which keeps each realized slot with its
+/// item and retires the slots of rows that left as exit orphans with their OLD content. That works only while no row has re-rendered as
+/// its new item, so <see cref="Observe"/> runs at STRUCTURAL priority (<c>RenderContext.UseStructuralEffect</c>).</summary>
+public sealed record MembershipOptions
+{
+    /// <summary>Runs at mount and whenever a signal it read moves, AHEAD of every row of this list in that flush: diff there and call
+    /// <see cref="ItemsViewController.CommitMembership"/>. It may diff, call the controller and bump a version signal, nothing else.</summary>
+    public required Action Observe { get; init; }
 }
 
 /// <summary>The disclosure seam of a bound virtual list (docs/plans/smooth-reveal-implementation.md §10). The owner starts
@@ -410,6 +424,9 @@ public record ListOptions
     public EntranceOptions? Entrance { get; init; }
     /// <summary>Removal choreography invoked through <see cref="ItemsViewController.BeginRemoval"/> (bound path).</summary>
     public RemovalOptions? Removal { get; init; }
+    /// <summary>Remote membership changes (bound path): the observer that commits them ahead of the rows (<see cref="MembershipOptions"/>).
+    /// Retired rows exit with <see cref="Removal"/>'s recipe.</summary>
+    public MembershipOptions? Membership { get; init; }
     /// <summary>Optional virtualized contiguous disclosure source.</summary>
     public DisclosureOptions? Disclosure { get; init; }
 

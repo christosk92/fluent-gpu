@@ -147,6 +147,10 @@ public sealed class ScrollHandle
     /// <summary>The viewport extent along the scroll axis as a signal.</summary>
     public IReadSignal<double> ViewportSignal => _viewportSig;
 
+    /// <summary>How many viewports have published their FIRST laid-out geometry (0 to a size) on the UI thread. The host compares it across its post-layout
+    /// pass: an arrival re-binds and re-lays out once in the same frame, so a part bound to <see cref="ViewportSignal"/> is never shown at 0.</summary>
+    internal static int ViewportArrivals;
+
     /// <summary><c>max(0, Extent − Viewport)</c> as a signal.</summary>
     public IReadSignal<double> MaxOffsetSignal => _maxSig;
 
@@ -232,6 +236,7 @@ public sealed class ScrollHandle
         if (extent < 0.0) extent = 0.0;
         if (viewport < 0.0) viewport = 0.0;
         bool geometryChanged = extent != _extent || viewport != _viewport;
+        if (_viewport <= 0.0 && viewport > 0.0) ViewportArrivals++;   // its first laid-out geometry (the host's 6.5 pass reads the count)
         _extent = extent;
         _viewport = viewport;
         _extentSig.Value = extent;
@@ -319,7 +324,10 @@ public sealed class ScrollHandle
 
     // ── programmatic moves ──────────────────────────────────────────────────────────────────────────────────────
 
-    public void ScrollTo(double offset, ScrollMove move = ScrollMove.Glide)
+    /// <summary>Moves to <paramref name="offset"/>. <paramref name="maxTravel"/> bounds an animated move: one longer than it cuts to
+    /// <paramref name="maxTravel"/> short of the destination on the side it comes from and decelerates in from there
+    /// (<see cref="PlanAuthor.Arrive"/>); infinity (the default) glides the whole way. An <see cref="ScrollMove.Immediate"/> move jumps.</summary>
+    public void ScrollTo(double offset, ScrollMove move = ScrollMove.Glide, double maxTravel = double.PositiveInfinity)
     {
         if (_slots is null)
         {
@@ -333,9 +341,9 @@ public sealed class ScrollHandle
         ScrollPlan prev = Plan;
         if (move == ScrollMove.Follow && IsUserDriven(in prev, t)) return;
         if (move != ScrollMove.Immediate) t = AnchorAt(t);   // a glide continues from what is already shown
-        ScrollPlan next = move == ScrollMove.Immediate
-            ? PlanAuthor.Immediate(in prev, t, offset)
-            : PlanAuthor.Glide(in prev, t, offset, ScrollTunables.Current);
+        ScrollPlan next = move == ScrollMove.Immediate ? PlanAuthor.Immediate(in prev, t, offset)
+            : double.IsPositiveInfinity(maxTravel) ? PlanAuthor.Glide(in prev, t, offset, ScrollTunables.Current)
+            : PlanAuthor.Arrive(in prev, t, offset, maxTravel, ScrollTunables.Current);
         Publish(in next, t);
         // A destination past the extent known NOW lands at today's max and stays latched as the RAW request: the moment
         // the content grows to hold it (a late measure, a list that is still filling) SetExtent completes the move. Any
@@ -355,8 +363,10 @@ public sealed class ScrollHandle
     /// <summary>Brings a content span [<paramref name="itemTop"/>, <paramref name="itemTop"/> + <paramref name="itemExtent"/>)
     /// into view. <paramref name="align"/> NaN = minimal move (no-op when already fully visible); otherwise the item's
     /// leading edge lands at <c>align·(Viewport − itemExtent)</c> from the viewport's leading edge (0 = top, 0.5 =
-    /// centered, 1 = bottom). Geometry-agnostic: the caller resolves a node to content coordinates.</summary>
-    public void BringIntoView(double itemTop, double itemExtent, float align = float.NaN, ScrollMove move = ScrollMove.Glide, double margin = 0.0)
+    /// centered, 1 = bottom). Geometry-agnostic: the caller resolves a node to content coordinates. <paramref name="maxTravel"/>: as
+    /// <see cref="ScrollTo"/>'s.</summary>
+    public void BringIntoView(double itemTop, double itemExtent, float align = float.NaN, ScrollMove move = ScrollMove.Glide, double margin = 0.0,
+        double maxTravel = double.PositiveInfinity)
     {
         double target;
         if (float.IsNaN(align))
@@ -373,7 +383,7 @@ public sealed class ScrollHandle
             // inside at align 1 — the same gutter the minimal branch keeps.
             target = itemTop - margin - align * (_viewport - itemExtent - 2.0 * margin);
         }
-        ScrollTo(target, move);
+        ScrollTo(target, move, maxTravel);
     }
 
     // ── input paths (called by the host's input dispatch after ScrollRouter picked this viewport) ───────────────

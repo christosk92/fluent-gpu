@@ -20,7 +20,7 @@
 //   kawase passes: K[2] = (srcTexel.xy, offset, 0); K[3] = (dst→src uv scale.xy, max uv.xy)
 //   acrylic:       K[2] = sample map; K[3] = (alpha, topFeatherFrac, radius, 0); K[4] = surface rect px;
 //                  K[5] = tint; K[6] = fallback; K[7] = (tintOpacity, luminosityOpacity, noiseOpacity, 0);
-//                  K[8] = (max uv.xy, min uv.xy)
+//                  K[8] = (max uv.xy, min uv.xy); K[9] = over video (K[3].w = 1): the holes' bounds px (x0, y0, x1, y1)
 
 cbuffer C : register(b0) { float4 K[14]; };
 Texture2D gSrc : register(t0);
@@ -160,19 +160,37 @@ float3 ClipColor(float3 c)
 }
 float3 SetLum(float3 c, float l) { return ClipColor(c + (l - Lum(c))); }
 
-float4 PSAcrylic(V i) : SV_Target
+// The plate's coverage: its rounded rect, the top feather, the item alpha.
+float AcrylicCoverage(float2 p)
 {
-    float2 p = i.pos.xy;
     float cov = saturate(0.5 - sdRoundRect(p, K[4], K[3].z));
     if (K[3].y > 0.0)
     {
         float t = (p.y - K[4].y) / max(K[4].w - K[4].y, 1e-4);
         cov *= smoothstep(0.0, K[3].y, t);
     }
-    cov *= saturate(K[3].x);
+    return cov * saturate(K[3].x);
+}
+
+// The ordinary frost of a blurred, premultiplied backdrop: SourceOver the opaque fallback, the luminosity blend, the tint/colour
+// blend, the noise. Opaque.
+float4 AcrylicFrost(float4 src, float nz)
+{
+    float3 B = src.rgb + K[6].rgb * saturate(1.0 - src.a);
+    float3 lumBlend = lerp(B, SetLum(B, Lum(K[5].rgb)), K[7].y);
+    float3 colorBlend = SetLum(K[5].rgb, Lum(lumBlend));
+    float3 res = lerp(lumBlend, colorBlend, K[7].x);
+    res += (nz - 0.5) * K[7].z;
+    return float4(res, 1.0);
+}
+
+// The plate's colour before coverage, premultiplied.
+float4 AcrylicPlate(float2 p)
+{
     float2 uv = clamp((p - K[2].xy) * K[2].zw, K[8].zw, K[8].xy);
     float4 src = gSrc.SampleLevel(gLinear, uv, 0);
     float nz = frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+    float4 frost = AcrylicFrost(src, nz);
     if (K[3].w > 0.5)
     {
         // Over a video hole (AcrylicRecipe.OverVideo): the mini-composite holds only what the UI painted over the video (the stage's
@@ -180,30 +198,37 @@ float4 PSAcrylic(V i) : SV_Target
         // this plate BLURRED and luminosity-pinned to the tint (IVideoPresenter.SetBackdrops), so the frost here is the colour step: the
         // tint veil, left translucent for the window to composite over that. The UI under the plate is pinned like the video would be
         // (the luminosity step overrides its lightness), so it shows through only by (1 - LuminosityOpacity). Never the opaque fallback.
+        // The plate REPLACES the back buffer under it (PSAcrylicVideo): the back buffer still holds that UI crisp.
         float va = K[7].w;
         float4 veil = float4(K[5].rgb * va, va);
         float4 o = veil + src * ((1.0 - va) * (1.0 - K[7].y));
         o.rgb += (nz - 0.5) * K[7].z * o.a;
-        // A plate that only PARTLY covers the hole (a menu or the search suggestions over the page AND the video panel): where the
-        // mini-composite is opaque there is no video beneath, only the UI, and the translucent veil let that UI show through sharp
-        // (the plate is blended over the back buffer, which already holds it). There the plate is the ordinary frost of the blurred
-        // UI, opaque; the veil remains where the backdrop is the video (transparent, or under a scrim). The switch follows the
-        // backdrop's own alpha, so it is smooth across the blurred edge of the hole.
+        // Where the mini-composite is opaque inside the hole (UI with its own ground over the video) there is no video to see: the
+        // ordinary frost of that UI, opaque. The switch follows the backdrop's own alpha, smooth across a blurred edge.
         float opaque = smoothstep(0.9, 1.0, src.a);
-        if (opaque > 0.0)
-        {
-            float3 ui = src.rgb / max(src.a, 1e-4);
-            float3 uiLum = lerp(ui, SetLum(ui, Lum(K[5].rgb)), K[7].y);
-            float3 uiCol = lerp(uiLum, SetLum(K[5].rgb, Lum(uiLum)), K[7].x);
-            uiCol += (nz - 0.5) * K[7].z;
-            o = lerp(o, float4(uiCol, 1.0), opaque);
-        }
-        return o * cov;
+        if (opaque > 0.0) o = lerp(o, frost, opaque);
+        // The veil belongs to the video only: outside the holes' bounds (K[9], AcrylicRecipe.VideoRect) the plate lies over UI or over
+        // the clear colour where the window's Mica shows, and there it is the ordinary opaque frost, as for any plate.
+        float inVideo = saturate(0.5 - sdRoundRect(p, K[9], 0.0));
+        frost = lerp(frost, o, inVideo);
     }
-    float3 B = src.rgb + K[6].rgb * saturate(1.0 - src.a);
-    float3 lumBlend = lerp(B, SetLum(B, Lum(K[5].rgb)), K[7].y);
-    float3 colorBlend = SetLum(K[5].rgb, Lum(lumBlend));
-    float3 res = lerp(lumBlend, colorBlend, K[7].x);
-    res += (nz - 0.5) * K[7].z;
-    return float4(res * cov, cov);
+    return frost;
+}
+
+float4 PSAcrylic(V i) : SV_Target
+{
+    return AcrylicPlate(i.pos.xy) * AcrylicCoverage(i.pos.xy);
+}
+
+// An OverVideo plate: dual-source REPLACE under its coverage (dst' = plate * cov + dst * (1 - cov); SliceCompositor Blend.Replace).
+// A source-over blend kept the crisp UI the back buffer holds over the hole behind the translucent veil, so a menu over a Canvas
+// showed the panel's tabs and combo sharp through it. The plate already carries that UI, blurred, from its mini-composite.
+struct AcrylicReplaceOut { float4 c : SV_Target0; float4 w : SV_Target1; };
+AcrylicReplaceOut PSAcrylicVideo(V i)
+{
+    float cov = AcrylicCoverage(i.pos.xy);
+    AcrylicReplaceOut o;
+    o.c = AcrylicPlate(i.pos.xy) * cov;
+    o.w = float4(cov, cov, cov, cov);
+    return o;
 }

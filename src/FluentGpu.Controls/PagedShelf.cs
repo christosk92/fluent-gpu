@@ -1474,8 +1474,11 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
             _glideRemap = _remapPending;
             _glideRev++;
             // A multi-row cell changes its width with the column count: while the glide runs, each slot's content eases to its new width
-            // through layout (ShelfCardSlot). Written here, never read by this render (the _effSpanSig shape above).
-            if (rowsNow > 1)
+            // through layout (ShelfCardSlot). Written here, never read by this render (the _effSpanSig shape above). Only when the cell's width
+            // changes (the columns per page or the lead's span): a rows-only re-fit (a chart taking the rows its column holds) keeps every cell's
+            // width, so there is nothing to ease, and an armed resize would ease any width correction landing in its window (a cell that realized
+            // against a provisional width) into a visible grow, and re-render every slot twice to arm and disarm it.
+            if (rowsNow > 1 && (laidOut.PerPage != perPageColumns || laidOut.LeadSpan != effSpan))
             {
                 _resizeArmed.Value = true;
                 _armRev++;
@@ -2153,7 +2156,7 @@ internal sealed class PagedShelfCore<T> : Component, IPropsHost
         // pure update, with the live ItemsView the same sibling that never flashes out of the tree — but its CELLS
         // exist ONLY while a pass is in flight (_probeSample > 0). They used to be emitted on EVERY render forever
         // (_probeSample was latched by the first probe and never cleared): a settled measured shelf rebuilt up to 24
-        // FULL card subtrees per render — each a ShelfCard + LazyNowPlayingOverlay + CoverShimmer + tooltip tree — and
+        // FULL card subtrees per render — each a ShelfCard + LazyNowPlayingOverlay + cover tile + tooltip tree — and
         // kept them mounted. The record-cull below hides them from the RECORDER, but layout does not honour
         // NodeFlags.Visible, so every layout pass still measured all of them: eight measured shelves on the artist
         // page meant ~190 phantom cards resident and remeasured for the page's whole life.

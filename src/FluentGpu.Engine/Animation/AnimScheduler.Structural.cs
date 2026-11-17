@@ -67,6 +67,11 @@ public sealed partial class AnimEngine
     /// (<see cref="AnimFlags.JustSeeded"/>) already shows t=0 on that frame; this marks the rows so the NEXT advance
     /// measures from its presentation (<see cref="PendingStartStep"/>, and RenderCompositorAnimations for render-owned
     /// rows). O(rows on the node), allocation-free; only this call's fresh rows carry JustSeeded.</summary>
+    /// <summary>Mark the rows just seeded on <paramref name="node"/> (this frame's fresh rows) pending-start, as an entrance's are:
+    /// the seed frame shows their start, and their clock starts at the first frame that presents it, so a slow commit frame (a
+    /// page mounting) eats none of their run. The connected navigation flight seeds its flyer's springs on the mount frame.</summary>
+    internal void HoldStartUntilPresented(NodeHandle node) => MarkStartPending(node, FluentGpu.Hosting.TraceAnimKind.Enter);
+
     private void MarkStartPending(NodeHandle node, FluentGpu.Hosting.TraceAnimKind kind = FluentGpu.Hosting.TraceAnimKind.Enter)
     {
         int rows = 0;

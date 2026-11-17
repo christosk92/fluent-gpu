@@ -7,9 +7,9 @@ using FluentGpu.Signals;
 namespace FluentGpu.Hooks;
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-//  Timing hooks — debounce / throttle / timeout / interval over the host's frame-clock HostTimerQueue.
+//  Timing hooks — debounce / throttle / timeout / interval / delayed-pending over the host's frame-clock HostTimerQueue.
 //
-//  All four are mount-once: one cell + (for debounce/throttle) one standalone watcher Effect + (for interval) one
+//  All five are mount-once: one cell + (for debounce/throttle/delayed-pending) one standalone watcher Effect + (for interval) one
 //  activation watcher, allocated at mount and reused every render. A source change re-arms via a LAZY heap re-insert
 //  guarded by a per-cell generation, so the steady render — and a quiet frame with an armed-but-not-due timer — allocate
 //  nothing. Every cell is IDisposableCell + generation-guarded: RunAllCleanups (unmount) bumps the generation so a
@@ -137,6 +137,55 @@ internal sealed class ThrottleCell<T> : HookCell, IDisposableCell
 
     public void Arm() { if (Queue is null) return; Queue.Cancel(Fire); Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(Ms, 0f), Gen, Fire, OwnerType); }
     public void DisposeCell() { Queue?.Cancel(Fire); Gen++; Watcher?.Dispose(); OwnedSource?.Dispose(); }
+}
+
+// The delay + minimum-show machine behind UseDelayedPending. Two facts (Source = pending now, Output = shown), the time it
+// showed and at most one armed timer: Idle (out false, no timer), Waiting (out false, timer = show), Shown (out true, no
+// timer), Lingering (out true, timer = hide).
+internal sealed class DelayedPendingCell : HookCell, IDisposableCell
+{
+    public HostTimerQueue? Queue;
+    public Type? OwnerType;
+    public long Gen;
+    public bool Armed;
+    public float DelayMs, MinVisibleMs;
+    public double ShownAtMs;
+    public IReadSignal<bool> Source = null!;
+    public Signal<bool> Output = null!;
+    public Effect? Watcher;
+    public readonly Action<long> Fire;
+
+    public DelayedPendingCell() => Fire = OnFire;
+
+    public void OnSource(bool pending)
+    {
+        if (Queue is null) return;                                  // no timers: the output stays false
+        if (pending)
+        {
+            if (Output.Peek()) { Disarm(); return; }                // Shown stays; Lingering → Shown (ShownAtMs kept)
+            if (Armed) return;                                      // already Waiting
+            if (DelayMs <= 0f) { Show(); return; }
+            ArmIn(DelayMs);                                     // Idle → Waiting
+            return;
+        }
+        if (!Output.Peek()) { Disarm(); return; }                   // Waiting → Idle: a short wait never shows
+        double left = MinVisibleMs - (Queue.NowMs - ShownAtMs);
+        if (left <= 0) { Disarm(); Output.Value = false; }          // Shown → Idle
+        else if (!Armed) ArmIn((float)left);                        // Shown → Lingering
+    }
+
+    private void OnFire(long g)
+    {
+        if (g != Gen) return;
+        Armed = false;
+        if (Source.Peek()) { if (!Output.Peek()) Show(); }          // Waiting → Shown
+        else Output.Value = false;                                  // Lingering → Idle
+    }
+
+    private void Show() { ShownAtMs = Queue!.NowMs; Output.Value = true; }
+    private void ArmIn(float ms) { Queue!.Cancel(Fire); Gen++; Armed = true; Queue.Schedule(Queue.NowMs + MathF.Max(ms, 0f), Gen, Fire, OwnerType); }
+    private void Disarm() { if (!Armed) return; Queue?.Cancel(Fire); Gen++; Armed = false; }
+    public void DisposeCell() { Queue?.Cancel(Fire); Gen++; Armed = false; Watcher?.Dispose(); }
 }
 
 internal sealed class IntervalCell : HookCell, IDisposableCell
@@ -329,6 +378,36 @@ public sealed partial class RenderContext
             if (cell.Key != deps) { cell.Key = deps; cell.Arm(ms); }   // deps change → restart
         }
         return new TimerHandle(cell);
+    }
+
+    // ── UseDelayedPending ────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The visible state of a "this is taking a while" indicator: false until <paramref name="pending"/> has
+    /// stayed true for <paramref name="showAfterMs"/>; once true it stays true for at least <paramref name="minShowMs"/>,
+    /// then follows <paramref name="pending"/> down. A wait shorter than <paramref name="showAfterMs"/> never shows, and a
+    /// pending edge inside the minimum keeps it up. Zero re-render: one standalone watcher effect and one timer on the host
+    /// timer queue (the headless host's frame clock under <c>--inspect</c>). Without a host timer queue the output stays
+    /// false. A source that is already pending at mount starts the delay at mount.</summary>
+    public IReadSignal<bool> UseDelayedPending(IReadSignal<bool> pending, float showAfterMs = 500f, float minShowMs = 400f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+    {
+        int idx = LookupCell(__hf, __hl, out var __k);
+        DelayedPendingCell cell;
+        if (idx < 0)
+        {
+            var queue = ResolveTimers();
+            bool showNow = queue is not null && showAfterMs <= 0f && pending.Peek();   // seeded, never written in render
+            cell = new DelayedPendingCell
+            {
+                Queue = queue, OwnerType = Owner?.GetType(), Source = pending, DelayMs = showAfterMs, MinVisibleMs = minShowMs,
+                Output = new Signal<bool>(showNow), ShownAtMs = showNow ? queue!.NowMs : 0,
+            };
+            RegisterCell(__k, cell, cleanupCapable: true);
+            cell.Watcher = new Effect(Rt, () => cell.OnSource(cell.Source.Value));   // runs now (arms a mount-time pending) and per change
+        }
+        else cell = (DelayedPendingCell)CellAt(idx);
+        cell.DelayMs = showAfterMs;
+        cell.MinVisibleMs = minShowMs;
+        return cell.Output;
     }
 
     // ── UseInterval ──────────────────────────────────────────────────────────────────────────────────────────────────

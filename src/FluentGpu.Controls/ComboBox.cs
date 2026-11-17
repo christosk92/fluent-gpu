@@ -120,6 +120,22 @@ public sealed class ComboBox : Component
     public const float ItemPillScaleMin = 0.625f;// ComboBoxItemPillMinScale (pressed)
     public const float PillScaleMs = 167f;        // ComboBoxItemScaleAnimationDuration / ControlFastAnimationDuration
     public const float MaxDropDownHeight = 504f;  // MaxDropDownHeight (generic.xaml:8887 style setter)
+    internal const float ItemPillWidth = 3f, ItemPillHeight = 16f, ItemPillRadius = 1.5f;   // ComboBoxItemPillWidth/Height, the pill's corner
+
+    /// <summary>The selection pill (ComboBoxItemPill): 3×16, corner 1.5, centred on the cross axis. SelectedPressed: PillTransform ScaleY 1 →
+    /// <see cref="ItemPillScaleMin"/> over <see cref="PillScaleMs"/> (KeySpline 0,0,0,1 = FluentPopOpen) about its centre. The pill is not
+    /// interactive, so it follows the ROW's press (the engine's press cascade); leaving SelectedPressed has no VisualTransition, so the release
+    /// snaps back. Composited only: the row never relayouts. Reduced motion holds the scale at 1 (a value, never a branch). ONE element for every
+    /// single-choice visual (the ComboBox's dropdown rows, a <see cref="MenuRadioMark.Pill"/> menu's chosen radio row), so the two never drift.</summary>
+    internal static BoxEl SelectionPill(ColorF fill) => new()
+    {
+        Width = ItemPillWidth, Height = ItemPillHeight, Corners = CornerRadius4.All(ItemPillRadius), Fill = fill, AlignSelf = FlexAlign.Center,
+        PressScale = Motion.ReducedMotion ? 1f : ItemPillScaleMin,
+        InteractScaleAxes = ScaleAxes.Y,
+        PressDurationMs = PillScaleMs,
+        PressReleaseDurationMs = 0f,
+        PressEasing = Easing.FluentPopOpen,
+    };
     // Item geometry (ComboBoxItem template): content padding 11,5,11,7 (ComboBoxItemThemePadding) around a 20px
     // 14pt line + LayoutRoot margin 5,2,5,2 → a 36px row pitch; touch mode pads 11,11,11,13 (ComboBoxItemThemeTouchPadding,
     // generic.xaml:131) → 48px pitch. The 4px dropdown content inset is ComboBoxDropdownContentMargin 0,4,0,4.
@@ -975,21 +991,9 @@ internal sealed class ComboBoxList : Component
                 Padding = Owner.TouchInputMode ? ComboBox.ItemTouchPadding : ComboBox.ItemPadding,
                 Children = [labelCol],
             };
-            // SelectedPressed: PillTransform ScaleY 1 → ComboBoxItemPillMinScale over ComboBoxItemScaleAnimationDuration
-            // (KeySpline 0,0,0,1 = FluentPopOpen) about the pill's centre (RenderTransformOrigin 0.5,0.5). The pill is
-            // not interactive, so it follows the ROW's press (the engine's press cascade); leaving SelectedPressed has no
-            // VisualTransition, so the release snaps back. Composited only: the row never relayouts. Reduced motion = no squish.
+            // The selected row's pill (ComboBox.SelectionPill: 3×16, the SelectedPressed squash), flush on the row's left edge.
             Element[] rowChildren = selected && st.ItemPill
-                ? [Owner.Parts.Apply(ComboBox.PartItemPill,
-                       new BoxEl
-                       {
-                           Width = 3f, Height = 16f, Corners = CornerRadius4.All(1.5f), Fill = st.ItemPillFill, AlignSelf = FlexAlign.Center,
-                           PressScale = Motion.ReducedMotion ? 1f : ComboBox.ItemPillScaleMin,
-                           InteractScaleAxes = ScaleAxes.Y,
-                           PressDurationMs = ComboBox.PillScaleMs,
-                           PressReleaseDurationMs = 0f,
-                           PressEasing = Easing.FluentPopOpen,
-                       }), content]
+                ? [Owner.Parts.Apply(ComboBox.PartItemPill, ComboBox.SelectionPill(st.ItemPillFill)), content]
                 : [content];
 
             // Item state matrix (ComboBox_themeresources, the style's): unselected rest=Transparent, hover=SubtleSecondary,

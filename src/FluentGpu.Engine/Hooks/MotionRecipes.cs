@@ -161,22 +161,6 @@ public static class MotionRecipes
         }
     }
 
-    /// <summary>transitions.dev "skeleton loader" pulse: a gentle looping opacity breathe (1 → <paramref name="min"/> →
-    /// 1) on a skeleton placeholder. Place it on the bars/avatar; cross-fade to the real content with a blurred
-    /// <see cref="SoftReveal"/> (opacity + Blur) when data arrives — the two layers share the slot, so the swap is
-    /// layout-free. Loops until cancelled (<see cref="AnimEngine.Cancel"/>).</summary>
-    public static void SkeletonPulse(this AnimEngine anim, NodeHandle node, float min = 0.5f, float durationMs = 1000f)
-    {
-        if (Motion.ReducedMotion) return;
-        // Every GPU tier gets the same shimmer (owner decision, 2026-10-05). The weak-tier branch that seeded a flat,
-        // non-looping opacity instead (the Adreno DEVICE_HUNG era: a hot render loop made every decoded texture upload on the
-        // next frame) is gone: the upload drain is budgeted per turn (one flat budget on every tier), the image cache is sized per tier,
-        // and a visible loop is never slowed for the hardware it runs on - only the measured GPU governor may pace it.
-        anim.Keyframes(node, AnimChannel.Opacity,
-            [new Keyframe(0f, 1f), new Keyframe(0.5f, min, Easing.EaseInOut), new Keyframe(1f, 1f, Easing.EaseInOut)],
-            durationMs, loop: true);
-    }
-
     /// <summary>transitions.dev "menu dropdown" / "modal" / "tooltip" open (the incoming half): scale from
     /// <paramref name="fromScale"/>→1 + Opacity 0→1, GROWING FROM the trigger anchor (set the node's
     /// <c>TransformOriginX/Y</c> so it unfolds from the right edge of the screen-space anchor — e.g. originY=0 for a

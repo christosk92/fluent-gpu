@@ -79,6 +79,8 @@ public abstract class Component
     /// inactive (page parked OR window minimized/suspended), <paramref name="onActivated"/> when it returns. Transitions
     /// only — never at mount (start work in <c>UseEffect</c>) or unmount (use its cleanup). Pause your own background
     /// work (poll/timer/OS subscription) here.</summary>
+    /// <inheritdoc cref="RenderContext.UseStructuralEffect"/>
+    protected void UseStructuralEffect(Action body, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseStructuralEffect(body, __hf, __hl);
     protected void UseActivation(Action? onActivated = null, Action? onDeactivated = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseActivation(onActivated, onDeactivated, __hf, __hl);
     /// <summary>The host UI-thread poster (<see cref="HostDispatch.Post"/>): run an action on the UI thread next frame
     /// from any thread. Use for off-thread data instead of <c>UseContext(FrameClock.Tick)</c> + a per-frame drain.</summary>
@@ -110,6 +112,13 @@ public abstract class Component
     /// <paramref name="deps"/> change (default = once from mount); a due fire after unmount is a no-op. See
     /// <see cref="RenderContext.UseTimeout"/>.</summary>
     protected TimerHandle UseTimeout(Action callback, float ms, DepKey deps = default, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseTimeout(callback, ms, deps, __hf, __hl);
+    /// <summary>A "this is taking a while" flag: true once <paramref name="pending"/> has held for
+    /// <paramref name="showAfterMs"/>, then for at least <paramref name="minShowMs"/> (zero re-render). See
+    /// <see cref="RenderContext.UseDelayedPending"/>.</summary>
+    protected IReadSignal<bool> UseDelayedPending(IReadSignal<bool> pending, float showAfterMs = 500f, float minShowMs = 400f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseDelayedPending(pending, showAfterMs, minShowMs, __hf, __hl);
+    /// <summary>Hold one claim on <paramref name="scope"/> (default: the nearest <see cref="LoadingScope"/>) while
+    /// <paramref name="pending"/> is true. See <see cref="RenderContext.UsePendingClaim"/>.</summary>
+    protected void UsePendingClaim(bool pending, LoadingScope? scope = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UsePendingClaim(pending, scope, __hf, __hl);
     /// <summary>Fire <paramref name="tick"/> every <paramref name="ms"/> while <paramref name="enabled"/> and the
     /// component is active — auto-pauses while parked/minimized, resumes cleanly. See <see cref="RenderContext.UseInterval"/>.</summary>
     protected void UseInterval(Action tick, float ms, bool enabled = true, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseInterval(tick, ms, enabled, __hf, __hl);

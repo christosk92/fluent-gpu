@@ -24,16 +24,18 @@ public enum SkelReveal : byte
     None,
 }
 
-/// <summary>The look of the derived shimmer (bar color + corner, the breathing pulse, and the inter-row gap the list
-/// shimmer stacks at), plus <c>ExitMs</c> — the shimmer's own FADE-OUT duration on the Pending→Ready swap. The shimmer
-/// leaves as an exit orphan (drawn UNDER the live tree) while the real content reveals up over it, so ExitMs is one half
-/// of a cross-dissolve, never a delay before the content appears. Defaults to the WinUI-flavoured subtle fill + a 1s
-/// breathe (matches the gallery skeleton bars) and a <see cref="Expressive.Fast"/> dissolve. For
-/// <see cref="SkelReveal.None"/> the engine floors it at <see cref="Expressive.Slow"/> (the content owns its entrance,
-/// so the shimmer has to linger across it). Ignored under <c>Motion.ReducedMotion</c> — the swap snaps.</summary>
+/// <summary>The look of the derived placeholder (bar colour and corner, the inter-row gap the list placeholder stacks at,
+/// the text bar's share of a line box) and <c>ExitMs</c>, the placeholder's FADE-OUT under the revealing content on the
+/// Pending→Ready swap. The placeholder is flat: it never moves or pulses, and it has no time on screen of its own (content
+/// already in hand never shows one; content that lands replaces it at once). It leaves as an exit orphan (drawn UNDER the
+/// live tree) while the real content reveals up over it, so ExitMs is one half of a cross-dissolve, never a delay before
+/// the content appears. Defaults to the WinUI-flavoured subtle fill (matches the gallery skeleton bars) and a
+/// <see cref="Expressive.Fast"/> dissolve. For <see cref="SkelReveal.None"/> the engine floors it at
+/// <see cref="Expressive.Slow"/> (the content owns its entrance, so the placeholder has to linger across it). Ignored under
+/// <c>Motion.ReducedMotion</c> — the swap snaps. A page that wants a "this is taking a while" bar counts its pending
+/// regions with a <see cref="LoadingScope"/>.</summary>
 public readonly record struct SkeletonStyle(
-    ColorF BarColor, float PulseMs = 1000f, float PulseMin = 0.5f, float RowGap = 8f, float BarRadius = 4f, float TextRatio = 0.72f,
-    float ExitMs = Expressive.Fast)
+    ColorF BarColor, float RowGap = 8f, float BarRadius = 4f, float TextRatio = 0.72f, float ExitMs = Expressive.Fast)
 {
     public static SkeletonStyle Default => new(Tok.FillSubtleSecondary);
 }

@@ -24,6 +24,11 @@ public enum MenuRadioMark : byte
     /// <summary>A drawn disc of <see cref="MenuFlyout.Style.DotSize"/> in the mark ink on the chosen row; with <see cref="MenuFlyout.Style.RingAtRest"/>
     /// a ring of the same size on every other radio row. Exact at any size (no glyph's side bearings), so a theme can match its board.</summary>
     Dot = 1,
+    /// <summary>The ComboBoxItem's selection visual: the 3×16 accent pill (<see cref="MenuFlyout.Style.PillFill"/>, the ComboBox's own element with
+    /// its pressed squash) flush on the chosen row's left edge, over the style's <see cref="MenuFlyout.Style.SelectedFill"/>. A radio row reserves no
+    /// check column (its label starts at the row padding, as a combo item's does); a menu that also holds a toggle keeps the column for every row,
+    /// so the labels stay on one edge.</summary>
+    Pill = 2,
 }
 
 /// <summary>A single row in a <see cref="MenuFlyout"/>: a label, an optional leading <see cref="Icon"/> (icon column), an
@@ -56,7 +61,8 @@ public readonly record struct MenuFlyoutItem(string Label, IconRef Icon = defaul
     public static MenuFlyoutItem Toggle(string label, bool isChecked, Action? invoke = null, IconRef icon = default, bool enabled = true)
         => new(label, icon, enabled, invoke) { Kind = MenuItemKind.Toggle, IsChecked = isChecked };
 
-    /// <summary>A mutually-exclusive command (WinUI RadioMenuFlyoutItem): an E915 bullet column whose glyph paints when selected.</summary>
+    /// <summary>A mutually-exclusive command (WinUI RadioMenuFlyoutItem): an E915 bullet column whose glyph paints when selected, or the
+    /// style's own mark (<see cref="MenuFlyout.Style.RadioMark"/>: a drawn dot, or the ComboBoxItem pill).</summary>
     public static MenuFlyoutItem RadioItem(string label, bool isChecked, Action? invoke = null, IconRef icon = default, bool enabled = true)
         => new(label, icon, enabled, invoke) { Kind = MenuItemKind.Radio, IsChecked = isChecked };
 
@@ -168,7 +174,8 @@ public static class MenuFlyout
         public float MarkColumnWidth { get; init; } = PlaceholderWidth;
         /// <summary>A checked toggle row's glyph (ToggleMenuFlyoutItem CheckGlyph E73E).</summary>
         public string CheckGlyph { get; init; } = MenuFlyout.CheckGlyph;
-        /// <summary>How a radio row is marked: the <see cref="RadioGlyph"/> on the chosen row (WinUI), or a drawn <see cref="MenuRadioMark.Dot"/>.</summary>
+        /// <summary>How a radio row is marked: the <see cref="RadioGlyph"/> on the chosen row (WinUI), a drawn <see cref="MenuRadioMark.Dot"/>, or the
+        /// ComboBoxItem's <see cref="MenuRadioMark.Pill"/>.</summary>
         public MenuRadioMark RadioMark { get; init; } = MenuRadioMark.Glyph;
         /// <summary>The chosen radio row's glyph under <see cref="MenuRadioMark.Glyph"/> (RadioMenuFlyoutItem CheckGlyph E915).</summary>
         public string RadioGlyph { get; init; } = MenuFlyout.RadioGlyph;
@@ -180,6 +187,9 @@ public static class MenuFlyout
         public ColorF MarkHoverColor { get; init; } = Tok.TextPrimary;
         /// <summary>The mark's ink while pressed (MenuFlyoutSubItemForegroundPressed = TextFillColorPrimary).</summary>
         public ColorF MarkPressedColor { get; init; } = Tok.TextPrimary;
+        /// <summary>The chosen radio row's pill under <see cref="MenuRadioMark.Pill"/> (ComboBoxItemPillFillBrush = AccentFillColorDefault); a disabled
+        /// chosen row draws it in AccentFillColorDisabled.</summary>
+        public ColorF PillFill { get; init; } = Tok.AccentDefault;
         /// <summary>The disc's diameter under <see cref="MenuRadioMark.Dot"/> (and the ring's, with <see cref="RingAtRest"/>).</summary>
         public float DotSize { get; init; } = 6f;
         /// <summary>Under <see cref="MenuRadioMark.Dot"/>: every radio row that is not chosen draws a ring of <see cref="DotSize"/>, so the group
@@ -275,15 +285,30 @@ public static class MenuFlyout
         // Disabled = TextDisabled (themeresources:26-30).
         ColorF chevronFg = enabled ? st.SubMenuGlyphColor : Tok.TextDisabled;
 
-        var children = new List<Element>(5);
+        var children = new List<Element>(6);
+
+        // The ComboBoxItem pill (MenuRadioMark.Pill): the chosen radio row's first child, of zero net width (pulled out over the row's left
+        // padding onto the plate's inside edge, its 3 handed back on the right), so the label keeps the padding's 11 on every row. The margin
+        // cancels the padding's top/bottom difference: the pill centres on the plate, as the combo's does in its ZStack row.
+        if (marked && it.Kind == MenuItemKind.Radio && st.RadioMark == MenuRadioMark.Pill)
+        {
+            var pad = st.ItemPadding;
+            float lift = pad.Bottom - pad.Top;
+            children.Add(ComboBox.SelectionPill(enabled ? st.PillFill : Tok.AccentDisabled) with
+            {
+                Margin = new Edges4(-pad.Left, MathF.Max(0f, lift), pad.Left - ComboBox.ItemPillWidth, MathF.Max(0f, -lift)),
+                Shrink = 0f, HitTestVisible = false,
+            });
+        }
 
         // Column 0: the check column (MarkColumnWidth): the toggle's check or the radio's mark, painted when on (CheckGlyph.Opacity 0→1),
         // or the style's ring on a radio row that is not chosen. Every row of a checkable menu keeps the column, so a change of choice
-        // moves nothing.
+        // moves nothing. Under MenuRadioMark.Pill a radio row's cell stays empty (the column is there only for a toggle in the same menu).
         if (checkColumn)
         {
             Element mark = new BoxEl();
-            if (it.Kind == MenuItemKind.Radio && st.RadioMark == MenuRadioMark.Dot)
+            if (it.Kind == MenuItemKind.Radio && st.RadioMark == MenuRadioMark.Pill) { /* the pill sits on the plate's edge: an empty cell */ }
+            else if (it.Kind == MenuItemKind.Radio && st.RadioMark == MenuRadioMark.Dot)
             {
                 if (marked || st.RingAtRest) mark = Dot(marked, enabled, st);
             }
@@ -498,7 +523,8 @@ internal sealed class MenuFlyoutPresenter : Component
         {
             var it = Items[i];
             if (it.IsSeparator || it.Kind == MenuItemKind.Header) continue;
-            if (it.Kind is MenuItemKind.Toggle or MenuItemKind.Radio) checkColumn = true;
+            // A pill-marked radio row carries its mark on the plate's edge, so only a toggle (or a glyph/dot radio) asks for the check column.
+            if (it.Kind == MenuItemKind.Toggle || (it.Kind == MenuItemKind.Radio && st.RadioMark != MenuRadioMark.Pill)) checkColumn = true;
             if (it.Icon.HasContent && st.ShowIcons) iconColumn = true;
         }
 

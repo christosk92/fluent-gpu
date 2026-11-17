@@ -10,6 +10,13 @@ using FluentGpu.Signals;
 
 namespace FluentGpu.Hooks;
 
+/// <summary>The bound-list membership seam (<see cref="RenderContext.CommitVirtualMembership"/>): <paramref name="newIndexOf"/> maps an old
+/// item index to its new one (-1 gone); <paramref name="leaves"/> names an old index whose slot must go although its item survives;
+/// <paramref name="frameShift"/> is the anchor rebase of the change (DIP, scroll axis), carried by the retired rows;
+/// <paramref name="exitDelayMs"/> delays a retired row's exit; without <paramref name="animate"/> nothing retires.</summary>
+public delegate void VirtualMembershipCommit(NodeHandle viewport, Func<int, int> newIndexOf, Func<int, bool>? leaves, float frameShift,
+                                             Func<int, float>? exitDelayMs, EnterExit exit, MotionTokenId motion, bool animate);
+
 /// <summary>The cell object of a hook whose state is more than its one payload (timers, resources, deps-gated effects, ...).
 /// The common hooks store their payload (the signal, memo, ref or effect they hand out) straight in their
 /// <see cref="HookSlot"/>; the slot also holds the call-site key and the render epoch (PERF r3 MODEL M2).</summary>
@@ -630,6 +637,16 @@ public sealed partial class RenderContext
     /// For a component that MOUNTS a page's content after the keep-alive switch itself (a deferred cold mount): the content's first layouts must
     /// land, not animate in from zero as a keep-alive activation's would not.</summary>
     public Action? SuppressLayoutTransitions;
+    /// <summary>Reconciler-injected: the tree THIS render mounts arrives whole, as one with this component, so no <c>Enter</c> inside it plays and
+    /// every part lands at its authored pose. For a component that mounts a page (a keep-alive page's first mount, a deferred cold mount): the
+    /// page's own entrance (or its cut) presents it, and a part's Enter is for when that part comes or swaps inside the live page, not for the
+    /// page's arrival. Mounted under it, every Enter of a page multiplied the page's entrance (a detail frame's arm fading in from 0 under the
+    /// page's fade: the card read almost empty for two frames). Parts that mount later (a row the data brings, a swap) enter as authored. Call
+    /// it from inside the render whose output arrives; it holds for that render's reconcile only.</summary>
+    public Action? ArriveWhole;
+    /// <summary>Reconciler-set: this component mounted inside an <see cref="ArriveWhole"/> reconcile and has not rendered yet. Its first render's
+    /// <see cref="UseTransition"/> seeds start at their end value (the part arrives with its page, at rest), as a reduced-motion seed does.</summary>
+    internal bool ArrivedWhole;
     /// <summary>Reconciler-injected: stagger the on-screen <see cref="FluentGpu.Dsl.Element.EntranceGroup"/> children under a node (and
     /// any group inside it) in, after this frame's layout (<see cref="FluentGpu.Foundation.EntranceCascade"/>). For a component that
     /// re-presents part of its own tree (a pivot that brings a section in) the way a keep-alive page swap presents a page.</summary>
@@ -643,6 +660,9 @@ public sealed partial class RenderContext
     /// item's new logical index (the map answers an old index with the new one, or -1 for an item that is gone), so a reordered
     /// item keeps its slot, its subtree and its state instead of its old slot showing another item.</summary>
     public Action<NodeHandle, Func<int, int>, Action>? BeginVirtualRemap;
+    /// <summary>Reconciler-injected bound-list membership seam (<see cref="VirtualMembershipCommit"/>): the model already holds the new membership;
+    /// every realized slot follows its item, and an on-screen slot whose item is gone or leaves the live rows retires as an exit orphan.</summary>
+    public VirtualMembershipCommit? CommitVirtualMembership;
     public NodeHandle HostNode;                 // this component's rendered child (animation hooks target it)
     private List<Action>? _hostBound;           // registrations installed ON HostNode (UseMeasuredBounds/Width, UseGesture)
 
@@ -926,6 +946,23 @@ public sealed partial class RenderContext
     /// <inheritdoc cref="UseEffect(Action, DepKey)"/>
     [OverloadResolutionPriority(1)]
     public void UseLayoutEffect(Func<Action?> effect, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => EffectKeyC(effect, deps, PendingLayoutEffects, __hf, __hl);
+
+    /// <summary>Hold one claim on <paramref name="scope"/> (default: the nearest <see cref="LoadingScope"/>, resolved at
+    /// render without subscribing) while <paramref name="pending"/> is true; released when it turns false and on unmount.
+    /// For pending UI that is not a <c>Skel.Region</c> (a region claims by itself). The claim is taken and released in the
+    /// passive effect drain, after paint, so a parent that hands over to its children's own claims never lets the count dip
+    /// to zero. No scope resolves: nothing is claimed.</summary>
+    public void UsePendingClaim(bool pending, LoadingScope? scope = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+    {
+        var s = scope ?? ResolveContextSignal?.Invoke(AnchorNode, LoadingScope.Current)?.Peek() as LoadingScope;
+        bool claim = pending && s is not null;
+        EffectKeyC(() =>
+        {
+            if (!claim) return null;
+            s!.Enter();
+            return s.Leave;
+        }, DepKey.From(claim ? 1 : 0, claim ? RuntimeHelpers.GetHashCode(s!) : 0), PendingEffects, __hf, __hl);
+    }
 
     /// <summary>Mount a signal-tracked effect owned by this component that runs EAGERLY (the body runs synchronously now,
     /// then re-runs inline during <see cref="ReactiveRuntime.Flush"/> when a read signal changes). Distinct from the
@@ -1236,6 +1273,24 @@ public sealed partial class RenderContext
         }
     }
 
+    /// <summary>A reactive effect at STRUCTURAL priority: <paramref name="body"/> runs once now (at mount) and again whenever a signal it read
+    /// moves, AHEAD of every component render and normal effect of that flush (<see cref="Computation.Structural"/>; the
+    /// <c>Flow.KeepAlive</c> boundary uses the same queue). For one use only: a virtual list's MEMBERSHIP, whose owner must decide which realized
+    /// slots stay and which leave (<c>ItemsViewController.CommitMembership</c>) before any row has re-rendered as its new item. The body runs
+    /// before every row, so it may diff, call the list's controller and bump a version signal, nothing else: keep it one method. The latest
+    /// body is read from a stable cell (a fresh lambda each render does not re-subscribe); disposed with the component.</summary>
+    public void UseStructuralEffect(Action body, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
+    {
+        var cb = UseRef<Action?>(null, __hf, __hl);
+        cb.Value = body;
+        int idx = LookupCell(__hf, __hl, out var __k);
+        if (idx < 0)
+        {
+            var effect = new Effect(Rt, () => cb.Value?.Invoke(), structural: true);
+            RegisterCell(__k, effect, cleanupCapable: true);
+        }
+    }
+
     /// <summary>The host's cross-thread UI-thread poster (<see cref="HostDispatch.Post"/>): <c>post(action)</c> runs
     /// <c>action</c> on the UI thread on the next frame, safe to call from ANY thread (OS callback / worker / agile COM).
     /// This is the engine-blessed marshal for off-thread data — use it instead of <c>UseContext(FrameClock.Tick)</c> +
@@ -1302,8 +1357,13 @@ public sealed partial class RenderContext
 
     public void UseSpring(AnimChannel channel, float to, SpringParams spring, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
         => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Spring(HostNode, channel, to, spring); }, deps, __hf, __hl);
+    /// <summary>Seed <paramref name="from"/> to <paramref name="to"/> at mount and whenever <paramref name="deps"/> change. A component that arrives with its
+    /// page (<see cref="ArrivedWhole"/>) starts its first seed at <paramref name="to"/>: the page's entrance presents it.</summary>
     public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, from, to, durationMs, easing); }, deps, __hf, __hl);
+    {
+        float start = ArrivedWhole ? to : from;
+        UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, start, to, durationMs, easing); }, deps, __hf, __hl);
+    }
     /// <summary><paramref name="cadence"/> is the row's own frame rate (see <c>AnimEngine.Keyframes</c>): <c>null</c>
     /// = display rate, one-shot or <paramref name="loop"/>. <paramref name="snapToDevicePixels"/>: a ScaleX/ScaleY track poses
     /// whole device pixels of the host node's extent (<c>AnimFlags.SnapDevicePx</c>).</summary>

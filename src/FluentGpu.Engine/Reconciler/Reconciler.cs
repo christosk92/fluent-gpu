@@ -411,6 +411,9 @@ public sealed partial class TreeReconciler
     // Loading-scrollbar suppression is node-owned. Remember the exact viewport each pending region incremented so an
     // unmount, branch replacement, or independent sibling completion releases precisely its own claim.
     private readonly Dictionary<int, NodeHandle> _skelScrollSuppression = new();
+    // Loading-scope claims are node-owned too: the LoadingScope each pending (and unparked) region entered, released on its
+    // Ready/Failed edge, on a park and on unmount (see SetSkeletonLoadingClaim).
+    private readonly Dictionary<int, LoadingScope> _skelLoadingClaim = new();
     // KeepAlive boundaries retain inactive page subtrees detached from the live child chain. Entries are node-owned so
     // unmounting the boundary releases every parked component/effect/resource deterministically.
     private sealed class KeepAliveEntry
@@ -719,6 +722,19 @@ public sealed partial class TreeReconciler
     /// no Enter and a removal frees at once (no Exit orphan) — the window reached or left the row; the list did not change.</summary>
     private int _edgeRealize;
 
+    /// <summary>Depth of an ARRIVING-WHOLE reconcile (<see cref="ArriveWhole"/>): while &gt; 0 a mount seeds no Enter. The tree a component's
+    /// render mounts arrives as one with that component (a page's first mount, whose own entrance or cut presents it), so a part inside it
+    /// rests at its authored pose instead of fading in from its terminal under the page's entrance. A part that mounts into the live tree
+    /// later (a row the data brings, a swap inside the page) is outside the window and enters as authored.</summary>
+    private int _arrivingWhole;
+
+    /// <summary>Set by <see cref="ArriveWhole"/> during a component's render; read (and cleared) by <see cref="RunComponent"/> before it reconciles that render.</summary>
+    private bool _arriveWholeAsked;
+
+    /// <summary>The <see cref="FluentGpu.Hooks.RenderContext.ArriveWhole"/> seam: the tree the component rendering NOW mounts arrives whole
+    /// (no Enter inside it plays). Called from inside a render; it applies to that render's reconcile only.</summary>
+    public void ArriveWhole() => _arriveWholeAsked = true;
+
     /// <summary>RAII helper for <see cref="SuppressBoundTransitions"/> — <c>using (reconciler.PushSuppressBoundTransitions())</c>.</summary>
     public SuppressBoundTransitionsScope PushSuppressBoundTransitions() { SuppressBoundTransitions++; return new SuppressBoundTransitionsScope(this); }
 
@@ -958,9 +974,11 @@ public sealed partial class TreeReconciler
     // so converting them per mount cost five delegates (~320 bytes) per component; they are built once per reconciler.
     private Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? _beginVirtualRemovalSeam;
     private Action<NodeHandle, Func<int, int>, Action>? _beginVirtualRemapSeam;
+    private VirtualMembershipCommit? _commitVirtualMembershipSeam;
     private Func<NodeHandle, object, Signal<object?>?>? _resolveContextSeam;
 
     private Action? _armSuppressionSeam;
+    private Action? _arriveWholeSeam;
 
     /// <summary>Open the keep-alive activation's layout-suppression window (two frames), as an activation does.</summary>
     public void ArmKeepAliveLayoutSuppression()
@@ -976,12 +994,14 @@ public sealed partial class TreeReconciler
         ctx.Runtime = Runtime;
         ctx.Anim = Anim;
         ctx.SuppressLayoutTransitions = _armSuppressionSeam ??= ArmKeepAliveLayoutSuppression;
+        ctx.ArriveWhole = _arriveWholeSeam ??= ArriveWhole;
         ctx.EntranceCascade = _cascadeSeam ??= RequestEntranceCascade;
         ctx.Images = Images;
         ctx.Scene = _scene;
         ctx.RequestFrame = RequestFrame;
         ctx.BeginVirtualRemoval = _beginVirtualRemovalSeam ??= BeginVirtualRemoval;
         ctx.BeginVirtualRemap = _beginVirtualRemapSeam ??= BeginVirtualRemap;
+        ctx.CommitVirtualMembership = _commitVirtualMembershipSeam ??= CommitVirtualMembership;
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = _resolveContextSeam ??= ResolveContext;
         ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
@@ -1450,6 +1470,7 @@ public sealed partial class TreeReconciler
         // E7: a Flow.Persist slot owns its key here, adopting the parked subtree of that key (or waiting for its live owner).
         if (IsPersistSlot(ce)) MountPersistSlot(node, entry, ((PersistProps)ce.Props!).Key);
         FluentGpu.Hosting.MountProf.Exit();
+        comp.Context.ArrivedWhole = _arrivingWhole > 0;   // mounted with an arriving page: its first render's UseTransition lands (ArriveWhole)
         entry.RunNow();                                   // first render + child mount (deferred if mounted parked)
     }
 
@@ -1495,6 +1516,7 @@ public sealed partial class TreeReconciler
         bool catchUp = entry.ThemeCatchUp && BeginThemeCatchUp(out savedThemeMs, out savedThemeFromT);
         entry.ThemeCatchUp = false;
         Element newRendered;
+        _arriveWholeAsked = false;   // only THIS render's ask counts (ArriveWhole)
         bool prevShape = _layoutShapeMutated;
         long t1;
         try
@@ -1510,12 +1532,19 @@ public sealed partial class TreeReconciler
                 }
             }
             else { FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Render); try { newRendered = comp.RenderWithHooks(); } finally { FluentGpu.Hosting.MountProf.Exit(); } }
+            comp.Context.ArrivedWhole = false;   // only the first render arrives with its page
             if (entry.DerivedSkeletonStyle is { } skeletonStyle)
                 newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
             t1 = census ? Stopwatch.GetTimestamp() : 0;
             _layoutShapeMutated = false;
             FluentGpu.Hosting.MountProf.Enter(FluentGpu.Hosting.MountProf.Reconcile);
-            try { ReconcileSingleChild(node, newRendered, entry.Rendered); } finally { FluentGpu.Hosting.MountProf.Exit(); }
+            // A render that asked to arrive whole (ArriveWhole) reconciles with mount Enters off: its tree lands at rest, presented by its owner's
+            // entrance. The nested renders this reconcile runs ask (or not) for their own; the window is this reconcile's alone.
+            bool whole = _arriveWholeAsked;
+            _arriveWholeAsked = false;
+            if (whole) _arrivingWhole++;
+            try { ReconcileSingleChild(node, newRendered, entry.Rendered); }
+            finally { FluentGpu.Hosting.MountProf.Exit(); if (whole) _arrivingWhole--; }
         }
         finally { if (catchUp) EndThemeCatchUp(savedThemeMs, savedThemeFromT); }
         // Nested component renders (children mounted/re-rendered inside this reconcile) report their own rows; this
@@ -1809,6 +1838,7 @@ public sealed partial class TreeReconciler
         if (_skelEffect.TryGetValue(idx, out int row)) Runtime.Rows.Schedule(row);
     }
 
+
     private void ReconcileSkeletonRegion(NodeHandle node, bool force)
     {
         if (!_scene.IsLive(node)) return;
@@ -1831,7 +1861,7 @@ public sealed partial class TreeReconciler
             // Bounded, not trusted: Remove() gives the orphan its OWN hard deadline (duration + delay + slack), so the
             // "half resolved page" a wedged/never-settling exit track once produced is now reclaimed in ~one exit
             // duration instead of waiting out the host's global 2s backstop.
-            // Reduced motion ⇒ no exit stamp at all (the swap snaps); the pulse + reveal already no-op under it.
+            // Reduced motion ⇒ no exit stamp at all (the swap snaps); the reveal already no-ops under it.
             // Content-owned reveal (SkelReveal.None): the shimmer must LINGER across the content's own per-row
             // entrance (it draws behind the live tree, so a too-fast exit leaves an empty gap before the rows fade
             // up). Floor the exit at the standard content-reveal duration so apps get the cross-dissolve for free —
@@ -1867,19 +1897,17 @@ public sealed partial class TreeReconciler
         // Hide the enclosing scrollbar while this region is loading (branch 1): the short skeleton → tall real swap
         // would otherwise pop the rail from a tiny thumb to its real size. Restored on Ready/Failed.
         SetSkeletonScrollbarSuppression(node, branch == 1);
+        // Report to the nearest LoadingScope while on the placeholder (the page's loading bar counts these). After the
+        // branch swap above, so a Ready region whose content holds nested pending regions hands over without the count
+        // touching 0.
+        SetSkeletonLoadingClaim(node, branch == 1);
 
         // Every edge INTO the shimmer (mount, refresh, retry after Failed) opens this member's slot in its group's round,
         // so the round waits only for the members that are actually loading — a region that reloads alone reveals on
         // its own Ready edge instead of parking its reveal behind siblings that stayed Ready.
         if (branch == 1 && lastBranch != 1 && se.Group is { } lg) SkelGroupCoordinator.Loading(lg, idx);
 
-        if (branch == 1 && lastBranch != 1 && Anim is { } a1)
-        {
-            // Pulse the whole derived skeleton (one looping track on the root; CancelAll on the orphan path kills it).
-            var shimmerRoot = _scene.FirstChild(node);
-            if (!shimmerRoot.IsNull) a1.SkeletonPulse(shimmerRoot, se.Style.PulseMin, se.Style.PulseMs);
-        }
-        else if (branch == 2 && lastBranch == 0 && se.Group is { } initialGroup)
+        if (branch == 2 && lastBranch == 0 && se.Group is { } initialGroup)
         {
             // A grouped region may mount directly on its real branch when its data was already warm. It still
             // registered above, so it MUST report Done or it leaves the group waiting forever for a transition that
@@ -2363,6 +2391,10 @@ public sealed partial class TreeReconciler
         // covers back" Browse→Charts→Back bug. Land the authored rest on both edges; pointer state is gone.
         Anim?.SnapAuthoredPose(node);
         if (parked) _scene.Mark(node, NodeFlags.Parked); else _scene.Unmark(node, NodeFlags.Parked);
+        // A parked region is off screen: it drops its loading-scope claim and claims again on the un-park. Every park path
+        // (KeepAlive pages, virtual spare and kept rows, Persist, BoundRebuild) walks through here; without it a row parked
+        // while its per-row region is still pending would hold its page's loading bar up for as long as the spare lives.
+        if (_skelState.Count != 0 && _skelState.TryGetValue((int)node.Raw.Index, out var parkedSkel)) SetSkeletonLoadingClaim(node, parkedSkel.Branch == 1);
         OnNodeParkedChanged?.Invoke(node, parked);
         if (!parked) SyncParkedThemeFade(node);   // E20: a bound fade seeded while parked re-joins the live theme fade's timeline
         if (_comps.TryGetValue(node, out var entry))
@@ -3613,6 +3645,30 @@ public sealed partial class TreeReconciler
         if (sc.LoadingBarSuppressors > 0) sc.LoadingBarSuppressors--;
         _scene.Mark(viewport, NodeFlags.PaintDirty);
     }
+
+    /// <summary>While a <see cref="SkelRegionEl"/> is on its placeholder and not parked, hold one claim on the nearest
+    /// <see cref="LoadingScope"/> (resolved from the region's node; none resolves: no claim). Node-owned like the scrollbar
+    /// claim: released on the Ready/Failed edge, on a park and on unmount.</summary>
+    private void SetSkeletonLoadingClaim(NodeHandle node, bool pending)
+    {
+        int owner = (int)node.Raw.Index;
+        bool want = pending && (_scene.Flags(node) & NodeFlags.Parked) == 0;   // a parked region is not on screen: no claim
+        if (!want) { ReleaseSkeletonLoadingClaim(owner); return; }
+        if (_skelLoadingClaim.ContainsKey(owner)) return;                       // one claim per region
+        if (ResolveContext(node, LoadingScope.Current)?.Peek() is not LoadingScope scope) return;
+        _skelLoadingClaim[owner] = scope;
+        scope.Enter();
+    }
+
+    private void ReleaseSkeletonLoadingClaim(int owner)
+    {
+        if (_skelLoadingClaim.Remove(owner, out var scope)) scope.Leave();
+    }
+
+    /// <summary>True while <paramref name="region"/> (a <see cref="SkelRegionEl"/> node) shows its placeholder branch.
+    /// Diagnostics (the inspector's settle).</summary>
+    internal bool IsSkeletonPending(NodeHandle region)
+        => _skelState.TryGetValue((int)region.Raw.Index, out var st) && st.Branch == 1;
 
     private void MountVirtual(NodeHandle node, VirtualListEl ve)
     {
@@ -4944,8 +5000,8 @@ public sealed partial class TreeReconciler
             float revealFrom = 0f, revealVelocity = 0f;
             if (flowReveal) anim.ReadFlowReveal(node, out revealFrom, out revealVelocity);
             UnmountSubtree(node);
-            // Kill any looping track (the SkeletonPulse) BEFORE orphaning + SeedExit, so only the FINITE exit tracks
-            // remain: an orphan is reclaimed when HasTracks(node)→false, and a forever-looping pulse would pin it and
+            // Kill any looping track (an indicator, a breathing badge) BEFORE orphaning + SeedExit, so only the FINITE exit
+            // tracks remain: an orphan is reclaimed when HasTracks(node)→false, and a forever-looping track would pin it and
             // defeat the engine's idle wake-stop (a battery/never-quiesce regression). Then seed the finite exit.
             anim.CancelAll(node);
             // Hand the orphan its OWN hard deadline (see ExitMaxAgeMs) on top of the host's global 2s backstop: a wedged
@@ -5056,6 +5112,7 @@ public sealed partial class TreeReconciler
         _skelEffect.Remove(idx);
         _skelForce.Remove(idx);
         ReleaseSkeletonScrollbarSuppression(idx);
+        ReleaseSkeletonLoadingClaim(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
         if (_attachments.Count != 0) DetachAttachment(idx);   // BoxEl.Attachment: the node leaves with its per-node state
         if (_comps.Remove(node, out var e)) { e.QueuedReplay = false; e.DisposeLifetime(); if (MountCensusEnabled) _mountFrameOf.Remove(e); }   // dispose the render-effect, then RunAllCleanups
@@ -5161,7 +5218,7 @@ public sealed partial class TreeReconciler
         {
             danim.SetTransition(node, dt);
             if ((dt.Channels & TransitionChannels.Bounds) != 0) { _scene.Mark(node, NodeFlags.BoundsAnimated); anchorAnimated = true; }
-            if (isMount && dt.Enter.Active && !SnapMotion && _edgeRealize == 0 && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
+            if (isMount && dt.Enter.Active && !SnapMotion && _edgeRealize == 0 && _arrivingWhole == 0 && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
             {
                 danim.SeedEnter(node, dt.Enter, dt);
                 // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout (host-driven). SizeMode.FlowReveal enter:
@@ -5309,25 +5366,8 @@ public sealed partial class TreeReconciler
         int[]? dealt = animate && staggerMs > 0f ? RealizedRemoved(entry, removed) : null;
 
         void Retire(in BoundSlot slot)
-        {
-            int index = slot.Index.Peek();
-            ve.OnItemClearing?.Invoke(index);
-            var root = slot.Root;
-            if (root.IsNull || !_scene.IsLive(root)) return;
-            // The removal hook Remove() runs, while the slot is still attached: the hover exit and the focus leave
-            // (LostFocus, IME/SIP teardown) reach the row and its ancestors. An exit orphan stays LIVE, so without it a
-            // focused row kept focus through its fade and Enter re-fired it on an index that now names another item.
-            OnSubtreeRemoved?.Invoke(root);
-            UnmountSubtree(root);
-            if (animate)
-            {
-                anim!.CancelAll(root);
-                _scene.Orphan(root);
-                anim!.SeedExitOver(root, exit, in motionDef, EnterRestOf(slot.El), dealt is null ? 0f : staggerMs * RemovedRank(index, dealt));
-            }
-            else _scene.FreeSubtree(root);
-            _reconciled = true;
-        }
+            => RetireBoundSlot(viewport, ve, in slot, animate, in exit, in motionDef,
+                               dealt is null ? 0f : staggerMs * RemovedRank(slot.Index.Peek(), dealt), 0f, false);
 
         static void DetachRemoved(List<BoundSlot>? slots, IReadOnlyList<int> indices, ActionRef<BoundSlot> retire)
         {
@@ -5390,6 +5430,50 @@ public sealed partial class TreeReconciler
         _realizeProgress = true;
     }
 
+    /// <summary>Take one realized bound slot out of the list: the item-clearing hook, the removal hook (hover exit, focus leave), the unmount,
+    /// then either an exit orphan that fades from where it is drawn (<paramref name="animate"/>) or an immediate free. The orphan keeps the
+    /// subtree's LAST content: nothing renders it again. <paramref name="frameShift"/> moves its bounds along the scroll axis by the anchor
+    /// rebase of the same change (an orphan is laid out by nobody, so the offset shift would otherwise carry it).</summary>
+    private void RetireBoundSlot(NodeHandle viewport, VirtualListEl ve, in BoundSlot slot, bool animate, in EnterExit exit, in MotionTokenDef motionDef,
+                                 float delayMs, float frameShift, bool horizontal)
+    {
+        int index = slot.Index.Peek();
+        ve.OnItemClearing?.Invoke(index);
+        var root = slot.Root;
+        if (root.IsNull || !_scene.IsLive(root)) return;
+        // The removal hook Remove() runs, while the slot is still attached: the hover exit and the focus leave
+        // (LostFocus, IME/SIP teardown) reach the row and its ancestors. An exit orphan stays LIVE, so without it a
+        // focused row kept focus through its fade and Enter re-fired it on an index that now names another item.
+        OnSubtreeRemoved?.Invoke(root);
+        UnmountSubtree(root);
+        if (animate && Anim is { } anim)
+        {
+            anim.CancelAll(root);
+            ref RectF b = ref _scene.Bounds(root);
+            if (frameShift != 0f) b = horizontal ? b with { X = b.X + frameShift } : b with { Y = b.Y + frameShift };
+            // The row's place from the row band's start, in the list's extent (content space + the arrange origin): the list's arrange keeps
+            // it there (FlexLayout pass 3) while the head above the rows or the window's origin moves.
+            double fromBand = double.NaN;
+            if (_scene.TryGetScroll(viewport, out var sc) && sc.Extent is { } ext)
+                fromBand = (horizontal ? b.X : b.Y) + sc.WindowOrigin - ext.OffsetOf(Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount));
+            _scene.Orphan(root);
+            if (!double.IsNaN(fromBand)) _scene.SetOrphanBandOffset(root, fromBand);
+            anim.SeedExitOver(root, exit, in motionDef, EnterRestOf(slot.El), delayMs);
+        }
+        else _scene.FreeSubtree(root);
+        _reconciled = true;
+    }
+
+    /// <summary>A bound list's model already holds a NEW membership (a remote answer): every realized slot follows its item to the item's new
+    /// logical index, and the slot of an item that is gone, or that <paramref name="leaves"/> the live rows although it survives, retires as an
+    /// exit orphan with its OLD content while it is on screen (<see cref="RetireBoundSlot"/>; off screen it keeps the remap's rule and the next
+    /// realize recycles it). Called from a structural effect, ahead of every row unit, so no row has rendered as its new item yet. At most
+    /// the scene's free orphan slots retire, top-down; the rest are freed at once. Prefix and keep-alive slots stay as they are. Without
+    /// <paramref name="animate"/> (reduced motion) nothing retires: the list changes in place.</summary>
+    private void CommitVirtualMembership(NodeHandle viewport, Func<int, int> newIndexOf, Func<int, bool>? leaves, float frameShift,
+                                         Func<int, float>? exitDelayMs, EnterExit exit, MotionTokenId motion, bool animate)
+        => RemapBoundSlots(viewport, newIndexOf, null, animate && exit.Active && Anim is not null, leaves, frameShift, exitDelayMs, exit, motion);
+
     /// <summary>A reorder of a bound list's backing items (the same items at other indices: a reading order that changes with the
     /// column count, an item moved): commit the mutation, then move every realized slot to its item's new logical index, so the item
     /// keeps its slot, its subtree and its state. Without this a slot keeps its INDEX and shows whatever item now sits there, so a
@@ -5399,16 +5483,22 @@ public sealed partial class TreeReconciler
     /// the commit runs BEFORE the slot writes, so the owning count/plan computation queues ahead of the rows. Prefix and keep-alive
     /// slots are fixed-index and stay as they are. Allocates only to grow its per-slot scratch (a data edge, never a frame).</summary>
     private void BeginVirtualRemap(NodeHandle viewport, Func<int, int> newIndexOf, Action commit)
+        => RemapBoundSlots(viewport, newIndexOf, commit, false, null, 0f, null, default, default);
+
+    /// <summary>The remap both <see cref="BeginVirtualRemap"/> (a reorder, <paramref name="commit"/> run first) and
+    /// <see cref="CommitVirtualMembership"/> (a membership already committed, <paramref name="retire"/> on) share.</summary>
+    private void RemapBoundSlots(NodeHandle viewport, Func<int, int> newIndexOf, Action? commit, bool retire, Func<int, bool>? leaves,
+                                 float frameShift, Func<int, float>? exitDelayMs, EnterExit exit, MotionTokenId motion)
     {
         if (viewport.IsNull || !_scene.IsLive(viewport) || !_virtuals.TryGetValue(viewport, out var entry)
             || entry.El?.RowBind is null || entry.Slots is not { Count: > 0 } slots)
         {
-            commit();
+            commit?.Invoke();
             return;
         }
 
         var ve = entry.El!;
-        commit();
+        commit?.Invoke();
 
         int n = slots.Count;
         var target = entry.RemapTarget is { } t && t.Length >= n ? t : entry.RemapTarget = new int[Math.Max(8, n)];
@@ -5420,17 +5510,54 @@ public sealed partial class TreeReconciler
                 if (target[j] == mapped) mapped = -1;
             target[i] = mapped;
         }
+
+        bool retired = false;
+        if (retire)
+        {
+            // The retire arm: a slot whose item is gone, or that leaves the live rows, exits from where it is drawn while its root is on
+            // screen. The orphan budget is spent top-down (the slots are in logical order after a realize); past it a row is freed at once.
+            var motionDef = MotionTok.Get(motion);
+            RectF clip = _scene.AbsoluteRect(viewport);
+            int budget = _scene.FreeOrphanSlots;
+            bool horizontal = ve.Horizontal;
+            for (int i = 0; i < n; i++)
+            {
+                int old = slots[i].Index.Peek();
+                if (target[i] >= 0 && leaves?.Invoke(old) != true) continue;
+                var root = slots[i].Root;
+                if (root.IsNull || !_scene.IsLive(root) || !Intersects(_scene.AbsoluteRect(root), clip)) continue;
+                bool animate = budget-- > 0;
+                RetireBoundSlot(viewport, ve, slots[i], animate, in exit, in motionDef, exitDelayMs?.Invoke(old) ?? 0f, frameShift, horizontal);
+                target[i] = RetiredTarget;
+                retired = true;
+            }
+        }
+
         // Pass 2: a slot whose item is gone keeps its index unless a moved item claimed it (then the realize recycles it).
         for (int i = 0; i < n; i++)
         {
-            if (target[i] >= 0) continue;
+            if (target[i] >= 0 || target[i] == RetiredTarget) continue;
             int old = slots[i].Index.Peek();
             bool claimed = false;
             for (int j = 0; j < n && !claimed; j++) claimed = target[j] == old;
             target[i] = claimed ? -1 : old;
         }
 
-        bool moved = false;
+        if (retired)
+        {
+            // The retired slots are gone from the list (their roots are orphans, or freed): the window's holes are the realize's to fill.
+            int kept = 0;
+            for (int i = 0; i < n; i++)
+            {
+                if (target[i] == RetiredTarget) continue;
+                target[kept] = target[i];
+                slots[kept++] = slots[i];
+            }
+            slots.RemoveRange(kept, n - kept);
+            n = kept;
+        }
+
+        bool moved = retired;
         for (int i = 0; i < n; i++)
         {
             int old = slots[i].Index.Peek(), mapped = target[i];
@@ -5440,6 +5567,7 @@ public sealed partial class TreeReconciler
             moved = true;
         }
         if (!moved) return;
+        if (n == 0) { MarkVirtualRangeAfterRemap(viewport); return; }
 
         // A displaced slot (its item gone, its index claimed) still holds that index until the realize recycles it, and the realize's
         // overlap pass gives an index to the FIRST slot holding it: list the displaced slots last so the moved item keeps its slot.
@@ -5456,6 +5584,17 @@ public sealed partial class TreeReconciler
 
         // The slots are no longer in logical order: the next realize repairs the chain (RealizeBoundWindow's cold path keeps every
         // exact index overlap, so each moved slot stays with its item) and the arrange places every slot at its item's new rect.
+        MarkVirtualRangeAfterRemap(viewport);
+    }
+
+    /// <summary><see cref="RemapBoundSlots"/>'s retired-slot marker (pass 2 never reads it as "gone").</summary>
+    private const int RetiredTarget = int.MinValue;
+
+    private static bool Intersects(in RectF a, in RectF b)
+        => a.X < b.X + b.W && b.X < a.X + a.W && a.Y < b.Y + b.H && b.Y < a.Y + a.H;
+
+    private void MarkVirtualRangeAfterRemap(NodeHandle viewport)
+    {
         if (_scene.TryGetScroll(viewport, out var current) && !current.ContentNode.IsNull && _scene.IsLive(current.ContentNode))
             MarkLayoutShape(current.ContentNode);
         _scene.Mark(viewport, NodeFlags.VirtualRangeDirty);
@@ -5958,7 +6097,7 @@ public sealed partial class TreeReconciler
                     anim.SetRestPose(node, EnterRestOf(b));
                     _scene.Mark(node, NodeFlags.BoundsAnimated);
                     animated = true;
-                    if (isMount && at.Enter.Active && !SnapMotion && _edgeRealize == 0 && (at.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
+                    if (isMount && at.Enter.Active && !SnapMotion && _edgeRealize == 0 && _arrivingWhole == 0 && (at.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         anim.SeedEnterOver(node, at.Enter, at, EnterRestOf(b));
                         // SizeMode.Reflow enter: ease the layout size 0→natural AFTER layout so neighbours reflow as it
@@ -5979,7 +6118,7 @@ public sealed partial class TreeReconciler
                     danim.SetRestTransform(node, restTf);
                     danim.SetRestPose(node, EnterRestOf(b));
                     if ((dt.Channels & TransitionChannels.Bounds) != 0) { _scene.Mark(node, NodeFlags.BoundsAnimated); animated = true; }
-                    if (isMount && dt.Enter.Active && !SnapMotion && _edgeRealize == 0 && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
+                    if (isMount && dt.Enter.Active && !SnapMotion && _edgeRealize == 0 && _arrivingWhole == 0 && (dt.Size != SizeMode.FlowReveal || SuppressBoundTransitions == 0))
                     {
                         danim.SeedEnterOver(node, dt.Enter, dt, EnterRestOf(b));
                         if (dt.Size == SizeMode.Reflow) danim.PendingEnterReflow.Add(node);

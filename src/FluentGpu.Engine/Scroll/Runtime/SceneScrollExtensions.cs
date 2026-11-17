@@ -17,20 +17,21 @@ public static class SceneScrollExtensions
     /// NaN = minimal move (no-op when already fully visible); otherwise the node's leading edge lands at
     /// <c>align·(viewport − extent)</c> (0 = leading edge, 0.5 = centred, 1 = trailing edge). <paramref name="margin"/> is
     /// the gutter kept between the node and the viewport edge it lands against. Returns false when the node has no live
-    /// scrolling ancestor (or the viewport has no handle yet).</summary>
+    /// scrolling ancestor (or the viewport has no handle yet). <paramref name="maxTravel"/> bounds an animated move: one longer than it cuts
+    /// to that far short of the node and decelerates in (<see cref="ScrollHandle.ScrollTo"/>); infinity glides the whole way.</summary>
     public static bool BringIntoView(this SceneStore scene, NodeHandle node, float align = float.NaN,
-        ScrollMove move = ScrollMove.Glide, double margin = 0.0)
+        ScrollMove move = ScrollMove.Glide, double margin = 0.0, double maxTravel = double.PositiveInfinity)
     {
         if (node.IsNull || !scene.IsLive(node)) return false;
         var vp = scene.Parent(node);
         while (!vp.IsNull && !scene.HasScroll(vp)) vp = scene.Parent(vp);
-        return !vp.IsNull && scene.BringIntoView(vp, node, align, move, margin);
+        return !vp.IsNull && scene.BringIntoView(vp, node, align, move, margin, maxTravel);
     }
 
     /// <summary>Same, against an EXPLICIT viewport — for a composing control that must scroll its own scroller and not
     /// some outer page. <paramref name="node"/> must be inside <paramref name="viewport"/>'s content.</summary>
     public static bool BringIntoView(this SceneStore scene, NodeHandle viewport, NodeHandle node, float align = float.NaN,
-        ScrollMove move = ScrollMove.Glide, double margin = 0.0)
+        ScrollMove move = ScrollMove.Glide, double margin = 0.0, double maxTravel = double.PositiveInfinity)
     {
         if (viewport.IsNull || node.IsNull || !scene.IsLive(viewport) || !scene.IsLive(node) || !scene.HasScroll(viewport)) return false;
         ref ScrollState sc = ref scene.ScrollRef(viewport);
@@ -44,7 +45,7 @@ public static class SceneScrollExtensions
         RectF contentRect = scene.AbsoluteLayoutRect(content);
         double local = horizontal ? nodeRect.X - contentRect.X : nodeRect.Y - contentRect.Y;
         double extent = horizontal ? nodeRect.W : nodeRect.H;
-        handle.BringIntoView((sc.WindowOrigin + local) * zoom, extent * zoom, align, move, margin);
+        handle.BringIntoView((sc.WindowOrigin + local) * zoom, extent * zoom, align, move, margin, maxTravel);
         return true;
     }
 }

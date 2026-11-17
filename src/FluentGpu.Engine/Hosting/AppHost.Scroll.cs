@@ -325,6 +325,10 @@ public sealed partial class AppHost
         Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.Scroll, AnyUserScrollMoving);
     }
 
+    /// <summary><see cref="ScrollHandle.ViewportArrivals"/> as the 6.5 pass last read it: a change means a viewport published its FIRST laid-out geometry
+    /// since (a freshly mounted list), so what binds to its viewport signal lays out in the frame that shows the list, not one frame later at 0.</summary>
+    private int _viewportArrivalsSeen;
+
     /// <summary>Re-publishes every viewport's current geometry to its handle, re-evaluates its plan at this frame's
     /// present time and publishes any offset that moved since the frame step — a plan authored MID-frame (a ScrollKey
     /// change's ScrollTo(0) in the reconcile, a layout effect's BringIntoView, a controller post) shows and windows in
