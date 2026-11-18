@@ -25,15 +25,17 @@ internal static class SkeletonDeriver
     public static Element Derive(Element real, in SkeletonStyle s) => Derive(real, s, inZStack: false);
 
     /// <param name="inZStack">The parent is a ZStack: a childless box there with no declared extent is a LAYER that fills the stack.</param>
-    private static Element Derive(Element real, in SkeletonStyle s, bool inZStack)
+    /// <param name="room">The parent's declared inner width (NaN: none): an estimated text bar never runs past a fixed-width cell (a chapter's
+    /// 28 number column) into its neighbour.</param>
+    private static Element Derive(Element real, in SkeletonStyle s, bool inZStack, float room = float.NaN)
     {
-        var derived = DeriveNode(real, s, inZStack);
+        var derived = DeriveNode(real, s, inZStack, room);
         // A whole view derived (SkeletonStyle.DeriveComponents) is a stand-in, never its loaded parts' identity: a key it kept would read as that
         // part rebuilt when the loaded view replaces the stand-in (its menu button, its rows). Its nodes carry none.
         return s.DeriveComponents && derived.Key is not null ? derived with { Key = null } : derived;
     }
 
-    private static Element DeriveNode(Element real, in SkeletonStyle s, bool inZStack)
+    private static Element DeriveNode(Element real, in SkeletonStyle s, bool inZStack, float room)
     {
         if (real.SkeletonOverride is { } custom) return custom;            // bespoke shimmer for this subtree
         if (real.SkeletonMode == SkeletonMode.Off) return Spacer(real, s); // keep the slot, no shimmer
@@ -53,7 +55,9 @@ internal static class SkeletonDeriver
                 // remove authored chrome. Copying a card fill, hero scrim, gradient, or border turns the whole container
                 // into a giant tinted slab and obscures the image/text placeholders inside it.
                 var kids = new Element[b.Children.Length];
-                for (int i = 0; i < kids.Length; i++) kids[i] = Derive(b.Children[i], s, b.ZStack);
+                float w0 = b.Width.IsBound ? float.NaN : b.Width.ValueOr(float.NaN);
+                float inner = float.IsNaN(w0) ? float.NaN : MathF.Max(0f, w0 - b.Padding.Left - b.Padding.Right);
+                for (int i = 0; i < kids.Length; i++) kids[i] = Derive(b.Children[i], s, b.ZStack, inner);
                 return b with
                 {
                     Children = kids,
@@ -141,7 +145,7 @@ internal static class SkeletonDeriver
                 return new BoxEl
                 {
                     ZStack = true,
-                    Width = TextBarWidth(t), Grow = t.Grow, Shrink = t.Shrink, MinWidth = t.MinWidth, MaxWidth = t.MaxWidth,
+                    Width = float.IsNaN(room) ? TextBarWidth(t) : MathF.Min(TextBarWidth(t), room), Grow = t.Grow, Shrink = t.Shrink, MinWidth = t.MinWidth, MaxWidth = t.MaxWidth,
                     Margin = t.Margin, AlignSelf = t.AlignSelf,
                     IsEnabled = false, HitTestVisible = false,
                     Children =
@@ -257,9 +261,28 @@ internal static class SkeletonDeriver
 
             case SpanTextEl span:
             {
+                // THE LINE BOX, as for a TextEl: a bare bar is TextRatio of the em, so a span line ("Up next · Title") derived 10 tall where it
+                // lays out 20 and the page grew by the difference on load. One unseen line of the span's base type, the bar centred over it.
                 float size = span.Size <= 0f ? 14f : span.Size;
                 float width = float.IsNaN(span.Width) ? MathF.Min(size * 18f, MathF.Max(size * 8f, 160f)) : span.Width;
-                return Bar(s, width, BarHeight(size, s), span.Grow, default, span.Margin, span.AlignSelf);
+                float h = BarHeight(size, s);
+                var probe = new TextEl("M")
+                {
+                    Size = size, Weight = span.Weight, FontFamily = span.FontFamily, LineHeight = span.LineHeight, LineStacking = span.LineStacking,
+                    MaxLines = 1, Wrap = TextWrap.NoWrap,
+                };
+                return new BoxEl
+                {
+                    ZStack = true,
+                    Width = width, Grow = span.Grow, Shrink = span.Shrink, MinWidth = span.MinWidth, MaxWidth = span.MaxWidth,
+                    Margin = span.Margin, AlignSelf = span.AlignSelf,
+                    IsEnabled = false, HitTestVisible = false,
+                    Children =
+                    [
+                        new BoxEl { Opacity = 0f, HitTestVisible = false, IsEnabled = false, JustifySelf = FlexAlign.Start, MinWidth = 0f, Children = [probe] },
+                        Bar(s, float.NaN, h, 0f, Radii.Circle(h), default, FlexAlign.Center) with { JustifySelf = FlexAlign.Stretch },
+                    ],
+                };
             }
 
             case ComponentEl { DeriveRenderedOutput: true } dynamicProxy:
