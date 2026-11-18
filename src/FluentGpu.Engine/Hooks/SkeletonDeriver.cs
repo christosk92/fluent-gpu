@@ -9,7 +9,7 @@ namespace FluentGpu.Hooks;
 /// <summary>
 /// Derives a SHIMMER element tree from the author's ONE real element subtree (so skeleton-loading needs no second
 /// hand-authored tree). A pure recursive switch over the closed Element hierarchy — runs ONCE per pending→loaded edge
-/// (a reconcile-edge event, never a paint phase) and never reads a live/measured node or a bound Prop:
+/// (a reconcile-edge event, never a paint phase) and never reads a live/measured node, nor subscribes to a bound Prop (a bound text is peeked for its width):
 /// <list type="bullet">
 /// <item><b>Container</b> (BoxEl/GridEl with children): COPY layout only, gate input, remove chrome/effects, and recurse
 /// — so cards/buttons/hero scrims do not become giant tinted placeholder slabs.</item>
@@ -326,7 +326,9 @@ internal static class SkeletonDeriver
         if (string.Equals(text.FontFamily, Tok.Definition.Fonts.Icon, StringComparison.OrdinalIgnoreCase))
             return size;
 
-        string value = text.Text.ValueOr("");
+        // A BOUND text (a row whose words bind to its slot) is sized from its current value, read untracked (a peek): the derive subscribes to
+        // nothing and runs no effect, it only measures the words the placeholder carries. A static text reads its value as before.
+        string value = text.Text.IsBound ? Reactive.Untrack(text.Text.Current) ?? "" : text.Text.ValueOr("");
         int glyphs = 0;
         for (int i = 0; i < value.Length && glyphs < 24; i++)
             if (!char.IsWhiteSpace(value[i]) || (i > 0 && !char.IsWhiteSpace(value[i - 1]))) glyphs++;
