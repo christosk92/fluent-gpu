@@ -35,6 +35,11 @@ public sealed class PackReorder<T>
     // ── policy (read live) ──
     /// <summary>Group heads and rows never lift; null: every tile lifts.</summary>
     public Func<T, bool>? CanLift;
+    /// <summary>Does a drag that starts on a draggable INSIDE the tile move the tile? True for a tile that is one thing (a card
+    /// with a track row in it: the row is part of the card). False for a tile that holds things of their own (a section of
+    /// cards): there the inner source drags as itself, and the tile lifts from its own surface (its head, its gaps). Null: every
+    /// liftable tile takes the inner drag.</summary>
+    public Func<T, bool>? ClaimsInnerDrag;
     /// <summary>(item, entry index): false refuses that landing (e.g. never above the first group head).</summary>
     public Func<T, int, bool>? CanLandAt;
     /// <summary>Classic: only in Edit Home; Zune: only the selected tile. Null: always.</summary>
