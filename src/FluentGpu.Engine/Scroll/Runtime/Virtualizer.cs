@@ -30,7 +30,8 @@ public static class Virtualizer
     public const double MaxLocalExtent = 16384.0;
 
     /// <summary>Decides the window to realize this frame. Overscan ahead of the motion is
-    /// <c>clamp(|v|·LookaheadS, OverscanMinPx, OverscanMaxPx)</c>; behind it is <c>OverscanMinPx</c>. At rest both
+    /// <c>clamp(|v|·LookaheadS, OverscanMinPx, OverscanMaxPx)</c>, or the floor when <c>|v|·LookaheadS</c> passes the viewport
+    /// plus that band (the motion would jump over the band unseen); behind it is <c>OverscanMinPx</c>. At rest both
     /// sides get the floor. <paramref name="anchorIndexPrev"/> is returned as the anchor when the source is empty
     /// (there is no visible row to anchor to).</summary>
     public static RealizeWindow Plan(IExtentSource ext, double p, double v, double viewport, in MotionFeel feel, int anchorIndexPrev)
@@ -38,9 +39,15 @@ public static class Virtualizer
         int n = ext.Count;
         if (n <= 0) return new RealizeWindow(0, -1, 0.0, 0.0, anchorIndexPrev);
 
-        double lead = Math.Abs(v) * feel.LookaheadS;
+        double reach = Math.Abs(v) * feel.LookaheadS;
+        double lead = reach;
         if (lead < feel.OverscanMinPx) lead = feel.OverscanMinPx;
         if (lead > feel.OverscanMaxPx) lead = feel.OverscanMaxPx;
+        // A band the motion jumps clean over is pure cost: once the look-ahead reach passes the viewport plus the capped band (a scrollbar
+        // scrub, a glide of thousands of DIP a frame), the view the motion lands on starts beyond everything realised ahead, so every row of
+        // the band would be built, laid out and recorded, then recycled unseen (a 500-row list rebuilt ~60 rows a frame for ~15 on screen).
+        // Realise the floor then: each frame builds what it shows.
+        if (reach >= viewport + lead) lead = feel.OverscanMinPx;
         double trail = feel.OverscanMinPx;
         double behind = v < 0.0 ? lead : trail;
         double ahead = v < 0.0 ? trail : lead;
