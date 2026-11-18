@@ -2627,9 +2627,19 @@ internal sealed partial class SceneRecordingContext
             }
             case VisualKind.TabShape:
             {
-                ResolveSurface(scene, node, flags, in p, in pc, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out ColorF fill, out _);
+                ResolveSurface(scene, node, flags, in p, in pc, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out ColorF fill, out ColorF border);
                 if (fill.A > 0f)
                     dl.TabShape(local, p.Corners.TopLeft, pc.TabFlareRadius, fill, world, opacity, key);
+                // The tab's BORDER is the outline of the same silhouette: inside the bounds, as a box's border is, and open at
+                // the foot (DrawTabShapeCmd.StrokeWidth). The band is centred on its edge, so the edge it follows is the
+                // silhouette drawn in by half the width on the top and the sides; the foot stays where it is.
+                if (p.BorderWidth > 0f && border.A > 0f)
+                {
+                    float half = p.BorderWidth * 0.5f;
+                    var ring = new RectF(local.X + half, local.Y + half, local.W - p.BorderWidth, local.H - half);
+                    if (ring.W > 0f && ring.H > 0f)
+                        dl.TabShape(ring, MathF.Max(0f, p.Corners.TopLeft - half), pc.TabFlareRadius, border, world, opacity, key, p.BorderWidth);
+                }
                 break;
             }
             case VisualKind.Video:
