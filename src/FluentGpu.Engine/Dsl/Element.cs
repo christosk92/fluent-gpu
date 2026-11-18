@@ -107,8 +107,9 @@ public abstract record Element
     public string? RelativeTo { get => (_ecold ?? ElementCold.Default).RelativeTo; init { if (!EqualityComparer<string?>.Default.Equals((_ecold ?? ElementCold.Default).RelativeTo, value)) ECold.RelativeTo = value; } }
 }
 
-/// <summary>Per-node skeleton-derivation policy (see <see cref="Element.SkeletonMode"/>).</summary>
-public enum SkeletonMode : byte { Auto, Off }
+/// <summary>Per-node skeleton-derivation policy (see <see cref="Element.SkeletonMode"/>). <see cref="Held"/> marks a shimmer stand-in shown
+/// as itself (<see cref="SkeletonExtensions.SkelHeld{T}"/>): the region's reveal holds the real node carrying its MorphId in place.</summary>
+public enum SkeletonMode : byte { Auto, Off, Held }
 
 /// <summary>The form-validation visual state of a control surface (form-validation.md). <see cref="Warning"/> is
 /// reserved for non-blocking advisory styling; v1 styles only <see cref="Error"/> (red border + message).</summary>

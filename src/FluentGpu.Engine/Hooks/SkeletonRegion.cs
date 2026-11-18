@@ -167,9 +167,11 @@ internal static class SkeletonReveal
     /// <see cref="Expressive.Stagger"/>: the cascade starts its last row within a second, however long the stack).</summary>
     internal const int MaxStaggerRungs = 24;
 
-    public static void Play(AnimEngine anim, SceneStore scene, SkelReveal reveal, NodeHandle realRoot, in SkeletonStyle style)
+    public static void Play(AnimEngine anim, SceneStore scene, SkelReveal reveal, NodeHandle realRoot, in SkeletonStyle style,
+        List<NodeHandle>? held = null)
     {
         if (realRoot.IsNull || !scene.IsLive(realRoot)) return;
+        if (held is { Count: > 0 } && reveal != SkelReveal.None) { RevealAround(anim, scene, reveal, realRoot, held); return; }
         switch (reveal)
         {
             case SkelReveal.None:
@@ -202,6 +204,43 @@ internal static class SkeletonReveal
             default:
                 anim.SoftReveal(realRoot, dy: 8f, blur: Expressive.BlurMedium);
                 break;
+        }
+    }
+
+    /// <summary>The reveal with HELD parts: nodes the shimmer already showed as themselves (a connected flight's landing that stood in the
+    /// placeholder, <see cref="SkeletonExtensions.SkelHeld{T}"/>). A held node and the chain of boxes down to it stay at rest; every other subtree
+    /// hanging off that chain takes the region's recipe on its own. The root reveal would carry the held part with it: a cover already on
+    /// screen faded, blurred and rose 8 DIP into its own place over its sharp copy, and a flight landing on it mid-reveal handed off to a
+    /// half-revealed picture.</summary>
+    static void RevealAround(AnimEngine anim, SceneStore scene, SkelReveal reveal, NodeHandle realRoot, List<NodeHandle> held)
+    {
+        var onPath = new HashSet<uint>();
+        var isHeld = new HashSet<uint>();
+        foreach (var h in held)
+        {
+            if (!scene.IsLive(h)) continue;
+            isHeld.Add(h.Raw.Index);
+            for (var n = scene.Parent(h); !n.IsNull && scene.IsLive(n); n = scene.Parent(n))
+            {
+                onPath.Add(n.Raw.Index);
+                if (n == realRoot) break;
+            }
+        }
+        if (isHeld.Count == 0 || !onPath.Contains(realRoot.Raw.Index)) { Play(anim, scene, reveal, realRoot, default); return; }
+        anim.SettlePresentation(realRoot);
+        Around(realRoot);
+
+        // The chain and the held part take no mount entrance either (a form's own Enter fade carried the cover in again).
+        void Around(NodeHandle parent)
+        {
+            for (var c = scene.FirstChild(parent); !c.IsNull; c = scene.NextSibling(c))
+            {
+                uint i = c.Raw.Index;
+                if (isHeld.Contains(i)) { anim.SettlePresentation(c); continue; }
+                if (onPath.Contains(i)) { anim.SettlePresentation(c); Around(c); continue; }
+                if (reveal == SkelReveal.FadeOnly) anim.Animate(c, AnimChannel.Opacity, 0f, 1f, Expressive.Fast, Easing.SmoothOut);
+                else anim.SoftReveal(c, dy: 8f, blur: Expressive.BlurMedium);
+            }
         }
     }
 
