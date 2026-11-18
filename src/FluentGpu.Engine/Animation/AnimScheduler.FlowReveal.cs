@@ -733,7 +733,15 @@ public sealed partial class AnimEngine
             }
             if (self && TryGetTransition(n, out var spec) && spec.Anchor == SizeAnchor.Parallax)
             {
-                p.ChildShiftY = RevealPlan.ParallaxShift(h + delta, ContentExtent(n));
+                // The content leads by a share of what is still hidden WHERE IT CAN BE SEEN. A reveal that runs past its view's lower
+                // edge is driven only to that edge (RevealPlan.TryClamp: the rest lands at once, unseen), so measured against its whole
+                // content the lead stayed at its cap for the whole flight and dropped to 0 in the one frame the row came to rest: a tall
+                // body opening near the foot of a list sat 24 DIP high, over its header, then snapped down (and a close started with
+                // the same step). The visible extent is the view's geometry, read each pass like the seed read it: no state to carry
+                // through a reverse.
+                RevealView(n, out float top, out _, out float viewBottom, out _);
+                float seen = MathF.Min(ContentExtent(n), RevealPlan.VisibleLimit(top, viewBottom));
+                p.ChildShiftY = RevealPlan.ParallaxShift(h + delta, seen);
                 p.FlowBits |= NodePaint.FlowOwnsShiftBit;
             }
             _scene.Mark(n, NodeFlags.PaintDirty);
