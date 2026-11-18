@@ -23,7 +23,7 @@ dotnet run
 |---|---|---|
 | `-n` / `--name` | the folder name | project, assembly and namespace name |
 | `--EnginePath` | `..\fluent-gpu` | the engine checkout (the folder that holds `FluentGpu.App.props`). Absolute, or relative to the new project folder |
-| `--GlobalJson` | `true` | add a `global.json` pinning the SDK band the engine builds with (11.0.100-rc.3.26522.148, `latestFeature`). Pass `false` inside a repo that already has one |
+| `--GlobalJson` | `true` | add a `global.json` pinning the SDK band the engine builds with (11.0.100, `latestFeature`). Pass `false` inside a repo that already has one |
 
 What you get:
 
