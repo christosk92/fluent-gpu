@@ -258,6 +258,18 @@ public sealed class TabStrip : Component
         Children = [new BoxEl { Height = 1f, Margin = lineMargin, Fill = RailBaselineFill }],
     };
 
+    /// <summary>Chrome appearance: false draws no baseline under the tabs, the lead and the "+" (the room it stands in is kept, so nothing
+    /// moves). For a bar whose rows share one ground: the baseline is the edge between a strip and what lies under it, and with no strip of
+    /// its own there is no edge, only a hairline that ends where the tabs do. MOUNT-TIME, like <see cref="Appearance"/>.</summary>
+    public bool ShowRailBaseline = true;
+
+    /// <summary>A baseline segment of THIS strip: <see cref="RailBaselineHost"/>, or its room alone when the strip draws none.</summary>
+    BoxEl Rail(float width = float.NaN, float grow = 0f, Edges4 lineMargin = default)
+    {
+        var host = RailBaselineHost(width, grow, lineMargin);
+        return ShowRailBaseline ? host : host with { Children = [] };
+    }
+
     public override Element Render()
     {
         _ = ItemsVersion?.Invoke();
@@ -358,7 +370,7 @@ public sealed class TabStrip : Component
         int tail = IsAddTabButtonVisible ? 1 : 0;
         var children = new Element[count + tail + 2];
         // The MUX LeftContentColumn + header-cell inset carries the same baseline as the unselected tabs.
-        children[0] = RailBaselineHost(6f,
+        children[0] = Rail(6f,
             lineMargin: selected == 0 ? new Edges4(0f, 0f, 4f, 0f) : default);
         for (int i = 0; i < count; i++)
         {
@@ -375,7 +387,7 @@ public sealed class TabStrip : Component
             children[count + 1] = AddButton(Add, count > 0 && selected == count - 1);
 
         int trailing = count + tail + 1;
-        children[trailing] = RailBaselineHost(5f,
+        children[trailing] = Rail(5f,
             lineMargin: !IsAddTabButtonVisible && count > 0 && selected == count - 1
                 ? new Edges4(4f, 0f, 0f, 0f)
                 : default);
@@ -534,7 +546,7 @@ public sealed class TabStrip : Component
             // tint-safe on live Mica in all four presets. (A token would be the right home for it if one were
             // alpha-guaranteed in light; none is.)
             // Stop at the selected TabShape's 4-DIP curve-out, rather than painting through its translucent flare.
-            layers.Add(RailBaselineHost(lineMargin: index == selectedIndex - 1
+            layers.Add(Rail(lineMargin: index == selectedIndex - 1
                 ? new Edges4(0f, 0f, 4f, 0f)
                 : index == selectedIndex + 1
                     ? new Edges4(4f, 0f, 0f, 0f)
@@ -703,7 +715,7 @@ public sealed class TabStrip : Component
         float rowH = host is { } h ? MathF.Max(1f, h.RowHeight.Current()) : TitleBar.ExpandedHeight;
 
         var tabs = new Element[count + 1];
-        tabs[0] = RailBaselineHost(6f, lineMargin: selected == 0 ? new Edges4(0f, 0f, 4f, 0f) : default);
+        tabs[0] = Rail(6f, lineMargin: selected == 0 ? new Edges4(0f, 0f, 4f, 0f) : default);
         for (int i = 0; i < count; i++)
         {
             int index = i;
@@ -754,7 +766,7 @@ public sealed class TabStrip : Component
 
         var kids = new List<Element>(3) { tabsPart };
         if (IsAddTabButtonVisible) kids.Add(AddButton(add, count > 0 && selected == count - 1));
-        kids.Add(RailBaselineHost(5f,
+        kids.Add(Rail(5f,
             lineMargin: !IsAddTabButtonVisible && count > 0 && selected == count - 1 ? new Edges4(4f, 0f, 0f, 0f) : default));
 
         // Hugs, like every strip shape: a title bar reports it wholesale as one Client island.
@@ -1208,7 +1220,7 @@ public sealed class TabStrip : Component
             ZStack = true,
             Children =
             [
-                RailBaselineHost(lineMargin: followsSelected ? new Edges4(4f, 0f, 0f, 0f) : default),
+                Rail(lineMargin: followsSelected ? new Edges4(4f, 0f, 0f, 0f) : default),
                 applied,
             ],
         };
