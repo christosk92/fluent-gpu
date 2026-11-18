@@ -64,6 +64,13 @@ public static class RevealPlan
     public static float ParallaxShift(float presented, float contentExtent)
         => -MathF.Min(ParallaxMaxDip, MathF.Max(0f, contentExtent - presented) * ParallaxShare);
 
+    /// <summary>The Trailing child shift of a node presenting <paramref name="presented"/> of a content extent <paramref name="contentExtent"/>:
+    /// the content's far edge rides the moving edge (it slides out from under the node's top, and back under it), so the clip never cuts
+    /// through it: what shows is always its lower part, its foot last. 0 once fully presented. The WHOLE content's extent: a Trailing
+    /// reveal springs its whole move (no visible-span clamp; a slide is on screen all the way), so the shift is continuous end to end.</summary>
+    public static float TrailingShift(float presented, float contentExtent)
+        => -MathF.Max(0f, contentExtent - presented);
+
     /// <summary>Normalized progress (0 → 1) of the <see cref="MotionTokenId.Reveal"/> spring <paramref name="tMs"/> after it
     /// leaves rest — the curve every reveal runs, sampled exactly as the scheduler samples it (gates + tests).</summary>
     public static float Progress(float tMs)
