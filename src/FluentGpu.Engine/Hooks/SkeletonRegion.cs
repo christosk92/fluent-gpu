@@ -13,7 +13,8 @@ public enum SkelReveal : byte
 {
     /// <summary>The whole content blur-rises in as one (Opacity + TranslateY + Blur → rest). The default scalar reveal.</summary>
     Soft,
-    /// <summary>Each row blur-rises 40ms behind the last (the track-list reveal — walks the mounted children).</summary>
+    /// <summary>Each row blur-rises 40ms behind the last (the track-list reveal — walks the mounted children). Bounded: a
+    /// row past the 24th rung rides it, so the last row of any stack starts within a second.</summary>
     StaggerRows,
     /// <summary>A plain opacity cross-fade (no translate/blur) — for content that should not move.</summary>
     FadeOnly,
@@ -162,6 +163,10 @@ public static class Skel
 /// Walks the mounted real subtree for the staggered row case. Called by the reconciler (a reconcile-edge event).</summary>
 internal static class SkeletonReveal
 {
+    /// <summary>The last row of a <see cref="SkelReveal.StaggerRows"/> cascade that gets a rung of its own (24 rungs of
+    /// <see cref="Expressive.Stagger"/>: the cascade starts its last row within a second, however long the stack).</summary>
+    internal const int MaxStaggerRungs = 24;
+
     public static void Play(AnimEngine anim, SceneStore scene, SkelReveal reveal, NodeHandle realRoot, in SkeletonStyle style)
     {
         if (realRoot.IsNull || !scene.IsLive(realRoot)) return;
@@ -185,10 +190,13 @@ internal static class SkeletonReveal
                 int n = 0;
                 for (var c = scene.FirstChild(rowParent); !c.IsNull; c = scene.NextSibling(c)) n++;
                 if (n == 0) { anim.SoftReveal(realRoot); break; }
-                var rows = new NodeHandle[n];
+                // One gesture, bounded: a row past MaxStaggerRungs rides the last rung. A long stack that is not virtualized (a book's hundred
+                // chapters) was otherwise still arriving four seconds after its first row, a rung at a time, with a frame produced for each
+                // one where nobody can see it.
                 int k = 0;
-                for (var c = scene.FirstChild(rowParent); !c.IsNull; c = scene.NextSibling(c)) rows[k++] = c;
-                anim.SoftRevealStaggered(rows, dy: 8f, blur: Expressive.BlurMedium, durationMs: Expressive.VerySlow, staggerMs: Expressive.Stagger);
+                for (var c = scene.FirstChild(rowParent); !c.IsNull; c = scene.NextSibling(c), k++)
+                    anim.SoftReveal(c, dy: 8f, blur: Expressive.BlurMedium, durationMs: Expressive.VerySlow,
+                        delayMs: Math.Min(k, MaxStaggerRungs) * Expressive.Stagger);
                 break;
             }
             default:
