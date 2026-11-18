@@ -223,6 +223,38 @@ internal static class SkeletonDeriver
                 };
             }
 
+            case VirtualListEl v when v.RowBind is { } bind && v.ItemCount > 0:
+            {
+                // The bound path (an ItemsView over a bound source, a whole page as one list): its slot template at a FIXED index is the
+                // one real row source. The persistent prefix (a page's hero, its toolbar) leads, then the same small pending window of rows as
+                // the RenderItem path; never the whole collection. A view derived with its components (SkeletonStyle.DeriveComponents) mounts
+                // each slot's components over that index, so the list shimmers at its loaded shape instead of one 160 bar.
+                // Each item is a layer of its own stack, as the virtualizer lays it out: it fills the list's cross axis and its main extent is its
+                // content's (a Grow / Basis it carries never takes a share of the derived column's height).
+                int prefix = Math.Clamp(v.PersistentPrefixCount, 0, v.ItemCount);
+                int count = Math.Min(v.ItemCount, prefix + 8);
+                var rows = new Element[count];
+                for (int i = 0; i < count; i++)
+                    rows[i] = new BoxEl
+                    {
+                        ZStack = true, Direction = v.Horizontal ? (byte)0 : (byte)1, Shrink = 0f, MinWidth = 0f, MinHeight = 0f,
+                        IsEnabled = false, HitTestVisible = false,
+                        Children = [Derive(bind(new Signal<int>(i)), s)],
+                    };
+                return new BoxEl
+                {
+                    Direction = v.Horizontal ? (byte)0 : (byte)1,
+                    Children = rows,
+                    Width = v.Width, Height = v.Height,
+                    MinWidth = v.MinWidth, MinHeight = v.MinHeight,
+                    MaxWidth = v.MaxWidth, MaxHeight = v.MaxHeight,
+                    Grow = v.Grow, Shrink = v.Shrink, Basis = v.Basis,
+                    AlignSelf = v.AlignSelf, Margin = v.Margin,
+                    ClipToBounds = true,
+                    IsEnabled = false, HitTestVisible = false,
+                };
+            }
+
             case SpanTextEl span:
             {
                 float size = span.Size <= 0f ? 14f : span.Size;
