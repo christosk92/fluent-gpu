@@ -9,7 +9,7 @@ namespace FluentGpu.Hooks;
 /// <summary>
 /// Derives a SHIMMER element tree from the author's ONE real element subtree (so skeleton-loading needs no second
 /// hand-authored tree). A pure recursive switch over the closed Element hierarchy — runs ONCE per pending→loaded edge
-/// (a reconcile-edge event, never a paint phase) and never reads a live/measured node or a bound Prop:
+/// (a reconcile-edge event, never a paint phase) and never reads a live/measured node, nor subscribes to a bound Prop (a bound text is peeked for its width):
 /// <list type="bullet">
 /// <item><b>Container</b> (BoxEl/GridEl with children): COPY layout only, gate input, remove chrome/effects, and recurse
 /// — so cards/buttons/hero scrims do not become giant tinted placeholder slabs.</item>
@@ -25,15 +25,17 @@ internal static class SkeletonDeriver
     public static Element Derive(Element real, in SkeletonStyle s) => Derive(real, s, inZStack: false);
 
     /// <param name="inZStack">The parent is a ZStack: a childless box there with no declared extent is a LAYER that fills the stack.</param>
-    private static Element Derive(Element real, in SkeletonStyle s, bool inZStack)
+    /// <param name="room">The parent's declared inner width (NaN: none): an estimated text bar never runs past a fixed-width cell (a chapter's
+    /// 28 number column) into its neighbour.</param>
+    private static Element Derive(Element real, in SkeletonStyle s, bool inZStack, float room = float.NaN)
     {
-        var derived = DeriveNode(real, s, inZStack);
+        var derived = DeriveNode(real, s, inZStack, room);
         // A whole view derived (SkeletonStyle.DeriveComponents) is a stand-in, never its loaded parts' identity: a key it kept would read as that
         // part rebuilt when the loaded view replaces the stand-in (its menu button, its rows). Its nodes carry none.
         return s.DeriveComponents && derived.Key is not null ? derived with { Key = null } : derived;
     }
 
-    private static Element DeriveNode(Element real, in SkeletonStyle s, bool inZStack)
+    private static Element DeriveNode(Element real, in SkeletonStyle s, bool inZStack, float room)
     {
         if (real.SkeletonOverride is { } custom) return custom;            // bespoke shimmer for this subtree
         if (real.SkeletonMode == SkeletonMode.Off) return Spacer(real, s); // keep the slot, no shimmer
@@ -53,7 +55,9 @@ internal static class SkeletonDeriver
                 // remove authored chrome. Copying a card fill, hero scrim, gradient, or border turns the whole container
                 // into a giant tinted slab and obscures the image/text placeholders inside it.
                 var kids = new Element[b.Children.Length];
-                for (int i = 0; i < kids.Length; i++) kids[i] = Derive(b.Children[i], s, b.ZStack);
+                float w0 = b.Width.IsBound ? float.NaN : b.Width.ValueOr(float.NaN);
+                float inner = float.IsNaN(w0) ? float.NaN : MathF.Max(0f, w0 - b.Padding.Left - b.Padding.Right);
+                for (int i = 0; i < kids.Length; i++) kids[i] = Derive(b.Children[i], s, b.ZStack, inner);
                 return b with
                 {
                     Children = kids,
@@ -141,7 +145,7 @@ internal static class SkeletonDeriver
                 return new BoxEl
                 {
                     ZStack = true,
-                    Width = TextBarWidth(t), Grow = t.Grow, Shrink = t.Shrink, MinWidth = t.MinWidth, MaxWidth = t.MaxWidth,
+                    Width = float.IsNaN(room) ? TextBarWidth(t) : MathF.Min(TextBarWidth(t), room), Grow = t.Grow, Shrink = t.Shrink, MinWidth = t.MinWidth, MaxWidth = t.MaxWidth,
                     Margin = t.Margin, AlignSelf = t.AlignSelf,
                     IsEnabled = false, HitTestVisible = false,
                     Children =
@@ -223,11 +227,62 @@ internal static class SkeletonDeriver
                 };
             }
 
+            case VirtualListEl v when v.RowBind is { } bind && v.ItemCount > 0:
+            {
+                // The bound path (an ItemsView over a bound source, a whole page as one list): its slot template at a FIXED index is the
+                // one real row source. The persistent prefix (a page's hero, its toolbar) leads, then the same small pending window of rows as
+                // the RenderItem path; never the whole collection. A view derived with its components (SkeletonStyle.DeriveComponents) mounts
+                // each slot's components over that index, so the list shimmers at its loaded shape instead of one 160 bar.
+                // Each item is a layer of its own stack, as the virtualizer lays it out: it fills the list's cross axis and its main extent is its
+                // content's (a Grow / Basis it carries never takes a share of the derived column's height).
+                int prefix = Math.Clamp(v.PersistentPrefixCount, 0, v.ItemCount);
+                int count = Math.Min(v.ItemCount, prefix + 8);
+                var rows = new Element[count];
+                for (int i = 0; i < count; i++)
+                    rows[i] = new BoxEl
+                    {
+                        ZStack = true, Direction = v.Horizontal ? (byte)0 : (byte)1, Shrink = 0f, MinWidth = 0f, MinHeight = 0f,
+                        IsEnabled = false, HitTestVisible = false,
+                        Children = [Derive(bind(new Signal<int>(i)), s)],
+                    };
+                return new BoxEl
+                {
+                    Direction = v.Horizontal ? (byte)0 : (byte)1,
+                    Children = rows,
+                    Width = v.Width, Height = v.Height,
+                    MinWidth = v.MinWidth, MinHeight = v.MinHeight,
+                    MaxWidth = v.MaxWidth, MaxHeight = v.MaxHeight,
+                    Grow = v.Grow, Shrink = v.Shrink, Basis = v.Basis,
+                    AlignSelf = v.AlignSelf, Margin = v.Margin,
+                    ClipToBounds = true,
+                    IsEnabled = false, HitTestVisible = false,
+                };
+            }
+
             case SpanTextEl span:
             {
+                // THE LINE BOX, as for a TextEl: a bare bar is TextRatio of the em, so a span line ("Up next · Title") derived 10 tall where it
+                // lays out 20 and the page grew by the difference on load. One unseen line of the span's base type, the bar centred over it.
                 float size = span.Size <= 0f ? 14f : span.Size;
                 float width = float.IsNaN(span.Width) ? MathF.Min(size * 18f, MathF.Max(size * 8f, 160f)) : span.Width;
-                return Bar(s, width, BarHeight(size, s), span.Grow, default, span.Margin, span.AlignSelf);
+                float h = BarHeight(size, s);
+                var probe = new TextEl("M")
+                {
+                    Size = size, Weight = span.Weight, FontFamily = span.FontFamily, LineHeight = span.LineHeight, LineStacking = span.LineStacking,
+                    MaxLines = 1, Wrap = TextWrap.NoWrap,
+                };
+                return new BoxEl
+                {
+                    ZStack = true,
+                    Width = width, Grow = span.Grow, Shrink = span.Shrink, MinWidth = span.MinWidth, MaxWidth = span.MaxWidth,
+                    Margin = span.Margin, AlignSelf = span.AlignSelf,
+                    IsEnabled = false, HitTestVisible = false,
+                    Children =
+                    [
+                        new BoxEl { Opacity = 0f, HitTestVisible = false, IsEnabled = false, JustifySelf = FlexAlign.Start, MinWidth = 0f, Children = [probe] },
+                        Bar(s, float.NaN, h, 0f, Radii.Circle(h), default, FlexAlign.Center) with { JustifySelf = FlexAlign.Stretch },
+                    ],
+                };
             }
 
             case ComponentEl { DeriveRenderedOutput: true } dynamicProxy:
@@ -271,7 +326,9 @@ internal static class SkeletonDeriver
         if (string.Equals(text.FontFamily, Tok.Definition.Fonts.Icon, StringComparison.OrdinalIgnoreCase))
             return size;
 
-        string value = text.Text.ValueOr("");
+        // A BOUND text (a row whose words bind to its slot) is sized from its current value, read untracked (a peek): the derive subscribes to
+        // nothing and runs no effect, it only measures the words the placeholder carries. A static text reads its value as before.
+        string value = text.Text.IsBound ? Reactive.Untrack(text.Text.Current) ?? "" : text.Text.ValueOr("");
         int glyphs = 0;
         for (int i = 0; i < value.Length && glyphs < 24; i++)
             if (!char.IsWhiteSpace(value[i]) || (i > 0 && !char.IsWhiteSpace(value[i - 1]))) glyphs++;
