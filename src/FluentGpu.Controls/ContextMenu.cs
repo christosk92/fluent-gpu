@@ -309,13 +309,13 @@ public static class ContextMenu
                 MenuItemKind.Separator => AppBarCommand.Separator,
                 MenuItemKind.Toggle or MenuItemKind.Radio =>
                     new AppBarCommand(it.Icon, it.Label, it.Invoke, AppBarCommandKind.ToggleButton, it.IsChecked, it.Enabled)
-                    { AcceleratorText = it.AcceleratorText },
+                    { AcceleratorText = it.AcceleratorText, Attention = it.Attention },
                 MenuItemKind.SubMenu =>
                     new AppBarCommand(it.Icon, it.Label, null, AppBarCommandKind.Button, false, it.Enabled)
-                    { AcceleratorText = it.AcceleratorText, Flyout = it.SubItems },
+                    { AcceleratorText = it.AcceleratorText, Flyout = it.SubItems, Attention = it.Attention },
                 _ =>
                     new AppBarCommand(it.Icon, it.Label, it.Invoke, AppBarCommandKind.Button, false, it.Enabled)
-                    { AcceleratorText = it.AcceleratorText },
+                    { AcceleratorText = it.AcceleratorText, Attention = it.Attention },
             };
         }
         return result;
