@@ -540,6 +540,23 @@ public sealed partial class AnimEngine
         if (!float.IsNaN(uiBase)) MarkSeedRelative(Find(node, channel), uiBase, driftScale);
     }
 
+    /// <summary>Bring <paramref name="node"/>'s presentation rows (an entrance's opacity, translate, scale, rotation, blur) to their rest targets
+    /// now: each is re-seeded as a 1 ms tween at its target, so the next tick composes the rest pose and frees it. A part a skeleton reveal holds
+    /// in place (SkeletonReveal.RevealAround) takes no mount entrance either: it was already on screen as itself.</summary>
+    internal void SettlePresentation(NodeHandle node)
+    {
+        Span<(AnimChannel Channel, float To)> rows = stackalloc (AnimChannel, float)[8];
+        int n = 0;
+        for (int s = _slab.HeadOnNode((int)node.Raw.Index); s >= 0 && n < rows.Length; s = _slab.At(s).NextOnNode)
+        {
+            ref AnimValue r = ref _slab.At(s);
+            if (r.Channel is AnimChannel.Opacity or AnimChannel.TranslateX or AnimChannel.TranslateY or AnimChannel.ScaleX or AnimChannel.ScaleY
+                or AnimChannel.Rotation or AnimChannel.BlurSigma)
+                rows[n++] = (r.Channel, r.To);
+        }
+        for (int i = 0; i < n; i++) Animate(node, rows[i].Channel, rows[i].To, rows[i].To, 1f, Easing.Linear);
+    }
+
     public void Cancel(NodeHandle node, AnimChannel channel)
     {
         int s = Find(node, channel);

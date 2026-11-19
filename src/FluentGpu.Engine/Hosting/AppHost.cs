@@ -1551,6 +1551,7 @@ public sealed partial class AppHost : IDisposable
     private readonly Dictionary<NodeHandle, ProjCapture> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
     private readonly List<NodeHandle> _projectionSuppressionRoots = new();          // changed projected containers that own descendant motion this commit
     private readonly List<NodeHandle> _liveReflowScratch = new(8);                  // nodes with a live LayoutW/H reflow row this commit (ApplyProjections shove suppression)
+    private readonly Dictionary<int, float> _revealSnapH = new(8);                  // ancestor idx → the height a FlowReveal's layout snap added to it this commit (AnimEngine.NoteRevealSnap): the reveal presents it, no size transition there may
     private readonly Dictionary<int, int> _reflowShoveFrames = new(16);             // parent idx → the child idx on a reflowing node's ancestor path ("the reflow-carrying child under this parent")
     /// <summary>The most layout passes a frame runs after its layout for sizes its layout delivered (a measured width a part re-renders from).</summary>
     private const int BoundsRelayoutPasses = 3;
@@ -8871,19 +8872,38 @@ public sealed partial class AppHost : IDisposable
         // Reveal-shove frames (SizeMode.FlowReveal): the reveal's presented flow IS the sibling's motion, so a node moved
         // by a reveal's layout snap must not position-FLIP. Carriers: a projected FlowReveal node whose height changed this
         // commit, a FlowReveal entrant mounted this commit, a FlowReveal exit orphaned this commit (under its old parent).
+        // The same carriers RESIZE their ancestors: what a snap adds to a box above it is the reveal's to present, so no size
+        // transition there animates it (_revealSnapH; ExplainRevealSnap at both seed points below). An About-the-show Expander in a
+        // list slot that eases its height through a Reflow for tier crossings: the toggle started the slot's 250 ms ease-out, which
+        // carried the rows under it on its own curve and, while it ran, stopped the reveal's flow at the slot (a box with a size row is
+        // a flow boundary). Opening, the rows ran ahead of the panel; closing, they rose over it, then stepped onto the reveal's
+        // remaining delta as the reflow ended (owner video 2026-11-18: "the content cuts ... every single time its a band-aid").
+        _revealSnapH.Clear();
         foreach (var kv in _projectBefore)
         {
             NodeHandle rn = kv.Key;
             if (!_scene.IsLive(rn) || !_anim.TryGetTransition(rn, out var rs) || rs.Size != SizeMode.FlowReveal) continue;
-            if (MathF.Abs(kv.Value.Rel.H - _scene.Bounds(rn).H) < SizeEps) continue;
+            float snap = _scene.Bounds(rn).H - kv.Value.Rel.H;
+            if (MathF.Abs(snap) < SizeEps) continue;
             AddShoveCarrier(rn, _scene.Parent(rn));
+            if ((rs.Channels & TransitionChannels.Size) != 0) _anim.NoteRevealSnap(rn, _scene.Parent(rn), snap, orphan: false, _revealSnapH);
+            if (s_motionDiag) LogMotionNode(rn.Raw.Index, "reveal-snap(" + _revealSnapH.Count + ")", kv.Value.Rel, _scene.Bounds(rn));
         }
         var revealEnters = _anim.PendingEnterReveal;
         for (int i = 0; i < revealEnters.Count; i++)
-            if (_scene.IsLive(revealEnters[i])) AddShoveCarrier(revealEnters[i], _scene.Parent(revealEnters[i]));
+        {
+            if (!_scene.IsLive(revealEnters[i])) continue;
+            AddShoveCarrier(revealEnters[i], _scene.Parent(revealEnters[i]));
+            _anim.NoteRevealSnap(revealEnters[i], _scene.Parent(revealEnters[i]), _scene.Bounds(revealEnters[i]).H, orphan: false, _revealSnapH);
+        }
         var revealExits = _anim.RevealExitCarriers;
         for (int i = 0; i < revealExits.Count; i++)
-            if (_scene.IsLive(revealExits[i].VisualParent)) AddShoveCarrier(revealExits[i].Node, revealExits[i].VisualParent);
+        {
+            if (!_scene.IsLive(revealExits[i].VisualParent)) continue;
+            AddShoveCarrier(revealExits[i].Node, revealExits[i].VisualParent);
+            if (_scene.IsLive(revealExits[i].Node))
+                _anim.NoteRevealSnap(revealExits[i].Node, revealExits[i].VisualParent, -_scene.Bounds(revealExits[i].Node).H, orphan: true, _revealSnapH);
+        }
         // Discover changed containers that explicitly own the visual projection for their subtree. A shell/card width
         // commit commonly changes dozens of descendant card/shelf bounds; allowing every descendant's authored
         // CardRefit/CardResize recipe to start here recreates per-frame Relayout/Reflow under the projected root. Keep
@@ -8962,6 +8982,13 @@ public sealed partial class AppHost : IDisposable
                 }
                 continue;
             }
+            // The height an inner reveal's snap added is the reveal's to present (see _revealSnapH): a change that is all of it starts nothing.
+            if (ExplainRevealSnap(n, ref from, in to) && MathF.Abs(from.X - to.X) < PosEps && MathF.Abs(from.Y - to.Y) < PosEps
+                && MathF.Abs(from.W - to.W) < SizeEps && MathF.Abs(from.H - to.H) < SizeEps)
+            {
+                if (s_motionDiag) LogMotionNode(n.Raw.Index, "reveal-explained", from, to);
+                continue;
+            }
             var relation = _reflowShoveFrames.Count > 0 ? ReflowRelationOf(n) : ReflowRelation.None;
             // A container a live reflow is moving or resizing that would have owned this commit's projection (see the roots above)
             // lands whole: the reflow's re-solve presents its geometry.
@@ -9019,8 +9046,23 @@ public sealed partial class AppHost : IDisposable
         _projectionSuppressionRoots.Clear();
         _liveReflowScratch.Clear();
         _reflowShoveFrames.Clear();
+        _revealSnapH.Clear();
         _reflowOwnedRoots.Clear();
         _projectBefore.Clear();
+    }
+
+    /// <summary>Take out of <paramref name="before"/>'s height the part of <paramref name="n"/>'s change an inner FlowReveal's layout snap
+    /// explains (<see cref="_revealSnapH"/>), so a size transition here animates only the rest, and nothing when that is all of it. Bounded
+    /// by the change itself, in its own direction: a box whose own change runs the other way, or is smaller, keeps what is its own.
+    /// True when it moved <paramref name="before"/>.</summary>
+    private bool ExplainRevealSnap(NodeHandle n, ref RectF before, in RectF after)
+    {
+        if (_revealSnapH.Count == 0 || !_revealSnapH.TryGetValue((int)n.Raw.Index, out float snap)) return false;
+        float change = after.H - before.H;
+        float take = change > 0f ? Math.Clamp(snap, 0f, change) : Math.Clamp(snap, change, 0f);
+        if (take == 0f) return false;
+        before = before with { H = before.H + take };
+        return true;
     }
 
     /// <summary>True when this commit's FLIP capture holds a SizeMode.FlowReveal node (its height may change in the
@@ -9126,6 +9168,8 @@ public sealed partial class AppHost : IDisposable
             if (!_anim.TryGetTransition(n, out var spec) || spec.Size != SizeMode.Reflow || (spec.Channels & TransitionChannels.Size) == 0) continue;
             if (_reflowOwnedRoots.Contains(n) || IsBelowProjectionSuppressionRoot(n)) continue;
             if (!TryProjectionRects(n, kv.Value, posEps, sizeEps, out RectF from, out RectF to)) continue;
+            // Not the height an inner reveal's snap added: the reveal presents it (see _revealSnapH).
+            ExplainRevealSnap(n, ref from, in to);
             // On the axes the reflow animates only: a width reflow's box that only grew taller (a page gutter stretched down the content
             // as a shelf below stands up) has nothing to start, and seeding it anyway re-presented the flying width row and re-probed the
             // destinations on every such commit (the probe's second arrange of the page each frame of a window drag).

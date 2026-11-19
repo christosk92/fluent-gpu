@@ -13,7 +13,8 @@ namespace FluentGpu.Rhi.D3D12;
 /// 0 = rounded rect (fill, or an SDF outline when <see cref="StrokeWidth"/> &gt; 0 — optionally dashed via
 /// <see cref="DashOn"/>/<see cref="DashOff"/>, px along the perimeter clockwise from the top edge's left end);
 /// 1 = checkerboard fill (<see cref="CellPx"/> square cells alternating color/ColorB — the ColorPicker alpha lane);
-/// 2 = the WinUI selected-tab shape (radii.x = top radius, radii.w = bottom flare radius — TabViewItem.cpp:98-123).
+/// 2 = the WinUI selected-tab shape (radii.x = top radius, radii.w = bottom flare radius — TabViewItem.cpp:98-123; with
+/// <see cref="StrokeWidth"/> &gt; 0 its outline, open at the foot).
 /// <see cref="ClipX"/>… carry the tier-2 rounded clip (device-space rounded box; ClipW ≤ 0 = none): the PS multiplies
 /// coverage by the clip SDF so an animated clip on a rounded surface (AnimChannel.ClipL/T/R/B + Corners) clips this
 /// pipeline's primitives with round corners (other pipelines stay scissor-clipped — documented on ClipCmd).
@@ -182,19 +183,41 @@ float4 PSMain(VSOut i) : SV_Target
         // edge flare-radius above the bottom (the concave quarter-arc the path's "a 4,4 0 0 0" encodes).
         float fr = i.radii.w;
         float2 bh = float2(max(i.halfSize.x - fr, 0.0), i.halfSize.y);
-        float r = (i.local.y < 0.0) ? min(i.radii.x, min(bh.x, bh.y)) : 0.0;   // per-corner radius: top only
-        float2 q = abs(i.local) - (bh - r);
-        float dBody = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
-        d = dBody;
-        if (fr > 0.0)
+        float2 fp = float2(abs(i.local.x), i.local.y);                      // mirror x: both flares in one test
+        float2 fc = float2(i.halfSize.x, i.halfSize.y - fr);                // concave-arc centre (outer edge)
+        if (stroke > 0.0)
         {
-            float2 fp = float2(abs(i.local.x), i.local.y);                  // mirror x: both flares in one test
-            float2 sqC = float2(i.halfSize.x - fr * 0.5, i.halfSize.y - fr * 0.5);
-            float2 sq = abs(fp - sqC) - fr * 0.5;
-            float dSquare = min(max(sq.x, sq.y), 0.0) + length(max(sq, 0.0));
-            float2 fc = float2(i.halfSize.x, i.halfSize.y - fr);            // concave-arc centre (outer edge)
-            float dFlare = max(dSquare, fr - length(fp - fc));              // square ∖ disc = the inverted fillet
-            d = min(dBody, dFlare);
+            // ── the OUTLINE, open at the foot: the top, the sides and the two curve-outs, never the bottom edge (the tab
+            // runs into the surface under it there). The same silhouette with its foot taken away: the body is the
+            // rounded-top box carried far below the quad, and each flare square loses its bottom side and reaches one
+            // flare radius INTO the body, so the two parts overlap and their union has no zero along the line they
+            // used to share (a band drawn on |d| would trace that line as a tick). Continuous everywhere: no step for
+            // fwidth to read as an edge. ──
+            const float Deep = 4096.0;
+            float rt = min(i.radii.x, min(bh.x, bh.y));
+            float2 qo = float2(abs(i.local.x), abs(i.local.y - Deep)) - (float2(bh.x, bh.y + Deep) - rt);
+            d = min(max(qo.x, qo.y), 0.0) + length(max(qo, 0.0)) - rt;
+            if (fr > 0.0)
+            {
+                float2 so = float2(abs(fp.x - (i.halfSize.x - fr)) - fr, (i.halfSize.y - fr) - fp.y);
+                float dOpen = min(max(so.x, so.y), 0.0) + length(max(so, 0.0));
+                d = min(d, max(dOpen, fr - length(fp - fc)));
+            }
+        }
+        else
+        {
+            float r = (i.local.y < 0.0) ? min(i.radii.x, min(bh.x, bh.y)) : 0.0;   // per-corner radius: top only
+            float2 q = abs(i.local) - (bh - r);
+            float dBody = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+            d = dBody;
+            if (fr > 0.0)
+            {
+                float2 sqC = float2(i.halfSize.x - fr * 0.5, i.halfSize.y - fr * 0.5);
+                float2 sq = abs(fp - sqC) - fr * 0.5;
+                float dSquare = min(max(sq.x, sq.y), 0.0) + length(max(sq, 0.0));
+                float dFlare = max(dSquare, fr - length(fp - fc));              // square ∖ disc = the inverted fillet
+                d = min(dBody, dFlare);
+            }
         }
     }
     else

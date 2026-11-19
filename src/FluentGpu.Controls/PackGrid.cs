@@ -445,9 +445,10 @@ internal sealed class PackGridView<T> : Component, IPackGridHost, IPackReorderHo
                 OnRealized = cell.OnRealized,
                 Role = o.Automation is { } au ? au(item).Role : AutomationRole.None,
                 Draggable = canLift ? cell.Drag : null,
-                // reorder context: a drag that starts on a draggable inside the tile (a track row in a card) moves the TILE;
+                // reorder context: a drag that starts on a draggable inside the tile (a track row in a card) moves the TILE, unless the
+                // tile holds things of their own (PackReorder.ClaimsInnerDrag: a section's cards drag as themselves);
                 // outside it (reorder off) the wrapper is not draggable and inner sources drag as themselves
-                ClaimsDescendantDrag = canLift,
+                ClaimsDescendantDrag = canLift && (Reorder!.ClaimsInnerDrag?.Invoke(item) ?? true),
                 OnDragStarted = canLift ? cell.OnDragStarted : null,
                 OnDragDelta = canLift ? cell.OnDragDelta : null,
                 OnDragCompleted = canLift ? cell.OnDragCompleted : null,

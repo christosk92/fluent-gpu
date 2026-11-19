@@ -13,4 +13,10 @@ public static class SkeletonExtensions
     /// node whose default-derived bar isn't the right placeholder.</summary>
     public static T Skel<T>(this T e, Element customShimmer) where T : Element
         => (T)((Element)e with { SkeletonOverride = customShimmer });
+
+    /// <summary>Stand this node in the shimmer as <paramref name="live"/>, a part the page already knows (a cover a card staged), and keep it in
+    /// place through the region's reveal: everything around it reveals, it does not. A connected flight lands on it on the click frame and hands
+    /// off to the real node (the one carrying the same MorphId) without a second arrival.</summary>
+    public static T SkelHeld<T>(this T e, Element live) where T : Element
+        => (T)((Element)e with { SkeletonOverride = live with { SkeletonMode = SkeletonMode.Held } });
 }

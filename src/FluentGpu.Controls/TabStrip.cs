@@ -150,6 +150,17 @@ public sealed class TabStrip : Component
     // theme switch — a raw ColorF here freezes at mount (TabStrip is a long-lived component; its constructor args don't
     // re-read). The default is itself a live semantic thunk so callers that do not style the strip also follow retheme.
     public Prop<ColorF> SelectedFill = Prop.Of(static () => Tok.FillSolidTertiary);
+    /// <summary>Chrome: the tone the strip's HOST paints behind the tabs (a title bar row's own fill), for a selected tab that is the
+    /// surface UNDER the strip rising into it, not a plate laid on it. Set: the selected tab paints no <see cref="SelectedFill"/>;
+    /// it CUTS this tone out in its own silhouette, so the tab shows exactly what shows under the strip (the window's material, with
+    /// its live wallpaper tint), on any ground and with no fill to match against it. The cut is the engine's erase box
+    /// (<c>BoxEl.VideoHole</c>: the body with its rounded top, and a box across each bottom corner), and the tone is put back
+    /// outside each curve-out's arc. Two conditions, both the host's: nothing but this tone is painted under the strip (the cut
+    /// goes through everything painted under it in the window), and the strip sits in no group layer; so an overflowing strip
+    /// CLIPS its tabs at the lane's ends in this form, where the plate form fades them (a fade is a group, and a cut inside one
+    /// never reaches the host's fill). Null, or a null result (the default): the plate form. Called at every render, so a host
+    /// whose ground changes under it (a window material switched for a solid colour) changes form where it stands.</summary>
+    public Func<ColorF?>? RailFill;
     /// <summary>Chrome (the MUX rail grammar) or Text (the merged-title-bar, text-first strip). MOUNT-TIME.</summary>
     public TabStripAppearance Appearance = TabStripAppearance.Chrome;
     /// <summary>Text appearance: the tab label point size (the hit rect stays 32 DIP tall regardless).</summary>
@@ -244,6 +255,17 @@ public sealed class TabStrip : Component
     // MUX TabViewBorderBrush expressed as an alpha ink over the LIVE Mica rail. Dark's divider token is already the
     // stock white-alpha seam; seeded light palettes publish opaque card/divider colours, so use stock black@6% there.
     // Keep this bound: TabStrip and TitleBar are long-lived shell nodes and RethemeAll must update the rail in place.
+    /// <summary>The selected tab's curve-out at each bottom corner (WinUI hardcodes 4: TabViewItem.cpp:106).</summary>
+    const float FlareR = 4f;
+
+    /// <summary>One piece at each bottom corner of the selected cell, flush with its foot (the cut form's corner boxes; each carries its own
+    /// outward margin).</summary>
+    static BoxEl FlareRow(BoxEl left, BoxEl right) => new()
+    {
+        Direction = 0, AlignItems = FlexAlign.End, Justify = FlexJustify.SpaceBetween, HitTestVisible = false,
+        Children = [left, right],
+    };
+
     internal static Prop<ColorF> RailBaselineFill => Prop.Of(static () =>
         Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0, 0, 0, 0x0F) : Tok.StrokeDividerDefault);
 
@@ -257,6 +279,18 @@ public sealed class TabStrip : Component
         HitTestVisible = false,
         Children = [new BoxEl { Height = 1f, Margin = lineMargin, Fill = RailBaselineFill }],
     };
+
+    /// <summary>Chrome appearance: false draws no baseline under the tabs, the lead and the "+" (the room it stands in is kept, so nothing
+    /// moves). For a bar whose rows share one ground: the baseline is the edge between a strip and what lies under it, and with no strip of
+    /// its own there is no edge, only a hairline that ends where the tabs do. MOUNT-TIME, like <see cref="Appearance"/>.</summary>
+    public bool ShowRailBaseline = true;
+
+    /// <summary>A baseline segment of THIS strip: <see cref="RailBaselineHost"/>, or its room alone when the strip draws none.</summary>
+    BoxEl Rail(float width = float.NaN, float grow = 0f, Edges4 lineMargin = default)
+    {
+        var host = RailBaselineHost(width, grow, lineMargin);
+        return ShowRailBaseline ? host : host with { Children = [] };
+    }
 
     public override Element Render()
     {
@@ -358,7 +392,7 @@ public sealed class TabStrip : Component
         int tail = IsAddTabButtonVisible ? 1 : 0;
         var children = new Element[count + tail + 2];
         // The MUX LeftContentColumn + header-cell inset carries the same baseline as the unselected tabs.
-        children[0] = RailBaselineHost(6f,
+        children[0] = Rail(6f,
             lineMargin: selected == 0 ? new Edges4(0f, 0f, 4f, 0f) : default);
         for (int i = 0; i < count; i++)
         {
@@ -375,7 +409,7 @@ public sealed class TabStrip : Component
             children[count + 1] = AddButton(Add, count > 0 && selected == count - 1);
 
         int trailing = count + tail + 1;
-        children[trailing] = RailBaselineHost(5f,
+        children[trailing] = Rail(5f,
             lineMargin: !IsAddTabButtonVisible && count > 0 && selected == count - 1
                 ? new Edges4(4f, 0f, 0f, 0f)
                 : default);
@@ -534,7 +568,7 @@ public sealed class TabStrip : Component
             // tint-safe on live Mica in all four presets. (A token would be the right home for it if one were
             // alpha-guaranteed in light; none is.)
             // Stop at the selected TabShape's 4-DIP curve-out, rather than painting through its translucent flare.
-            layers.Add(RailBaselineHost(lineMargin: index == selectedIndex - 1
+            layers.Add(Rail(lineMargin: index == selectedIndex - 1
                 ? new Edges4(0f, 0f, 4f, 0f)
                 : index == selectedIndex + 1
                     ? new Edges4(4f, 0f, 0f, 0f)
@@ -542,49 +576,62 @@ public sealed class TabStrip : Component
         }
         else
         {
-            // (a) the DEFINITION hairline, as a 1px OUTSET SILHOUETTE behind the plate — not a BorderWidth/BorderColor
-            // on the plate itself: VisualKind.TabShape resolves the fill only and DROPS the border (SceneRecorder.cs
-            // `out _`), so a border on a TabShape node is a silent no-op. A plain bordered Box can't stand in either —
-            // its SDF ring is a rounded RECT, so it would miss the bottom flares and draw a closed bottom edge across
-            // the tab, breaking the "tab merges into the surface below" read. A same-shape silhouette 1px larger on
-            // top/left/right (height 33 grows UPWARD off AlignSelf.End, so its bottom edge stays flush and paints no
-            // ink under the plate) leaves exactly a 1px rim tracing the real silhouette, flares included; corner radius
-            // is Overlay+1 so the rim is a true parallel offset at the top corners.
-            // Wavee supplies the RAW translucent body plate here, so a same-material tab follows live wallpaper hue and
-            // luminance instead of becoming a fixed neutral chip. The silhouette therefore comes from the low-alpha
-            // CardStroke ink, not a white lift that would brighten the whole translucent plate. Light keeps stock
-            // black@6%; dark uses the semantic CardStroke token (#19000000 in the neutral preset).
-            layers.Add(new BoxEl
+            // The plate, and its DEFINITION hairline as the plate's own border: VisualKind.TabShape draws BorderWidth /
+            // BorderColor as the outline of the same silhouette, inside its edge and OPEN AT THE FOOT (the top, the sides
+            // and the two curve-outs; WinUI's TabViewSelectedItemBorderThickness 1,1,1,0), so nothing closes the tab off
+            // from the surface it merges into. The hairline used to be a second silhouette 1px larger, filled with the
+            // ink BEHIND the plate (a TabShape dropped its border then). Wavee supplies a TRANSLUCENT plate (the same
+            // material as the surface under the strip, so the tab follows the live wallpaper hue), and under one the
+            // ink showed through the whole tab: about 4 levels darker than that surface in light, a step along the
+            // tab's foot where the two should be one.
+            // The ink is the low-alpha CardStroke, never a white lift that would brighten a translucent plate's edge.
+            // Light keeps stock black@6%; dark uses the semantic CardStroke token (#19000000 in the neutral preset).
+            // A formed cell's width eases (FormWidthMotion): the plate FILLS the cell with a 4-DIP overhang either side
+            // (basis 0, so the share is the cell's width, never a cached measure), so it follows every frame, the
+            // reflow's seed frame included. A plain cell keeps its explicit width.
+            ColorF? railTone = RailFill?.Invoke();
+            if (railTone is { } rail)
             {
-                Direction = 0,
-                AlignItems = FlexAlign.End,
-                HitTestVisible = false,
-                Children =
-                [
+                // THE CUT (see RailFill): the tab is the surface under the strip. Three erase boxes take the host's tone
+                // away in the tab's silhouette: the body (the cell, rounded at the top), and one across each bottom corner,
+                // FlareR out and FlareR in (it overlaps the body's cut: two cuts that only met would leave a quarter of
+                // the tone on the pixel column they share). Each corner box takes the whole square outside the body, where
+                // the silhouette is only what lies outside the curve-out's arc, so the tone goes back on the rest: the
+                // quarter disc at the square's outer top corner, which is that square with its inner bottom corner rounded.
+                layers.Add(new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.End, HitTestVisible = false,
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Key = "selected-cut",
+                            Width = formed ? float.NaN : tabW,
+                            Grow = formed ? 1f : 0f,
+                            Basis = formed ? 0f : float.NaN,
+                            Height = tabH,
+                            Animate = PlateHeightMotion,
+                            AlignSelf = FlexAlign.End,
+                            Corners = Radii.OverlayTop,
+                            VideoHole = true,
+                        },
+                    ],
+                });
+                layers.Add(FlareRow(
+                    new BoxEl { Width = 2f * FlareR, Height = FlareR, Shrink = 0f, Margin = new Edges4(-FlareR, 0f, 0f, 0f), VideoHole = true },
+                    new BoxEl { Width = 2f * FlareR, Height = FlareR, Shrink = 0f, Margin = new Edges4(0f, 0f, -FlareR, 0f), VideoHole = true }));
+                layers.Add(FlareRow(
                     new BoxEl
                     {
-                        Key = "selected-edge",
-                        // A formed cell's width eases (FormWidthMotion): the silhouette FILLS the cell with a 5-DIP overhang
-                        // either side (basis 0, so the share is the cell's width, never a cached measure), so it follows
-                        // every frame, the reflow's seed frame included. A plain cell keeps its explicit width.
-                        Width = formed ? float.NaN : tabW + 10f,
-                        Grow = formed ? 1f : 0f,
-                        Basis = formed ? 0f : float.NaN,
-                        Margin = formed ? new Edges4(-5f, 0f, -5f, 0f) : default,
-                        Height = tabH + 1f,
-                        Animate = PlateHeightMotion,
-                        OffsetX = formed ? 0f : -5f,
-                        AlignSelf = FlexAlign.End,
-                        TabShape = true,
-                        TabFlareRadius = 4f,
-                        Corners = new CornerRadius4(Radii.Overlay + 1f, Radii.Overlay + 1f, 0f, 0f),
-                        Fill = Prop.Of(static () => Tok.Theme == ThemeKind.Light
-                            ? ColorF.FromRgba(0, 0, 0, 0x0F)
-                            : Tok.StrokeCardDefault),
+                        Width = FlareR, Height = FlareR, Shrink = 0f, Margin = new Edges4(-FlareR, 0f, 0f, 0f),
+                        Corners = new CornerRadius4(0f, 0f, FlareR, 0f), Fill = rail,
                     },
-                ],
-            });
-            // (b) the plate itself.
+                    new BoxEl
+                    {
+                        Width = FlareR, Height = FlareR, Shrink = 0f, Margin = new Edges4(0f, 0f, -FlareR, 0f),
+                        Corners = new CornerRadius4(0f, 0f, 0f, FlareR), Fill = rail,
+                    }));
+            }
             layers.Add(new BoxEl
             {
                 Direction = 0,
@@ -595,18 +642,23 @@ public sealed class TabStrip : Component
                     new BoxEl
                     {
                         Key = "selected-bg",
-                        Width = formed ? float.NaN : tabW + 8f,
+                        Width = formed ? float.NaN : tabW + 2f * FlareR,
                         Grow = formed ? 1f : 0f,
                         Basis = formed ? 0f : float.NaN,
-                        Margin = formed ? new Edges4(-4f, 0f, -4f, 0f) : default,
+                        Margin = formed ? new Edges4(-FlareR, 0f, -FlareR, 0f) : default,
                         Height = tabH,
                         Animate = PlateHeightMotion,
-                        OffsetX = formed ? 0f : -4f,
+                        OffsetX = formed ? 0f : -FlareR,
                         AlignSelf = FlexAlign.End,
                         TabShape = true,
-                        TabFlareRadius = 4f,
+                        TabFlareRadius = FlareR,
                         Corners = Radii.OverlayTop,
-                        Fill = SelectedFill,
+                        // The cut form draws the hairline alone: the tab's surface is what the cut uncovered.
+                        Fill = railTone is null ? SelectedFill : ColorF.Transparent,
+                        BorderWidth = 1f,
+                        BorderColor = Prop.Of(static () => Tok.Theme == ThemeKind.Light
+                            ? ColorF.FromRgba(0, 0, 0, 0x0F)
+                            : Tok.StrokeCardDefault),
                     },
                 ],
             });
@@ -703,7 +755,7 @@ public sealed class TabStrip : Component
         float rowH = host is { } h ? MathF.Max(1f, h.RowHeight.Current()) : TitleBar.ExpandedHeight;
 
         var tabs = new Element[count + 1];
-        tabs[0] = RailBaselineHost(6f, lineMargin: selected == 0 ? new Edges4(0f, 0f, 4f, 0f) : default);
+        tabs[0] = Rail(6f, lineMargin: selected == 0 ? new Edges4(0f, 0f, 4f, 0f) : default);
         for (int i = 0; i < count; i++)
         {
             int index = i;
@@ -738,7 +790,9 @@ public sealed class TabStrip : Component
                 MinWidth = 0f,
                 Height = rowH,
                 SuppressScrollBar = true,
-                AutoEdgeFade = true,
+                // The cut form clips: an edge fade is a group layer, and the selected tab's cut inside one would never reach
+                // the host's tone (see RailFill).
+                AutoEdgeFade = RailFill?.Invoke() is null,
                 Content = row,
                 Handle = _tabScroll,
                 OnRealized = n => _scrollViewport = n,
@@ -754,7 +808,7 @@ public sealed class TabStrip : Component
 
         var kids = new List<Element>(3) { tabsPart };
         if (IsAddTabButtonVisible) kids.Add(AddButton(add, count > 0 && selected == count - 1));
-        kids.Add(RailBaselineHost(5f,
+        kids.Add(Rail(5f,
             lineMargin: !IsAddTabButtonVisible && count > 0 && selected == count - 1 ? new Edges4(4f, 0f, 0f, 0f) : default));
 
         // Hugs, like every strip shape: a title bar reports it wholesale as one Client island.
@@ -1208,7 +1262,7 @@ public sealed class TabStrip : Component
             ZStack = true,
             Children =
             [
-                RailBaselineHost(lineMargin: followsSelected ? new Edges4(4f, 0f, 0f, 0f) : default),
+                Rail(lineMargin: followsSelected ? new Edges4(4f, 0f, 0f, 0f) : default),
                 applied,
             ],
         };

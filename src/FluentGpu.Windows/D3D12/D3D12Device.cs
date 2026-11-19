@@ -2344,6 +2344,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         R = c.Fill.R, G = c.Fill.G, B = c.Fill.B, A = c.Fill.A,
                         M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
                         Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity,
+                        StrokeWidth = c.StrokeWidth,   // > 0: the silhouette's outline, open at the foot (the PS's kind-2 stroke arm)
                         Kind = 2f,
                     };
                     ApplyRoundedClip(ref inst);

@@ -10,6 +10,11 @@ namespace FluentGpu.Controls;
 /// Error and their Indeterminate counterparts), selected from IsIndeterminate + ShowPaused + ShowError.</summary>
 public enum ProgressBarState : byte { Normal = 0, Paused = 1, Error = 2 }
 
+/// <summary>How an indeterminate <see cref="ProgressBar"/> says "busy" (<see cref="ProgressBar.Style.IndeterminateForm"/>).
+/// <see cref="Sweep"/> is WinUI's: two accent indicators sweeping the track. <see cref="Dots"/> is the Metro train: a few small
+/// dots that rush in from the left, slow to a drift through the middle and rush out on the right, one after the other.</summary>
+public enum ProgressBarIndeterminateForm : byte { Sweep = 0, Dots = 1 }
+
 /// <summary>
 /// A WinUI ProgressBar (1:1). A 3px-min band (<c>ProgressBarMinHeight</c>) holding a 1px track
 /// (<c>ProgressBarTrackHeight</c>, <c>ControlStrongStrokeColorDefault</c>) under an accent indicator
@@ -76,6 +81,14 @@ public static class ProgressBar
         public ColorF ErrorForeground { get; init; } = Tok.SystemFillCritical;
         /// <summary>Whether the track shows under the indeterminate sweep (WinUI hides it: false).</summary>
         public bool IndeterminateTrack { get; init; }
+        /// <summary>How the indeterminate bar moves: WinUI's sweep (the default), or the train of dots.</summary>
+        public ProgressBarIndeterminateForm IndeterminateForm { get; init; }
+        /// <summary>The <see cref="ProgressBarIndeterminateForm.Dots"/> train: how many dots, a dot's side and its corner radius
+        /// (2 on a side of 4 is a round dot, 0 a square one). The band keeps <see cref="Height"/>, so the bar takes the room the sweep
+        /// takes; the train rides centred on it and a dot is drawn whole where the band is thinner than a dot.</summary>
+        public int DotCount { get; init; } = 5;
+        public float DotSize { get; init; } = 4f;
+        public float DotRadius { get; init; } = 2f;
 
         /// <summary>The indicator foreground for <paramref name="state"/> (ProgressBarForeground / ...PausedForegroundColor / ...ErrorForegroundColor).</summary>
         public ColorF ForegroundFor(ProgressBarState state) => state switch
@@ -101,7 +114,10 @@ public static class ProgressBar
     public static Element Create(FloatSignal? value = null, float width = DefaultWidth,
                                  ProgressBarState state = ProgressBarState.Normal, TemplateParts? parts = null)
         => value is null
-            ? (float.IsNaN(width)
+            ? DefaultStyle.IndeterminateForm == ProgressBarIndeterminateForm.Dots
+                // The style's train of dots (one component for a fixed and a stretched width).
+                ? Embed.Comp(new Props(width, state, parts), () => new IndeterminateDots())
+            : (float.IsNaN(width)
                 // width: float.NaN ⇒ stretch to the parent-offered width (see StretchIndeterminateBar) — a
                 // separate component so the fixed-width path below stays byte-identical (no measured-width hook,
                 // no extra wrapper node) for every caller that doesn't ask for stretch.
@@ -181,6 +197,147 @@ public static class ProgressBar
     /// never re-runs its factory, so runtime-changeable props are delivered live (equality-gated); the core reads them
     /// with <c>UseProps</c>.</summary>
     internal sealed record Props(float Width, ProgressBarState State, TemplateParts? Parts);
+
+    // ── the train of dots (ProgressBarIndeterminateForm.Dots) ───────────────────────────────────────────────────────
+    // One dot's lap, on a 4 s loop: it waits off the left edge, covers the first third in 0.5 s slowing down, drifts over the
+    // middle third in 1.5 s, leaves over the last third in 0.5 s speeding up, and waits off the right edge for the rest of the
+    // loop. Each dot starts 0.2 s after the one before, so the train bunches up in the middle and strings out at both ends.
+    // The two curves meet the drift at its own speed (their slope there is 1/3, the ratio of the two speeds), so a dot never
+    // kinks where it changes pace.
+    const float DotsLoopMs = 4000f;
+    const float DotsStaggerMs = 200f;
+    const float DotsEnterEnd = 0.125f, DotsDriftEnd = 0.5f, DotsExitEnd = 0.625f;   // 0.5 s, 2.0 s and 2.5 s of the loop
+    static readonly EasingSpec DotsEnterEase = EasingSpec.CubicBezier(0.1f, 0.5f, 0.4f, 0.8f);
+    static readonly EasingSpec DotsExitEase = EasingSpec.CubicBezier(0.6f, 0.2f, 0.9f, 0.5f);
+
+    /// <summary>A dot's left edge over one lap of a track <paramref name="width"/> wide (the dot is <paramref name="dot"/> across):
+    /// off the left edge, a third in, two thirds in, off the right edge, and held there to the end of the loop.</summary>
+    internal static Keyframe[] DotLap(float width, float dot) =>
+    [
+        new(0f, -dot, Easing.Linear),
+        new(DotsEnterEnd, width / 3f - dot / 2f, DotsEnterEase),
+        new(DotsDriftEnd, width * 2f / 3f - dot / 2f, Easing.Linear),
+        new(DotsExitEnd, width, DotsExitEase),
+        new(1f, width, Easing.Linear),
+    ];
+
+    /// <summary>Where dot <paramref name="index"/> of <paramref name="count"/> stands while the bar is Paused or in Error: the train
+    /// at rest in the middle of the track, a dot's width apart.</summary>
+    internal static float DotRest(float width, float dot, int index, int count)
+        => (width - (2 * count - 1) * dot) / 2f + index * 2f * dot;
+
+    /// <summary>The indeterminate bar as a train of dots (see the constants above). A fixed width is taken as given; a stretched
+    /// one (<c>width: float.NaN</c>) is read back from layout exactly as <see cref="StretchIndeterminateBar"/> does, and a new
+    /// width starts the train again over the new track. Paused and Error stop the train at rest in the middle, in the state's
+    /// colour. <see cref="PartFill"/> runs on every dot; <see cref="PartTrack"/> is hidden unless the style shows it.</summary>
+    private sealed class IndeterminateDots : Component
+    {
+        NodeHandle[] _dots = [];
+        Action<NodeHandle>[] _capture = [];
+
+        public override Element Render()
+        {
+            var props = UseProps<Props>();
+            bool stretch = float.IsNaN(props.Width);
+            float width = stretch ? MathF.Max(0f, UseMeasuredWidth(StretchWidthQuantum).Value) : props.Width;
+            var state = props.State;
+            var st = DefaultStyle;   // read now: a theme swap re-renders the bar in the new look
+            int count = Math.Max(1, st.DotCount);
+            float dot = st.DotSize;
+            bool rest = state != ProgressBarState.Normal;
+            if (_dots.Length != count)
+            {
+                _dots = new NodeHandle[count];
+                _capture = new Action<NodeHandle>[count];
+                for (int i = 0; i < count; i++)
+                {
+                    int at = i;
+                    _capture[i] = h => _dots[at] = h;
+                }
+            }
+
+            UseEffect(() =>
+            {
+                var anim = Context.Anim;
+                var scene = Context.Scene;
+                if (anim is null || scene is null || width <= 0f) return;
+                Keyframe[]? lap = rest ? null : DotLap(width, dot);
+                for (int i = 0; i < _dots.Length; i++)
+                {
+                    NodeHandle h = _dots[i];
+                    if (h.IsNull || !scene.IsLive(h)) continue;
+                    if (lap is not null)
+                    {
+                        anim.Keyframes(h, AnimChannel.TranslateX, lap, DotsLoopMs, loop: true, delayMs: i * DotsStaggerMs, cadence: Cadence.Display);
+                        continue;
+                    }
+                    // Paused / Error: the train stops where it rests. A one-shot track onto the rest position ends at once and
+                    // leaves no row behind (a running lap would otherwise park the dot wherever it was).
+                    float at = DotRest(width, dot, i, _dots.Length);
+                    anim.Keyframes(h, AnimChannel.TranslateX, [new(0f, at, Easing.Linear), new(1f, at, Easing.Linear)], 1f);
+                }
+            }, DepKey.From(HashCode.Combine(width, state, count, dot)));
+
+            ColorF fg = st.ForegroundFor(state);
+            var track = props.Parts.Apply(PartTrack, new BoxEl
+            {
+                Width = width,
+                Height = st.TrackHeight,
+                OffsetY = (st.Height - st.TrackHeight) / 2f,
+                Corners = CornerRadius4.All(st.TrackRadius),
+                Fill = st.TrackFill,
+                Opacity = st.IndeterminateTrack ? 1f : 0f,
+            });
+            var kids = new Element[count];
+            for (int i = 0; i < count; i++)
+            {
+                var d = new BoxEl
+                {
+                    Width = dot,
+                    Height = dot,
+                    // Before the first lap is seeded a dot waits where its lap starts (off the left edge), or stands at rest.
+                    OffsetX = rest ? DotRest(width, dot, i, count) : -dot,
+                    Corners = CornerRadius4.All(st.DotRadius),
+                    Fill = fg,
+                    OnRealized = _capture[i],
+                };
+                if (props.Parts is { } p)
+                {
+                    var m = p.Apply(PartFill, d);
+                    d = m with { OnRealized = TemplateParts.Chain(_capture[i], m.OnRealized) };
+                }
+                kids[i] = d;
+            }
+
+            // The band is the bar's own height (the room the sweep takes). The train rides centred on it in a box a dot tall that
+            // cuts it at the track's two ends only, so a dot is whole even where the band is thinner than a dot.
+            var train = new BoxEl
+            {
+                ZStack = true,
+                Width = width,
+                Height = dot,
+                Shrink = 0f,
+                OffsetY = (st.Height - dot) / 2f,
+                ClipToBounds = true,
+                Children = kids,
+            };
+            var bar = new BoxEl
+            {
+                ZStack = true,
+                Width = width,
+                Height = st.Height,
+                Role = AutomationRole.ProgressBar,
+                Children = [track, train],
+            };
+            if (!stretch) return bar;
+            return new BoxEl
+            {
+                Direction = 1, MinWidth = 0f, Grow = 1f, Basis = 0f, AlignSelf = FlexAlign.Stretch,
+                Role = AutomationRole.None,
+                Children = [bar],
+            };
+        }
+    }
 
     /// <summary>The computed translate positions WinUI binds from ProgressBarTemplateSettings into the indeterminate
     /// storyboards (ProgressBar.cpp UpdateWidthBasedTemplateSettings). Indicator widths follow SetProgressBarIndicatorWidth.</summary>
