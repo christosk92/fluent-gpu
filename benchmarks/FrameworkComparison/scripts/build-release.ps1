@@ -1,12 +1,13 @@
 [CmdletBinding()]
 param(
-    [string]$OutputRoot = 'C:\WAVEE\fluent-gpu\artifacts\framework-comparison\publish',
+    [string]$OutputRoot = '',
     [string]$WinUIVersion = '2.3.1'
 )
 
 $ErrorActionPreference = 'Stop'
 $benchRoot = Split-Path -Parent $PSScriptRoot
 $repoRoot = Resolve-Path (Join-Path $benchRoot '..\..')
+if (-not $OutputRoot) { $OutputRoot = Join-Path $repoRoot 'artifacts\framework-comparison\publish' }
 
 $fluentOut = Join-Path $OutputRoot 'FluentGpu'
 $winUIOut = Join-Path $OutputRoot 'WinUI'

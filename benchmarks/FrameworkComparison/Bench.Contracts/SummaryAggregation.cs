@@ -23,6 +23,10 @@ public sealed record RunObservation
     public int Iterations { get; init; }
     public long WorkingSetBytes { get; init; }
     public long PrivateBytes { get; init; }
+    /// <summary>Desktop-driven scenarios only: per-run scalars (see <see cref="BenchResult.Metrics"/>).</summary>
+    public Dictionary<string, double>? Metrics { get; init; }
+    /// <summary>Desktop-driven scenarios only: extra per-step series (see <see cref="BenchResult.Series"/>).</summary>
+    public Dictionary<string, double[]>? Series { get; init; }
 }
 
 public sealed record AggregatedSummary
@@ -111,6 +115,12 @@ public static class SummaryAggregation
                 continue;
             }
 
+            if (BenchScenarios.IsDesktopDriven(scenario))
+            {
+                AddDesktopDriven(rows, scenario, winui, fluent, missing);
+                continue;
+            }
+
             AddDistribution(rows, scenario, CpuWorkMetric,
                 winui.SelectMany(static x => x.CpuWorkMs ?? []),
                 fluent.SelectMany(static x => x.CpuWorkMs ?? []), "ms", Combine(missing, CpuWorkCaveat));
@@ -131,6 +141,41 @@ public static class SummaryAggregation
         }
 
         return new AggregatedSummary { Rows = rows.ToArray(), Outcomes = outcomes.ToArray() };
+    }
+
+    public const string DesktopDrivenCaveat =
+        "desktop-observed (DwmFlush + BitBlt of the composed desktop by the same driver code in both hosts); not an in-app timing";
+
+    /// <summary>The desktop-driven rows: the primary latency series (frameMs), every extra series, and the median over
+    /// runs of every per-run scalar. All of it comes from the shared desktop driver, so no definition asymmetry applies.</summary>
+    private static void AddDesktopDriven(List<SummaryRow> rows, string scenario, RunObservation[] winui,
+        RunObservation[] fluent, string? missing)
+    {
+        string caveat = Combine(missing, DesktopDrivenCaveat)!;
+        string primary = scenario == BenchScenarios.WindowResize
+            ? "resize step to matching content"
+            : "switch to fully re-themed frame";
+        AddDistribution(rows, scenario, primary,
+            winui.SelectMany(static x => x.FrameMs ?? []),
+            fluent.SelectMany(static x => x.FrameMs ?? []), "ms", caveat);
+
+        string[] seriesKeys = winui.Concat(fluent).SelectMany(static x => x.Series?.Keys ?? Enumerable.Empty<string>())
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        foreach (string key in seriesKeys)
+            AddDistribution(rows, scenario, key,
+                winui.SelectMany(x => x.Series is { } d && d.TryGetValue(key, out double[]? v) ? v : []),
+                fluent.SelectMany(x => x.Series is { } d && d.TryGetValue(key, out double[]? v) ? v : []),
+                key.EndsWith("Ms", StringComparison.Ordinal) ? "ms" : "count", caveat);
+
+        string[] metricKeys = winui.Concat(fluent).SelectMany(static x => x.Metrics?.Keys ?? Enumerable.Empty<string>())
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        foreach (string key in metricKeys)
+            AddRow(rows, scenario, key + " (median of runs)",
+                MedianOrNull(winui.Where(x => x.Metrics?.ContainsKey(key) == true).Select(x => x.Metrics![key])),
+                MedianOrNull(fluent.Where(x => x.Metrics?.ContainsKey(key) == true).Select(x => x.Metrics![key])),
+                "value", SampleCount(winui.Length, fluent.Length), caveat);
+
+        AddMemory(rows, scenario, winui, fluent, missing);
     }
 
     public static double Percentile(IEnumerable<double> values, double p)

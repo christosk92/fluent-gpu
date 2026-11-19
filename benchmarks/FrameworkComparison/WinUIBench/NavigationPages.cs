@@ -49,7 +49,10 @@ internal sealed partial class BenchmarkWindow
         => BenchWorkload.NavIsDetailPage(iteration) ? BuildDetailPage(iteration) : BuildLibraryPage(iteration);
 
     /// <summary>Page A: hero header, a 6 x 4 grid of 24 cards, and a 40-row three-column list.</summary>
-    private UIElement BuildDetailPage(int iteration)
+    /// <param name="resizable">window-resize variant: the same hero, cards and list rows, laid out responsively - a
+    /// two-column Grid (star main column, docked 380-DIP side list) whose cards re-wrap in a VariableSizedWrapGrid -
+    /// instead of the fixed 1200 x 720 geometry. Mirrors FluentNavigationPages.BuildDetail(resizable: true).</param>
+    private UIElement BuildDetailPage(int iteration, bool resizable = false)
     {
         var hero = new StackPanel
         {
@@ -79,6 +82,18 @@ internal sealed partial class BenchmarkWindow
         hero.Children.Add(heroText);
 
         var grid = new StackPanel { Orientation = Orientation.Vertical, Spacing = BenchWorkload.NavCardGap };
+        // The resizable variant places every card in one wrap panel instead of fixed rows. A 132 x 134 cell holds a
+        // 128 x 130 card at its top-left; the -4 right margin lets the last column end flush, so n cards fit exactly
+        // when n*128 + (n-1)*4 <= width - the same rule as the FluentGPU wrap row with Gap = 4.
+        VariableSizedWrapGrid? wrap = resizable
+            ? new VariableSizedWrapGrid
+            {
+                Orientation = Orientation.Horizontal,
+                ItemWidth = BenchWorkload.ResizeCardCellWidth,
+                ItemHeight = BenchWorkload.ResizeCardCellHeight,
+                Margin = new Thickness(0, 0, -BenchWorkload.NavCardGap, 0),
+            }
+            : null;
         int card = 0;
         for (int r = 0; r < BenchWorkload.NavCardRows; r++)
         {
@@ -109,7 +124,7 @@ internal sealed partial class BenchmarkWindow
                     BenchWorkload.NavCardTitleHeight, _navTextPrimary));
                 body.Children.Add(Label(BenchWorkload.NavCardSubtitle(card, iteration),
                     BenchWorkload.NavCardSubtitleSize, BenchWorkload.NavCardSubtitleHeight, _navTextSecondary));
-                row.Children.Add(new Border
+                var cardBorder = new Border
                 {
                     Width = BenchWorkload.NavCardWidth,
                     Height = BenchWorkload.NavCardHeight,
@@ -117,19 +132,26 @@ internal sealed partial class BenchmarkWindow
                     CornerRadius = new CornerRadius(BenchWorkload.NavCardCorner),
                     Background = _navCardBrush,
                     Child = body,
-                });
+                };
+                if (wrap is not null)
+                {
+                    cardBorder.HorizontalAlignment = HorizontalAlignment.Left;
+                    cardBorder.VerticalAlignment = VerticalAlignment.Top;
+                    wrap.Children.Add(cardBorder);
+                }
+                else row.Children.Add(cardBorder);
             }
-            grid.Children.Add(row);
+            if (wrap is null) grid.Children.Add(row);
         }
 
         var main = new StackPanel
         {
             Orientation = Orientation.Vertical,
-            Width = BenchWorkload.NavMainColumnWidth,
             Spacing = BenchWorkload.NavHeroSectionGap,
         };
+        if (!resizable) main.Width = BenchWorkload.NavMainColumnWidth;
         main.Children.Add(hero);
-        main.Children.Add(grid);
+        main.Children.Add(wrap is not null ? wrap : grid);
 
         var side = new StackPanel
         {
@@ -152,6 +174,23 @@ internal sealed partial class BenchmarkWindow
             row.Children.Add(Cell(BenchWorkload.NavDetailCell(i, 2, iteration), BenchWorkload.NavDetailTextSize,
                 BenchWorkload.NavDetailTextHeight, BenchWorkload.NavDetailCol2Width, _navTextTertiary));
             side.Children.Add(row);
+        }
+
+        if (resizable)
+        {
+            var responsive = new Grid
+            {
+                Padding = new Thickness(BenchWorkload.NavPagePadding),
+                ColumnSpacing = BenchWorkload.NavColumnGap,
+            };
+            responsive.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            responsive.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(BenchWorkload.NavSideListWidth) });
+            side.VerticalAlignment = VerticalAlignment.Top;
+            main.VerticalAlignment = VerticalAlignment.Top;
+            Grid.SetColumn(side, 1);
+            responsive.Children.Add(main);
+            responsive.Children.Add(side);
+            return responsive;
         }
 
         var page = new StackPanel

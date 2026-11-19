@@ -62,6 +62,24 @@ internal static class FluentBenchHarness
         if (host.PublishSequence == 0) Frame();
         WaitForPublishedFrame();
 
+        if (BenchScenarios.IsDesktopDriven(options.Scenario))
+        {
+            // Desktop-driven: the shared driver thread resizes / re-themes the window and judges the composed desktop.
+            // The host runs its ORDINARY interactive loop (return false), exactly as a shipping app does.
+            string version = Assembly.GetExecutingAssembly()
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
+            LiveWindowDriver.Start(options, new LiveWindowTarget
+            {
+                Framework = "FluentGpu",
+                FrameworkVersion = version,
+                Hwnd = window.Handle.Value,
+                PostToUi = host.Post,
+                CloseOnUi = FluentGpu.FluentApp.CloseWindow,
+                ApplyThemeOnUi = (id, dark) => FluentBenchState.ApplyTheme(host, id, dark),
+            });
+            return false;
+        }
+
         for (int i = 0; i < options.WarmupFrames && !window.IsClosed; i++)
         {
             WaitForPublishedFrame();
@@ -108,8 +126,6 @@ internal static class FluentBenchHarness
         string notes = rawCpu
             ? "Vsync and the swap-chain latency wait were suppressed; cpuWorkMs excludes fence/present waits."
             : "Display-paced cadence pass; frameMs includes presentation pacing.";
-        if (host.PhaseGateCeilingEscapes > 0)
-            notes += $" phaseGateCeilingEscapes={host.PhaseGateCeilingEscapes}.";
         if (FluentBenchState.ScrollValidityNote() is { } scroll) notes += " " + scroll;
         WriteResult(options, start, stopQpc, frameMs, cpuMs, allocated, notes);
         return true;
