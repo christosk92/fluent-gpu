@@ -861,10 +861,37 @@ internal sealed partial class SceneRecordingContext
             var abs = scene.AbsoluteRect(ov);
             ref readonly RectF ob = ref scene.Bounds(ov);
             ref readonly NodePaint op = ref scene.Paint(ov);
+            // A flyer's own clip (NodePaint.ClipRect, local to its presented rect): a card that a scroller's edge cut takes off as
+            // its visible part and opens to the whole picture (ConnectedAnimation.Nav). A walk clips only children by it.
+            RectF ovClip = overlayClip;
+            bool ownClip = !op.ClipRect.IsInfinite;
+            if (ownClip)
+            {
+                ovClip = new RectF(abs.X + op.ClipRect.X, abs.Y + op.ClipRect.Y, op.ClipRect.W, op.ClipRect.H).Intersect(overlayClip);
+                rootDl.PushClip(ovClip, overlayKey);
+            }
             Walk(scene, rootDl, images, ov,
                  Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
-                 1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                 1f, (1 << 16) | 1, ovClip, in focus, in textEdit, scrollThumb, scrollTrack,
                  1f, 1f, false, false, default, default, null, 0, true, false, ref stats);
+            // A whole-picture flyer (SceneStore.SetMirror): the mirrored subtree drawn scaled from its own box into the flyer's
+            // presented rect, at the flyer's opacity (a generated cover: one continuous picture from the card to the header).
+            if ((scene.Flags(ov) & NodeFlags.SparsePaint) != 0 && scene.TryGetMirror(ov, out NodeHandle mirrored) && scene.IsLive(mirrored))
+            {
+                ref readonly RectF mb = ref scene.Bounds(mirrored);
+                float pw = float.IsNaN(op.PresentedW) ? ob.W : op.PresentedW, ph = float.IsNaN(op.PresentedH) ? ob.H : op.PresentedH;
+                if (mb.W > 0.5f && mb.H > 0.5f && op.Opacity > 0.001f)
+                {
+                    float msx = pw / mb.W, msy = ph / mb.H;
+                    _mirrorBypass = mirrored;
+                    Walk(scene, rootDl, images, mirrored,
+                         Affine2D.Translation(abs.X, abs.Y).Multiply(Affine2D.Scale(msx, msy)).Translate(-mb.X, -mb.Y),
+                         op.Opacity, (1 << 16) | 1, ovClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                         msx, msy, false, false, default, default, null, 0, true, false, ref stats);
+                    _mirrorBypass = NodeHandle.Null;
+                }
+            }
+            if (ownClip) rootDl.PopClip(overlayKey);
         }
         if (overlayClipped) rootDl.PopClip(overlayKey);
         // E5 drag-OVERLAY top band (the chip): same hoist as the ghost band above, at band depth (1<<16)|2 and emitted
@@ -1069,6 +1096,11 @@ internal sealed partial class SceneRecordingContext
     //
     // NOTE: `depth` still carries a z-band in the high bits for painter order; that is unrelated to these guards.
     private uint[]? t_walkPath;
+    // The connected navigation flyer: its corners by its presented size (SceneStore.SetCornerMorph) are resolved into this copy
+    // of its paint (a flyer node has no children, so no nested walk can overwrite it while it is in use), and the one node a
+    // whole-picture flyer mirrors (SceneStore.SetMirror) draws although the flight cleared its Visible flag in place.
+    private NodePaint _morphPaint;
+    private NodeHandle _mirrorBypass;
     private int t_walkPathLen;
     private int s_cycleAbortLogged;
     private int s_depthAbortLogged;
@@ -1227,7 +1259,7 @@ internal sealed partial class SceneRecordingContext
                                          ref RecordAccumulator stats)
     {
         if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return default;   // subtree renders in its own popup window
-        if ((scene.Flags(node) & NodeFlags.Visible) == 0) return default;
+        if ((scene.Flags(node) & NodeFlags.Visible) == 0 && node != _mirrorBypass) return default;
         if (!PushWalkPath(node)) return default;
         if (!HasWalkStackHeadroom(ref stats)) { PopWalkPath(); return default; }
         // Retained tiles: a PRE-ORDER span-index entry for each of the first SpanIndexDepth levels below a slice root —
@@ -1350,8 +1382,13 @@ internal sealed partial class SceneRecordingContext
             return false;
         }
         // Inside an inline group layer no slice may be cut (its marker would sit inside a layer the tile replay applies to
-        // nothing): the subtree records inline with its pose baked, and re-records when that pose moves.
-        if (stats.InlineLayerDepth > 0 || (pose == SliceRecorder.PoseKind.Effect && !sl.EffectBudgetFor(idx, node.Raw.Gen, SliceRole.Main)))
+        // nothing): the subtree records inline with its pose baked, and re-records when that pose moves. A composited transition
+        // layer posed with a scale spends no share of its own: its Main slice only carries its opacity group's Layer slice, which
+        // spends the one share the pair costs (ScaledCutAllowed asks for it; BudgetClass.Carrier).
+        bool scaleCandidate = pose == SliceRecorder.PoseKind.Effect && p.CompositeLayer
+            && (p.LocalTransform.M11 != 1f || p.LocalTransform.M22 != 1f || p.LocalTransform.M12 != 0f || p.LocalTransform.M21 != 0f);
+        if (stats.InlineLayerDepth > 0
+            || (pose == SliceRecorder.PoseKind.Effect && !scaleCandidate && !sl.EffectBudgetFor(idx, node.Raw.Gen, SliceRole.Main)))
         {
             if (pose == SliceRecorder.PoseKind.Effect) sl.NoteFolded();
             if (stats.InlineLayerDepth == 0) sl.NoteRefusedCut(stats.CurSlot);   // a budget decision a later pass may reverse
@@ -1379,13 +1416,27 @@ internal sealed partial class SceneRecordingContext
                 (float)(vsc.WindowOrigin - baseOffset), vsc.ZoomFactor);
             freeLocal = free.LocalTransform;
         }
+        bool scaled = false;
         if (!SliceRecorder.SameLinear(in posedLocal, in freeLocal))
         {
-            // a pose that is not a pure translation of the free one (a zoom mid-gesture, an animated scale on the content
-            // node): record inline with it baked; the fresh slot, never registered, retires at the end of the pass.
-            sl.AddBaked(stats.CurSlot, node, posedLocal);
-            return false;
+            // A composited transition layer whose pose carries an axis-aligned SCALE (a page growing in, shrinking out, a drill
+            // zoom) records pose-free like its translate: its stream becomes its opacity group's Layer slice alone (the walk
+            // below forces that group, ScaledCompositeLayer) and the composite draws that group scaled (CompositeItem.SlideScaleX),
+            // so the transition re-records nothing below the layer. Anything else — a zoom mid-gesture, an animated scale on a
+            // content node, a scale whose group the stream could not be (ScaledCutAllowed) — records inline with its pose
+            // baked; the fresh slot, never registered, retires at the end of the pass.
+            bool budgetDenied = false;
+            scaled = scaleCandidate && ScaledCutAllowed(scene, sl, node, in p, in baseWorld, in posedLocal, sl.HoldsEffectShare(slot), out budgetDenied);
+            if (!scaled)
+            {
+                if (budgetDenied) { sl.NoteFolded(); sl.NoteRefusedCut(stats.CurSlot); }   // a budget decision a later pass may reverse
+                sl.AddBaked(stats.CurSlot, node, posedLocal);
+                return false;
+            }
+            sl.ReleaseEffectShare(slot);   // the share it held last pass (cut as a plain transition layer) goes to its Layer slice
+            sl.SetBudget(slot, SliceRecorder.BudgetClass.Carrier);
         }
+        else if (p.CompositeLayer) sl.ClearScaleRefused(idx);   // back to a translation: a later scale may be composited again
         if (!HasWalkStackHeadroom(ref stats)) return true;   // counted + reported; the subtree goes unpainted, never a stack overflow
         Affine2D posedW = SliceRecorder.Conjugate(in baseWorld, in posedLocal, ox, oy);
         Affine2D freeW = SliceRecorder.Conjugate(in baseWorld, in freeLocal, ox, oy);
@@ -1397,6 +1448,7 @@ internal sealed partial class SceneRecordingContext
         sl.AddChild(stats.CurSlot, slot);
         sl.SetPose(slot, pose, in baseWorld, ox, oy, in freeLocal, ownDx, ownDy);
         if (p.CompositeLayer) sl.SetFractional(slot);
+        if (scaled) sl.SetScalable(slot);
         sl.SetMarker(slot, in clip, 0, default, default);
         if (pose == SliceRecorder.PoseKind.Content)
         {
@@ -1439,10 +1491,69 @@ internal sealed partial class SceneRecordingContext
         // (span bounds, damage, cull) covers the viewport it owns, never the whole (far taller) content.
         if (res.HasBounds)
         {
-            RectF painted = SliceRecorder.Offset(res.SubtreeBounds, ownDx, ownDy);
+            RectF painted = scaled ? SliceRecorder.PoseBounds(in posedW, in freeW, res.SubtreeBounds)
+                : SliceRecorder.Offset(res.SubtreeBounds, ownDx, ownDy);
             result.Include(clip.IsInfinite ? painted : painted.Intersect(clip));
         }
         return true;
+    }
+
+    /// <summary>May the composited transition layer at <paramref name="node"/>, posed with the axis-aligned scale
+    /// <paramref name="posedLocal"/>, be cut pose-free with that scale as a composite parameter? Its stream must come out as ONE
+    /// opacity group (the Layer slice the walk forces, <see cref="ScaledCompositeLayer"/>) for the composite to draw scaled: not
+    /// when the node needs another group (an edge fade, a self-blur, an acrylic frost), carries a composite sticky clip, a scale
+    /// the composite could not draw (not axis-aligned, under a rotated base, non-positive) or one a placement already refused
+    /// (<see cref="SliceRecorder.ScaleRefused"/>), or when no effect budget is left for the group (<paramref name="heldShare"/>: the
+    /// layer's own Main slice holds a share from last pass, which it hands to the group).</summary>
+    private bool ScaledCutAllowed(SceneRecordingSnapshot scene, SliceRecorder sl, NodeHandle node, in NodePaint p,
+        in Affine2D baseWorld, in Affine2D posedLocal, bool heldShare, out bool budgetDenied)
+    {
+        budgetDenied = false;
+        if (posedLocal.M12 != 0f || posedLocal.M21 != 0f || posedLocal.M11 <= 0f || posedLocal.M22 <= 0f) return false;
+        if (baseWorld.M12 != 0f || baseWorld.M21 != 0f || baseWorld.M11 == 0f || baseWorld.M22 == 0f) return false;
+        int idx = (int)node.Raw.Index;
+        if (sl.ScaleRefused(idx, node.Raw.Gen) || sl.IsStickyClipNode(idx)) return false;
+        if (p.BlurSigma > 0.01f || scene.TryGetAcrylic(node, out _)) return false;
+        NodeFlags flags = scene.Flags(node);
+        if (TryResolveEdgeFade(scene, node, flags, (flags & NodeFlags.SparsePaint) != 0, out _)) return false;
+        budgetDenied = !heldShare && !sl.EffectBudgetFor(idx, node.Raw.Gen, SliceRole.Layer); return !budgetDenied;
+    }
+
+    /// <summary>Is the walk at <paramref name="node"/> the self walk of a SCALED composited transition layer
+    /// (<see cref="ScaledCutAllowed"/>)? Its opacity group is then made even at full or zero opacity: the group is what the composite
+    /// draws scaled.</summary>
+    private static bool ScaledCompositeLayer(in RecordAccumulator stats, bool isSliceSelf, int selfSlot)
+        => isSliceSelf && stats.Slicing && selfSlot > SliceRecorder.RootSlot && stats.Slices!.IsScalable(selfSlot);
+
+    /// <summary>A culled text node's glyph run, as the text branch of <see cref="WalkCore"/> would shape it (the fit size, the line box, a
+    /// structured run's landing width), written to <paramref name="prep"/> for the backend to shape without drawing.</summary>
+    /// <summary>How many frames after its measure a culled run is still shaped (see <see cref="PrepCulledText"/>).</summary>
+    private const uint PrepCulledFrames = 2;
+
+    private static void PrepCulledText(SceneRecordingSnapshot scene, NodeHandle node, in RectF b, in RectF local, in Affine2D world, DrawList prep,
+        bool inMotion)
+    {
+        TextMeasureEntry mc = scene.ResolveMeasureForWidth(node, b.W);
+        // Measured on this frame or within the last two: a mount is often first recorded a frame or two after its measure (an entrance held
+        // at t = 0 on a frame that is not shown, a cascade's first unit). Older runs were shaped when they were new, or are never drawn.
+        // Or carried by a moving ancestor (a pager's page sliding in, a panel sliding out): it is shaped on the motion's first recorded frame, the
+        // one that started it, not on a later frame of the motion where it first crosses into the clip.
+        if (!mc.Valid || (!inMotion && (uint)(scene.TextMeasureStamp - mc.Stamp) > PrepCulledFrames)) return;
+        TextStyle style = scene.RecordingTextStyle(node);
+        float effSize = mc.FitSize > 0f ? mc.FitSize : style.SizeDip;
+        float effLine = mc.FitSize > 0f ? style.AtFitSize(mc.FitSize).LineHeight : style.LineHeight;
+        RectF run = local;
+        if (mc.Structured && MathF.Abs(mc.MaxW - local.W) > 0.01f)
+        {
+            float slack = local.W - mc.MaxW;
+            float shift = style.Align == TextAlign.Center ? slack * 0.5f : style.Align == TextAlign.End ? slack : 0f;
+            run = new RectF(local.X + shift, local.Y, mc.MaxW, local.H);
+        }
+        ref readonly NodePaint p = ref scene.Paint(node);
+        prep.DrawGlyphRun(run, default, p.Text, style.FontFamily, effSize, style.Weight,
+            (int)style.Wrap, (int)style.Trim, style.MaxLines,
+            style.CharSpacing, effLine, (int)style.Stacking, (int)style.LineBounds,
+            world, 0f, 0, style.SpanRunId, typography: TextTypography.Pack(in style));
     }
 
     private SpanRecordResult WalkCore(SceneRecordingSnapshot scene, DrawList dl, ImageRecordingSnapshot? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
@@ -1523,6 +1634,13 @@ internal sealed partial class SceneRecordingContext
 
         ref readonly RectF b = ref scene.Bounds(node);
         ref readonly NodePaint p = ref scene.Paint(node);
+        if (maybeSparsePaint && scene.TryGetCornerMorph(node, out CornerMorph cornerMorph))
+        {
+            _morphPaint = p;
+            _morphPaint.Corners = CornerRadius4.All(cornerMorph.At(float.IsNaN(p.PresentedW) ? b.W : p.PresentedW,
+                float.IsNaN(p.PresentedH) ? b.H : p.PresentedH));
+            p = ref _morphPaint;
+        }
         // The cold half (state colours, hover/press opacity, dash, flare, image focus): the node's row or the shared
         // default row — a ref, no branch, no copy.
         ref readonly NodePaintCold pc = ref scene.PaintCold(node);
@@ -1626,8 +1744,10 @@ internal sealed partial class SceneRecordingContext
         bool isBlurGroup = isBlurCandidate;
         // ── flat opacity group (NodePaint.OpacityGroup, WinUI Composition LayerVisual semantics): the subtree renders at
         // FULL alpha into a pooled offscreen RT and composites ONCE at the group alpha. Skipped at alpha ≈ 1 (a no-op) and
-        // ≈ 0 (invisible — still walked for hit/anim state). A self-blur group SUBSUMES it.
-        bool isOpacityGroup = !isEdgeFade && !isBlurGroup && (p.OpacityGroup || p.CompositeLayer) && opacity < 0.999f && opacity > 0.001f && overlapsClip;
+        // ≈ 0 (invisible — still walked for hit/anim state). A self-blur group SUBSUMES it. A SCALED composited transition layer
+        // (ScaledCutAllowed) always makes it, whatever its opacity: the group is what the composite draws at the layer's scale.
+        bool isOpacityGroup = !isEdgeFade && !isBlurGroup && (p.OpacityGroup || p.CompositeLayer)
+            && (ScaledCompositeLayer(in stats, isSliceSelf, selfSlot) || (opacity < 0.999f && opacity > 0.001f && overlapsClip));
         if (isBlurGroup || (isEdgeFade && edgeFade.Mode != EdgeFadeMode.Fade)) stickyCut = false;
         // EdgeFadeSpec.WhileStuck: the fade exists only while the node's own sticky clip is engaged. On a composite sticky
         // cut the MARKER carries it (CompositeSliceFlags.FadeWhileStuck) and the composite plan decides per turn from the
@@ -2375,6 +2495,12 @@ internal sealed partial class SceneRecordingContext
         // it has none). One handle compare per node per frame, and DragGhost is Null except during a lifted drag.
         if (node == scene.DragGhost && scene.DragGhostBackplate is { } dragBackplate && overlapsRecordClip)
             dl.FillRoundRect(local, p.Corners, dragBackplate, world, opacity, key);
+
+        // Text culled outside the clip is still SHAPED (never drawn) when it was just measured (a mount, a new text or width): a run that
+        // slides or scrolls in is then shaped with its mount, not first on a frame of the motion that brings it in (CompositeFrame.GlyphPrep).
+        // A run measured earlier shapes nothing it does not draw, as before.
+        if (hasOwnVisual && !ownVisible && p.VisualKind == VisualKind.Text && stats.Slicing && !p.Text.IsEmpty && b.W > 0f && b.H > 0f)
+            PrepCulledText(scene, node, in b, in local, in world, stats.Slices!.GlyphPrep, inMotion);
 
         GradientSpec nodeGradient = default;
         bool hasNodeGradient = maybeSparsePaint && scene.TryGetGradient(node, out nodeGradient) && nodeGradient.Stops is { Length: > 0 };

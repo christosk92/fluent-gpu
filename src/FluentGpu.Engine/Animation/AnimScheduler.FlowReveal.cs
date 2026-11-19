@@ -36,6 +36,16 @@ public sealed partial class AnimEngine
     public List<(NodeHandle Node, NodeHandle VisualParent)> RevealExitCarriers { get; } = new(8);
 
     private readonly record struct SettleKey(uint Index, uint Gen, AnimChannel Channel);
+
+    // The settle map's comparer, made with the map: a default comparer (and the record's own field comparers) is created lazily on its first
+    // lookup, which landed on the animation frame the first reveal settled (88 bytes; Zune's edit mode opening, SKILL rule 7).
+    private sealed class SettleKeyComparer : IEqualityComparer<SettleKey>
+    {
+        public static readonly SettleKeyComparer Instance = new();
+        public bool Equals(SettleKey a, SettleKey b) => a.Index == b.Index && a.Gen == b.Gen && (int)a.Channel == (int)b.Channel;
+        public int GetHashCode(SettleKey k) => HashCode.Combine(k.Index, k.Gen, (int)k.Channel);
+    }
+
     private readonly record struct RevealEntry(NodeHandle Node, int Depth, float Presented, float Target);
 
     private int _revealRows;                                    // live RevealExtent rows (the idle fast path's census)
@@ -44,7 +54,7 @@ public sealed partial class AnimEngine
     private List<NodeHandle> _ovViewports = new(8), _ovPrevViewports = new(8);   // viewports given RevealOverscan
     private List<float> _ovAmount = new(8), _ovPrevAmount = new(8);              // (this pass / last pass)
     private bool _overscanGrew;
-    private readonly Dictionary<SettleKey, Action> _settleCallbacks = new();
+    private readonly Dictionary<SettleKey, Action> _settleCallbacks = new(SettleKeyComparer.Instance);
     private readonly Dictionary<uint, int> _settleIndexRefs = new();   // node index → callbacks registered on it
     private readonly List<Action> _settledQueue = new(32);
     private Action?[] _settledDrain = new Action?[32];
@@ -723,7 +733,15 @@ public sealed partial class AnimEngine
             }
             if (self && TryGetTransition(n, out var spec) && spec.Anchor == SizeAnchor.Parallax)
             {
-                p.ChildShiftY = RevealPlan.ParallaxShift(h + delta, ContentExtent(n));
+                // The content leads by a share of what is still hidden WHERE IT CAN BE SEEN. A reveal that runs past its view's lower
+                // edge is driven only to that edge (RevealPlan.TryClamp: the rest lands at once, unseen), so measured against its whole
+                // content the lead stayed at its cap for the whole flight and dropped to 0 in the one frame the row came to rest: a tall
+                // body opening near the foot of a list sat 24 DIP high, over its header, then snapped down (and a close started with
+                // the same step). The visible extent is the view's geometry, read each pass like the seed read it: no state to carry
+                // through a reverse.
+                RevealView(n, out float top, out _, out float viewBottom, out _);
+                float seen = MathF.Min(ContentExtent(n), RevealPlan.VisibleLimit(top, viewBottom));
+                p.ChildShiftY = RevealPlan.ParallaxShift(h + delta, seen);
                 p.FlowBits |= NodePaint.FlowOwnsShiftBit;
             }
             _scene.Mark(n, NodeFlags.PaintDirty);

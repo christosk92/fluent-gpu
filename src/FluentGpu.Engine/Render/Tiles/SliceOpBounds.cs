@@ -64,8 +64,8 @@ public static class SliceOpBounds
     private static bool Box(in RectF r, in Affine2D t, float halo, out RectF bounds)
     {
         if (!(r.W > 0f) || !(r.H > 0f) || float.IsNaN(r.X) || float.IsNaN(r.Y)) { bounds = default; return false; }
-        RepaintCull.Aabb(r.X, r.Y, r.W, r.H, t.M11, t.M12, t.M21, t.M22, t.Dx, t.Dy, out float l, out float tp, out float rr, out float b);
-        bounds = new RectF(l - halo, tp - halo, rr - l + 2f * halo, b - tp + 2f * halo);
+        RepaintCull.Footprint(r.X, r.Y, r.W, r.H, t.M11, t.M12, t.M21, t.M22, t.Dx, t.Dy, halo, out float l, out float tp, out float rr, out float b);
+        bounds = new RectF(l, tp, rr - l, b - tp);
         return true;
     }
 }

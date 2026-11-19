@@ -1494,7 +1494,7 @@ public sealed class MediaPlayerElement : Component
         // OWN composition visual BELOW the UI swapchain — it is not inside any scissor the UI draws with — so a
         // viewport of the element's own rect keeps presenting at full size while the element scrolls out of its
         // scroller. That is how a video in a list ended up painted across the tab strip and the title bar.
-        RectF viewport = ClipToAncestors(scene, h, area);
+        RectF viewport = scene.ClipToClippingAncestors(h, area);
         if (viewport.W <= 0.5f || viewport.H <= 0.5f) { ShowSlot(b, false); NoteInView(false); return; }
         NoteInView(true);
         b.SetViewport(viewport);
@@ -1547,6 +1547,9 @@ public sealed class MediaPlayerElement : Component
                 return;
             }
         }
+        // A full pump that follows a geometry move (a session that pumps every frame, a native event mid-slide) is motion too: it opens the
+        // settle window like a geometry-only turn, so no unsettled geometry is logged (one formatted line per frame while a clip eased).
+        if (!motion && b.IsGeometryMovedPump) NoteGeometryMotion();
         LogPump(b, pumpMode, area, natural, videoRect, viewport, s, defer: motion || _settleArmed);
         Player.SetAdaptiveViewportHeight((int)MathF.Ceiling(videoRect.H * MathF.Max(1f, s)));
         // The session sizes its stream for where ITS frame will be: the declared fit before metadata, the successor's fit while a
@@ -1634,41 +1637,6 @@ public sealed class MediaPlayerElement : Component
         // so a dual-writer hunt could not tell the main window's slot from a pop-out's.
         Diag.Line($"[video] pump host={line.Ord} token={line.Tok} mode={mode} natural={natural.Width}x{natural.Height} area={(int)area.W}x{(int)area.H} viewport={(int)viewport.W}x{(int)viewport.H} videoRect={(int)videoRect.X},{(int)videoRect.Y} {(int)videoRect.W}x{(int)videoRect.H} hostFs={line.Host} overlayFs={line.Pres} scale={scale:0.##}");
     }
-
-    /// <summary>Intersect <paramref name="rect"/> with the bounds of every <c>ClipsToBounds</c> ancestor.
-    ///
-    /// The UI gets this for free from the scissor stack; a composited video visual does not, because it lives outside
-    /// the UI back buffer entirely. Walking the parent chain is cheap — it runs once per coalesced pump, and the chain
-    /// is a handful of nodes deep.
-    ///
-    /// E1: a <see cref="SizeMode.Reveal"/> ancestor animates <c>NodePaint.PresentedW</c>/<c>PresentedH</c>
-    /// (<c>Columns.cs:110-113</c>) while <see cref="SceneStore.AbsoluteRect"/> keeps returning the node's FINAL
-    /// laid-out bounds (<c>SceneStore.cs:1809-1824</c> never reads Presented*). Left alone, a revealing clipping
-    /// ancestor narrows (or widens) what the UI actually paints/clips while this walk kept intersecting against the
-    /// final rect — so the pumped video viewport disagreed with the visible clip and the composited frame spilled
-    /// outside it. Mirror the exact sentinel the recorder itself uses at the same site
-    /// (<c>SceneRecorder.cs:1185-1186</c>, also <c>SceneStore.cs:516-517</c>): not-NaN means a Reveal row is live and
-    /// its presented value wins.</summary>
-    private static RectF ClipToAncestors(SceneStore scene, NodeHandle node, RectF rect)
-    {
-        for (NodeHandle p = scene.Parent(node); !p.IsNull && scene.IsLive(p); p = scene.Parent(p))
-        {
-            if ((scene.Flags(p) & NodeFlags.ClipsToBounds) == 0) continue;
-            ref NodePaint pp = ref scene.Paint(p);
-            RectF lb = scene.Bounds(p);
-            float cw = float.IsNaN(pp.PresentedW) ? lb.W : pp.PresentedW;
-            float ch = float.IsNaN(pp.PresentedH) ? lb.H : pp.PresentedH;
-            // Mapped through the ancestor's full transform (a scaled clipping ancestor clips a scaled rect), with the
-            // presented extent as its local size.
-            RectF c = scene.AbsoluteTransformedRect(p, cw, ch);
-            float x0 = MathF.Max(rect.X, c.X), y0 = MathF.Max(rect.Y, c.Y);
-            float x1 = MathF.Min(rect.X + rect.W, c.X + c.W), y1 = MathF.Min(rect.Y + rect.H, c.Y + c.H);
-            rect = new RectF(x0, y0, MathF.Max(0f, x1 - x0), MathF.Max(0f, y1 - y0));
-            if (rect.W <= 0f || rect.H <= 0f) return rect;
-        }
-        return rect;
-    }
-
 
     // ── default transport (pure FluentGpu: two rows — a full-width seek row above a control row) ─────────────────────
     //

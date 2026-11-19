@@ -31,6 +31,17 @@ public enum MenuRadioMark : byte
     Pill = 2,
 }
 
+/// <summary>How a <see cref="MenuFlyout.Style"/> marks a row that asks for attention (<see cref="MenuFlyoutItem.Attention"/>: something new behind
+/// it, a one-time pointer).</summary>
+public enum MenuAttentionMark : byte
+{
+    /// <summary>WinUI's InfoBadge dot (<see cref="InfoBadge.Dot(ColorF?, TemplateParts?)"/>) after the label, in <see cref="MenuFlyout.Style.AttentionColor"/>
+    /// (the accent fill by default).</summary>
+    Dot = 0,
+    /// <summary>The label itself in <see cref="MenuFlyout.Style.AttentionColor"/> (the accent text by default): a Metro menu says it in its words.</summary>
+    Ink = 1,
+}
+
 /// <summary>A single row in a <see cref="MenuFlyout"/>: a label, an optional leading <see cref="Icon"/> (icon column), an
 /// enabled flag, the action to run when chosen, and an optional trailing keyboard-accelerator hint (e.g. "Ctrl+S"). The
 /// <see cref="Icon"/> is a polymorphic <see cref="IconRef"/> — a plain glyph string converts implicitly (existing call
@@ -49,6 +60,9 @@ public readonly record struct MenuFlyoutItem(string Label, IconRef Icon = defaul
     public string? AcceleratorText { get; init; }
     /// <summary>Nested items (Kind == <see cref="MenuItemKind.SubMenu"/> only) — the cascading sub-menu's rows.</summary>
     public IReadOnlyList<MenuFlyoutItem>? SubItems { get; init; }
+    /// <summary>The row asks for attention (something new behind it, a one-time pointer): marked as the style says
+    /// (<see cref="MenuFlyout.Style.AttentionMark"/>: WinUI's InfoBadge dot after the label, or the label in the accent). Nothing else changes.</summary>
+    public bool Attention { get; init; }
 
     public bool IsSeparator => Kind == MenuItemKind.Separator;
     public static MenuFlyoutItem Separator => new("") { Kind = MenuItemKind.Separator };
@@ -202,6 +216,12 @@ public static class MenuFlyout
         /// <summary>The label (and accelerator) ink of a checked toggle or the chosen radio row; null keeps the row's ink (WinUI). A Metro menu
         /// writes the choice in the accent.</summary>
         public ColorF? SelectedLabelColor { get; init; }
+        /// <summary>How a row that asks for attention is marked (<see cref="MenuFlyoutItem.Attention"/>): WinUI's InfoBadge dot after the label
+        /// (the default), or the label in the accent.</summary>
+        public MenuAttentionMark AttentionMark { get; init; } = MenuAttentionMark.Dot;
+        /// <summary>The attention mark's colour; null = the accent (the InfoBadge's AccentFillColorDefault for the dot, AccentTextFillColorPrimary
+        /// for the label).</summary>
+        public ColorF? AttentionColor { get; init; }
         /// <summary>The chosen radio row's fill at rest; transparent in WinUI (the glyph alone marks it).</summary>
         public ColorF SelectedFill { get; init; } = Tok.FillSubtleTransparent;
         /// <summary>The chosen radio row's fill under the pointer and the keyboard cursor; null = <see cref="ItemHoverFill"/>.</summary>
@@ -257,6 +277,10 @@ public static class MenuFlyout
 
     internal const float HeaderSize = 12f, HeaderLine = 16f, HeaderPadTop = 8f, HeaderPadBottom = 4f;
 
+    /// <summary>The gap between a label and its attention dot (<see cref="MenuAttentionMark.Dot"/>): half the accelerator column's 24, so the dot
+    /// reads as the label's, not as a column of its own.</summary>
+    internal const float AttentionDotGap = 12f;
+
     internal static Element Separator(Style st, TemplateParts? parts = null) => parts.Apply(PartSeparator, new BoxEl
     {
         Direction = 1,
@@ -281,6 +305,9 @@ public static class MenuFlyout
         // (the WinUI MenuFlyoutItem hover/pressed states do NOT recolor the label — they only change the row fill). A style may write
         // the chosen row's label in its own ink (SelectedLabelColor: the Metro accent).
         ColorF fg = !enabled ? Tok.TextDisabled : marked && st.SelectedLabelColor is { } selInk ? selInk : Tok.TextPrimary;
+        // A row that asks for attention: its label in the accent (MenuAttentionMark.Ink), or a dot after it (below).
+        bool attention = it.Attention && enabled;
+        ColorF labelFg = attention && st.AttentionMark == MenuAttentionMark.Ink ? st.AttentionColor ?? Tok.AccentTextPrimary : fg;
         // SubItemChevron foreground = MenuFlyoutSubItemChevron = TextSecondary; Pressed = TextTertiary (MenuFlyoutSubItemChevronPressed);
         // Disabled = TextDisabled (themeresources:26-30).
         ColorF chevronFg = enabled ? st.SubMenuGlyphColor : Tok.TextDisabled;
@@ -335,7 +362,11 @@ public static class MenuFlyout
         }
 
         // Column 2: the label (TextBlock, "*" column → grows).
-        children.Add(new TextEl(it.Label) { Size = st.LabelSize, Color = fg, Grow = 1f, Case = it.Literal ? TextCase.AsWritten : st.LabelCase });
+        children.Add(new TextEl(it.Label) { Size = st.LabelSize, Color = labelFg, Grow = 1f, Case = it.Literal ? TextCase.AsWritten : st.LabelCase });
+
+        // Column 2b: the attention dot (MenuAttentionMark.Dot): WinUI's InfoBadge dot, trailing the label, centred on the row.
+        if (attention && st.AttentionMark == MenuAttentionMark.Dot)
+            children.Add(InfoBadge.Dot(st.AttentionColor) with { Margin = new Edges4(AttentionDotGap, 0, 0, 0), AlignSelf = FlexAlign.Center, Shrink = 0f, HitTestVisible = false });
 
         // Column 3: optional keyboard-accelerator hint, right-aligned (HorizontalAlignment=Right),
         // CaptionTextBlock (12px), MenuFlyoutItemKeyboardAcceleratorTextForeground = TextSecondary / Disabled.

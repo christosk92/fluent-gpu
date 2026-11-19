@@ -118,6 +118,14 @@ public static class RepaintStreamSafety
 /// rasterizes, so a primitive whose geometry lies outside the rect but whose FOOTPRINT reaches into it is kept. They are
 /// deliberately ≥ the shader's own quad inflation. A primitive exactly ON the rect edge is KEPT (the tests are inclusive).
 /// </para>
+/// <para>
+/// A halo is slack in the op's LOCAL units (the SDF pipelines inflate their quad by <c>margin</c> local units before the
+/// transform; a stroke's outer half, a shadow's blur and a glyph's overhang are local too), so a transform that magnifies
+/// an axis magnifies the slack with it: <see cref="Footprint"/> maps it through the transform's linear part and never lets
+/// it fall below the halo itself (the AA feather is device-sized, ~1 px, at any scale). A NavigationView pill stretched
+/// ScaleY 36 paints its AA fringe ~4 px past its tip — past a 2-DIP halo taken in device space, so a partial raster's
+/// damage missed that pixel (damage-validate, slice 174:1).
+/// </para>
 /// </summary>
 public static class RepaintCull
 {
@@ -174,6 +182,21 @@ public static class RepaintCull
         right = MathF.Max(MathF.Max(ax, bx), MathF.Max(cx, ex));
         top = MathF.Min(MathF.Min(ay, by), MathF.Min(cy, ey));
         bottom = MathF.Max(MathF.Max(ay, by), MathF.Max(cy, ey));
+    }
+
+    /// <summary>The conservative device footprint of a local rect drawn with per-kind <paramref name="halo"/> under a 2×3
+    /// affine: its <see cref="Aabb"/> grown on each axis by the halo mapped through the linear part (a local square of
+    /// half-side <c>halo</c> spans <c>halo·(|m11|+|m21|)</c> on x and <c>halo·(|m12|+|m22|)</c> on y — exactly the inflated
+    /// quad's AABB), never by less than <paramref name="halo"/>. Identity, translation and any scale ≤ 1 without rotation
+    /// keep the plain halo.</summary>
+    public static void Footprint(float x, float y, float w, float h,
+        float m11, float m12, float m21, float m22, float dx, float dy, float halo,
+        out float left, out float top, out float right, out float bottom)
+    {
+        Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out left, out top, out right, out bottom);
+        float hx = halo * MathF.Max(1f, MathF.Abs(m11) + MathF.Abs(m21));
+        float hy = halo * MathF.Max(1f, MathF.Abs(m12) + MathF.Abs(m22));
+        left -= hx; right += hx; top -= hy; bottom += hy;
     }
 
     /// <summary>Keep the primitive whose device AABB (inflated by <paramref name="halo"/>) touches

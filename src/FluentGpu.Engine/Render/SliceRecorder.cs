@@ -179,6 +179,12 @@ public sealed partial class SliceRecorder
         public bool Held;          // this pass: cut last pass under a budget, its share is reserved until it registers (CountBudget)
         public bool RefusedCut;    // its last walk folded a cut inline for want of budget / a slot (never partially kept)
         public float PoseDx, PoseDy;   // this turn's composite-time pose delta (OwnDelta at placement; 0 = at its free pose)
+        // A SCALING transition layer (a composited transition layer whose pose may carry an axis-aligned scale: SetScalable).
+        // This turn's pose as the window map q -> PoseS·q + PoseT (window DIP, placed at RestDx): PoseScaled = it is not 1.
+        public bool Scalable;
+        public bool PoseScaled;
+        public float PoseSx, PoseSy, PoseTx, PoseTy;
+        public float LastPoseSx, LastPoseSy, LastPoseTx, LastPoseTy;
         // which cut budget the slice spends when registered (effect budget / acrylic budget / a free distributable fade)
         public BudgetClass Budget;
         // a repaint boundary's raster downscale (BoxEl.RasterScale): > 1 = the low-resolution route (no tiles)
@@ -588,6 +594,9 @@ public sealed partial class SliceRecorder
         /// <summary>An edge fade that passed the record-time distribution test (<see cref="CompositeSliceFlags.DistributeFade"/>):
         /// composited as an analytic per-item feather whenever placement allows, so it spends no budget.</summary>
         FreeFade,
+        /// <summary>A SCALING composited transition layer's Main slice (SetScalable): it only carries its opacity group's Layer
+        /// slice, which spends the one effect share the pair costs, so it spends none.</summary>
+        Carrier,
     }
 
     private void CountBudget(ref Rec r)
@@ -597,6 +606,7 @@ public sealed partial class SliceRecorder
         {
             case BudgetClass.Acrylic: _acrylics++; if (r.Held) { r.Held = false; _acrylicHeld--; } break;
             case BudgetClass.FreeFade: _freeFades++; break;
+            case BudgetClass.Carrier: break;
             default: _effects++; if (r.Held) { r.Held = false; _effectHeld--; } break;
         }
     }
@@ -637,6 +647,19 @@ public sealed partial class SliceRecorder
         int s = Find(nodeIndex, gen, (int)role);
         if (s >= 0 && _recs[s].Held && _recs[s].Budget == BudgetClass.Effect) return true;
         return _effects + _effectHeld < EffectSliceCap;
+    }
+
+    /// <summary>Does the slice at <paramref name="slot"/> hold an effect share from last pass (see above)?</summary>
+    internal bool HoldsEffectShare(int slot) => (uint)slot < (uint)_slotCount && _recs[slot].Held && _recs[slot].Budget == BudgetClass.Effect;
+
+    /// <summary>The slice at <paramref name="slot"/> gives the effect share it holds to the cut made right after it: a scaling
+    /// transition layer's Main slice, re-cut as a <see cref="BudgetClass.Carrier"/>, hands its share to its own Layer slice (the pair
+    /// still costs one share; the cap holds).</summary>
+    internal void ReleaseEffectShare(int slot)
+    {
+        if (!HoldsEffectShare(slot)) return;
+        _recs[slot].Held = false;
+        _effectHeld--;
     }
 
     /// <summary>The acrylic twin of <see cref="EffectBudgetFor"/>.</summary>
@@ -698,11 +721,73 @@ public sealed partial class SliceRecorder
         ref Rec r = ref _recs[slot];
         r.Pose = pose; r.BaseWorld = baseWorld; r.Ox = ox; r.Oy = oy; r.FreeLocal = freeLocal; r.OwnDx = ownDx; r.OwnDy = ownDy;
         r.Fractional = false;
+        r.Scalable = false;
     }
 
     /// <summary>The slice at <paramref name="slot"/> is a composited transition layer: it and every slice below it place at their
     /// exact (sub-pixel) offset — see <see cref="SliceFrame.PhaseX"/>.</summary>
     internal void SetFractional(int slot) => _recs[slot].Fractional = true;
+
+    /// <summary>The composited transition layer at <paramref name="slot"/> may SCALE as a composite parameter: its walk recorded it
+    /// pose-free and its stream is its opacity group's Layer slice alone (SceneRecordingContext's scaled cut), so an axis-aligned
+    /// scale of its pose is drawn by that group (<see cref="CompositeItem.SlideScaleX"/>) instead of re-recording the subtree.</summary>
+    internal void SetScalable(int slot) => _recs[slot].Scalable = true;
+
+    /// <summary>Was the slice at <paramref name="slot"/> cut as a scaling transition layer (<see cref="SetScalable"/>)?</summary>
+    internal bool IsScalable(int slot) => (uint)slot < (uint)_slotCount && _recs[slot].Live && _recs[slot].Scalable;
+
+    /// <summary><paramref name="r"/> (recorded at the free world <paramref name="freeW"/>) where the posed world
+    /// <paramref name="posedW"/> puts it: <c>posedW ∘ freeW⁻¹</c>, for an axis-aligned <paramref name="freeW"/>.</summary>
+    internal static RectF PoseBounds(in Affine2D posedW, in Affine2D freeW, in RectF r)
+    {
+        float i11 = 1f / freeW.M11, i22 = 1f / freeW.M22;
+        var inv = new Affine2D(i11, 0f, 0f, i22, -freeW.Dx * i11, -freeW.Dy * i22);
+        return posedW.Multiply(in inv).TransformBounds(r);
+    }
+
+    /// <summary><paramref name="r"/> through the window map <c>q → s·q + t</c> (an Infinite or empty rect stays so).</summary>
+    private static RectF MapRect(in RectF r, float sx, float sy, float tx, float ty)
+        => r.IsInfinite || r.IsEmpty ? r : new RectF(r.X * sx + tx, r.Y * sy + ty, r.W * sx, r.H * sy);
+
+    /// <summary><paramref name="r"/> through the inverse of the window map <c>q → s·q + t</c>.</summary>
+    private static RectF UnmapRect(in RectF r, float sx, float sy, float tx, float ty)
+        => r.IsInfinite || r.IsEmpty ? r : new RectF((r.X - tx) / sx, (r.Y - ty) / sy, r.W / sx, r.H / sy);
+
+    // Nodes whose scaled pose a placement could not draw as a group (node-indexed, gen-stamped like the baked-clip table): until
+    // the node's transform is back to a pure translation its cut records the scale baked (the inline route, identical pixels).
+    private uint[] _scaleRefusedGen = [];
+    private int _scaleRefusals;
+
+    /// <summary>Scaled poses a placement could not draw as a group since this recorder was created (each then re-recorded baked).
+    /// Expected 0: the scaled cut makes the opacity group the stream needs.</summary>
+    public int ScaleRefusals => _scaleRefusals;
+
+    /// <summary>Is the scale of the composited transition layer at <paramref name="nodeIndex"/> refused (see above)?</summary>
+    internal bool ScaleRefused(int nodeIndex, uint gen)
+        => (uint)nodeIndex < (uint)_scaleRefusedGen.Length && _scaleRefusedGen[nodeIndex] == BakedGen(gen);
+
+    /// <summary>The node's transform is back to a translation: a later scale may be posed again.</summary>
+    internal void ClearScaleRefused(int nodeIndex)
+    {
+        if ((uint)nodeIndex < (uint)_scaleRefusedGen.Length) _scaleRefusedGen[nodeIndex] = 0;
+    }
+
+    private void NoteScaleRefused(int nodeIndex, uint gen)
+    {
+        if (nodeIndex >= _scaleRefusedGen.Length) Array.Resize(ref _scaleRefusedGen, Math.Max(nodeIndex + 1, Math.Max(64, _scaleRefusedGen.Length * 2)));
+        if (_scaleRefusedGen[nodeIndex] == BakedGen(gen)) return;
+        _scaleRefusedGen[nodeIndex] = BakedGen(gen);
+        _scaleRefusals++;
+    }
+
+    /// <summary>A transition layer's local transform the composite can pose: the linear part it was recorded under, or — on a
+    /// scalable layer (<see cref="SetScalable"/>) — any positive axis-aligned scale.</summary>
+    private bool PoseableLinear(in Rec r, in Affine2D l)
+        => SameLinear(in l, in r.FreeLocal)
+           || (r.Scalable && l.M12 == 0f && l.M21 == 0f && l.M11 > 0f && l.M22 > 0f && !ScaleRefused(r.NodeIndex, r.Gen));
+
+    /// <summary>Is the slice posed away from its free pose this turn (a translation, or a scale)?</summary>
+    private static bool Posed(in Rec r) => r.PoseDx != 0f || r.PoseDy != 0f || r.PoseScaled;
 
     /// <summary>How close to a whole device pixel a FRACTIONAL placement must be to be taken as that pixel: 2⁻¹⁰ px. See
     /// <see cref="FractionalPx"/>.</summary>
@@ -733,7 +818,7 @@ public sealed partial class SliceRecorder
             ref Rec r = ref _recs[s];
             // a slide group's members place at rest; a pose held from the last pass (a page parked at its exit offset) is no
             // slide either: its float noise is snapped like a free pose's
-            if (r.Fractional && !r.Sliding && !r.PoseHeld && (r.PoseDx != 0f || r.PoseDy != 0f)) return false;
+            if (r.Fractional && !r.Sliding && !r.PoseHeld && Posed(in r)) return false;
             if (s == RootSlot) break;
         }
         return true;
@@ -1095,7 +1180,9 @@ public sealed partial class SliceRecorder
                 var h = scene.HandleAt(r.NodeIndex);
                 if (h.IsNull || h.Raw.Gen != r.Gen || !scene.IsLive(h)) continue;
                 Affine2D l = scene.Paint(h).LocalTransform;
-                if (!SameLinear(in l, in r.FreeLocal)) { _mustRewalk.Add(h); continue; }
+                if (!PoseableLinear(in r, in l)) { _mustRewalk.Add(h); continue; }
+                // a scaling transition layer back at scale 1: re-recorded once, without the opacity group its scale needed
+                if (r.Scalable && SameLinear(in l, in r.FreeLocal)) { _mustRewalk.Add(h); continue; }
                 if (r.PoseLocked)
                 {
                     OwnDelta(s, scene, out float dx, out float dy);
@@ -1262,7 +1349,7 @@ public sealed partial class SliceRecorder
                 var h = scene.HandleAt(r.NodeIndex);
                 if (h.IsNull || h.Raw.Gen != r.Gen || !scene.IsLive(h)) { dx = r.OwnDx; dy = r.OwnDy; return false; }
                 Affine2D l = scene.Paint(h).LocalTransform;
-                if (!SameLinear(in l, in r.FreeLocal)) { dx = r.OwnDx; dy = r.OwnDy; return false; }
+                if (!PoseableLinear(in r, in l)) { dx = r.OwnDx; dy = r.OwnDy; return false; }
                 Affine2D posed = Conjugate(in r.BaseWorld, in l, r.Ox, r.Oy);
                 Affine2D free = Conjugate(in r.BaseWorld, in r.FreeLocal, r.Ox, r.Oy);
                 dx = posed.Dx - free.Dx;
@@ -1753,8 +1840,10 @@ public sealed partial class SliceRecorder
         // the same content in its tiles (the paint route). NaN = none.
         public float StickyY, StickyDy;
         // A SLIDE GROUP (GroupOpen of a posed transition layer, PlaceChild): its pose (DIP), drawn bilinearly at the surface's
-        // draw; AccDx/AccDy and everything it encloses are at the REST offset.
+        // draw; AccDx/AccDy and everything it encloses are at the REST offset. A SCALED one (a scaling transition layer's group)
+        // adds its scale: a rest point q is drawn at q·SlideS + SlideD (window DIP; SlideSx/Sy 0 = unscaled).
         public float SlideDx, SlideDy;
+        public float SlideSx, SlideSy;
     }
 
     /// <summary>Up to two ancestor edge fades DISTRIBUTED onto every item below them (gpu-renderer.md §13.1e): each item
@@ -2136,31 +2225,86 @@ public sealed partial class SliceRecorder
         c.Visited = true;
         ChildGeometry(child, in m, scene, accDx, accDy, parentAccDx, parentAccDy, in parentClip,
             out float cdx, out float cdy, out float pdx, out float pdy, out RectF clip);
+
+        // A SCALING transition layer (SetScalable: a page growing in, shrinking out, a drill zoom): this turn's pose as the window
+        // map q → S·q + T of its rest placement (its parent's offset, accDx). Its stream is its opacity group's Layer slice alone,
+        // and that group is drawn through the map (below); a stream that is not (ScaleDrawable) refuses the scale: the node
+        // re-records it baked from the next pass (NoteScaleRefused; expected never — the scaled cut makes the group).
+        c.PoseScaled = false;
+        c.PoseSx = c.PoseSy = 1f;
+        if (c.Scalable && c.Pose == PoseKind.Effect && PosedAffine(child, scene, out Affine2D sm) && (sm.M11 != 1f || sm.M22 != 1f))
+        {
+            if (ScaleDrawable(child))
+            {
+                c.PoseScaled = true;
+                c.PoseSx = sm.M11; c.PoseSy = sm.M22;
+                c.PoseTx = sm.Dx + accDx * (1f - sm.M11); c.PoseTy = sm.Dy + accDy * (1f - sm.M22);
+            }
+            else NoteScaleRefused(c.NodeIndex, c.Gen);
+        }
         // A SLIDING transition layer within SlideRestPx of its free pose (the last frames of an ease-out slide) places AT its free
         // pose: the slide ends on exactly the frame it comes to rest on (no last bilinear frame against a crisp first rest frame).
-        // Only a layer that has slid as a slide group (c.Slid): every other transition layer keeps its exact placement.
-        if (SlideGroups && c.Slid && c.Fractional && (cdx != accDx || cdy != accDy))
+        // Only a layer that has slid as a slide group (c.Slid): every other transition layer keeps its exact placement. A scaled
+        // pose is at rest when every edge of the slice lies within SlideRestPx of its rest place.
+        if (SlideGroups && c.Slid && c.Fractional && (cdx != accDx || cdy != accDy || c.PoseScaled))
         {
             float ds = scene.DeviceScale > 0f ? scene.DeviceScale : 1f;
-            if (MathF.Abs((cdx - accDx) * ds) < SlideRestPx && MathF.Abs((cdy - accDy) * ds) < SlideRestPx) { cdx = accDx; cdy = accDy; }
+            bool near;
+            if (c.PoseScaled)
+            {
+                RectF rest = Offset(c.Bounds, accDx, accDy), at = MapRect(in rest, c.PoseSx, c.PoseSy, c.PoseTx, c.PoseTy);
+                near = MathF.Abs((at.X - rest.X) * ds) < SlideRestPx && MathF.Abs((at.Right - rest.Right) * ds) < SlideRestPx
+                    && MathF.Abs((at.Y - rest.Y) * ds) < SlideRestPx && MathF.Abs((at.Bottom - rest.Bottom) * ds) < SlideRestPx;
+            }
+            else near = MathF.Abs((cdx - accDx) * ds) < SlideRestPx && MathF.Abs((cdy - accDy) * ds) < SlideRestPx;
+            if (near) { cdx = accDx; cdy = accDy; c.PoseScaled = false; c.PoseSx = c.PoseSy = 1f; }
+        }
+        if (!c.PoseScaled) { c.PoseTx = cdx - accDx; c.PoseTy = cdy - accDy; }
+
+        // Inside a SCALED transition layer (its Layer slice, the group drawn through the layer's map): the marker's clips, rounded
+        // clip and layer rect are the layer's rest geometry through that map — where the group is drawn — not its offset alone.
+        ref Rec sp = ref _recs[parentSlot];
+        bool inScaled = sp.PoseScaled && !m.Has(CompositeSliceFlags.ParamsUp);
+        float msx = sp.PoseSx, msy = sp.PoseSy, mtx = sp.PoseTx, mty = sp.PoseTy, mrx = sp.RestDx, mry = sp.RestDy;
+        if (inScaled)
+        {
+            clip = parentClip;
+            if (!m.Clip.IsEmpty && !m.Clip.IsInfinite) clip = ClipAnd(clip, MapRect(Offset(m.Clip, mrx, mry), msx, msy, mtx, mty));
+            if (m.Has(CompositeSliceFlags.OuterClip)) clip = ClipAnd(clip, MapRect(Offset(m.OuterClip.DeviceRect, mrx, mry), msx, msy, mtx, mty));
         }
 
         // The innermost rounded clip in effect at the marker (the marker's own rounded outer clip, else the containing
         // stream's).
         RectF round = parentRound;
         float roundR = parentRoundR;
-        if (mark.RoundR > 0f) { round = Offset(mark.RoundRect, accDx, accDy); roundR = mark.RoundR; }
-        if (m.Has(CompositeSliceFlags.OuterClip) && m.OuterClip.CornerRadius > 0f)
+        if (inScaled)
         {
-            round = Offset(m.OuterClip.RoundedRect, pdx, pdy); roundR = m.OuterClip.CornerRadius;
+            float rs = MathF.Min(msx, msy);
+            if (mark.RoundR > 0f) { round = MapRect(Offset(mark.RoundRect, mrx, mry), msx, msy, mtx, mty); roundR = mark.RoundR * rs; }
+            if (m.Has(CompositeSliceFlags.OuterClip) && m.OuterClip.CornerRadius > 0f)
+            {
+                round = MapRect(Offset(m.OuterClip.RoundedRect, mrx, mry), msx, msy, mtx, mty); roundR = m.OuterClip.CornerRadius * rs;
+            }
+        }
+        else
+        {
+            if (mark.RoundR > 0f) { round = Offset(mark.RoundRect, accDx, accDy); roundR = mark.RoundR; }
+            if (m.Has(CompositeSliceFlags.OuterClip) && m.OuterClip.CornerRadius > 0f)
+            {
+                round = Offset(m.OuterClip.RoundedRect, pdx, pdy); roundR = m.OuterClip.CornerRadius;
+            }
         }
         c.AccDx = cdx; c.AccDy = cdy;
         c.PoseDx = cdx - accDx; c.PoseDy = cdy - accDy;
         c.RestDx = accDx; c.RestDy = accDy;
         c.Sliding = false;
-        if (c.PoseDx == 0f && c.PoseDy == 0f) c.Slid = false;   // back at its free pose: the slide is over
-        c.PoseHeld = SlideGroups && c.Slid && c.PoseDx == c.LastPoseDx && c.PoseDy == c.LastPoseDy;
+        if (!Posed(in c)) c.Slid = false;   // back at its free pose: the slide is over
+        c.PoseHeld = SlideGroups && c.Slid && c.PoseDx == c.LastPoseDx && c.PoseDy == c.LastPoseDy
+            && c.PoseSx == c.LastPoseSx && c.PoseSy == c.LastPoseSy;
+        bool scaleMoved = c.PoseSx != c.LastPoseSx || c.PoseSy != c.LastPoseSy || (c.PoseScaled && (c.PoseTx != c.LastPoseTx || c.PoseTy != c.LastPoseTy));
         c.LastPoseDx = c.PoseDx; c.LastPoseDy = c.PoseDy;
+        c.LastPoseSx = c.PoseSx; c.LastPoseSy = c.PoseSy; c.LastPoseTx = c.PoseTx; c.LastPoseTy = c.PoseTy;
+        if (c.PoseScaled) { Mix(ref _compositeHash, c.PoseSx); Mix(ref _compositeHash, c.PoseSy); Mix(ref _compositeHash, c.PoseTx); Mix(ref _compositeHash, c.PoseTy); }
 
         // A composite-time STICKY clip (CompositeSliceFlags.StickyClip): the node's ClipTop pose, a half-plane that is
         // viewport-fixed while the slice rides the page. Everything below the slice inherits it exactly (childClip — the
@@ -2192,10 +2336,14 @@ public sealed partial class SliceRecorder
             Mix(ref _compositeHash, pm.M11); Mix(ref _compositeHash, pm.M22); Mix(ref _compositeHash, pm.Dx); Mix(ref _compositeHash, pm.Dy);
         }
 
-        // Composite damage: the slice's footprint moved, or its sticky line did.
-        RectF placed = Offset(c.Pose == PoseKind.Posed ? pm.TransformBounds(c.Bounds) : c.Bounds, cdx, cdy);
+        // Composite damage: the slice's footprint moved (or scaled), or its sticky line did. A scaled layer's footprint is its rest
+        // bounds through its map; its Layer slice's, through the map of the layer it is drawn in.
+        RectF placed = c.PoseScaled ? MapRect(Offset(c.Bounds, accDx, accDy), c.PoseSx, c.PoseSy, c.PoseTx, c.PoseTy)
+            : inScaled ? MapRect(Offset(c.Bounds, mrx, mry), msx, msy, mtx, mty)
+            : Offset(c.Pose == PoseKind.Posed ? pm.TransformBounds(c.Bounds) : c.Bounds, cdx, cdy);
         RectF footprint = clip.IsInfinite ? placed : placed.Intersect(clip);
         bool stickyMoved = sticky != c.HasLastSticky || (sticky && c.LastStickyWc != stickyWc);
+        poseMoved |= scaleMoved || (inScaled && c.HasLast && c.LastFootprint != footprint);
         if (c.HasLast && (c.LastAccDx != cdx || c.LastAccDy != cdy || stickyMoved || poseMoved))
         {
             repaint.Add(Pad(c.LastFootprint));
@@ -2219,11 +2367,23 @@ public sealed partial class SliceRecorder
         {
             layer.HasLayer = true;
             layer.Layer = PosedLayer(in m, pdx, pdy, sticky, in stickyWc);
+            if (inScaled)
+                layer.Layer = m.Layer with
+                {
+                    DeviceRect = MapRect(Offset(m.Layer.DeviceRect, mrx, mry), msx, msy, mtx, mty),
+                    CompositeClip = m.Layer.CompositeClip.IsEmpty ? m.Layer.CompositeClip
+                        : MapRect(Offset(m.Layer.CompositeClip, mrx, mry), msx, msy, mtx, mty),
+                };
             // A POSED layer slice (a self-blur whose own translate is its pose — SceneRecordingContext's layer cut) recorded its
             // layer rect and blur source pose-free: they ride its own pose too. Its composite clip is its parent's and does not.
             float ldx = pdx, ldy = pdy;
-            if (c.Pose == PoseKind.Effect) { ldx = cdx; ldy = cdy; layer.Layer = layer.Layer with { DeviceRect = Offset(m.Layer.DeviceRect, cdx, cdy) }; }
-            layer.InnerClip = m.Has(CompositeSliceFlags.InnerClip) ? Offset(m.InnerClip.DeviceRect, ldx, ldy) : default;
+            if (inScaled)
+                layer.InnerClip = m.Has(CompositeSliceFlags.InnerClip) ? MapRect(Offset(m.InnerClip.DeviceRect, mrx, mry), msx, msy, mtx, mty) : default;
+            else
+            {
+                if (c.Pose == PoseKind.Effect) { ldx = cdx; ldy = cdy; layer.Layer = layer.Layer with { DeviceRect = Offset(m.Layer.DeviceRect, cdx, cdy) }; }
+                layer.InnerClip = m.Has(CompositeSliceFlags.InnerClip) ? Offset(m.InnerClip.DeviceRect, ldx, ldy) : default;
+            }
         }
 
         // An acrylic slice: its frosted backdrop composites first (from everything painted before it), then its content.
@@ -2258,10 +2418,15 @@ public sealed partial class SliceRecorder
         // carried back by the pose.
         // The rest offset is taken where it is exact — the offset BEFORE the pose was added (RestDx), never cdx − pose, whose
         // float rounding would move the members' phase by noise from frame to frame (and re-raster them, item 1's bug class).
-        float sdx = 0f, sdy = 0f, rdx = cdx, rdy = cdy, prdx = accDx, prdy = accDy;   // prdx: the parent's offset at rest
-        if (layer.HasLayer && !leaf)
+        // A SCALED transition layer's group (its Layer slice, inScaled) is always a slide group, leaf or not and whatever it encloses:
+        // the group surface is the only thing the composite can draw at the layer's scale (a scale is no sub-pixel phase: drawn any
+        // other way, the subtree would re-record at every scale step, which is what the scaled cut exists to avoid).
+        bool scaleGroup = inScaled && layer.HasLayer && !sticky && (LayerKind)layer.Layer.Kind == LayerKind.Opacity
+            && layer.Layer.BlurSigma <= 0f && c.Role == (int)SliceRole.Layer && sp.NodeIndex == c.NodeIndex && cdx == accDx && cdy == accDy;
+        float sdx = 0f, sdy = 0f, ssx = 1f, ssy = 1f, rdx = cdx, rdy = cdy, prdx = accDx, prdy = accDy;   // prdx: the parent's offset at rest
+        if (layer.HasLayer && (!leaf || scaleGroup))
         {
-            if (Distributable(child, in m, in layer.Layer, scene, cdx, cdy, accDx, accDy, in childClip, dist.Count,
+            if (!scaleGroup && Distributable(child, in m, in layer.Layer, scene, cdx, cdy, accDx, accDy, in childClip, dist.Count,
                     sticky ? Offset(stickyWc, cdx, cdy) : RectF.Infinite))
             {
                 // A DISTRIBUTED edge fade (gpu-renderer.md §13.1e): no group surface — every item below carries the
@@ -2271,7 +2436,12 @@ public sealed partial class SliceRecorder
                     dist.With(in layer.Layer), in dist, false, ref repaint);
                 return;
             }
-            if (SlideGroups && !sticky && (LayerKind)layer.Layer.Kind == LayerKind.Opacity && layer.Layer.BlurSigma <= 0f)
+            if (scaleGroup)
+            {
+                sdx = sp.PoseTx; sdy = sp.PoseTy; ssx = msx; ssy = msy;
+                rdx = mrx; rdy = mry; prdx = rdx; prdy = rdy; sp.Sliding = true; sp.Slid = true;
+            }
+            else if (SlideGroups && !sticky && (LayerKind)layer.Layer.Kind == LayerKind.Opacity && layer.Layer.BlurSigma <= 0f)
             {
                 ref Rec pr = ref _recs[parentSlot];
                 bool own = c.Fractional && (c.PoseDx != 0f || c.PoseDy != 0f);
@@ -2295,17 +2465,33 @@ public sealed partial class SliceRecorder
             g.StickyY = stickyY; g.StickyDy = cdy;
             g.AccDx = rdx; g.AccDy = rdy;
             g.SlideDx = sdx; g.SlideDy = sdy;
-            g.Rect = c.Bounds.IsEmpty ? default : Offset(c.Bounds, cdx, cdy);   // the placed footprint (the group-cache region)
+            if (scaleGroup) { g.SlideSx = ssx; g.SlideSy = ssy; }
+            g.Rect = c.Bounds.IsEmpty ? default : scaleGroup ? placed : Offset(c.Bounds, cdx, cdy);   // the placed footprint (the group-cache region)
             g.Dist = dist;
             Mix(ref _compositeHash, layer.Layer.GroupAlpha); Mix(ref _compositeHash, layer.Layer.BlurSigma); MixRect(ref _compositeHash, ownClip);
             MixRect(ref _compositeHash, layer.Layer.DeviceRect);
             Mix(ref _compositeHash, cdx); Mix(ref _compositeHash, cdy); MixDist(ref _compositeHash, in dist);
-            bool liftThumbs = ChromeOverLayer(in layer.Layer) && ThumbsTrail(child);
+            // a scaled group's thumbs stay in it (they scale with the page); lifted out they would be drawn unscaled
+            bool liftThumbs = !scaleGroup && ChromeOverLayer(in layer.Layer) && ThumbsTrail(child);
             int posedFrom = _posedHoleCount;
-            RectF mClip = Offset(clip, -sdx, -sdy), mCull = Offset(sticky ? ClipAnd(cull, Offset(stickyWc, cdx, cdy)) : cull, -sdx, -sdy);
-            RectF mRound = roundR > 0f ? Offset(round, -sdx, -sdy) : round;
+            RectF mClip, mCull, mRound;
+            float mRoundR = roundR;
+            if (scaleGroup)
+            {
+                // what it encloses gets the group's clip, cull and rounded clip carried back through the scale map to its rest place
+                mClip = UnmapRect(in clip, ssx, ssy, sdx, sdy);
+                mCull = UnmapRect(in cull, ssx, ssy, sdx, sdy);
+                mRound = roundR > 0f ? UnmapRect(in round, ssx, ssy, sdx, sdy) : round;
+                if (roundR > 0f) mRoundR = roundR / MathF.Min(ssx, ssy);
+            }
+            else
+            {
+                mClip = Offset(clip, -sdx, -sdy);
+                mCull = Offset(sticky ? ClipAnd(cull, Offset(stickyWc, cdx, cdy)) : cull, -sdx, -sdy);
+                mRound = roundR > 0f ? Offset(round, -sdx, -sdy) : round;
+            }
             PlaceSlot(child, scene, rdx, rdy, prdx, prdy, mClip, mClip, float.NaN, 0f,
-                mCull, mRound, roundR, default, default, default, liftThumbs, ref repaint);
+                mCull, mRound, mRoundR, default, default, default, liftThumbs, ref repaint);
             // The group's band line cuts its surface where it is drawn, so every hole it encloses shows only below it: the video
             // behind each takes the line too (its erase stays unclipped by it, inside the surface).
             if (sticky)
@@ -2315,6 +2501,23 @@ public sealed partial class SliceRecorder
             if (liftThumbs) PlaceTrailingThumbs(child, scene, cdx, cdy, accDx, accDy, in childClip, in cull, in round, roundR, in dist, ref repaint);
         }
         else PlaceSlot(child, scene, cdx, cdy, accDx, accDy, childClip, ownClip, stickyY, cdy, cull, round, roundR, layer, in dist, in dist, false, ref repaint);
+    }
+
+    /// <summary>Can the scaling transition layer at <paramref name="s"/> be drawn scaled — is its stream exactly its own opacity
+    /// group's Layer slice (one marker of the same node, an unblurred opacity layer, no sticky clip or fade) and nothing else that
+    /// paints? What the scaled cut records by construction (SceneRecordingContext.ScaledCutAllowed and the forced opacity group).</summary>
+    private bool ScaleDrawable(int s)
+    {
+        ref Rec r = ref _recs[s];
+        ScanSlot(s);
+        if (_scanMarkCount[s] != 1 || _scanVideoCount[s] != 0) return false;
+        for (int k = 0; k <= 1; k++)
+            if (!_scanSegs[s]![k].Bounds.IsEmpty) return false;
+        CompositeSliceCmd m = _scanMarks[s]![0].Cmd;
+        if (m.NodeIndex != r.NodeIndex || m.Gen != r.Gen || (m.Sub & 7) != (int)SliceRole.Layer) return false;
+        if (!m.Has(CompositeSliceFlags.Layer) || m.Has(CompositeSliceFlags.FadeWhileStuck) || m.Has(CompositeSliceFlags.StickyClip)
+            || m.Has(CompositeSliceFlags.ParamsUp)) return false;
+        return (LayerKind)m.Layer.Kind == LayerKind.Opacity && m.Layer.BlurSigma <= 0f;
     }
 
     /// <summary>Does the subtree at <paramref name="s"/> hold a segment that composites from TILES — what a new sub-pixel phase
@@ -2765,6 +2968,8 @@ public sealed partial class SliceRecorder
                         gFeather, gSigma, default, 0, RoundPx(e.RoundRect, e.RoundR, scale), 0, 1, gSrc, gFeather2, gFoot, e.Dist.Count);
                     // a slide group: its surface (rest) drawn at the pose, bilinearly (GroupCacheKey.Region carries the region back)
                     if (e.SlideDx != 0f || e.SlideDy != 0f) gItem = gItem with { SubPxX = e.SlideDx * scale, SubPxY = e.SlideDy * scale };
+                    // a scaled slide group: its surface (rest) drawn through its scale map (a rest px p lands at p·S + SubPx)
+                    if (e.SlideSx != 0f) gItem = gItem with { SlideScaleX = e.SlideSx, SlideScaleY = e.SlideSy };
                     AddItem(gItem, in e.Layer, in e.Dist, in e);
                     continue;
                 }
@@ -3031,17 +3236,37 @@ public sealed partial class SliceRecorder
             _frameSpans.AsSpan(0, _frameSpanCount), _itemLayers.AsSpan(0, _itemCount),
             _rasterDone.AsSpan(0, _rasterCount), _itemInherited.AsSpan(0, 2 * _itemCount),
             EvRasterFlags(_rasterCount), EvItemFlags(_itemCount), table.TrimmedSurfaces,   // the textures the table released (§13.1g)
-            table.OwnerId, _inlineOps.AsSpan(0, _inlineOpCount), _rowInlineRange.AsSpan(0, 2 * _rowCount));
+            table.OwnerId, _inlineOps.AsSpan(0, _inlineOpCount), _rowInlineRange.AsSpan(0, 2 * _rowCount), _glyphPrep.Bytes);
     }
+
+    private readonly DrawList _glyphPrep = new(1024);
+
+    /// <summary>The glyph runs of text the recorder walked but culled outside its clip since the last composite (<see cref="CompositeFrame.GlyphPrep"/>):
+    /// written by the record pass, handed to the backend by the next composite, cleared by <see cref="EndComposite(SliceTable, in CompositeFrame)"/>.
+    /// The record pass and the composite run on the same thread (the UI thread inline, the render thread when it records).</summary>
+    internal DrawList GlyphPrep => _glyphPrep;
 
     /// <summary>The composite ERASE item of video plan entry <paramref name="e"/>. F078 + pixel rule R (F073): the erase quad is the
     /// hole's rect cut to the composite clip, each edge rounded to the nearest device pixel (the same rule the DirectComposition
     /// video rect uses, so the erase and the video share one edge); its strength is the punch's (VideoReady x opacity) times
     /// <paramref name="alphaMul"/>; and its shape is the hole's own rounded rect (per-corner radii) - or, when the hole is
     /// square, the in-stream rounded clip it sits under. (<paramref name="dx"/>, <paramref name="dy"/>) moves it by the poses of
-    /// the slide groups it is hoisted out of (window DIP).</summary>
-    private void AddVideoErase(in Plan e, float scale, float alphaMul, float dx, float dy)
+    /// the slide groups it is hoisted out of (window DIP), after (<paramref name="sx"/>, <paramref name="sy"/>) scales it by theirs.</summary>
+    private void AddVideoErase(in Plan e, float scale, float alphaMul, float dx, float dy, float sx = 1f, float sy = 1f)
     {
+        if (sx != 1f || sy != 1f)
+        {
+            // under a scaled slide group: the hole's rects through the groups' map, its radii by its scale
+            Plan q = e;
+            q.Rect = MapRect(in e.Rect, sx, sy, dx, dy);
+            q.Hole = MapRect(in e.Hole, sx, sy, dx, dy);
+            q.RoundRect = MapRect(in e.RoundRect, sx, sy, dx, dy);
+            float rs = MathF.Min(sx, sy);
+            q.Radii = new CornerRadius4(e.Radii.TopLeft * rs, e.Radii.TopRight * rs, e.Radii.BottomRight * rs, e.Radii.BottomLeft * rs);
+            q.RoundR = e.RoundR * rs;
+            AddVideoErase(in q, scale, alphaMul, 0f, 0f);
+            return;
+        }
         RectF rect = dx != 0f || dy != 0f ? Offset(e.Rect, dx, dy) : e.Rect;
         RectF erasePx = WholePx(ScalePx(rect, scale));
         if (erasePx.IsEmpty) return;
@@ -3067,9 +3292,9 @@ public sealed partial class SliceRecorder
     private void EraseUnderGroup(int open, float scale)
     {
         int depth = 0;
-        float alpha = 1f, dx = 0f, dy = 0f;
+        float alpha = 1f, dx = 0f, dy = 0f, sx = 1f, sy = 1f;
         Span<float> alphas = stackalloc float[16];
-        Span<float> slides = stackalloc float[32];
+        Span<float> slides = stackalloc float[64];
         for (int j = open; j < _planCount; j++)
         {
             ref Plan p = ref _plan[j];
@@ -3081,9 +3306,11 @@ public sealed partial class SliceRecorder
                     LayerParams(k == 0 ? p.Dist.A : p.Dist.B, default, scale, out float da, out _, out _, out _);
                     a *= da;
                 }
-                if (depth < 16) { alphas[depth] = alpha; slides[2 * depth] = dx; slides[2 * depth + 1] = dy; }
+                if (depth < 16) { alphas[depth] = alpha; slides[4 * depth] = dx; slides[4 * depth + 1] = dy; slides[4 * depth + 2] = sx; slides[4 * depth + 3] = sy; }
                 alpha *= Math.Clamp(a, 0f, 1f);
-                dx += p.SlideDx; dy += p.SlideDy;
+                // the groups' maps compose outside-in: a point inside lands at outer(inner(q))
+                dx += sx * p.SlideDx; dy += sy * p.SlideDy;
+                if (p.SlideSx != 0f) { sx *= p.SlideSx; sy *= p.SlideSy; }
                 depth++;
                 continue;
             }
@@ -3091,10 +3318,10 @@ public sealed partial class SliceRecorder
             {
                 depth--;
                 if (depth <= 0) return;
-                if (depth < 16) { alpha = alphas[depth]; dx = slides[2 * depth]; dy = slides[2 * depth + 1]; }
+                if (depth < 16) { alpha = alphas[depth]; dx = slides[4 * depth]; dy = slides[4 * depth + 1]; sx = slides[4 * depth + 2]; sy = slides[4 * depth + 3]; }
                 continue;
             }
-            if (p.Kind == PlanKind.Video && alpha > 0f) AddVideoErase(in p, scale, alpha, dx, dy);
+            if (p.Kind == PlanKind.Video && alpha > 0f) AddVideoErase(in p, scale, alpha, dx, dy, sx, sy);
         }
     }
 
@@ -3370,6 +3597,7 @@ public sealed partial class SliceRecorder
     public void EndComposite(SliceTable table, ReadOnlySpan<byte> rasterDone, ReadOnlySpan<byte> rasterFlags = default,
         ReadOnlySpan<byte> itemFlags = default)
     {
+        _glyphPrep.Reset();
         int done = 0;
         long bytes = 0;
         for (int i = 0; i < _rasterCount; i++)

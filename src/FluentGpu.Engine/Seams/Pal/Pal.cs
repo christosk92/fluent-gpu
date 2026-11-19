@@ -525,7 +525,9 @@ public interface IPlatformPopupWindow : IDisposable
 /// edge-resize loop at the new client size (<see cref="IPlatformWindow.LiveResize"/>), instead of the default defer that keeps
 /// the content at its pre-drag size until mouse-up. For a small window whose layout is a function of its size (a mini player);
 /// the main window keeps the defer. <paramref name="MaxClientSizeDip"/> is the opt-in maximum tracking size in logical DIP,
-/// resolved like <paramref name="MinClientSizeDip"/> (live DPI plus the frame); an empty axis keeps USER32's default.</summary>
+/// resolved like <paramref name="MinClientSizeDip"/> (live DPI plus the frame); an empty axis keeps USER32's default.
+/// <paramref name="NoActivate"/>: a window that never takes the foreground or the keyboard (a test run beside the person's work): every
+/// show leaves the active window active, a click does not activate it, and an activation redirect does not bring it up.</summary>
 public readonly record struct WindowDesc(
     string Title,
     Size2 SizePx,
@@ -541,7 +543,8 @@ public readonly record struct WindowDesc(
     RectF InitialBoundsPx = default,
     bool InitialMaximized = false,
     bool LiveResize = false,
-    Size2 MaxClientSizeDip = default);
+    Size2 MaxClientSizeDip = default,
+    bool NoActivate = false);
 
 /// <summary>How native input should affect a bounded platform wait.</summary>
 public enum PlatformInputWakePolicy : byte

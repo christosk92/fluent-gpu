@@ -159,7 +159,11 @@ public struct LedgerUiFrame
     /// <summary><see cref="FluentGpu.Scene.CaptureFullReason"/> of the capture; 1 when the DEBUG incremental-capture parity
     /// self-check re-derived it (a Debug-only cost, compiled out of Release).</summary>
     public byte CaptureFull, CaptureParity;
-    public ushort Reserved3;
+    /// <summary>The window's client width in pixels when the frame ran (v5; was reserved): a live resize's frames read off it.</summary>
+    public ushort ClientW;
+    /// <summary>Where <see cref="CaptureMs"/> went (v5): the scene snapshot (incremental or full), the recording configuration, the image
+    /// table, the compositor animations.</summary>
+    public float CaptureSceneMs, CaptureConfigMs, CaptureImagesMs, CaptureAnimMs;
 }
 
 /// <summary>One turn of the owning host's render thread (only turns that passed the wait: resize parks and device-loss

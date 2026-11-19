@@ -99,6 +99,8 @@ public sealed partial class SceneStore : ISceneBackend
     // change re-read). Scroll transform rounding and recorder-side self-blur support geometry share it so both land on
     // the same physical grid while their logical offsets/bounds remain float.
     public float DeviceScale = 1f;
+    /// <summary>The host's frame number for text measures (<see cref="TextMeasureEntry.Stamp"/>), advanced once per frame before its layout.</summary>
+    public int TextMeasureStamp;
 
     // topology (int indices; 0 = none)
     private int[] _parent, _firstChild, _lastChild, _prevSib, _nextSib, _childCount;
@@ -168,6 +170,8 @@ public sealed partial class SceneStore : ISceneBackend
     // Optional rich-paint side-tables (O(decorated nodes), keyed by node index): eased interaction, shadow, gradient, acrylic.
     private readonly ColdSlab<InteractionAnim> _interact = new();   // GEN-17 (wired)
     private readonly ColdSlab<ShadowSpec> _shadows = new();   // GEN-17 (wired): dense slab, not Dictionary
+    private readonly ColdSlab<CornerMorph> _cornerMorphs = new();   // the connected navigation flyer's radius by presented size
+    private readonly ColdSlab<NodeHandle> _mirrors = new();         // an overlay that draws another node's subtree (a whole-picture flyer)
     private readonly ColdSlab<ArcSpec> _arcs = new();
     private readonly ColdSlab<PolylineStrokeSpec> _polylines = new();   // GEN-17 (wired)
     private readonly ColdSlab<PathSpec> _paths = new();   // GEN-17 (wired) — VisualKind.Path's geometry/fill/stroke
@@ -568,6 +572,8 @@ public sealed partial class SceneStore : ISceneBackend
         if ((flags & NodeFlags.SparsePaint) != 0)
         {
             _shadows.Remove(idx);
+            _cornerMorphs.Remove(idx);
+            _mirrors.Remove(idx);
             _arcs.Remove(idx);
             _polylines.Remove(idx);
             _paths.Remove(idx);
@@ -615,6 +621,7 @@ public sealed partial class SceneStore : ISceneBackend
         if (_dropSpotlightRoots.Count != 0) _dropSpotlightRoots.Remove(idx);
         if (_dropSpotlightOver == node) _dropSpotlightOver = NodeHandle.Null;
         if (_gestureSubs.Count != 0) _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)
+        if (_holds.Count != 0) _holds.Remove(idx);               // BoxEl.OnHold side table
         if (DragGhost == node) { DragGhost = NodeHandle.Null; DragGhostBackplate = null; }   // a freed ghost must not linger in the recorder's top band
         if (DragOverlay == node) DragOverlay = NodeHandle.Null;   // …nor a freed preview-layer root in the overlay band
         if ((flags & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
@@ -2229,6 +2236,30 @@ public sealed partial class SceneStore : ISceneBackend
     public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGet((int)h.Raw.Index, out s);
     public void ClearShadow(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_shadows.Contains(idx)) return; _shadows.Remove(idx); MarkRecordDirty(idx); }
 
+    /// <summary>Draw this node's corners by its presented size (<see cref="CornerMorph"/>) instead of <see cref="NodePaint.Corners"/>.</summary>
+    public void SetCornerMorph(NodeHandle h, in CornerMorph m)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint | NodeFlags.PaintDirty;
+        _cornerMorphs.GetOrAdd(idx) = m;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetCornerMorph(NodeHandle h, out CornerMorph m) => _cornerMorphs.TryGet((int)h.Raw.Index, out m);
+    public void ClearCornerMorph(NodeHandle h) { int idx = (int)h.Raw.Index; if (!_cornerMorphs.Contains(idx)) return; _cornerMorphs.Remove(idx); _flags[idx] |= NodeFlags.PaintDirty; MarkRecordDirty(idx); }
+
+    /// <summary>An OVERLAY node (<see cref="AddOverlay"/>) that also draws <paramref name="target"/>'s subtree, scaled from the target's
+    /// own size into the overlay's presented rect (a connected navigation flyer carrying a generated cover: a gradient, a glyph, a
+    /// mosaic). The target draws even while its own Visible flag is cleared (the flight hides it in place) and while it is parked
+    /// off the live tree: the recording snapshot captures its subtree beside the overlays.</summary>
+    public void SetMirror(NodeHandle overlay, NodeHandle target)
+    {
+        int idx = (int)overlay.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint | NodeFlags.PaintDirty;
+        _mirrors.GetOrAdd(idx) = target;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetMirror(NodeHandle h, out NodeHandle target) => _mirrors.TryGet((int)h.Raw.Index, out target);
+
     public void SetArc(NodeHandle h, in ArcSpec a)
     {
         int idx = (int)h.Raw.Index;
@@ -2658,6 +2689,31 @@ public sealed partial class SceneStore : ISceneBackend
         _dropSpotlightActive = false;
     }
 
+    // ── BoxEl.Hold / OnHold / OnHoldReleased (pinned Home): a sparse side table, only holding nodes have a row ──
+    private readonly Dictionary<int, HoldDecl> _holds = new();
+
+    /// <summary>Install or clear a node's press-and-hold declaration (the reconciler, from <c>BoxEl.OnHold</c>). Sets or clears
+    /// <see cref="InteractionInfo.HoldBit"/>.</summary>
+    public void SetHold(NodeHandle h, HoldSpec? spec, Action<HoldEventArgs>? onHold, Action<HoldEventArgs>? onReleased)
+    {
+        int idx = LiveIndex(h);
+        if (onHold is null)
+        {
+            if (_holds.Count != 0) _holds.Remove(idx);
+            _interaction[idx].HandlerMask &= ~InteractionInfo.HoldBit;
+            return;
+        }
+        _holds[idx] = new HoldDecl(spec ?? new HoldSpec(), onHold, onReleased);
+        _interaction[idx].HandlerMask |= InteractionInfo.HoldBit;
+    }
+
+    /// <summary>The node's hold declaration (false when it has none or the handle is stale).</summary>
+    public bool TryGetHold(NodeHandle h, out HoldDecl decl)
+    {
+        decl = default;
+        return _holds.Count != 0 && !h.IsNull && IsLive(h) && _holds.TryGetValue((int)h.Raw.Index, out decl);
+    }
+
     // ── UseGesture subscriptions (input-a11y.md §13; the Hooks⇄Input seam) ──────────────────────────────────────
     /// <summary>Cheap census: any node in the scene declared a <c>UseGesture</c> hook (lets the dispatcher skip the
     /// gesture-routing probe entirely when no component subscribes — the common case).</summary>
@@ -2811,6 +2867,28 @@ public sealed partial class SceneStore : ISceneBackend
     /// Zero-alloc.</summary>
     public RectF AbsoluteTransformedRect(NodeHandle h)
         => AbsoluteTransformedRect(h, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
+
+    /// <summary><paramref name="rect"/> (window DIP) cut by every clipping ancestor of <paramref name="node"/> as it is PRESENTED now: an
+    /// ancestor's presented extent (<c>PresentedW</c>/<c>PresentedH</c>, a <see cref="SizeMode.Reveal"/> row easing it) mapped through its
+    /// full transform. What a composited surface placed outside the UI back buffer (a video visual) must clip itself to, since no scissor the
+    /// UI draws with reaches it. Zero-alloc.</summary>
+    public RectF ClipToClippingAncestors(NodeHandle node, RectF rect)
+    {
+        for (NodeHandle p = Parent(node); !p.IsNull && IsLive(p); p = Parent(p))
+        {
+            if ((Flags(p) & NodeFlags.ClipsToBounds) == 0) continue;
+            ref NodePaint pp = ref Paint(p);
+            RectF lb = Bounds(p);
+            float cw = float.IsNaN(pp.PresentedW) ? lb.W : pp.PresentedW;
+            float ch = float.IsNaN(pp.PresentedH) ? lb.H : pp.PresentedH;
+            RectF c = AbsoluteTransformedRect(p, cw, ch);
+            float x0 = MathF.Max(rect.X, c.X), y0 = MathF.Max(rect.Y, c.Y);
+            float x1 = MathF.Min(rect.X + rect.W, c.X + c.W), y1 = MathF.Min(rect.Y + rect.H, c.Y + c.H);
+            rect = new RectF(x0, y0, MathF.Max(0f, x1 - x0), MathF.Max(0f, y1 - y0));
+            if (rect.W <= 0f || rect.H <= 0f) return rect;
+        }
+        return rect;
+    }
 
     /// <summary><see cref="AbsoluteTransformedRect(NodeHandle)"/> for an explicit LOCAL size instead of the node's laid-out
     /// W/H: a <see cref="SizeMode.Reveal"/> ancestor presents <c>PresentedW</c>/<c>PresentedH</c> while its bounds stay

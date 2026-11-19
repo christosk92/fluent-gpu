@@ -260,6 +260,16 @@ public sealed partial class AnimEngine
         if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, rest.ScaleX, dyn, initial: rest.ScaleX * e.Sx, delayMs: delay);
         if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, rest.ScaleY, dyn, initial: rest.ScaleY * e.Sy, delayMs: delay);
         if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, rest.Blur, dyn, initial: rest.Blur + e.Blur, delayMs: delay);
+        // From another size, through layout: only a node whose transition sizes it by relayout and whose size is declared (the row eases the
+        // declared value, and a later re-declaration re-aims it: RecordDeclaredSize).
+        if ((e.Dw != 0f || e.Dh != 0f) && spec.Size == SizeMode.Relayout && (spec.Channels & TransitionChannels.Size) != 0 && _scene.IsLive(node))
+        {
+            ref LayoutInput li = ref _scene.Layout(node);
+            bool seeded = false;
+            if (e.Dw != 0f && float.IsFinite(li.Width) && li.Width + e.Dw > 0f) { RelayoutSize(node, AnimChannel.SizeW, li.Width + e.Dw, li.Width, dyn, delay); seeded = true; }
+            if (e.Dh != 0f && float.IsFinite(li.Height) && li.Height + e.Dh > 0f) { RelayoutSize(node, AnimChannel.SizeH, li.Height + e.Dh, li.Height, dyn, delay); seeded = true; }
+            if (seeded) _scene.Mark(node, NodeFlags.Relayouting);
+        }
         MarkStartPending(node);
     }
 
@@ -410,6 +420,26 @@ public sealed partial class AnimEngine
                     break;
             }
         }
+        // ONE CLOCK PER COMMIT for springs. A spring already in flight is re-aimed without a seed-frame hold (it keeps moving: Spring,
+        // ReframePosition), while a fresh seed held its first frame, so a commit that re-aims some rows and starts others ran them one frame
+        // apart. Rows that must add up (the widths and positions of a row of tiles, a picture centred in a resizing box) then drifted by a
+        // frame of motion: a quick hover sweep opened 4 DIP gaps between song tiles. The fresh spring rows of a projection advance from
+        // this commit like the re-aimed ones (their first frame is the first small step from rest, never a jump).
+        if (dyn.Kind == DynamicsKind.Spring) StartWithCommit(node);
+    }
+
+    /// <summary>Clear the seed-frame hold on <paramref name="node"/>'s fresh projection rows (translate, scale, presented size): see the end of
+    /// <see cref="AnimateBounds(NodeHandle, in RectF, in RectF, in LayoutTransition, bool)"/>. Allocation-free.</summary>
+    private void StartWithCommit(NodeHandle node)
+    {
+        for (int s = _slab.HeadOnNode((int)node.Raw.Index); s >= 0; s = _slab.At(s).NextOnNode)
+        {
+            ref AnimValue r = ref _slab.At(s);
+            if (!r.Has(AnimFlags.JustSeeded) || r.Has(AnimFlags.StartPending) || r.Kind != GenKind.Spring) continue;
+            if (r.Channel is AnimChannel.TranslateX or AnimChannel.TranslateY or AnimChannel.ScaleX or AnimChannel.ScaleY
+                or AnimChannel.SizeW or AnimChannel.SizeH)
+                r.Flags &= ~AnimFlags.JustSeeded;
+        }
     }
 
     // Position FLIP. Spring: shift a running spring's frame by the layout delta (keep velocity — analytical rebase),
@@ -476,6 +506,50 @@ public sealed partial class AnimEngine
                 Animate(node, ch, cur + delta, rest, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
             }
         }
+    }
+
+    /// <summary>Shift where a FLIP's translate row seeded THIS FRAME starts by <paramref name="delta"/>, its rest kept, and pose the node there on
+    /// this frame: the row holds its node <paramref name="delta"/> further from its layout place and glides home over the time it has. The scroll
+    /// anchoring's partner (the host knows which rows are fresh: the nodes its projection pass moved this frame): a scroller whose offset the
+    /// host shifts under a FLIP hold would carry the held node with the content, so the hold takes the shift back and the node starts where it
+    /// was drawn. False when the node has no such row (a driven, keyframed, additive or parked row, none). Allocation-free.</summary>
+    internal bool ShiftHold(NodeHandle node, AnimChannel ch, float delta)
+    {
+        int ex = Find(node, ch);
+        if (ex < 0) return false;
+        ref AnimValue r = ref _slab.At(ex);
+        if (r.Has(AnimFlags.Done) || r.Has(AnimFlags.Driven) || r.Has(AnimFlags.Parked) || r.Has(AnimFlags.Additive)) return false;
+        if (!TryGetTransition(node, out LayoutTransition spec)) return false;
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if (r.Kind == GenKind.Spring)
+        {
+            var sp = SpringParams.FromResponse(dyn.Response, dyn.DampingRatio);
+            float uiBase = r.Position;
+            r.Position += delta;
+            r.Gen = Generators.BakeSpring(in sp, x0: r.Position - r.To, v0: r.Velocity);
+            r.ElapsedMs = 0f;
+            StampCompositorSeed(ex, newInstance: false, explicitFrom: true);
+            MarkSeedRelative(ex, uiBase);
+        }
+        else if (r.Kind is GenKind.Eased or GenKind.Keyframes)   // Animate bakes a two-point tween as keyframes
+        {
+            float start = r.Position + delta, to = r.To, pendingDelay = r.DelayRemainingMs;
+            float remaining = MathF.Max(1f, r.Gen.DurationMs - r.ElapsedMs);
+            Animate(node, ch, start, to, remaining, dyn.Easing, delayMs: pendingDelay);
+            ex = Find(node, ch);
+            if (ex < 0) return false;
+            _slab.At(ex).Flags &= ~AnimFlags.JustSeeded;   // this frame was its seed frame: the next tick moves it
+        }
+        else return false;
+        // This frame's pose: the tick has folded the row already.
+        ref AnimValue now = ref _slab.At(ex);
+        if (!(RenderOwnsCompositor && IsCompositorRow(in now)))
+        {
+            Accum acc = Accum.FromPaint(in _scene.Paint(node));
+            acc.Fold(ch, Posed(in now, now.Position, in _scene.Bounds(node), _scene.DeviceScale), replace: true);
+            Compose(node, in acc);
+        }
+        return true;
     }
 
     /// <summary>Re-aim every live presented-size REVEAL (SizeW / SizeH, not a Relayout's) whose node a re-solve that was no commit (a live reflow's
@@ -625,6 +699,33 @@ public sealed partial class AnimEngine
         r.Flags &= ~AnimFlags.JustSeeded;   // a re-aim keeps moving (as ReframePosition's retarget)
         MarkSeedRelative(s, uiBase);
         return true;
+    }
+
+    /// <summary>Move a live SizeMode.Relayout row by its target's change at once (<paramref name="to"/> - its target), keeping what is left of its own
+    /// motion: a tween eases that rest over the time it has left, a spring from the shifted value. Allocates only the re-seed's keyframes.</summary>
+    private void ShiftRelayout(NodeHandle node, AnimChannel ch, float to)
+    {
+        int ex = Find(node, ch);
+        if (ex < 0) return;
+        AnimValue cur = _slab.At(ex);   // copy: Animate/Spring may grow the slab's backing array
+        if (cur.Has(AnimFlags.Driven) || cur.Has(AnimFlags.Additive)) return;
+        float restore = cur.RestoreTo;
+        float shifted = cur.Position + (to - cur.To);
+        if (!TryGetTransition(node, out var spec)) spec = default;
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if (cur.Kind == GenKind.Spring)
+            Spring(node, ch, to, SpringParams.FromResponse(dyn.Kind == DynamicsKind.Spring ? dyn.Response : 0.30f,
+                dyn.Kind == DynamicsKind.Spring ? dyn.DampingRatio : 1f), initial: shifted);
+        else if (cur.Kind is GenKind.Eased or GenKind.Keyframes)
+            Animate(node, ch, shifted, to, MathF.Max(1f, cur.Gen.DurationMs - cur.ElapsedMs), dyn.Easing, delayMs: cur.DelayRemainingMs);
+        else return;
+        int s = Find(node, ch);
+        if (s < 0) return;
+        ref AnimValue r = ref _slab.At(s);
+        r.RestoreTo = restore;
+        r.Flags |= AnimFlags.RestoreLayout;
+        r.Flags &= ~AnimFlags.JustSeeded;
+        MarkSeedRelative(s, shifted);
     }
 
     /// <summary>A live SizeMode.Relayout row: its node, axis (SizeW / SizeH), target and the declared value its settle restores (NaN: auto).</summary>

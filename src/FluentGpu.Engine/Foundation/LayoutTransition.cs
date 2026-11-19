@@ -90,10 +90,13 @@ public readonly record struct TransitionDynamics(
 /// both are summed. Default 0f is today's behaviour (byte-identical). Ignored on exit (SeedExit does not read it).
 /// <c>SwapFamily</c> is the id <see cref="SwapFamilies.Declare"/> gave a theme's declared tree-swap cross-fade (0: none). The engine
 /// never reads it (the terminal animates the same either way); inspection does, to tell a declared swap of a genuinely different
-/// tree from any other fade.</summary>
+/// tree from any other fade.
+/// <c>Dw</c>/<c>Dh</c> (enter only) start a node whose transition sizes it through layout (<see cref="SizeMode.Relayout"/>) that much wider /
+/// taller than its declared size and ease it to that size: a node mounting where a re-flow moves its siblings from their previous boxes
+/// enters from its own previous box like them (a bento grid's tile realized by the re-pack that moved it into the window).</summary>
 public readonly record struct EnterExit(
     float Dx = 0f, float Dy = 0f, float Sx = 1f, float Sy = 1f, float Opacity = 1f, bool Active = false, float Blur = 0f,
-    float DelayMs = 0f, ushort SwapFamily = 0);
+    float DelayMs = 0f, ushort SwapFamily = 0, float Dw = 0f, float Dh = 0f);
 
 /// <summary>The registered swap families: the cross-fades a theme declares for a tree that is genuinely different on each side of a tier
 /// edge (a form swap: the old tree fades out over the new, keyed per family), so a remount under one is the design, not a rebuilt part.
@@ -168,7 +171,12 @@ public readonly record struct LayoutTransition(
     // A SizeMode.Reflow node clips to its bounds while its size animates (its content may still be arranged at the far size,
     // and would paint over its neighbours). True keeps painting its overflow: for content laid out AT the animated size that
     // draws outside its own box on purpose (a Chrome tab's flared selected plate, which overhangs the cell by its flares).
-    bool ReflowUnclipped = false)
+    bool ReflowUnclipped = false,
+    // This transition keeps animating while the window (or a splitter) is being resized. A resize lands every other FLIP on its layout so
+    // bounds track the drag; a box whose HEIGHT the width decides in steps (a grid that gains or loses a row as its columns change) opts in
+    // with a SizeMode.Reflow height, which runs through real layout every tick and so can never hold a stale size: it eases each step while
+    // the drag goes on, and everything after it rides the re-solve instead of jumping by the step.
+    bool AnimateDuringResize = false)
 {
     /// <summary>Translate-only reflow (the default for reordered / moved items). Springs.</summary>
     public static LayoutTransition Slide => new(TransitionChannels.Position, TransitionDynamics.Default);

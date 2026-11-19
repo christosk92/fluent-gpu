@@ -134,21 +134,23 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // were working set). Begun once per frame right after WaitForFrame, which is also the only point it may grow.
     private UploadArena? _uploadArena;
     private RoundRectPipeline? _rectPipe;
-    private readonly List<RectInstance> _rectInsts = new();
+    // The per-segment instance lists start at a working capacity (about 140 KB in all, once per device): the first frame that
+    // drew a kind (the first shadow, a segment's ninth rect) grew one mid-frame, on a steady animation frame of a swipe.
+    private readonly List<RectInstance> _rectInsts = new(256);
     private ShadowPipeline? _shadowPipe;
-    private readonly List<ShadowInstance> _shadowInsts = new();
+    private readonly List<ShadowInstance> _shadowInsts = new(64);
     private ArcPipeline? _arcPipe;
-    private readonly List<ArcInstance> _arcInsts = new();
+    private readonly List<ArcInstance> _arcInsts = new(64);
     private PolylineStrokePipeline? _polylinePipe;
-    private readonly List<PolylineStrokeInstance> _polylineInsts = new();
+    private readonly List<PolylineStrokeInstance> _polylineInsts = new(64);
     private GradientPipeline? _gradPipe;
-    private readonly List<GradientInstance> _gradInsts = new();
+    private readonly List<GradientInstance> _gradInsts = new(64);
     private PathPipeline? _pathPipe;
-    private readonly List<PathDrawItem> _pathDraws = new();
+    private readonly List<PathDrawItem> _pathDraws = new(64);
     private SeriesPipeline? _seriesPipe;
-    private readonly List<SeriesInstance> _seriesInsts = new();
+    private readonly List<SeriesInstance> _seriesInsts = new(16);
     private SpritePipeline? _spritePipe;
-    private readonly List<SpriteInstance> _spriteInsts = new();
+    private readonly List<SpriteInstance> _spriteInsts = new(64);
     private readonly List<RectF> _clipStack = new(16);
     // Tier-2 rounded clip (E9), parallel to _clipStack: the innermost rounded-box clip in effect (W <= 0 = none).
     // A rounded PushClip replaces it; a plain (rectangular) PushClip inherits the enclosing rounded clip — a reveal
@@ -174,7 +176,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private ImagePipeline? _imagePipe;
     private BakedBlurCompositor? _bakedBlur;
     private FluentGpu.Hosting.Threading.BakedBlurQueue? _bakedBlurQueue;
-    private readonly List<(ImageInstance inst, int imageId)> _imageDraws = new();
+    private readonly List<(ImageInstance inst, int imageId)> _imageDraws = new(128);
     private readonly List<ImageInstance> _imageRangeScratch = new(64);
     // Painter-order draw runs: a segment's non-glyph primitives in STREAM order (consecutive same-kind ops batched into
     // one draw), so a shadow correctly sits OVER the background drawn before it and UNDER the element it belongs to.
@@ -188,7 +190,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // balanced pairs, so a stream ends SrcOver. _blendBase is the replay's floor: a feedback trail whose fresh content
     // paints Additive (FeedbackSpec.Fresh) holds it, so a nested bracket's closing SetBlend(SrcOver) stays additive.
     private bool _blendAdditive, _blendBase;
-    private readonly List<(PrimKind Kind, int Count)> _runs = new();
+    private readonly List<(PrimKind Kind, int Count)> _runs = new(256);
     // Painter's-order guard for the glyph batch. RecordAll replays every glyph of a segment AFTER the segment's
     // non-glyph primitives ("text on top within a z-context"), which is only correct while nothing opaque is recorded
     // OVER text inside one segment. A modal plate over a page of text, a card fill over a list row's label in one
@@ -203,8 +205,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private int _frameImageCount;
     private int _frameImageSkipped;
     private int _frameImagesInFlight;   // draws that showed a placeholder (or prior pixels) for pixels still on a side queue or behind a held upload
-    private readonly List<GlyphInstance> _glyphInsts = new();
-    private readonly List<GradGlyphInstance> _gradGlyphInsts = new();   // sub-glyph karaoke wipe (active lyric line + glow)
+    private readonly List<GlyphInstance> _glyphInsts = new(1024);
+    private readonly List<GradGlyphInstance> _gradGlyphInsts = new(64);   // sub-glyph karaoke wipe (active lyric line + glow)
     private float _frameScale = 1f;
     private float _imageClockMs;
     private int _frameRectCount;
@@ -2126,8 +2128,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // Union a just-appended glyph run's transformed DIP box (plus its cull halo) into the pending-text box.
     private void NotePendingText(float x, float y, float w, float h, float m11, float m12, float m21, float m22, float dx, float dy, float halo)
     {
-        RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
-        l -= halo; t -= halo; r += halo; b += halo;
+        RepaintCull.Footprint(x, y, w, h, m11, m12, m21, m22, dx, dy, halo, out float l, out float t, out float r, out float b);
         if (!_pendTextAny) { _pendTextL = l; _pendTextT = t; _pendTextR = r; _pendTextB = b; _pendTextAny = true; return; }
         if (l < _pendTextL) _pendTextL = l;
         if (t < _pendTextT) _pendTextT = t;
@@ -2140,8 +2141,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void CoverPendingText(float x, float y, float w, float h, float m11, float m12, float m21, float m22, float dx, float dy, float halo)
     {
         if (!_pendTextAny) return;
-        RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
-        if (r + halo <= _pendTextL || l - halo >= _pendTextR || b + halo <= _pendTextT || t - halo >= _pendTextB) return;
+        RepaintCull.Footprint(x, y, w, h, m11, m12, m21, m22, dx, dy, halo, out float l, out float t, out float r, out float b);
+        if (r <= _pendTextL || l >= _pendTextR || b <= _pendTextT || t >= _pendTextB) return;
         _frameTextCoverFlushes++;
         FlushSegment(_streamLw, _streamLh);
     }
@@ -2814,8 +2815,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         float m11, float m12, float m21, float m22, float dx, float dy, float halo)
     {
         if (!_cullActive) return false;
-        RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
-        if (RepaintCull.Keep(l, t, r, b, halo, in _cullRect)) return false;
+        RepaintCull.Footprint(x, y, w, h, m11, m12, m21, m22, dx, dy, halo, out float l, out float t, out float r, out float b);
+        if (RepaintCull.Keep(l, t, r, b, 0f, in _cullRect)) return false;
         _rcCulledTally++;
         return true;
     }
@@ -2990,6 +2991,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// pool's retired queue, retire idle free scratch, release an idle stencil surface. Everything it frees is rebuilt on demand
     /// and only touches resources nothing has used for seconds, so nothing visible changes. Never waits on the GPU: a resource
     /// whose fence has not passed is simply looked at again soon (the returned delay).</summary>
+    /// <inheritdoc cref="IGpuDevice.TurnPresented"/>
+    public void TurnPresented() => _glyphs?.RestockQuadPool();
+
     public int TrimIdleResources(long nowMs)
     {
         if (_device == null) return -1;
@@ -5168,6 +5172,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// </summary>
     public byte[] CaptureBgra(out int width, out int height)
     {
+        byte[]? outp = null;
+        CaptureBgraCore(ref outp, out width, out height);
+        return outp!;
+    }
+
+    /// <summary><see cref="CaptureBgra(out int, out int)"/> into <paramref name="buffer"/> (width × height × 4 bytes, reused when it
+    /// is big enough, else replaced): a caller capturing many frames (the inspector's film) keeps ONE large buffer instead of a new
+    /// large-object-heap array per frame, whose churn ran full GCs on the frames being measured.</summary>
+    public void CaptureBgraInto(ref byte[]? buffer, out int width, out int height) => CaptureBgraCore(ref buffer, out width, out height);
+
+    private void CaptureBgraCore(ref byte[]? outp, out int width, out int height)
+    {
         AssertDeviceOwner();
         if (_primarySwapchain is null) throw new InvalidOperationException("CreateSwapchain must be called before CaptureBgra.");
         BeginTargetFrame(_primarySwapchain.Frame);
@@ -5226,7 +5242,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.ExecuteCommandLists(_queue, 1, (void**)&execList);   // GEN-COM (wired)
         WaitForGpu();
 
-        byte[] outp = new byte[(long)width * height * 4];
+        long need = (long)width * height * 4;
+        if (outp is null || outp.Length < need) outp = new byte[need];
         void* mapped;
         D3D12_RANGE rr = default; rr.Begin = 0; rr.End = (nuint)total;
         Check(readback->Map(0, &rr, &mapped), "capture.Map");
@@ -5241,7 +5258,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         D3D12MemoryDiagnostics.Release(readback, "Capture.Readback");
         readback->Release();
         EndTargetFrame();
-        return outp;
     }
 
     // ── Live resize: buffer headroom + source size ─────────────────────────────────────────────────────────────────
@@ -5257,6 +5273,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // SetSourceSize: DWM presents [0,0,W,H] of the buffer, no allocation, no wait, no released buffer. A lone change (maximize,
     // restore, snap, DPI hop) keeps the exact-size ResizeBuffers it always had, and the host trims a live resize's headroom once the
     // size has settled (TrimSizeHeadroom, AppHost.EnsureSize), so the resting memory is what it was.
+    // The swapchain follows the PUBLICATIONS, not the window: the render turn that presents a frame sizes it to the frame's own
+    // size first (AppHost.SubmitPresentOnRenderThread), so a frame one step behind a drag is shown at its size instead of dropped,
+    // and the resize mailbox only makes room ahead of it (Reserve), so a growing drag reallocates off the present.
     private const long LiveResizeWindowMs = 250;
     private const int ReallocOomRetries = 3;
 
@@ -5267,14 +5286,36 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (target.Disposed || (w == target.W && h == target.H)) return;
         if (target.BuildPending || target.BuildFailed) { target.W = w; target.H = h; return; }   // built at this size later
         long now = System.Diagnostics.Stopwatch.GetTimestamp();
-        // Popups (the WUC acrylic path sizes its visuals to the buffers) keep exact buffers.
-        bool live = !target.DesktopAcrylic && target.LastSizeChangeQpc != 0
-            && now - target.LastSizeChangeQpc < LiveResizeWindowMs * System.Diagnostics.Stopwatch.Frequency / 1000;
+        bool live = IsLiveResize(target, now);
         target.LastSizeChangeQpc = now;
         if (live && w <= target.BufW && h <= target.BufH && SetSourceSizeOnly(target, w, h, now)) return;
         uint bw = w, bh = h;
-        if (live) (bw, bh) = HeadroomSize(target, w, h);
+        if (live && !target.SourceSizeUnsupported) (bw, bh) = HeadroomSize(target, w, h);
         ReallocateBuffers(target, w, h, bw, bh);
+    }
+
+    /// <summary>A size request in quick succession of the previous one (a drag, a programmatic animation, the mini player's edge): the
+    /// steps that fit the buffers are a source-size change, and a reallocation takes headroom. Popups (the WUC acrylic path sizes its
+    /// visuals to the buffers) and a swap chain that refused a source size keep exact buffers.</summary>
+    private static bool IsLiveResize(D3D12Swapchain target, long now)
+        => !target.DesktopAcrylic && !target.SourceSizeUnsupported && target.LastSizeChangeQpc != 0
+           && now - target.LastSizeChangeQpc < LiveResizeWindowMs * System.Diagnostics.Stopwatch.Frequency / 1000;
+
+    /// <summary><see cref="ISwapchain.Reserve"/>: grow the buffers to hold <paramref name="w"/> x <paramref name="h"/> ahead of the frame
+    /// laid out at that size, still showing the current source size, so a growing drag reallocates off the turn that presents it.
+    /// Never shrinks them (a frame published at an earlier, larger request may still be on its way). Exact on a lone request (a
+    /// maximize reallocates once: the Resize of its frame then fits); with headroom when live. A grow counts as a size change for the
+    /// live-resize detector, so the Resize that follows it and the next request in the drag are live. Nothing when the buffers already
+    /// hold the size, or the target keeps exact buffers.</summary>
+    internal void Reserve(D3D12Swapchain target, uint w, uint h)
+    {
+        AssertDeviceOwner();
+        if (target.Disposed || target.BuildPending || target.BuildFailed || target.DesktopAcrylic || target.SourceSizeUnsupported) return;
+        if (w <= target.BufW && h <= target.BufH) return;
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        (uint bw, uint bh) = IsLiveResize(target, now) ? HeadroomSize(target, w, h) : (w, h);
+        target.LastSizeChangeQpc = now;
+        ReallocateBuffers(target, target.W, target.H, Math.Max(bw, target.BufW), Math.Max(bh, target.BufH));
     }
 
     /// <summary>Drop a live resize's headroom: reallocate the buffers at exactly the presented size. The host calls it once the size
@@ -5291,20 +5332,29 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// presented with). The next frame composites and presents whole (the epoch bump), as after a reallocation.</summary>
     private bool SetSourceSizeOnly(D3D12Swapchain target, uint w, uint h, long t0)
     {
-        int hr = (int)target.SwapChain->SetSourceSize(w, h);
-        if (hr < 0)
-        {
-            Diag.Line($"[window.resize] SetSourceSize({w}x{h}) on {target.BufW}x{target.BufH} buffers failed: 0x{(uint)hr:X8}; reallocating");
-            return false;
-        }
+        if (!TrySetSourceSize(target, w, h)) return false;
         target.W = w; target.H = h;
         ApplySourceScale(target);
         target.PpEpoch++;
         target.SourceSizeCount++;
         target.NoteBufferState();
+        target.Backdrop?.SetBounds(w, h);
         target.LastResizeWaitGpuMs = 0;
         target.LastResizeBuffersMs = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         return true;
+    }
+
+    /// <summary>The source size the compositor shows of the back buffers (IDXGISwapChain2.SetSourceSize). False when the swap chain
+    /// refuses it: the target is marked <see cref="D3D12Swapchain.SourceSizeUnsupported"/>, and from then on its buffers follow the
+    /// window exactly (no headroom, no Reserve).</summary>
+    private static bool TrySetSourceSize(D3D12Swapchain target, uint w, uint h)
+    {
+        if (target.SourceSizeUnsupported) return false;
+        int hr = (int)target.SwapChain->SetSourceSize(w, h);
+        if (hr >= 0) return true;
+        target.SourceSizeUnsupported = true;
+        Diag.Line($"[window.resize] SetSourceSize({w}x{h}) on {target.BufW}x{target.BufH} buffers failed: 0x{(uint)hr:X8} target={target.Ordinal}; its buffers follow the window exactly from now on");
+        return false;
     }
 
     /// <summary>A COMPOSITION swapchain (the DComp / Mica path) stretches its source region over the whole buffer size in its
@@ -5392,11 +5442,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.BufW = bw; target.BufH = bh;
         target.ReallocCount++;
         target.PpEpoch++;   // new buffers hold nothing: the next frame composites and presents whole
+        // ResizeBuffers resets the source region to the whole buffer; a buffer with headroom presents only W x H of it. A swap chain
+        // that refuses the source size gets buffers of the window's size after all (and keeps exact buffers from then on).
+        if ((bw != w || bh != h) && !TrySetSourceSize(target, w, h))
+        {
+            Check(target.SwapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, target.SwapChainFlags), "ResizeBuffers");
+            target.BufW = w; target.BufH = h;
+            target.ReallocCount++;
+        }
         target.W = w; target.H = h;
         CreateRtvs(target);
-        // ResizeBuffers resets the source region to the whole buffer; a buffer with headroom presents only W x H of it.
-        if (target.BufW != w || target.BufH != h) Check(target.SwapChain->SetSourceSize(w, h), "SetSourceSize");
-        ApplySourceScale(target);
+        ApplySourceScale(target);   // a composition swap chain's counter-scale for the new buffers (identity at exact buffers)
         target.NoteBufferState();
         target.Backdrop?.SetBounds(w, h);   // resize the WUC backdrop/content visuals to match
         long resizeT2 = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -5595,7 +5651,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // values the new fence (restarting at 0) would not reach for a long time: drop them, restart their sequences.
         ReleaseValidatorsForRecovery();
         _feedbackTrails.Clear(); Volatile.Write(ref _feedbackLive, 0);   // F6: trails restart empty after a device loss
-        _groupMemos.Clear();   // the surfaces they describe went with the pool
+        _groupMemoCount = 0;   // the surfaces they describe went with the pool (the memos stay, unused)
         ReleaseGroupRepairValidation();
         _compositor?.Dispose(); _compositor = null;
         _imageTextures?.Dispose(); _imageTextures = null;
@@ -5811,7 +5867,8 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     // headroom, so a step that fits is a SetSourceSize instead of a ResizeBuffers. Render thread.
     internal uint W, H;
     internal uint BufW, BufH;
-    internal long LastSizeChangeQpc;    // the last Resize that changed W x H (the live-resize detector, D3D12Device.Resize)
+    internal bool SourceSizeUnsupported;   // SetSourceSize failed once: every resize reallocates at the exact size (no headroom, no Reserve)
+    internal long LastSizeChangeQpc;    // the last size request: a Resize that changed W x H, or a Reserve that grew the buffers (D3D12Device.IsLiveResize)
     internal int ReallocCount;          // ResizeBuffers calls since creation (the [window.resize] line)
     internal int SourceSizeCount;       // size changes served by SetSourceSize alone
     internal long FailedReallocLogQpc;  // the failed-reallocation line's rate limit
@@ -6127,6 +6184,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     }
 
     public void Resize(Size2 px) => Device.Resize(this, (uint)px.Width, (uint)px.Height);
+    public void Reserve(Size2 px) => Device.Reserve(this, (uint)px.Width, (uint)px.Height);
     public void Present() => Device.Present(this);
     public bool PresentNoWait()
     {

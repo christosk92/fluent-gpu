@@ -138,6 +138,7 @@ public sealed unsafe partial class D3D12Device
         Mix(ref h, (ulong)(uint)it.Feather.GetHashCode() << 32 | (uint)it.Feather2.GetHashCode());
         if (it.Kind == CompositeKind.Backdrop) Mix(ref h, (ulong)(uint)it.Acrylic.GetHashCode());
         Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.SubPxX) << 32 | BitConverter.SingleToUInt32Bits(it.SubPxY));
+        Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.SlideScaleX) << 32 | BitConverter.SingleToUInt32Bits(it.SlideScaleY));
         return h;
     }
 
@@ -319,16 +320,14 @@ public sealed unsafe partial class D3D12Device
                     {
                         PixelRect rg = _itemRegion[i];
                         // a surface drawn between whole pixels (a posed self-blur, a slide group: CompositeItem.SubPxX) lands that much
-                        // further and reaches one pixel further on its leading sides
-                        if (it.SubPxX != 0f || it.SubPxY != 0f)
-                            rg = new PixelRect((int)MathF.Floor(rg.Left + it.SubPxX) - 1, (int)MathF.Floor(rg.Top + it.SubPxY) - 1,
-                                (int)MathF.Ceiling(rg.Right + it.SubPxX) + 1, (int)MathF.Ceiling(rg.Bottom + it.SubPxY) + 1);
+                        // further and reaches one pixel further on its leading sides; a scaled slide group lands where its pose maps it
+                        rg = GroupCacheKey.Drawn(in it, in rg);
                         foot = PpIntersect(in rg, in sci);
                     }
                     int end = _itemChunkStart[i] + _itemChunkCount[i];
                     for (int c = _itemChunkStart[i]; c < end; c++) foot = PpUnion(in foot, PpIntersect(_chunks[c].Rect, in sci));
                     ulong s = sig;
-                    if (it.Kind == CompositeKind.Group && it.BlurSigma <= 0f && TileDamage.PrecisePresent && it.SubPxX == 0f && it.SubPxY == 0f)
+                    if (it.Kind == CompositeKind.Group && it.BlurSigma <= 0f && TileDamage.PrecisePresent && !it.Displaced)
                     {
                         // An unblurred group composites each pixel from its members' pixels at that pixel (alpha, feather,
                         // rounded clip): what changed inside it is exactly what its members' own entries dirty, so its

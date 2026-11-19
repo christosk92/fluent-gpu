@@ -55,7 +55,9 @@ public sealed unsafe partial class D3D12Device
     private readonly record struct DirectChunk(int Surface, PixelRect Rect);
     private DirectChunk[] _chunks = new DirectChunk[32];
     private int _chunkCount;
-    private D3D12_RESOURCE_BARRIER[] _tileBarriers = new D3D12_RESOURCE_BARRIER[64];
+    // Sized for a burst of new tiles (a page sliding in rasters a few dozen at once): growing it on the frame the burst arrives
+    // allocated on a steady animation frame. Beyond, it still doubles (once).
+    private D3D12_RESOURCE_BARRIER[] _tileBarriers = new D3D12_RESOURCE_BARRIER[512];
     private bool _renderPassesLogged;
 
     /// <summary>Retained-tile census of the last composite (render thread writes, diagnostics read).</summary>
@@ -324,6 +326,7 @@ public sealed unsafe partial class D3D12Device
         _glyphs!.SyncBodyFontNow();   // a body-font change evicts every run: the skip below must already see it
         int epoch = _glyphs.RunCacheEpoch;
         PrepareCompositeRows(in frame, stamp, allDirect, epoch, skipPrepared: true);
+        if (!frame.GlyphPrep.IsEmpty) PrepareGlyphs(frame.GlyphPrep);   // culled text, shaped on the frame it was recorded (never drawn)
         if (_glyphs.RunCacheEpoch != epoch)
             PrepareCompositeRows(in frame, -stamp, allDirect, _glyphs.RunCacheEpoch, skipPrepared: false);   // runs left mid-pass
     }
@@ -386,8 +389,8 @@ public sealed unsafe partial class D3D12Device
         Array.Clear(_rastersOfRow, 0, frame.Slices.Length);
         for (int i = 0; i < rasters.Length; i++) { int rr = RowOf(rasters[i].Key.SliceId); if (rr >= 0) _rastersOfRow[rr]++; }
         ulong fence = _fenceValue + 1;
-        if (_tileBarriers.Length < rasters.Length * 2) _tileBarriers = new D3D12_RESOURCE_BARRIER[rasters.Length * 2];
-        if (_tileInits.Length < rasters.Length) _tileInits = new nint[rasters.Length * 2];
+        if (_tileBarriers.Length < rasters.Length * 2) _tileBarriers = new D3D12_RESOURCE_BARRIER[(int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)rasters.Length * 2)];
+        if (_tileInits.Length < rasters.Length) _tileInits = new nint[(int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)rasters.Length)];
         int nb = 0, ni = 0;
         for (int i = 0; i < rasters.Length; i++)
         {
@@ -520,7 +523,7 @@ public sealed unsafe partial class D3D12Device
         return b;
     }
 
-    private nint[] _tileInits = new nint[16];   // tiles placed this raster batch (aliased in, then discarded)
+    private nint[] _tileInits = new nint[256];   // tiles placed this raster batch (aliased in, then discarded)
 
     private void FlushBarriers(int n)
     {
@@ -1203,7 +1206,17 @@ public sealed unsafe partial class D3D12Device
         public int Turn;
     }
 
-    private readonly List<GroupMemo> _groupMemos = new(MaxGroupMemos);
+    // Every memo exists from the start (a composite turn never allocates: a receding tile's group mints a new shape each frame of its motion,
+    // and minting the first eight memos in those frames allocated 456 bytes a frame, SKILL rule 7); _groupMemoCount of them are in use.
+    private readonly GroupMemo[] _groupMemos = NewGroupMemoPool();
+    private int _groupMemoCount;
+
+    private static GroupMemo[] NewGroupMemoPool()
+    {
+        var pool = new GroupMemo[MaxGroupMemos];
+        for (int k = 0; k < pool.Length; k++) pool[k] = new GroupMemo();
+        return pool;
+    }
     private GroupEntry[] _groupEntries = new GroupEntry[16];
     private readonly PixelRect[] _groupDirty = new PixelRect[GroupDelta.MaxDirtyRects];
     private PixelRect _drawClip;
@@ -1215,7 +1228,7 @@ public sealed unsafe partial class D3D12Device
 
     private GroupMemo? FindGroupMemo(ulong shape)
     {
-        for (int k = 0; k < _groupMemos.Count; k++) if (_groupMemos[k].Shape == shape) return _groupMemos[k];
+        for (int k = 0; k < _groupMemoCount; k++) if (_groupMemos[k].Shape == shape) return _groupMemos[k];
         return null;
     }
 
@@ -1223,17 +1236,17 @@ public sealed unsafe partial class D3D12Device
     /// lines move mints a new shape every turn — recycling keeps that allocation-free).</summary>
     private const int MaxGroupMemos = 8;
 
-    /// <summary>A memo for a shape seen for the first time: a fresh one while fewer than <see cref="MaxGroupMemos"/> exist,
-    /// else the least recently used one, recycled.</summary>
+    /// <summary>A memo for a shape seen for the first time: an unused one of the pool while fewer than <see cref="MaxGroupMemos"/> are in use,
+    /// else the least recently used one, recycled (never an allocation).</summary>
     private GroupMemo NewGroupMemo(ulong shape)
     {
         GroupMemo? memo = null;
-        if (_groupMemos.Count >= MaxGroupMemos)
+        if (_groupMemoCount >= MaxGroupMemos)
         {
             memo = _groupMemos[0];
-            for (int k = 1; k < _groupMemos.Count; k++) if (_groupMemos[k].Turn < memo.Turn) memo = _groupMemos[k];
+            for (int k = 1; k < _groupMemoCount; k++) if (_groupMemos[k].Turn < memo.Turn) memo = _groupMemos[k];
         }
-        else _groupMemos.Add(memo = new GroupMemo());
+        else memo = _groupMemos[_groupMemoCount++];
         memo.Shape = shape;
         memo.Count = 0;
         return memo;
@@ -1406,6 +1419,7 @@ public sealed unsafe partial class D3D12Device
             Mix(ref h, (ulong)(uint)it.Kind << 32 | (uint)it.SliceId);
             Mix(ref h, (ulong)(uint)(int)it.Transform.Dx << 32 | (uint)(int)it.Transform.Dy);
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.SubPxX) << 32 | BitConverter.SingleToUInt32Bits(it.SubPxY));   // a posed blur between pixels
+            Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.SlideScaleX) << 32 | BitConverter.SingleToUInt32Bits(it.SlideScaleY));   // a scaled slide group
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Alpha) << 32 | BitConverter.SingleToUInt32Bits(it.BlurSigma));
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Clip.X) << 32 | BitConverter.SingleToUInt32Bits(it.Clip.Y));
             Mix(ref h, (ulong)BitConverter.SingleToUInt32Bits(it.Clip.W) << 32 | BitConverter.SingleToUInt32Bits(it.Clip.H));
@@ -1651,16 +1665,19 @@ public sealed unsafe partial class D3D12Device
         PixelRect region = _itemRegion[i];
         ItemScissor(in it, ox, oy);
         int down = _itemDown[i];
-        if (it.SubPxX != 0f || it.SubPxY != 0f)
+        if (it.Displaced)
         {
-            // A posed self-blur between whole pixels (CompositeItem.SubPxX): its surface drawn that much further, bilinearly,
-            // clamped to the region it holds (a pooled scratch past it is not this blur's).
-            float fx = it.SubPxX, fy = it.SubPxY;
+            // A posed self-blur between whole pixels (CompositeItem.SubPxX), or a slide group at its pose (SubPx, and its slide
+            // scale: a page growing in or shrinking out): its surface drawn there, bilinearly, clamped to the region it holds (a
+            // pooled scratch past it is not this item's). A rest pixel p lands at p·scale + SubPx.
+            float sx = it.ScaleX, sy = it.ScaleY;
+            float x0 = region.Left * sx + it.SubPxX - ox, y0 = region.Top * sy + it.SubPxY - oy;
+            float x1 = region.Right * sx + it.SubPxX - ox, y1 = region.Bottom * sy + it.SubPxY - oy;
             float clampU = ((region.Right - region.Left) / (float)down - 0.5f) / _surfaces!.ScratchW(s);
             float clampV = ((region.Bottom - region.Top) / (float)down - 0.5f) / _surfaces.ScratchH(s);
-            DrawItemQuad(in it, region.Left - ox + fx, region.Top - oy + fy, region.Right - ox + fx, region.Bottom - oy + fy, ox, oy, feathers,
+            DrawItemQuad(in it, x0, y0, x1, y1, ox, oy, feathers,
                 it.BlendCopy == CompositeItem.BlendScreen ? SliceCompositor.Pso.SampleScreen : SliceCompositor.Pso.Sample, _surfaces.ScratchSrv(s),
-                sample: true, 1f / (down * _surfaces.ScratchW(s)), 1f / (down * _surfaces.ScratchH(s)), clampU, clampV);
+                sample: true, 1f / (down * sx * _surfaces.ScratchW(s)), 1f / (down * sy * _surfaces.ScratchH(s)), clampU, clampV);
         }
         else if (down <= 1)
             DrawItemQuad(in it, region.Left - ox, region.Top - oy, region.Right - ox, region.Bottom - oy, ox, oy, feathers,

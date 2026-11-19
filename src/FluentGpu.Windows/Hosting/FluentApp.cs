@@ -165,10 +165,24 @@ public static class FluentApp
     /// px without resizing or activating it. UI-thread only.</summary>
     public static void MoveWindowPx(float x, float y) => s_window?.MoveToPx(new Point2(x, y));
 
+    /// <summary>The main window never takes the foreground (<see cref="AppOptions.NoActivate"/>): an app's own "bring the window up"
+    /// paths (a tray restore, a deep link that wakes the window) show it without activating it and never call SetForegroundWindow.</summary>
+    public static bool NeverActivates => s_window is { IsClosed: false } w && w.NeverActivates;
+
     /// <summary>Resize the main window's client area to <paramref name="widthDip"/>×<paramref name="heightDip"/> DIP (the
     /// same raw-DPI rule <see cref="AppOptions.Width"/>/<see cref="AppOptions.Height"/> use; app zoom does not scale it).
     /// Works on a window that is not <see cref="AppOptions.Resizable"/>. UI-thread only.</summary>
     public static void ResizeWindow(float widthDip, float heightDip) => s_window?.SetClientSizeDip(widthDip, heightDip);
+
+    /// <summary>Resize the main window's client area to <paramref name="widthDip"/>x<paramref name="heightDip"/> DIP over
+    /// <paramref name="ms"/> through the window's own move/size loop, as a user's edge drag does, without moving the cursor or sending
+    /// input (Win32Window.DriveSizeLoop: WM_ENTERSIZEMOVE, eased SetWindowPos steps with the loop's messages dispatched between them,
+    /// WM_EXITSIZEMOVE). Starts on the next message pump and holds the frame loop for its length, as a real drag does. A diagnostic
+    /// driver's path into the modal-loop resize (the composited defer, the deferred tier commit); UI-thread only.</summary>
+    public static void ResizeWindowThroughSizeLoop(float widthDip, float heightDip, int ms)
+    {
+        if (s_window is { IsClosed: false } w) w.DriveSizeLoop(widthDip, heightDip, ms);
+    }
 
     internal static void QueueInput(in InputEvent e)
     {
@@ -405,7 +419,8 @@ public static class FluentApp
         ToolWindow: o.ToolWindow,
         Resizable: o.Resizable,
         InitialBoundsPx: o.InitialBoundsPx,
-        InitialMaximized: o.InitialMaximized);
+        InitialMaximized: o.InitialMaximized,
+        NoActivate: o.NoActivate);
 
     internal static void RunCore(Func<Component> root, AppOptions o, HarnessOptions h)
     {
@@ -1114,6 +1129,12 @@ public sealed record AppOptions
     /// the sign-in start of an app that lives in the notification area. Deciding WHEN to start hidden is the app's
     /// (only the startup activation, never a Start-menu click); the engine only honours it.</summary>
     public bool StartHidden { get; init; }
+
+    /// <summary>A window that never takes the foreground or the keyboard: a test run on a screen beside the person's work. Every show
+    /// is SW_SHOWNOACTIVATE, the window is WS_EX_NOACTIVATE (a click does not activate it; WS_EX_APPWINDOW keeps its taskbar
+    /// button), and an activation redirect (WM_COPYDATA from a second launch, a wavee:// verb) does not SetForegroundWindow.
+    /// Input reaches it only through <see cref="FluentAppHarness.QueueInput"/>. <see cref="FluentApp.NeverActivates"/> reads it back.</summary>
+    public bool NoActivate { get; init; }
 
     /// <summary>Keep the window hidden until its first frame has PRESENTED with <see cref="FirstFrameReady"/> true, then show it
     /// (EP8): the first thing the user sees is the final frame, with the OS material and dark attribute already applied. The same

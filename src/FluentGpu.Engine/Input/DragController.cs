@@ -203,15 +203,9 @@ public sealed class DragController
     public bool TryArm(NodeHandle pressTarget, Point2 abs, PointerKind kind, KeyModifiers mods, uint timestampMs)
     {
         if (_active || !_node.IsNull) return false;
-        for (var n = pressTarget; !n.IsNull; n = _scene.Parent(n))
+        var n = ArmTarget(_scene, pressTarget);
+        if (!n.IsNull)
         {
-            if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
-            uint mask = _scene.Interaction(n).HandlerMask;
-            if ((mask & InteractionInfo.DragBit) == 0)
-            {
-                if ((mask & InteractionInfo.BlocksDragArmBit) != 0) return false;   // barrier: no ancestor drag arms
-                continue;
-            }
             _node = n;
             _pressAbs = abs;
             _lastAbs = abs;
@@ -224,6 +218,28 @@ public sealed class DragController
             return true;
         }
         return false;
+    }
+
+    /// <summary>The node a press on <paramref name="pressTarget"/> arms: the nearest enabled draggable self-or-ancestor (a
+    /// <see cref="InteractionInfo.BlocksDragArmBit"/> node met first stops the walk: nothing arms), then, above it, the
+    /// outermost enabled draggable carrying <see cref="InteractionInfo.ClaimsDescendantDragBit"/> (a tile that takes the drag
+    /// of the rows inside it). Null when nothing arms. Shared by the mouse arm and the touch reorder enrollment. O(depth).</summary>
+    public static NodeHandle ArmTarget(SceneStore scene, NodeHandle pressTarget)
+    {
+        NodeHandle found = NodeHandle.Null;
+        for (var n = pressTarget; !n.IsNull; n = scene.Parent(n))
+        {
+            if (!scene.IsLive(n) || (scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            uint mask = scene.Interaction(n).HandlerMask;
+            if ((mask & InteractionInfo.DragBit) == 0)
+            {
+                if (found.IsNull && (mask & InteractionInfo.BlocksDragArmBit) != 0) return NodeHandle.Null;   // barrier: no ancestor drag arms
+                continue;
+            }
+            if (found.IsNull) found = n;
+            else if ((mask & InteractionInfo.ClaimsDescendantDragBit) != 0) found = n;
+        }
+        return found;
     }
 
     /// <summary>Pointer move while armed or active. Armed: crossing the drag box either PROMOTES (fires

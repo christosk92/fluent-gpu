@@ -162,6 +162,20 @@ public sealed class DragEventArgs
     public PointerKind Kind;
 }
 
+/// <summary>Press-and-hold timing for <c>BoxEl.Hold</c>: the dwell per pointer kind (<see cref="MouseMs"/> 0: the mouse does
+/// not hold), the slop the press must stay inside (DIP), and how long after the hold a move past the slop still promotes the
+/// node's own drag ("hold, then drag").</summary>
+public readonly record struct HoldSpec(float TouchMs = 500f, float MouseMs = 0f, float SlopDip = 8f, float DragWindowMs = 500f)
+{
+    /// <summary>The stock hold. A struct's <c>new HoldSpec()</c> skips the primary constructor's defaults: an <c>OnHold</c> without a
+    /// <c>Hold</c> spec got a 0 ms touch dwell, a 0 DIP slop and no drag window.</summary>
+    public HoldSpec() : this(500f, 0f, 8f, 500f) { }
+}
+
+/// <summary>A hold on a node (<c>BoxEl.OnHold</c> / <c>OnHoldReleased</c>): the press point in window space, the device and
+/// the node that holds the handler.</summary>
+public readonly record struct HoldEventArgs(Point2 Position, PointerKind Pointer, NodeHandle Node);
+
 /// <summary>How a context-menu request was raised (WinUI ContextRequestedEventArgs — the moral equivalent of
 /// <c>TryGetPosition</c>): a <see cref="Pointer"/>/<see cref="Hold"/> request carries a real point (open at it), a
 /// <see cref="Keyboard"/> request does NOT (WinUI TryGetPosition == false) so it anchors to the element rect instead.</summary>

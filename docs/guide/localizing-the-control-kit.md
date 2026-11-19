@@ -50,6 +50,11 @@ Localization.LoadFolder(Path.Combine(AppContext.BaseDirectory, "assets", "loc"))
 Localization.SetCulture("fr-FR");   // bumps the culture epoch → bound text re-resolves, no re-render
 ```
 
+`Loc.Get` resolves only through the active culture. To read one key from another loaded culture (a search index that
+matches English terms while the UI is French), use `Loc.TryGetIn("en-US", key, out string? text)`: it consults that
+culture's table and its parent (`fr-FR → fr`), never the default culture or the neutral floor, returns the raw template
+(no formatting, no pseudo transform), and returns false when the culture or the key is missing.
+
 The full key list is discoverable from `FluentGpu.Controls.Strings.*` in your IDE (or read
 `src/FluentGpu.Controls/assets/loc/en-US.json`).
 

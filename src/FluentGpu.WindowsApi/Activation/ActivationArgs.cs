@@ -75,11 +75,13 @@ public readonly record struct ActivationArgs(ActivationKind Kind, string Argumen
     /// <c>AppInstance.cpp:485-491</c>). Only <see cref="ActivationKind.StartupTask"/> is taken from the platform today;
     /// <see cref="ActivationKind.Protocol"/>/<see cref="ActivationKind.File"/> still come from the command line.
     /// Live-validate on the target OS build before shipping packaged (docs/plans/windowsapi-implementation-research.md §5 #4).
-    /// </para></summary>
-    public static ActivationArgs FromCurrentProcess(string scheme)
+    /// </para>
+    /// <para><paramref name="valueOptions"/>: the app's switches that take a value (<c>--profile &lt;dir&gt;</c>): each one's
+    /// value is the switch's, never a deep link or a file to open (<see cref="Classify(ReadOnlySpan{string}, string, ReadOnlySpan{string})"/>).</para></summary>
+    public static ActivationArgs FromCurrentProcess(string scheme, params string[] valueOptions)
     {
         string[] argv = Environment.GetCommandLineArgs();
-        ActivationArgs commandLine = Classify(argv.AsSpan(argv.Length > 0 ? 1 : 0), scheme);
+        ActivationArgs commandLine = Classify(argv.AsSpan(argv.Length > 0 ? 1 : 0), scheme, valueOptions);
         if (commandLine.Kind != ActivationKind.Launch || !FluentGpu.WindowsApi.Packaging.PackageIdentity.IsPackaged)
             return commandLine;
         return PlatformActivation.TryRead(out int platformKind, out string taskId)
@@ -110,8 +112,28 @@ public readonly record struct ActivationArgs(ActivationKind Kind, string Argumen
     /// (4) otherwise <see cref="ActivationKind.Launch"/>. Scheme match is case-insensitive (URI schemes are
     /// case-insensitive, RFC 3986 §3.1).
     /// </summary>
-    public static ActivationArgs Classify(ReadOnlySpan<string> argv, string scheme)
+    public static ActivationArgs Classify(ReadOnlySpan<string> argv, string scheme) => Classify(argv, scheme, default);
+
+    /// <summary>
+    /// As <see cref="Classify(ReadOnlySpan{string}, string)"/>, after dropping the value that follows each of
+    /// <paramref name="valueOptions"/> (exact, ordinal): <c>--profile C:\p</c> names a profile folder, which the file rule
+    /// would otherwise take for a file the shell handed over (and a deep link door then refuses). The switch tokens
+    /// themselves start with '-' and are skipped by the rules already.
+    /// </summary>
+    public static ActivationArgs Classify(ReadOnlySpan<string> argv, string scheme, ReadOnlySpan<string> valueOptions)
     {
+        if (!valueOptions.IsEmpty)
+        {
+            var kept = new List<string>(argv.Length);
+            for (int i = 0; i < argv.Length; i++)
+            {
+                kept.Add(argv[i]);
+                foreach (string option in valueOptions)
+                    if (string.Equals(argv[i], option, StringComparison.Ordinal)) { i++; break; }
+            }
+            argv = kept.ToArray();
+        }
+
         // (1) Toast relaunch sentinel — recognized regardless of position, the prefix is stripped.
         foreach (string a in argv)
         {

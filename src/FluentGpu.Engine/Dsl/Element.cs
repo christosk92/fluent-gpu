@@ -335,6 +335,18 @@ public sealed record BoxEl : Element
     /// <summary>The drag aborted (Escape / pointer-capture loss / window blur): drop hints without committing. Also the abort
     /// edge of an <c>OnDrag</c> capture owner whose contact dies with no release (its OnClick commit never comes).</summary>
     public Action? OnDragCanceled { get => (_cGesture ?? BoxColdGesture.Default).OnDragCanceled; init { if (!EqualityComparer<Action?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnDragCanceled, value)) CGesture.OnDragCanceled = value; } }
+    /// <summary>Press and hold (pinned Home): how long a press must stay inside its slop before <see cref="OnHold"/> fires, per
+    /// pointer kind (<see cref="HoldSpec.MouseMs"/> 0: the mouse does not hold). Null with an <see cref="OnHold"/> handler means
+    /// the default spec (touch 500 ms, no mouse hold).</summary>
+    public HoldSpec? Hold { get => (_cGesture ?? BoxColdGesture.Default).Hold; init { if (!EqualityComparer<HoldSpec?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).Hold, value)) CGesture.Hold = value; } }
+    /// <summary>The hold's dwell elapsed inside the slop. The press's click is swallowed. A node with this handler takes the
+    /// hold instead of raising <c>OnContextRequested</c> (Hold). After it, movement past the slop within
+    /// <see cref="HoldSpec.DragWindowMs"/> promotes the node's own drag (<see cref="Draggable"/>): "hold, then drag".</summary>
+    public Action<HoldEventArgs>? OnHold { get => (_cGesture ?? BoxColdGesture.Default).OnHold; init { if (!EqualityComparer<Action<HoldEventArgs>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnHold, value)) CGesture.OnHold = value; } }
+    /// <summary>Released after <see cref="OnHold"/> with no drag (WinUI opens the card's menu here). Unset, a TOUCH hold released
+    /// without a drag raises the node's context request (<c>OnContextRequested</c>, trigger Hold) at the press point: the touch
+    /// long-press menu, deferred to the release so the hold can still become a drag.</summary>
+    public Action<HoldEventArgs>? OnHoldReleased { get => (_cGesture ?? BoxColdGesture.Default).OnHoldReleased; init { if (!EqualityComparer<Action<HoldEventArgs>?>.Default.Equals((_cGesture ?? BoxColdGesture.Default).OnHoldReleased, value)) CGesture.OnHoldReleased = value; } }
     /// <summary>E5-L2 typed drag SOURCE (the Flutter Draggable / react-beautiful-dnd model — deliberately NOT WinUI
     /// OLE, per the 2026-06-10 user ruling): marks this box draggable (implies <see cref="CanDrag"/> — the L1 gesture
     /// armer) with a string Kind discriminator + a payload factory the engine resolves ONCE when the press promotes
@@ -543,6 +555,11 @@ public sealed record BoxEl : Element
     /// this element's own click/press handling are unaffected, and it says nothing about whether the element itself is
     /// draggable (set <c>Draggable</c>/<c>CanDrag</c> for that).</summary>
     public bool BlocksDragArm { get => (_cInput ?? BoxColdInput.Default).BlocksDragArm; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).BlocksDragArm, value)) CInput.BlocksDragArm = value; } }
+    /// <summary>A draggable box (<c>Draggable</c>/<c>CanDrag</c>) that takes the drag of any draggable inside it: a press on a
+    /// draggable descendant (a track row in a card) arms THIS box's drag instead of the descendant's. For a container whose
+    /// own move is the gesture while it is in a reorder context (a pinned-Home tile); turn it off outside that context so the
+    /// inner sources drag as themselves. A <see cref="BlocksDragArm"/> child below still arms nothing. Mouse and touch.</summary>
+    public bool ClaimsDescendantDrag { get => (_cInput ?? BoxColdInput.Default).ClaimsDescendantDrag; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).ClaimsDescendantDrag, value)) CInput.ClaimsDescendantDrag = value; } }
 
     /// <summary>A pointer LISTENER that is not an interaction scope (the ToolTip service wrapper): it carries pointer
     /// handlers, so it is hit-testable and receives them normally, but the hover cascade, the lazy-mount hover seed and
@@ -604,6 +621,11 @@ public sealed record BoxEl : Element
     public FlexJustify Justify { get; init; } = FlexJustify.Start;
     public FlexAlign AlignItems { get; init; } = FlexAlign.Stretch;
     public bool Wrap { get; init; }
+    /// <summary>A wrap row whose children are sized as shares of its live width (a grid that picks its columns itself, at the structure
+    /// width, and binds its cells to the live width) breaks its lines at its live width. By default a wrap row breaks at its STRUCTURE
+    /// width while a width reflow resizes it (the width it lands at: it rewraps once), which suits children of fixed widths; cells that are
+    /// a share of the live width would not fit that many to a line there and break early for the slide's frames.</summary>
+    public bool WrapLive { get; init; }
     /// <summary>Lay the children in a row (<c>Direction</c> is ignored) while they fit, and otherwise stack them with these
     /// spacings. See <see cref="Foundation.StackFallback"/>.</summary>
     public StackFallback? StackFallback { get; init; }
@@ -1154,6 +1176,12 @@ public sealed record ScrollEl : Element
     /// content wraps to fit; only content that cannot go narrower (a grid at its min-content floor) pans. The Markdown
     /// table frame (layout.md §7.2).</summary>
     public bool FitContentWidth { get; init; }
+
+    /// <summary>Scroll anchoring (CSS <c>overflow-anchor</c>), vertical, non-virtual scrollers: when layout ABOVE what the user is
+    /// looking at changes size (a section that grows at a tier edge, a shelf that stands up, content that lands late), the offset
+    /// follows so the first thing in view stays where it is on screen. Never while the user scrolls, drags or flings, never against a
+    /// programmatic scroll, never at the top. Default off: a scroller opts in.</summary>
+    public bool Anchoring { get; init; }
 
     /// <summary>Opt into pinch-zoom (WinUI <c>ScrollingZoomMode.Enabled</c> — default off, mirroring
     /// ScrollPresenter's <c>s_defaultZoomMode = Disabled</c>). When set, a SECOND touch contact over the viewport scales

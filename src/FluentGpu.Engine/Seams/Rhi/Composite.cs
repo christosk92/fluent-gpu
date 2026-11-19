@@ -86,13 +86,27 @@ public readonly record struct AcrylicRecipe(ColorF Tint, ColorF Fallback, float 
 /// <see cref="SubPxX"/>/<see cref="SubPxY"/> = the part of a POSED self-blur's placement below a whole device pixel
 /// (−0.5..0.5): <see cref="Transform"/> stays whole (its tiles, its blur source and its retained blur are placed by it), and
 /// the backend draws the blurred surface that much further, bilinearly — so a blurred row moved by its pose glides at the
-/// sub-pixel precision its re-raster used to give it, without re-rastering or re-blurring.</summary>
+/// sub-pixel precision its re-raster used to give it, without re-rastering or re-blurring. A SLIDE GROUP's surface (rendered at
+/// its members' REST placement) is drawn the same way at its pose; <see cref="SlideScaleX"/>/<see cref="SlideScaleY"/> (0 = 1, unscaled)
+/// add an axis-aligned scale to that pose: a rest-surface pixel at window px <c>p</c> lands at <c>p · SlideScale + SubPx</c>
+/// (a composited transition layer that scales: a page growing in or shrinking out, re-recording nothing below it).</summary>
 public readonly record struct CompositeItem(int SliceId, CompositeKind Kind, Affine2D Transform, float Alpha, RectF Clip,
     CornerRadius4 ClipRadii, EdgeFeather Feather, float BlurSigma, AcrylicRecipe Acrylic, byte BlendCopy,
     RectF RoundClip = default, int GroupCount = 0, byte HasLayer = 0, RectF SourceClip = default,
     EdgeFeather Feather2 = default, RectF Footprint = default, byte Inherited = 0, byte LowResDown = 0, RectF Opaque = default,
-    FeedbackSpec Feedback = default, Affine2D FeedbackWarp = default, float FeedbackDecay = 0f, float SubPxX = 0f, float SubPxY = 0f)
+    FeedbackSpec Feedback = default, Affine2D FeedbackWarp = default, float FeedbackDecay = 0f, float SubPxX = 0f, float SubPxY = 0f,
+    float SlideScaleX = 0f, float SlideScaleY = 0f)
 {
+    /// <summary>The surface is drawn away from its rest placement: a sub-pixel offset and/or a slide scale (<see cref="SubPxX"/>,
+    /// <see cref="SlideScaleX"/>).</summary>
+    public bool Displaced => SubPxX != 0f || SubPxY != 0f || Scaled;
+    /// <summary>A slide group drawn scaled (<see cref="SlideScaleX"/>).</summary>
+    public bool Scaled => (SlideScaleX != 0f && SlideScaleX != 1f) || (SlideScaleY != 0f && SlideScaleY != 1f);
+    /// <summary>The horizontal draw scale (1 when unscaled).</summary>
+    public float ScaleX => SlideScaleX != 0f ? SlideScaleX : 1f;
+    /// <summary>The vertical draw scale (1 when unscaled).</summary>
+    public float ScaleY => SlideScaleY != 0f ? SlideScaleY : 1f;
+
     /// <summary>A FEEDBACK item (BoxEl.Feedback, visualizer F6): a <see cref="CompositeKind.Direct"/> low-res item whose backend
     /// surface persists and is advanced through <see cref="FeedbackWarp"/> / <see cref="FeedbackDecay"/> each change.</summary>
     public bool IsFeedback => FeedbackDecay > 0f;
@@ -191,6 +205,10 @@ public readonly ref struct CompositeFrame
     public readonly ReadOnlySpan<TileOpRec> InlineOps;
     /// <summary>Two per row of <see cref="Slices"/>: the start and count of its range in <see cref="InlineOps"/> (count −1 = none).</summary>
     public readonly ReadOnlySpan<int> InlineOpRanges;
+    /// <summary>Glyph runs the backend SHAPES this turn without drawing them (<c>DrawGlyphRun</c> ops, SliceRecorder.GlyphPrep): text the
+    /// recorder walked but culled outside its clip. Text that slides or scrolls in is then shaped on the frame it was recorded (a render
+    /// frame), never first on a frame of the motion that brings it in (a shaping miss rents and bakes: SKILL rule 7). Never drawn.</summary>
+    public readonly ReadOnlySpan<byte> GlyphPrep;
 
     public CompositeFrame(in FrameInfo info, ReadOnlySpan<SliceRow> slices, ReadOnlySpan<byte> sliceStreams,
         ReadOnlySpan<TileRaster> rasters, ReadOnlySpan<TilePlacement> placements, ReadOnlySpan<CompositeItem> items,
@@ -202,13 +220,14 @@ public readonly ref struct CompositeFrame
         PresentParams present, ReadOnlySpan<SliceSpan> sliceSpans,
         ReadOnlySpan<PushLayerCmd> itemLayers, Span<byte> rasterDone, ReadOnlySpan<PushLayerCmd> itemInherited = default,
         Span<byte> rasterFlags = default, Span<byte> itemFlags = default, ReadOnlySpan<int> trimSurfaces = default,
-        int ownerToken = 0, ReadOnlySpan<TileOpRec> inlineOps = default, ReadOnlySpan<int> inlineOpRanges = default)
+        int ownerToken = 0, ReadOnlySpan<TileOpRec> inlineOps = default, ReadOnlySpan<int> inlineOpRanges = default,
+        ReadOnlySpan<byte> glyphPrep = default)
     {
         Info = info; Slices = slices; SliceStreams = sliceStreams; Rasters = rasters; Placements = placements;
         Items = items; Present = present; SliceSpans = sliceSpans;
         ItemLayers = itemLayers; RasterDone = rasterDone; ItemInherited = itemInherited;
         RasterFlags = rasterFlags; ItemFlags = itemFlags; TrimSurfaces = trimSurfaces; OwnerToken = ownerToken;
-        InlineOps = inlineOps; InlineOpRanges = inlineOpRanges;
+        InlineOps = inlineOps; InlineOpRanges = inlineOpRanges; GlyphPrep = glyphPrep;
     }
 
     /// <summary>Row <paramref name="row"/>'s inline op records (slice px relative to its grid, offset by
@@ -291,6 +310,12 @@ public partial interface IGpuDevice
     bool HasLiveFeedback => false;
     /// <summary>True when <see cref="SubmitComposite"/> is implemented (the headless model and D3D12).</summary>
     bool SupportsComposite => false;
+
+    /// <summary>The thread that presents, right after a turn's present (the frame is on its way to the glass): the device may restock
+    /// what the turn drew down (pools that a burst of new content emptied), so the NEXT turn that needs them takes from stock instead
+    /// of allocating mid-frame. Never on a frame's critical path: the render thread calls it after its present, an inline host after
+    /// its hot phases. Default: nothing to restock.</summary>
+    void TurnPresented() { }
 
     /// <summary>Render thread: raster <see cref="CompositeFrame.Rasters"/> into their surfaces (CLEAR→STORE render pass
     /// each), composite <see cref="CompositeFrame.Items"/> into the PRIMARY back buffer in one CLEAR→STORE pass, and

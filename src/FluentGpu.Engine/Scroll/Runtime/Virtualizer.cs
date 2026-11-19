@@ -30,7 +30,8 @@ public static class Virtualizer
     public const double MaxLocalExtent = 16384.0;
 
     /// <summary>Decides the window to realize this frame. Overscan ahead of the motion is
-    /// <c>clamp(|v|·LookaheadS, OverscanMinPx, OverscanMaxPx)</c>; behind it is <c>OverscanMinPx</c>. At rest both
+    /// <c>clamp(|v|·LookaheadS, OverscanMinPx, OverscanMaxPx)</c>, or the floor once <c>|v|·LookaheadS</c> reaches the viewport
+    /// (the motion leaves the view within the horizon: the band would mostly be skipped unseen); behind it is <c>OverscanMinPx</c>. At rest both
     /// sides get the floor. <paramref name="anchorIndexPrev"/> is returned as the anchor when the source is empty
     /// (there is no visible row to anchor to).</summary>
     public static RealizeWindow Plan(IExtentSource ext, double p, double v, double viewport, in MotionFeel feel, int anchorIndexPrev)
@@ -38,9 +39,16 @@ public static class Virtualizer
         int n = ext.Count;
         if (n <= 0) return new RealizeWindow(0, -1, 0.0, 0.0, anchorIndexPrev);
 
-        double lead = Math.Abs(v) * feel.LookaheadS;
+        double reach = Math.Abs(v) * feel.LookaheadS;
+        double lead = reach;
         if (lead < feel.OverscanMinPx) lead = feel.OverscanMinPx;
         if (lead > feel.OverscanMaxPx) lead = feel.OverscanMaxPx;
+        // A band the motion jumps over is pure cost: once the look-ahead reach is a whole viewport (a scrollbar scrub, a glide of thousands of
+        // DIP a frame; a wheel spin or a touchpad fling stays far below it), the next view starts past this one and the rows between them are
+        // built, laid out and recorded, then recycled unseen (a 500-row list rebuilt ~60 rows a frame for ~15 on screen, and a glide slowing
+        // through the cap built 2400 DIP of band in one frame). Realise the floor then: each frame builds what it shows, and the per-frame
+        // cost stays the slide's own (the rows that come into view), never a band's.
+        if (reach >= viewport) lead = feel.OverscanMinPx;
         double trail = feel.OverscanMinPx;
         double behind = v < 0.0 ? lead : trail;
         double ahead = v < 0.0 ? trail : lead;

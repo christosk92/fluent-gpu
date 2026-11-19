@@ -56,6 +56,9 @@ public struct TextMeasureEntry
     /// (<c>SceneStore.StructureWidth</c>), not at its box: the recorder draws them at that width (aligned in the box), so the run keeps
     /// its landing breaks while its box eases.</summary>
     public bool Structured;
+    /// <summary>The frame this row was measured on (<see cref="SceneStore.TextMeasureStamp"/>): the recorder shapes a culled run measured on
+    /// the frame it records (SceneRecorder.PrepCulledText).</summary>
+    public int Stamp;
 
     public readonly bool Matches(StringId text, in TextStyle style, float maxW, int fontEpoch = 0)
         => Valid && Text == text && MaxW == maxW && FontEpoch == fontEpoch && Style == style;
@@ -81,6 +84,9 @@ public struct TextMeasureCache
     private byte _last;
 
     public readonly bool Valid => E0.Valid || E1.Valid;
+
+    /// <summary>The entry most recently stored or hit (the lines the run was last laid out with).</summary>
+    public readonly TextMeasureEntry Last => _last == 0 ? E0 : E1;
 
     /// <summary>Probe both entries. A hit also becomes the ring's "last used" entry, so the recorder's fallback follows
     /// the width the layout pass most recently resolved at (the arranged width).</summary>
@@ -147,6 +153,7 @@ public struct LayoutInput
     public FlexJustify Justify;   // container: main-axis distribution
     public FlexAlign AlignItems;  // container: default child cross alignment
     public bool Wrap;             // container: wrap children to multiple lines when the main axis is constrained
+    public bool WrapLive;         // container: a wrap row breaks its lines at its live width, never its structure width (BoxEl.WrapLive)
     // ZStack overlay child only (A3/layout.md MeasureZStack): ignore the stack's own constrained childAvail and
     // measure at PositiveInfinity instead, reporting the child's natural content width — e.g. a rail tooltip that
     // must report its real text width even though the rail itself stays pinned to a fixed, narrower ZStack. Packed
@@ -487,6 +494,7 @@ public record struct ScrollState
     public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
     public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
     public bool  FitContentWidth;         // horizontal: content measured against the viewport width; viewport hugs min(content, avail)
+    public bool  Anchoring;               // ScrollEl.Anchoring: hold what is in view in place when layout above it changes (AppHost.ScrollAnchor.cs)
     /// <summary>The scroller's row pitch in DIP (a <c>Virtual.List</c> stamps its item extent; 0 = no hint). Written
     /// by the reconciler from <c>Element.ScrollLineDip</c>; a config column.</summary>
     public float LineDip;
@@ -838,6 +846,15 @@ public record struct InteractionInfo
                                                     // drag, so this bit STOPS that walk at itself. Discriminator only:
                                                     // never a hit/press/focus target, deliberately outside
                                                     // AnyInteractiveMask. Clear as `~BlocksDragArmBit`.
+    public const uint ClaimsDescendantDragBit = 1u << 24;   // BoxEl.ClaimsDescendantDrag: a DRAGGABLE node that takes the drag of
+                                                            // any draggable inside it (a pinned-Home tile while its board reorders:
+                                                            // dragging a track row in a card moves the card). The arm walk finds
+                                                            // the nearest draggable, then keeps climbing for a claiming one.
+                                                            // Discriminator only, outside AnyInteractiveMask.
+    public const uint HoldBit = 1u << 23;                   // BoxEl.OnHold (pinned Home): a press-and-hold handler (SceneStore.SetHold). Hit-testable
+                                                            // in its own right; the touch arena enrolls a Hold member on it with the node's own
+                                                            // dwell, the mouse path runs a hold timer when its spec names one, and a Draggable
+                                                            // node carrying it drags only after the hold ("hold, then drag").
     public const uint FocusRingHostBit = 1u << 22;          // BoxEl.FocusRingHost: paints its nearest focused ancestor's keyboard-focus ring on its
                                                             // own rect (the recorder's ring emission looks for it). Paint-only discriminator: never a
                                                             // hit-test or handler bit.
@@ -873,7 +890,7 @@ public record struct InteractionInfo
     /// HandlerMask bit (it lives in ScrollState/NodeFlags.Scrollable) — the touch press site additionally excludes a pan
     /// candidate. Widened to uint (was ushort) so it can also carry <see cref="RowCellsBit"/> (bit 21).</summary>
     public const uint AnyInteractiveMask =
-        ClickBit | PointerBit | PressedBit | ContextBit | DragBit | SelectableTextBit | SpanLinksBit | WheelBit | GestureBit | RowCellsBit;
+        ClickBit | PointerBit | PressedBit | ContextBit | DragBit | SelectableTextBit | SpanLinksBit | WheelBit | GestureBit | RowCellsBit | HoldBit;
 
     /// <summary>WinUI RepeatButton Delay/Interval (ms) for <see cref="RepeatBit"/> nodes. NaN (or non-positive) = the
     /// WinUI DP defaults (500/33, DependencyProperty.cpp:714-720); ScrollBar template arrows use Interval=50.</summary>
@@ -914,3 +931,25 @@ public struct GestureSubscription
         }
     }
 }
+
+/// <summary>A node's corner radius as a function of its PRESENTED extent (the connected navigation flyer, whose size rides SizeW/H rows
+/// that the render thread may own): <see cref="FromRadius"/> at <see cref="FromExtent"/>, <see cref="ToRadius"/> at <see cref="ToExtent"/>,
+/// linear between and clamped outside, along the width or (<see cref="AlongHeight"/>) the height. The recorder evaluates it where it
+/// resolves the presented size, so the radius is exact on the frame that draws the rect, whichever thread advanced it: a circle that
+/// opens into a wide header never draws a pill on a slow UI frame. Uniform radius only (all four corners).</summary>
+public readonly record struct CornerMorph(float FromRadius, float ToRadius, float FromExtent, float ToExtent, bool AlongHeight)
+{
+    /// <summary>The radius at a presented size (allocation-free).</summary>
+    public float At(float presentedW, float presentedH)
+    {
+        float extent = AlongHeight ? presentedH : presentedW;
+        float span = ToExtent - FromExtent;
+        float t = MathF.Abs(span) < 0.001f ? 1f : Math.Clamp((extent - FromExtent) / span, 0f, 1f);
+        float r = FromRadius + (ToRadius - FromRadius) * t;
+        return MathF.Max(0f, MathF.Min(r, MathF.Min(presentedW, presentedH) * 0.5f));
+    }
+}
+
+/// <summary>A node's press-and-hold declaration (<c>BoxEl.Hold</c> / <c>OnHold</c> / <c>OnHoldReleased</c>), stored sparsely in
+/// <see cref="SceneStore"/>.</summary>
+public readonly record struct HoldDecl(HoldSpec Spec, Action<HoldEventArgs> OnHold, Action<HoldEventArgs>? OnReleased);
