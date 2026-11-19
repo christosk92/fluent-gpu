@@ -70,13 +70,18 @@ internal static unsafe class WasapiEndpoints
     const string DisplayPortJack = "{E47E4031-3EA6-418D-8F9B-B73843CCBA97}";
     const uint DigitalDisplayFormFactor = 9;
 
-    internal static WasapiEndpointInfo? Describe(IMMDevice* device, bool isDefault)
+    /// <summary>The device's endpoint id, or null.</summary>
+    internal static string? IdOf(IMMDevice* device)
     {
         char* id = null;
         if (device->GetId(&id) < 0 || id == null) return null;
-        string endpointId;
-        try { endpointId = new string(id); }
+        try { return new string(id); }
         finally { CoTaskMemFree(id); }
+    }
+
+    internal static WasapiEndpointInfo? Describe(IMMDevice* device, bool isDefault)
+    {
+        if (IdOf(device) is not { } endpointId) return null;
         string name = endpointId, deviceName = "", description = "", enumerator = "", jack = "";
         uint formFactor = uint.MaxValue;
         Guid container = default;

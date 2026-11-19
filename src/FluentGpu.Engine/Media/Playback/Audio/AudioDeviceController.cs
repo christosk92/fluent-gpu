@@ -29,6 +29,7 @@ public sealed class AudioDeviceController : IDisposable
     private readonly AudioFeedThread? _feed;
     private readonly Signal<AudioDeviceState> _state = new(AudioDeviceState.Building);
     private readonly Action _watcherHandler;
+    private readonly Func<bool>? _followsDefault;
 
     // The cold device thread: a single-consumer request pump (never the RT thread, never the control thread).
     // _gate serializes the policy + retry clock between the watcher thread, the RT reporter and the cold thread — an
@@ -43,17 +44,26 @@ public sealed class AudioDeviceController : IDisposable
     private int _wakeDisposed;
 
     /// <summary>Create a controller over <paramref name="session"/>. <paramref name="endpointFactory"/> opens a fresh
-    /// default endpoint on a rebuild; <paramref name="watcher"/> (optional) fires the follow-default event;
-    /// <paramref name="feed"/> (optional) is parked around the swap on-box.</summary>
+    /// endpoint on a rebuild (the default, or the one the host chose); <paramref name="watcher"/> (optional) fires the follow-default event;
+    /// <paramref name="feed"/> (optional) is parked around the swap on-box. <paramref name="followsDefault"/> (optional, default: always)
+    /// says whether a default-device change concerns this session: a host that plays on a CHOSEN endpoint answers false, so a new default
+    /// never moves playback off it (the host requests the rebuilds that do concern it: <see cref="RequestRebuild"/>).</summary>
     public AudioDeviceController(PcmAudioSession session, Func<IAudioEndpoint> endpointFactory,
-        IDeviceWatcher? watcher = null, AudioFeedThread? feed = null)
+        IDeviceWatcher? watcher = null, AudioFeedThread? feed = null, Func<bool>? followsDefault = null)
     {
+        _followsDefault = followsDefault;
         _session = session;
         _endpointFactory = endpointFactory;
         _watcher = watcher;
         _feed = feed;
-        _watcherHandler = RequestRebuild;
+        _watcherHandler = OnWatcherDefaultChanged;
         if (_watcher is not null) _watcher.DefaultDeviceChanged += _watcherHandler;
+    }
+
+    // A default-device change: a rebuild, unless the host plays on a chosen endpoint the new default does not concern.
+    private void OnWatcherDefaultChanged()
+    {
+        if (_followsDefault is null || _followsDefault()) RequestRebuild();
     }
 
     /// <summary>The current device state (spec §7.9).</summary>
