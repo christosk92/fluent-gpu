@@ -89,17 +89,33 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
 
     /// <summary>Open the default render endpoint at (or near) <paramref name="requested"/>. On failure the device is inert
     /// (silent) but never throws — the session stays alive and surfaces silence, not a crash.</summary>
-    public WasapiAudioDevice(MixFormat requested)
+    public WasapiAudioDevice(MixFormat requested) : this(requested, null) { }
+
+    /// <summary>Open the render endpoint <paramref name="endpointId"/> (an <c>IMMDevice</c> id, as <see cref="WasapiEndpointInfo.Id"/>), or
+    /// the console default when it is null, at (or near) <paramref name="requested"/>. A chosen endpoint that is gone or not active fails the
+    /// open (logged through <see cref="FormatSink"/>, reported through <see cref="OpenResultSink"/>): it NEVER falls back to the default on its
+    /// own, because what to play on instead is the app's decision. On failure the device is inert (silent) but never throws.</summary>
+    public WasapiAudioDevice(MixFormat requested, string? endpointId)
     {
         Format = requested;
-        try { Open(requested); }
+        RequestedEndpointId = endpointId;
+        try { Open(requested, endpointId); }
         catch (Exception ex)
         {
             Debug.WriteLine($"WasapiAudioDevice open failed: {ex.Message}");
             Volatile.Write(ref _ready, false);
-            FormatSink?.Invoke(FormatOpenFailure("exception", ex.HResult) + " msg=" + ex.Message);
+            FormatSink?.Invoke(FormatOpenFailure("exception", ex.HResult, endpointId) + " msg=" + ex.Message);
         }
+        OpenResultSink?.Invoke(endpointId, EndpointInfo, IsReady);
     }
+
+    /// <summary>The endpoint this device was asked to open, or null for the console default.</summary>
+    public string? RequestedEndpointId { get; }
+
+    /// <summary>Every open's outcome, on the opening thread (off the RT path; a probe, a session open, a rebuild): the endpoint asked for
+    /// (null = the default), the endpoint reached (null when it failed before one was found) and whether it can render. An app marks an
+    /// output that did not open ("Not responding") instead of leaving the failure in the log alone.</summary>
+    public static Action<string?, WasapiEndpointInfo?, bool>? OpenResultSink;
 
     /// <inheritdoc cref="IAudioSink.Format"/>
     public MixFormat Format { get; private set; }
@@ -117,7 +133,8 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
     /// <summary>Pure: the always-on <see cref="FormatSink"/> line for an open that failed at <paramref name="step"/>
     /// with <paramref name="hr"/> — the line production triage reads to tell "device not ready yet" (0x88890004 /
     /// E_NOTFOUND during a jack switch) from a real driver fault.</summary>
-    public static string FormatOpenFailure(string step, int hr) => $"open FAILED step={step} hr=0x{hr:X8} default-endpoint";
+    public static string FormatOpenFailure(string step, int hr, string? endpointId = null)
+        => $"open FAILED step={step} hr=0x{hr:X8} " + (endpointId is null ? "default-endpoint" : "endpoint=" + endpointId);
 
     // The running client was invalidated (a Write/WritableFrames/Start hit a device-lost HRESULT): flip inert so every later
     // Write returns 0 / WritableFrames -1 — the session's sink-failure path then asks the cold thread for a rebuild. Volatile
@@ -422,14 +439,19 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
     // ── COM bring-up ─────────────────────────────────────────────────────────────────────────────────────────────────
     // Every early exit of Open goes through here so a failed open is never silent (Wavee #112: the 0.2.8 leaf returned
     // quietly from nine places, and a dead default endpoint was adopted with nothing in the log). Off the RT path.
-    private static void Fail(string step, int hr) => FormatSink?.Invoke(FormatOpenFailure(step, hr));
+    private void Fail(string step, int hr) => FormatSink?.Invoke(FormatOpenFailure(step, hr, RequestedEndpointId));
 
-    private void Open(MixFormat requested)
+    // IMMDevice::GetState's DEVICE_STATE_ACTIVE; any other state (disabled, not present, unplugged) is no endpoint to open.
+    private const uint DeviceStateActive = 1;
+    // HRESULT_FROM_WIN32(ERROR_NOT_FOUND): the step code of a chosen endpoint that exists but is not active.
+    private const int NotActiveHr = unchecked((int)0x80070490);
+
+    private void Open(MixFormat requested, string? endpointId)
     {
         // Always-on, one line per device open (the matching "open deviceRate=…" line below is the success edge): a
         // WASAPI open that never returns — the 2026-09-22 hand-back from a closed video window opened its byte source,
         // filled its ring and then produced nothing at all — must at least show that it was ENTERED.
-        FormatSink?.Invoke($"open.begin requested={requested.SampleRate}Hz/{requested.Channels}ch");
+        FormatSink?.Invoke($"open.begin requested={requested.SampleRate}Hz/{requested.Channels}ch endpoint={endpointId ?? "default"}");
         // COM must be initialized on this thread; MTA is fine for WASAPI. Ignore "already initialized" results.
         _ = CoInitializeEx(null, (uint)(COINIT.COINIT_MULTITHREADED | COINIT.COINIT_DISABLE_OLE1DDE));
         int hr;
@@ -441,11 +463,33 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
         if (hr < 0) { Fail("CoCreateInstance", hr); return; }
         _enumerator = enumerator;
 
+        // The console default, always: it IS the device when none was chosen, and says whether a chosen one is the default.
+        IMMDevice* defaultDevice = null;
+        int defaultHr = enumerator->GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eConsole, &defaultDevice);
+        string? defaultId = defaultHr >= 0 && defaultDevice != null ? WasapiEndpoints.IdOf(defaultDevice) : null;
         IMMDevice* device;
-        hr = enumerator->GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eConsole, &device);
-        if (hr < 0) { Fail("GetDefaultAudioEndpoint", hr); return; }
+        if (endpointId is null)
+        {
+            if (defaultHr < 0 || defaultDevice == null) { Fail("GetDefaultAudioEndpoint", defaultHr); return; }
+            device = defaultDevice;
+        }
+        else
+        {
+            if (defaultDevice != null) defaultDevice->Release();
+            fixed (char* id = endpointId) hr = enumerator->GetDevice(id, &device);
+            if (hr < 0 || device == null) { Fail("GetDevice", hr); return; }
+            uint state;
+            if (device->GetState(&state) < 0 || state != DeviceStateActive)
+            {
+                device->Release();
+                Fail("GetState", NotActiveHr);
+                return;
+            }
+        }
         _device = device;
-        EndpointInfo = WasapiEndpoints.Describe(device, isDefault: true);
+        EndpointInfo = WasapiEndpoints.Describe(device, isDefault: false) is { } info
+            ? info with { IsDefault = string.Equals(info.Id, defaultId, StringComparison.Ordinal) }
+            : null;
 
         Guid iidClient = IID.IID_IAudioClient;
         IAudioClient* client;
@@ -512,7 +556,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
         // Open runs once, off the RT path — the ONLY line that answers "what is the user's device sample rate?" for
         // production hiccup triage, so it goes through FormatSink (always-on), not DiagSink (RT-path-only now, and only
         // invoked from the non-RT stats drain elsewhere).
-        FormatSink?.Invoke($"open deviceRate={deviceRate} renderRate={Format.SampleRate} devCh={_deviceChannels} renderCh={Format.Channels} devBits={devBits} devFloat={devFloat} floatDirect={_devFloat} bytesPerFrame={_devBytesPerFrame} tag=0x{devTag:X} bufFrames={_bufferFrames}");
+        FormatSink?.Invoke($"open deviceRate={deviceRate} renderRate={Format.SampleRate} devCh={_deviceChannels} renderCh={Format.Channels} devBits={devBits} devFloat={devFloat} floatDirect={_devFloat} bytesPerFrame={_devBytesPerFrame} tag=0x{devTag:X} bufFrames={_bufferFrames} endpoint=\"{EndpointInfo?.Name}\" default={EndpointInfo?.IsDefault == true} id={EndpointInfo?.Id}");
 
         long hnsLatency;
         if (client->GetStreamLatency(&hnsLatency) >= 0)
