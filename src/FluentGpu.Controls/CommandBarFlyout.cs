@@ -40,6 +40,8 @@ public sealed record AppBarCommand(
 {
     /// <summary>Right-aligned keyboard-accelerator hint (KeyboardAcceleratorTextLabel), e.g. "Ctrl+S".</summary>
     public string? AcceleratorText { get; init; }
+    /// <summary>An overflow row that asks for attention (<see cref="MenuFlyoutItem.Attention"/>): WinUI's InfoBadge dot after its label.</summary>
+    public bool Attention { get; init; }
     /// <summary>A real keyboard chord that invokes <see cref="Invoke"/> from anywhere (WinUI KeyboardAccelerator).</summary>
     public KeyAccelerator? Accelerator { get; init; }
     /// <summary>Cascading sub-menu items (secondary commands only): the row gains the E76C SubItemChevron
@@ -1060,6 +1062,12 @@ internal sealed class CommandBarFlyoutBody : Component
             Margin = new Edges4((hasCheckColumn || hasIconColumn) ? 0f : 10f, 0, hasTrailing ? 0f : 10f, 0),
             Children = [new TextEl(cmd.Label) { Size = 14f, Color = fg, PressedColor = pressedFg, DisabledColor = Tok.TextDisabled, Trim = TextTrim.Clip }],
         });
+        // An overflow row that asks for attention: WinUI's InfoBadge dot after the label (MenuFlyout's MenuAttentionMark.Dot).
+        if (cmd.Attention && enabled)
+            children.Add(InfoBadge.Dot() with
+            {
+                Margin = new Edges4(MenuFlyout.AttentionDotGap, 0, hasTrailing ? 0f : 10f, 0), AlignSelf = FlexAlign.Center, Shrink = 0f, HitTestVisible = false,
+            });
         // KeyboardAcceleratorTextLabel: Caption 12, right-aligned, Margin 24,0,12,0, TextSecondary→pressed Tertiary
         // ramp (:302 + CommandBarFlyoutAppBarButtonKeyboardTextLabelForeground* :16-18).
         if (cmd.AcceleratorText is { Length: > 0 } acc)

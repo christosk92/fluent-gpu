@@ -191,6 +191,17 @@ public sealed partial class AnimEngine
             }
     }
 
+    /// <summary>True when <paramref name="node"/> has a structural row in flight (a move, a scale, a size or a reflow: what a resize keeps for a
+    /// part that animates through it, and re-aims). O(1) for a node with no rows.</summary>
+    public bool HasStructuralRow(NodeHandle node)
+    {
+        int idx = (int)node.Raw.Index;
+        if (!_slab.NodeHasRows(idx)) return false;
+        for (int s = _slab.HeadOnNode(idx); s >= 0; s = _slab.At(s).NextOnNode)
+            if (IsStructuralChannel(_slab.At(s).Channel) && !_slab.At(s).Has(AnimFlags.Loop)) return true;
+        return false;
+    }
+
     /// <summary>True when <paramref name="node"/> has an advancing width (LayoutW) reflow row. O(1) for a node with no rows.</summary>
     public bool HasLiveWidthReflow(NodeHandle node)
     {
@@ -333,6 +344,30 @@ public sealed partial class AnimEngine
     /// slot's pinned height climbs back toward the with-drawer extent while the drawer's content is already faded out,
     /// so the row reserves a band nothing paints in (and, mid-flight, paints content past a band that stopped
     /// growing).</para></summary>
+    private readonly record struct Redeclared(NodeHandle Node, AnimChannel Channel);
+    private readonly List<Redeclared> _redeclared = new(32);
+
+    /// <summary>The declared sizes re-written under a live SizeMode.Relayout row this frame (<see cref="RecordDeclaredSize"/>) that no projection
+    /// re-aimed: each row moves by the change at once and eases on what is left of its own motion over the time it has left. A re-declaration
+    /// with no FLIP is a size that follows its owner at once (a bento grid's width-only re-pack: the tiles follow the board's width as the page
+    /// does), so the row carries that change as the layout does and keeps only the structural part it was seeded for (a tile easing to its new
+    /// cell keeps easing while the board's width moves under it, instead of trailing the width over the row's remaining time). The host calls it
+    /// after the frame's projections, before the tick. Allocates nothing.</summary>
+    public void FollowRedeclaredSizes()
+    {
+        for (int i = 0; i < _redeclared.Count; i++)
+        {
+            var d = _redeclared[i];
+            if (!_scene.IsLive(d.Node)) continue;
+            int s = Find(d.Node, d.Channel);
+            if (s < 0 || !_slab.At(s).Has(AnimFlags.RestoreLayout) || _slab.At(s).Has(AnimFlags.Done)) continue;
+            float to = _slab.At(s).RestoreTo;
+            if (float.IsNaN(to) || MathF.Abs(to - _slab.At(s).To) < 0.5f) continue;   // a projection re-aimed it (RelayoutSize)
+            ShiftRelayout(d.Node, d.Channel, to);
+        }
+        _redeclared.Clear();
+    }
+
     public bool RecordDeclaredSize(NodeHandle node, AnimChannel ch, float declared)
     {
         if (!_slab.NodeHasRows((int)node.Raw.Index)) return false;   // O(1) — the common case, per reconciled node
@@ -342,8 +377,17 @@ public sealed partial class AnimEngine
             // SizeMode.Relayout keeps its declared shadow on the SizeW/SizeH row (the host lays the node's subtree out at the interp
             // each tick). File the re-declaration there so a retarget carries ground truth, but still answer false: the
             // reconciler must write the column so this commit's layout solves the destination AnimateBounds aims at.
-            int rs = Find(node, ch == AnimChannel.LayoutW ? AnimChannel.SizeW : AnimChannel.SizeH);
-            if (rs >= 0 && _slab.At(rs).Has(AnimFlags.RestoreLayout)) _slab.At(rs).RestoreTo = declared;
+            AnimChannel rch = ch == AnimChannel.LayoutW ? AnimChannel.SizeW : AnimChannel.SizeH;
+            int rs = Find(node, rch);
+            if (rs >= 0 && _slab.At(rs).Has(AnimFlags.RestoreLayout))
+            {
+                _slab.At(rs).RestoreTo = declared;
+                // A declared size re-written while the row flies (a bento tile following a window drag after its re-pack seeded the row):
+                // decided after this frame's projections (FollowRedeclaredSizes). A commit that FLIPs the node re-aims the row itself; one that
+                // does not (a width-only re-pack, a drag frame) moves the row by the change at once and keeps easing what is left of its own.
+                if (!float.IsNaN(declared) && !_slab.At(rs).Has(AnimFlags.Done) && MathF.Abs(declared - _slab.At(rs).To) >= 0.5f)
+                    _redeclared.Add(new Redeclared(node, rch));
+            }
             return false;
         }
 
@@ -703,7 +747,17 @@ public sealed partial class AnimEngine
     /// A looping row (<see cref="AnimFlags.Loop"/>, e.g. a meter bar's ScaleY) is authored continuous motion, not a stale
     /// projection: it is skipped, and never forces the transform reset. Zero-alloc POD-slab walk (no LINQ/enumerator);
     /// the caller runs it BEFORE layout so bounds land clean.</summary>
-    public void SnapStructuralToLayout(NodeHandle node)
+    public void SnapStructuralToLayout(NodeHandle node) => SnapStructuralToLayout(node, keepReflows: false);
+
+    /// <summary><see cref="SnapStructuralToLayout(NodeHandle)"/>; with <paramref name="keepReflows"/> the size rows that are layout inputs keep running:
+    /// a SizeMode.Reflow WIDTH row (LayoutW: a width the tier chose, a pane, a margin) and a SizeMode.Relayout row of a box whose size is DECLARED
+    /// (SizeW/SizeH with a finite RestoreTo: a bento grid's tile easing to its new cell). The next solve re-lays the subtree at their interpolated
+    /// size, never a stale offset over the new geometry, and a declared size the drag re-writes re-aims the Relayout row (RecordDeclaredSize), so
+    /// one row owns that size to the end. A Reflow HEIGHT row is kept only when its transition opts in (<see cref="LayoutTransition.AnimateDuringResize"/>:
+    /// the resized frame re-captures and re-aims it); any other height row and an auto-sized Relayout row are landed: a height that follows the width
+    /// the window is still changing has no owner that re-aims it, and a kept one fought the size projection a board seeds once the width holds (a tile
+    /// easing from a height it never had).</summary>
+    public void SnapStructuralToLayout(NodeHandle node, bool keepReflows)
     {
         int idx = (int)node.Raw.Index;
         bool live = _scene.IsLive(node);
@@ -715,7 +769,8 @@ public sealed partial class AnimEngine
         {
             int next = _slab.At(s).NextOnNode;   // read the link BEFORE FreeSlot unlinks the row
             AnimChannel ch = _slab.At(s).Channel;
-            if (IsStructuralChannel(ch) && !IsGestureOwnedTransform(idx, ch) && !_slab.At(s).Has(AnimFlags.Loop))
+            if (IsStructuralChannel(ch) && !IsGestureOwnedTransform(idx, ch) && !_slab.At(s).Has(AnimFlags.Loop)
+                && !(keepReflows && KeptThroughResize(idx, in _slab.At(s))))
             {
                 // Ghost-band damage (Fix 1): the FIRST structural row we're about to cancel means this node was drawing
                 // at a translated/reveal-inflated extent LAST frame. Snapshot that last-presented rect NOW — before the
@@ -766,10 +821,21 @@ public sealed partial class AnimEngine
     /// the imminent (re)layout solves (<see cref="SnapStructuralToLayout"/> per node). Zero-alloc — walks the caller's
     /// FLIP-node registry (SceneStore.BoundsAnimatedNodes) and, per node, the POD row chain. Freeing anim rows never
     /// mutates the passed list (it indexes SceneStore nodes, not slab slots), so the walk is stable across the frees.</summary>
-    public void CancelStructuralAll(List<NodeHandle> flipNodes)
+    /// <summary>A size row that is a layout input and has one owner through a live resize (see <see cref="SnapStructuralToLayout(NodeHandle, bool)"/>):
+    /// a width reflow (LayoutW), a declared box's relayout row (re-aimed by RecordDeclaredSize), and a height reflow (LayoutH) whose transition opts in
+    /// with <see cref="LayoutTransition.AnimateDuringResize"/> (a body whose rows the width decides: the resized frame re-aims it while it flies, and
+    /// its Reflow solves real layout every tick), and the move of a part that opts in the same way (a card a grid's new columns moved: it slides
+    /// to its cell while the drag goes on, relative to its parent, which the drag places).</summary>
+    private bool KeptThroughResize(int idx, in AnimValue r)
+        => r.Channel == AnimChannel.LayoutW
+           || (r.Channel is AnimChannel.SizeW or AnimChannel.SizeH && r.Has(AnimFlags.RestoreLayout) && !float.IsNaN(r.RestoreTo))
+           || (r.Channel is AnimChannel.LayoutH or AnimChannel.TranslateX or AnimChannel.TranslateY
+               && _transitions.TryGetValue(idx, out var t) && t.AnimateDuringResize);
+
+    public void CancelStructuralAll(List<NodeHandle> flipNodes, bool keepReflows = false)
     {
-        if (s_motionDiag) Console.Error.WriteLine($"[motion-diag] CancelStructuralAll flipNodes={flipNodes.Count}");
+        if (s_motionDiag) Console.Error.WriteLine($"[motion-diag] CancelStructuralAll flipNodes={flipNodes.Count} keepReflows={keepReflows}");
         for (int i = 0; i < flipNodes.Count; i++)
-            SnapStructuralToLayout(flipNodes[i]);
+            SnapStructuralToLayout(flipNodes[i], keepReflows);
     }
 }

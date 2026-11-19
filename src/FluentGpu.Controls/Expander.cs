@@ -32,12 +32,15 @@ public sealed record ExpanderOptions
 /// header toggles local <see cref="Component"/> state (or a controlled <see cref="IsExpanded"/> signal); the single
 /// chevron glyph is ROTATED by the computed <see cref="ExpanderTemplateSettings"/> (down collapsed → up expanded).
 ///
-/// MOTION — NOT WinUI's (Expander.xaml snaps the layout space and slides only the content). The content clip wrapper's
-/// declared Height toggles 0 ↔ NaN(auto): layout lands ONCE at the new size and <see cref="SizeMode.FlowReveal"/> springs
-/// the PRESENTED height under <c>MotionTok.Reveal</c> (critically damped, ~0.26 s, the same spring both ways) while every
-/// sibling below rides the difference at paint time — no per-frame layout, no component render, interruptible from the
-/// live value with its velocity. <see cref="SizeAnchor.Parallax"/>: the panel trails the moving edge by a damped share of
-/// what is still hidden (≤ 24 DIP), so it reads as unfolding rather than wiped. The chevron rotates on the same spring.
+/// MOTION — WinUI's slide, with WinUI's layout snap made smooth (Expander.xaml snaps the layout space and slides only the
+/// content). The content clip wrapper's declared Height toggles 0 ↔ NaN(auto): layout lands ONCE at the new size and
+/// <see cref="SizeMode.FlowReveal"/> springs the PRESENTED height under <c>MotionTok.Reveal</c> (critically damped, ~0.26 s, the
+/// same spring both ways) while every sibling below rides the difference at paint time — no per-frame layout, no component
+/// render, interruptible from the live value with its velocity. <see cref="SizeAnchor.Trailing"/>: the panel's foot rides the
+/// moving edge, so the panel slides out from under the header and back under it, its rounded foot always in view; the clip
+/// never cuts through its text. (It used <see cref="SizeAnchor.Parallax"/> until 2026-11-18: the 24-DIP lead was deeper than
+/// the panel's 16 padding, so the first line showed cut at its top for the whole motion and, as a close ended, a sliver of
+/// that line lingered under the header; owner: "the content cuts".) The chevron rotates on the same spring.
 /// The panel stays mounted through a close and unmounts when the engine reports the reveal at rest
 /// (<c>AnimEngine.WhenSettled</c>) — no control-local ticker, no per-frame watcher.
 ///
@@ -60,7 +63,7 @@ public sealed class Expander : Component
     public const string PartChevron = "Chevron";
     /// <summary>The always-mounted reveal wrapper (WinUI ExpanderContentClip) — the SizeMode.FlowReveal host. Owned:
     /// ClipToBounds, Height (the open/closed toggle), Animate (the reveal spec), Children, OnRealized (chained).
-    /// NOTE: its children are shifted mid-motion (Parallax ChildShiftY) — do not add a ChildShift-owning scroll effect here.</summary>
+    /// NOTE: its children are shifted mid-motion (Trailing ChildShiftY) — do not add a ChildShift-owning scroll effect here.</summary>
     public const string PartClip = "Clip";
     /// <summary>The padded content panel (WinUI ExpanderContent). Owned: Children (the <see cref="Content"/> slot —
     /// restructure via the slot, restyle via this part: padding, fill, border, corners…).</summary>
@@ -106,9 +109,9 @@ public sealed class Expander : Component
     public sealed record ExpanderSlots(Element? HeaderContent, Element Content, TemplateParts? Parts);
 
     // The one disclosure motion (docs/plans/smooth-reveal-implementation.md §1): layout snaps once, the presented height
-    // springs under MotionTok.Reveal, siblings ride it at paint time; Parallax lets the panel trail the edge.
+    // springs under MotionTok.Reveal, siblings ride it at paint time; Trailing slides the panel out from under the header.
     static LayoutTransition Reveal => new(TransitionChannels.Size, MotionTok.Reveal.ToDynamics(),
-        Size: SizeMode.FlowReveal, Anchor: SizeAnchor.Parallax);
+        Size: SizeMode.FlowReveal, Anchor: SizeAnchor.Trailing);
     // ExpanderOptions.AnimateContentResize=false's STEADY-state spec: no Size channel, so a settled-open clip host's content
     // change lands in the next layout as is. Only used while no toggle is in flight (see `animateResize` in Render).
     static LayoutTransition RevealNoResize => Reveal with { Channels = TransitionChannels.None };
@@ -264,7 +267,7 @@ public sealed class Expander : Component
         header = parts.Apply(PartHeader, header) with { OnClick = toggle, Role = AutomationRole.Expander };
 
         // ExpanderContent (Expander.xaml:114): the panel inside the reveal. It keeps its natural size; the clip
-        // wrapper's presented height crops it, and the Parallax anchor trails it behind the reveal edge.
+        // wrapper's presented height crops it, and the Trailing anchor keeps its foot on the reveal edge.
         var content = new BoxEl
         {
             Direction = 1,                       // vertical content area: stretch the child to full width so wrapping text reserves its true height

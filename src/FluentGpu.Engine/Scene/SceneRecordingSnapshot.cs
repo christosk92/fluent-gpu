@@ -54,6 +54,8 @@ public sealed partial class SceneRecordingSnapshot
     private int _removalCount;
     private readonly SnapshotColumn<InteractionAnim> _interact = new();
     private readonly SnapshotColumn<ShadowSpec> _shadow = new();
+    private readonly SnapshotColumn<CornerMorph> _cornerMorph = new();
+    private readonly SnapshotColumn<NodeHandle> _mirror = new();
     private readonly SnapshotColumn<ArcSpec> _arc = new();
     private readonly SnapshotColumn<PolylineStrokeSpec> _polyline = new();
     private readonly SnapshotColumn<PathSpec> _path = new();
@@ -91,6 +93,8 @@ public sealed partial class SceneRecordingSnapshot
     public NodeHandle Root { get; private set; }
     public int Capacity => _handles.Length;
     public float DeviceScale { get; private set; }
+    /// <summary>The captured frame's <see cref="SceneStore.TextMeasureStamp"/>.</summary>
+    public int TextMeasureStamp { get; private set; }
     public NodeHandle DragGhost { get; private set; }
     public ColorF? DragGhostBackplate { get; private set; }
     public NodeHandle DragOverlay { get; private set; }
@@ -390,6 +394,10 @@ public sealed partial class SceneRecordingSnapshot
         _captured.Clear();
         CaptureTree(source, source.Root, epoch);
         for (int i = 0; i < OverlayCount; i++) CaptureTree(source, source.OverlayAt(i), epoch);
+        // A whole-picture flyer draws another node's subtree (SceneStore.SetMirror): that subtree may be parked off the live tree
+        // (the page the flight left), so it is captured beside the overlays.
+        for (int i = 0; i < OverlayCount; i++)
+            if (source.TryGetMirror(source.OverlayAt(i), out NodeHandle mirrored) && source.IsLive(mirrored)) CaptureTree(source, mirrored, epoch);
         for (int i = 0; i < OrphanCount; i++) CaptureTree(source, source.OrphanAt(i, out _, out _), epoch);
         CaptureTree(source, DragGhost, epoch);
         CaptureTree(source, DragOverlay, epoch);
@@ -419,6 +427,7 @@ public sealed partial class SceneRecordingSnapshot
     {
         Root = source.Root;
         DeviceScale = source.DeviceScale;
+        TextMeasureStamp = source.TextMeasureStamp;
         DragGhost = source.DragGhost;
         DragGhostBackplate = source.DragGhostBackplate;
         DragOverlay = source.DragOverlay;
@@ -529,6 +538,8 @@ public sealed partial class SceneRecordingSnapshot
         _rowCells.Remove(index);
         _interact.Remove(index);
         _shadow.Remove(index);
+        _cornerMorph.Remove(index);
+        _mirror.Remove(index);
         _arc.Remove(index);
         _polyline.Remove(index);
         _path.Remove(index);
@@ -684,6 +695,8 @@ public sealed partial class SceneRecordingSnapshot
         if ((flags & NodeFlags.SparsePaint) != 0)
         {
             if (source.TryGetShadow(node, out ShadowSpec shadow)) _shadow.Set(index) = shadow;
+            if (source.TryGetCornerMorph(node, out CornerMorph cornerMorph)) _cornerMorph.Set(index) = cornerMorph;
+            if (source.TryGetMirror(node, out NodeHandle mirror)) _mirror.Set(index) = mirror;
             if (source.TryGetArc(node, out ArcSpec arc)) _arc.Set(index) = arc;
             if (source.TryGetPolylineStroke(node, out PolylineStrokeSpec polyline)) _polyline.Set(index) = polyline;
             if (source.TryGetPath(node, out PathSpec path)) _path.Set(index) = path;
@@ -1059,6 +1072,8 @@ public sealed partial class SceneRecordingSnapshot
         return _interact.TryGet((int)node.Raw.Index, out value);
     }
     public bool TryGetShadow(NodeHandle node, out ShadowSpec value) => _shadow.TryGet((int)node.Raw.Index, out value);
+    public bool TryGetCornerMorph(NodeHandle node, out CornerMorph value) => _cornerMorph.TryGet((int)node.Raw.Index, out value);
+    public bool TryGetMirror(NodeHandle node, out NodeHandle value) => _mirror.TryGet((int)node.Raw.Index, out value);
     public bool TryGetArc(NodeHandle node, out ArcSpec value) => _arc.TryGet((int)node.Raw.Index, out value);
     public bool TryGetPolylineStroke(NodeHandle node, out PolylineStrokeSpec value) => _polyline.TryGet((int)node.Raw.Index, out value);
     public bool TryGetPath(NodeHandle node, out PathSpec value) => _path.TryGet((int)node.Raw.Index, out value);
@@ -1228,6 +1243,8 @@ public sealed partial class SceneRecordingSnapshot
         _scroll.BeginCapture(); _selectionRects.BeginCapture(); _underlineRects.BeginCapture();
         _interact.BeginCapture();
         _shadow.BeginCapture();
+        _cornerMorph.BeginCapture();
+        _mirror.BeginCapture();
         _arc.BeginCapture();
         _polyline.BeginCapture();
         _path.BeginCapture();
@@ -1263,6 +1280,8 @@ public sealed partial class SceneRecordingSnapshot
         _scroll.EndCapture(); _selectionRects.EndCapture(); _underlineRects.EndCapture();
         _interact.EndCapture();
         _shadow.EndCapture();
+        _cornerMorph.EndCapture();
+        _mirror.EndCapture();
         _arc.EndCapture();
         _polyline.EndCapture();
         _path.EndCapture();

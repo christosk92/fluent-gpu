@@ -20,6 +20,11 @@ namespace FluentGpu.Animation;
 //  Nested reveals combine, never sum: a reveal presents its own spring, bounded — only while an inner reveal runs inside
 //  it — by its content's presented bottom (ContentExtent + inner deltas), never by its laid-out height (a close lays out
 //  at its FINAL height, which would snap it shut).
+//  A size transition on an ANCESTOR never animates the reveal's change a second time (NoteRevealSnap, read by the host's
+//  projection pass): the height a reveal's layout snap adds to a box above it is the reveal's to present, so a Reflow (or any
+//  size mode) there starts nothing for it, holds no row that would stop the reveal's flow, and the rows after it ride the
+//  reveal's own spring. Two curves on one edge (a 250 ms ease-out reflow carrying the rows under a disclosure whose panel
+//  opened on the reveal spring) ran apart and met with a step at the end.
 //
 //  Settle callbacks (WhenSettled) replace the FrameClock poller components that used to watch HasTracks: the tick (or a
 //  snap, or the node's death) queues them, and the host drains them at the START of the next frame (outside the
@@ -36,6 +41,16 @@ public sealed partial class AnimEngine
     public List<(NodeHandle Node, NodeHandle VisualParent)> RevealExitCarriers { get; } = new(8);
 
     private readonly record struct SettleKey(uint Index, uint Gen, AnimChannel Channel);
+
+    // The settle map's comparer, made with the map: a default comparer (and the record's own field comparers) is created lazily on its first
+    // lookup, which landed on the animation frame the first reveal settled (88 bytes; Zune's edit mode opening, SKILL rule 7).
+    private sealed class SettleKeyComparer : IEqualityComparer<SettleKey>
+    {
+        public static readonly SettleKeyComparer Instance = new();
+        public bool Equals(SettleKey a, SettleKey b) => a.Index == b.Index && a.Gen == b.Gen && (int)a.Channel == (int)b.Channel;
+        public int GetHashCode(SettleKey k) => HashCode.Combine(k.Index, k.Gen, (int)k.Channel);
+    }
+
     private readonly record struct RevealEntry(NodeHandle Node, int Depth, float Presented, float Target);
 
     private int _revealRows;                                    // live RevealExtent rows (the idle fast path's census)
@@ -44,7 +59,7 @@ public sealed partial class AnimEngine
     private List<NodeHandle> _ovViewports = new(8), _ovPrevViewports = new(8);   // viewports given RevealOverscan
     private List<float> _ovAmount = new(8), _ovPrevAmount = new(8);              // (this pass / last pass)
     private bool _overscanGrew;
-    private readonly Dictionary<SettleKey, Action> _settleCallbacks = new();
+    private readonly Dictionary<SettleKey, Action> _settleCallbacks = new(SettleKeyComparer.Instance);
     private readonly Dictionary<uint, int> _settleIndexRefs = new();   // node index → callbacks registered on it
     private readonly List<Action> _settledQueue = new(32);
     private Action?[] _settledDrain = new Action?[32];
@@ -128,6 +143,10 @@ public sealed partial class AnimEngine
         RevealView(node, out float top, out float viewTop, out float viewBottom, out NodeHandle viewport);
         float from = p1, to = p1;
         if (!snap) snap = !RevealPlan.TryClamp(cur, p1, top, viewTop, viewBottom, out from, out to);
+        // A Trailing reveal SLIDES its content with the edge, so all of its move is on screen (the content's foot rides the edge from
+        // under the node's top): it springs the whole way. The clamp exists for a wipe, whose edge moving below the view shows nothing;
+        // a slide clamped there would land the unseen part at once and step the content it carries by that much.
+        if (!snap && TryGetTransition(node, out var anchorSpec) && anchorSpec.Anchor == SizeAnchor.Trailing) { from = cur; to = p1; }
         if (snap)
         {
             // Wholly ABOVE the view (whatever made it snap, reduced motion included): the snap must not move what the user
@@ -584,6 +603,36 @@ public sealed partial class AnimEngine
         }
     }
 
+    /// <summary>Record, per ancestor of <paramref name="carrier"/> (a SizeMode.FlowReveal node whose LAYOUT height changed this commit by
+    /// <paramref name="d"/>, new minus old; an entrant from 0, an exit orphan to 0 under <paramref name="parent"/>, its former visual
+    /// parent), the height that snap adds to it, into <paramref name="into"/> (node index → DIP, summed over carriers). It climbs as the
+    /// reveal's presented flow does (<see cref="AddReveal"/>): all of it through a column, only what reaches past the tallest other
+    /// child in a row or a z-stack, and it stops where a box keeps its own height (a declared height, a share of a definite parent, the
+    /// root, a scroll viewport) or at the scroll content (an extent, not a box), and at a containing reveal, which is a carrier of its own
+    /// (its change already holds this one). The host takes this part out of every size transition it seeds this commit: the reveal
+    /// presents it. Allocation-free past the map's own growth.</summary>
+    internal void NoteRevealSnap(NodeHandle carrier, NodeHandle parent, float d, bool orphan, Dictionary<int, float> into)
+    {
+        NodeHandle child = carrier;
+        bool viaOrphan = orphan;
+        for (NodeHandle p = parent; !p.IsNull && _scene.IsLive(p); child = p, p = _scene.Parent(p))
+        {
+            if (p == _scene.Root || (_scene.Flags(p) & NodeFlags.Scrollable) != 0 || IsVerticalScrollContent(p, out _)) return;
+            ref readonly LayoutInput li = ref _scene.Layout(p);
+            if (!float.IsNaN(li.Height)) return;
+            NodeHandle gp = _scene.Parent(p);
+            if (!gp.IsNull && FillsParentHeight(gp, in li) && IsDefiniteHeight(gp)) return;
+            if (TryGetTransition(p, out var t) && t.Size == SizeMode.FlowReveal && (t.Channels & TransitionChannels.Size) != 0) return;
+            // FlowContribution moves a PRESENTED extent off the laid-out one (d < 0 opens); a layout snap is its mirror image.
+            float c = -FlowContribution(p, child, -d, viaOrphan);
+            if (MathF.Abs(c) < 1e-3f) return;
+            int key = (int)p.Raw.Index;
+            into[key] = into.TryGetValue(key, out float had) ? had + c : c;
+            d = c;
+            viaOrphan = false;
+        }
+    }
+
     // A live, unparked reveal row on the node.
     private bool IsLiveReveal(NodeHandle n)
     {
@@ -593,7 +642,8 @@ public sealed partial class AnimEngine
     }
 
     // How far a child's presented-extent change moves its PARENT's presented bottom: all of it in a column (children
-    // stack); in a row / z-stack / grid only the part that reaches past the tallest other child.
+    // stack); in a row / z-stack / grid only the part that reaches past the tallest other child, each other child counted at
+    // what it HOLDS the parent to (HeldHeight), never at a height the parent gave it.
     private float FlowContribution(NodeHandle parent, NodeHandle child, float d, bool childIsOrphan)
     {
         if (IsColumnFlow(parent)) return d;
@@ -603,10 +653,27 @@ public sealed partial class AnimEngine
         for (var s = _scene.FirstChild(parent); !s.IsNull; s = _scene.NextSibling(s))
         {
             if (s == child) continue;
-            ref readonly RectF sb = ref _scene.Bounds(s);
-            others = MathF.Max(others, sb.Y + sb.H);
+            others = MathF.Max(others, _scene.Bounds(s).Y + HeldHeight(parent, s, 0));
         }
         return MathF.Max(childBottom + d, others) - MathF.Max(childBottom, others);
+    }
+
+    // The height a child holds its parent to: its laid-out height, unless that height is the PARENT's (stretched across a single-line
+    // row, a filling z-stack layer, with no declared height: FillsParentHeight), which says nothing about the child; then what its own
+    // content needs (its children's bottom, the same way down, plus its bottom padding, at least its MinH). Counted at the laid-out
+    // height, a row's stretched gutter cells beside an Expander took the row's NEW height on the commit that opened it, so the opening
+    // panel "reached past" nothing: the reveal's flow stopped at the row and the rows under it stood at their final place from the
+    // first frame while the panel unfolded (and on a close the row's cells were already short, so the two directions disagreed).
+    private float HeldHeight(NodeHandle parent, NodeHandle s, int depth)
+    {
+        ref readonly RectF sb = ref _scene.Bounds(s);
+        ref readonly LayoutInput li = ref _scene.Layout(s);
+        if (depth > 8 || !float.IsNaN(li.Height) || !FillsParentHeight(parent, in li)) return sb.H;
+        float e = li.Padding.Top + li.Padding.Bottom;
+        for (var c = _scene.FirstChild(s); !c.IsNull; c = _scene.NextSibling(c))
+            e = MathF.Max(e, _scene.Bounds(c).Y + HeldHeight(s, c, depth + 1) + _scene.Layout(c).Margin.Bottom + li.Padding.Bottom);
+        if (!float.IsNaN(li.MinH)) e = MathF.Max(e, li.MinH);
+        return MathF.Min(e, sb.H);
     }
 
     private bool IsColumnFlow(NodeHandle n)
@@ -721,9 +788,23 @@ public sealed partial class AnimEngine
                 p.PresentedH = MathF.Max(0f, h + delta);
                 p.FlowBits |= NodePaint.FlowOwnsHBit;
             }
-            if (self && TryGetTransition(n, out var spec) && spec.Anchor == SizeAnchor.Parallax)
+            if (self && TryGetTransition(n, out var spec) && spec.Anchor is SizeAnchor.Parallax or SizeAnchor.Trailing)
             {
-                p.ChildShiftY = RevealPlan.ParallaxShift(h + delta, ContentExtent(n));
+                // The content leads by a share of what is still hidden WHERE IT CAN BE SEEN. A reveal that runs past its view's lower
+                // edge is driven only to that edge (RevealPlan.TryClamp: the rest lands at once, unseen), so measured against its whole
+                // content the lead stayed at its cap for the whole flight and dropped to 0 in the one frame the row came to rest: a tall
+                // body opening near the foot of a list sat 24 DIP high, over its header, then snapped down (and a close started with
+                // the same step). The visible extent is the view's geometry, read each pass like the seed read it: no state to carry
+                // through a reverse.
+                // A Trailing reveal is never clamped (SeedFlowReveal: a slide is all on screen), so its foot rides the edge over the
+                // whole content: what shows is always the content's lower part, its foot last, never a slice through its middle.
+                if (spec.Anchor == SizeAnchor.Trailing) p.ChildShiftY = RevealPlan.TrailingShift(h + delta, ContentExtent(n));
+                else
+                {
+                    RevealView(n, out float top, out _, out float viewBottom, out _);
+                    float seen = MathF.Min(ContentExtent(n), RevealPlan.VisibleLimit(top, viewBottom));
+                    p.ChildShiftY = RevealPlan.ParallaxShift(h + delta, seen);
+                }
                 p.FlowBits |= NodePaint.FlowOwnsShiftBit;
             }
             _scene.Mark(n, NodeFlags.PaintDirty);

@@ -25,13 +25,18 @@ public static class RevealPlan
     {
         from = to = p1;
         if (IsAboveView(p0, p1, regionTop, viewTop)) return false;
-        float limit = MathF.Max(0f, viewBottom + VisibleSlackDip - regionTop);
+        float limit = VisibleLimit(regionTop, viewBottom);
         from = MathF.Min(p0, MathF.Max(p1, limit));
         to = MathF.Min(p1, MathF.Max(p0, limit));
         if (MathF.Abs(from - to) >= 0.5f) return true;
         from = to = p1;
         return false;
     }
+
+    /// <summary>How much of a region whose top sits at <paramref name="regionTop"/> (window DIP) can be seen above a view's lower
+    /// edge <paramref name="viewBottom"/> (with the slack): the extent <see cref="TryClamp"/> drives a reveal through, and the
+    /// extent a Parallax lead is measured against (<see cref="ParallaxShift"/>).</summary>
+    public static float VisibleLimit(float regionTop, float viewBottom) => MathF.Max(0f, viewBottom + VisibleSlackDip - regionTop);
 
     /// <summary>The visible span (<see cref="Scene.RevealBand.Visible"/>) a band records when it is armed over a move whose clamped
     /// spring runs [<paramref name="from"/>, <paramref name="to"/>]: the larger end. A REVERSE of a live band (<paramref name="prior"/>
@@ -53,9 +58,18 @@ public static class RevealPlan
 
     /// <summary>The Parallax child shift of a node presenting <paramref name="presented"/> of a content extent
     /// <paramref name="contentExtent"/>: the content leads by a damped share of what is still hidden, never past
-    /// <see cref="ParallaxMaxDip"/>; 0 once fully presented.</summary>
+    /// <see cref="ParallaxMaxDip"/>; 0 once fully presented. <paramref name="contentExtent"/> is the content a viewer can SEE
+    /// (the caller caps it at <see cref="VisibleLimit"/>): a reveal that runs past its view's lower edge is driven only to that
+    /// edge, so the lead must reach 0 there, not at the content's far end.</summary>
     public static float ParallaxShift(float presented, float contentExtent)
         => -MathF.Min(ParallaxMaxDip, MathF.Max(0f, contentExtent - presented) * ParallaxShare);
+
+    /// <summary>The Trailing child shift of a node presenting <paramref name="presented"/> of a content extent <paramref name="contentExtent"/>:
+    /// the content's far edge rides the moving edge (it slides out from under the node's top, and back under it), so the clip never cuts
+    /// through it: what shows is always its lower part, its foot last. 0 once fully presented. The WHOLE content's extent: a Trailing
+    /// reveal springs its whole move (no visible-span clamp; a slide is on screen all the way), so the shift is continuous end to end.</summary>
+    public static float TrailingShift(float presented, float contentExtent)
+        => -MathF.Max(0f, contentExtent - presented);
 
     /// <summary>Normalized progress (0 → 1) of the <see cref="MotionTokenId.Reveal"/> spring <paramref name="tMs"/> after it
     /// leaves rest — the curve every reveal runs, sampled exactly as the scheduler samples it (gates + tests).</summary>

@@ -215,6 +215,8 @@ public sealed partial class SceneRecordingSnapshot
         if (!SparseEqual(_scroll, other._scroll, i, ScrollEqual, out which)) return Fail(out mismatch, $"n#{i} ScrollState ({which})");
         if (!SparseEqual(_interact, other._interact, i, (in InteractionAnim a, in InteractionAnim b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} InteractionAnim ({which})");
         if (!SparseEqual(_shadow, other._shadow, i, (in ShadowSpec a, in ShadowSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} ShadowSpec ({which})");
+        if (!SparseEqual(_cornerMorph, other._cornerMorph, i, (in CornerMorph a, in CornerMorph b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} CornerMorph ({which})");
+        if (!SparseEqual(_mirror, other._mirror, i, (in NodeHandle a, in NodeHandle b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} Mirror ({which})");
         if (!SparseEqual(_arc, other._arc, i, (in ArcSpec a, in ArcSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} ArcSpec ({which})");
         if (!SparseEqual(_polyline, other._polyline, i, (in PolylineStrokeSpec a, in PolylineStrokeSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} PolylineStrokeSpec ({which})");
         if (!SparseEqual(_path, other._path, i, (in PathSpec a, in PathSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} PathSpec ({which})");

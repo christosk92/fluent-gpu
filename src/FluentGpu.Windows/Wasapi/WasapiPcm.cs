@@ -32,10 +32,18 @@ public static class WasapiPcm
     /// EQ/normalization signals. When <paramref name="useRtFeed"/> (M4, spec §7.9) the render/consume moves onto an MMCSS
     /// "Pro Audio" RT feed thread (decode on a worker via a lock-free ring, clock poll + Position on a non-RT tick), and a
     /// follow-default <see cref="AudioDeviceController"/> rebuilds ONLY the sink on a device change; otherwise it drives the
-    /// M2 single control-thread feeder. On-box only.</summary>
+    /// M2 single control-thread feeder. On-box only.
+    /// <para><paramref name="openEndpoint"/> (optional) opens the endpoint a session renders to (default: <c>new WasapiAudioDevice(fmt)</c>,
+    /// the console default): the host that lets the user choose an output opens it there (<see cref="WasapiAudioDevice(MixFormat, string?)"/>)
+    /// and decides what to do when it is gone. <paramref name="followsDefault"/> says whether a default-device change concerns the live
+    /// session (false while it plays on a chosen endpoint); <paramref name="endpointChanged"/> answers, for an endpoint whose state changed
+    /// or that was removed (<see cref="MmDeviceWatcher.EndpointStateChanged"/>), whether the session should rebuild (the chosen one left or
+    /// came back).</para></summary>
     public static PcmAudioPlayer CreateBackend(IAudioEffects? effects = null, int maxBlock = 1024, bool useRtFeed = true,
-        Func<MixFormat, IAudioDecoder>? decoderFactory = null)
+        Func<MixFormat, IAudioDecoder>? decoderFactory = null, Func<MixFormat, IAudioEndpoint>? openEndpoint = null,
+        Func<bool>? followsDefault = null, Func<string, bool>? endpointChanged = null)
     {
+        Func<MixFormat, IAudioEndpoint> open = openEndpoint ?? (static fmt => new WasapiAudioDevice(fmt));
         var format = ProbeFormat();
         PowerThrottling.OptOut();   // F4 — before any producer/clock thread exists; covers the !useRtFeed path too. Idempotent, once per process
 
@@ -46,12 +54,12 @@ public static class WasapiPcm
         var sizing = new RingSizing(BlockMs: 10.0, AheadMs: 2000.0, RingMs: 4000.0, KeepBehindMs: 1000.0);   // D8: 2 s ahead + 1 s kept behind
 
         if (!useRtFeed)
-            return new PcmAudioPlayer(format, fmt => new WasapiAudioDevice(fmt), effects, maxBlock, driveWithOwnThread: true,
+            return new PcmAudioPlayer(format, open, effects, maxBlock, driveWithOwnThread: true,
                 decoderFactory: decoderFactory, rt: rt, ringSizing: sizing);
 
         return new PcmAudioPlayer(
             format,
-            endpointFactory: fmt => new WasapiAudioDevice(fmt),
+            endpointFactory: open,
             effects: effects,
             maxBlock: maxBlock,
             driveWithOwnThread: false,              // the RT feed drives — NOT the M2 single feeder
@@ -71,7 +79,9 @@ public static class WasapiPcm
                 // (spec §7.9 Fix 3): after a soft reload/RebuildSink the session's live rate can differ from the format
                 // this backend was originally probed at, and a follow-default rebuild opening the fresh default device
                 // should hand it the CURRENT rate, not a stale one from process start.
-                var controller = new AudioDeviceController(session, () => new WasapiAudioDevice(session.Format), watcher, feed);
+                var controller = new AudioDeviceController(session, () => open(session.Format), watcher, feed, followsDefault);
+                if (endpointChanged is not null)
+                    watcher.EndpointStateChanged += id => { if (endpointChanged(id)) controller.RequestRebuild(); };
                 session.RegisterDisposable(controller);
                 session.RegisterDisposable(watcher);
                 controller.MarkRunning();

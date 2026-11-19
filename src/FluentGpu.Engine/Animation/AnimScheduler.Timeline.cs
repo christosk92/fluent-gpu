@@ -38,7 +38,7 @@ public sealed partial class AnimEngine
                           Cadence? cadence = null, bool snapToDevicePixels = false)
     {
         if (Snapping && !loop && composite == CompositeOp.Replace && keys.Length > 0
-            && TryLandAtEnd(node, channel, keys[^1].Value)) return;   // SnapScope: the last keyframe now, no row
+            && TryLandAtEnd(node, channel, Terminal(keys))) return;   // SnapScope: the value the track ends on now, no row
         int s = Get(node, channel, composite != CompositeOp.Replace);
         SetCadence(s, cadence ?? Cadence.Display);
         ref AnimValue r = ref _slab.At(s);
@@ -46,7 +46,7 @@ public sealed partial class AnimEngine
         r.Gen = default;
         r.Gen.FromV = keys.Length > 0 ? keys[0].Value : 0f;
         r.Gen.DurationMs = durationMs;
-        r.To = keys.Length > 0 ? keys[^1].Value : 0f;
+        r.To = Terminal(keys);
         r.Position = r.Gen.FromV; r.Velocity = 0f; r.ElapsedMs = 0f;
         r.DelayRemainingMs = MathF.Max(0f, delayMs);
         r.Flags &= ~(AnimFlags.Done | AnimFlags.Driven);
@@ -65,7 +65,7 @@ public sealed partial class AnimEngine
                                 ReducedMotionPolicy reduced = ReducedMotionPolicy.SnapEnd,
                                 CompositeOp composite = CompositeOp.Replace, float delayMs = 0f)
     {
-        float terminal = keys.Length > 0 ? keys[^1].Value : 0f;
+        float terminal = Terminal(keys);
         if (ReducedSnap(channel, reduced)) { SnapTo(node, channel, terminal); return; }
         Keyframes(node, channel, keys, durationMs, composite: composite, delayMs: delayMs);
     }
@@ -137,6 +137,13 @@ public sealed partial class AnimEngine
         => r.Has(AnimFlags.SnapDevicePx)
             ? SnapToDevicePixels(r.Channel, value, r.Channel == AnimChannel.ScaleX ? bounds.W : bounds.H, deviceScale)
             : value;
+
+    /// <summary>The value a one-shot track ends on and holds: its sample at progress 1, which is where the tick stops it
+    /// (<see cref="AdvanceTimeline"/>). That is the last keyframe only while the keys end at offset 1. A track cut to a window
+    /// of its source timeline keeps the keys past the window at offsets above 1 (a Lottie played over its first half): its
+    /// last keyframe is a pose the track never reaches, so a snap that landed there showed the END of the source timeline
+    /// (the scene's outro, usually empty) where the running track holds the end of the window.</summary>
+    internal static float Terminal(ReadOnlySpan<Keyframe> keys) => keys.Length > 0 ? Sample(keys, 1f) : 0f;
 
     /// <summary>A keyframe track's value at progress <paramref name="u"/> (0..1), per-segment easing — exactly what the UI
     /// tick and the render thread sample (an app pins its own motion function against it).</summary>

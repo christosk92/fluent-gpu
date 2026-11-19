@@ -152,6 +152,7 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
     public bool? TabStop;
     public Edges4? FocusVisualMargin;
     public bool BlocksDragArm;
+    public bool ClaimsDescendantDrag;
     public bool HoverScopeTransparent;
     public bool FocusRingHost;
     public NodeAttachment? Attachment;
@@ -181,6 +182,7 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
             && EqualityComparer<bool?>.Default.Equals(TabStop, o.TabStop)
             && EqualityComparer<Edges4?>.Default.Equals(FocusVisualMargin, o.FocusVisualMargin)
             && EqualityComparer<bool>.Default.Equals(BlocksDragArm, o.BlocksDragArm)
+            && EqualityComparer<bool>.Default.Equals(ClaimsDescendantDrag, o.ClaimsDescendantDrag)
             && EqualityComparer<bool>.Default.Equals(HoverScopeTransparent, o.HoverScopeTransparent)
             && EqualityComparer<bool>.Default.Equals(FocusRingHost, o.FocusRingHost)
             && EqualityComparer<NodeAttachment?>.Default.Equals(Attachment, o.Attachment);
@@ -210,6 +212,9 @@ internal sealed class BoxColdGesture : IEquatable<BoxColdGesture>
     public Action<DragEventArgs>? OnDragDelta;
     public Action<DragEventArgs>? OnDragCompleted;
     public Action? OnDragCanceled;
+    public HoldSpec? Hold;
+    public Action<HoldEventArgs>? OnHold;
+    public Action<HoldEventArgs>? OnHoldReleased;
     public DragSource? Draggable;
     public DropTargetSpec? DropTarget;
     public bool Repeats;
@@ -247,6 +252,9 @@ internal sealed class BoxColdGesture : IEquatable<BoxColdGesture>
             && EqualityComparer<Action<DragEventArgs>?>.Default.Equals(OnDragDelta, o.OnDragDelta)
             && EqualityComparer<Action<DragEventArgs>?>.Default.Equals(OnDragCompleted, o.OnDragCompleted)
             && EqualityComparer<Action?>.Default.Equals(OnDragCanceled, o.OnDragCanceled)
+            && EqualityComparer<HoldSpec?>.Default.Equals(Hold, o.Hold)
+            && EqualityComparer<Action<HoldEventArgs>?>.Default.Equals(OnHold, o.OnHold)
+            && EqualityComparer<Action<HoldEventArgs>?>.Default.Equals(OnHoldReleased, o.OnHoldReleased)
             && EqualityComparer<DragSource?>.Default.Equals(Draggable, o.Draggable)
             && EqualityComparer<DropTargetSpec?>.Default.Equals(DropTarget, o.DropTarget)
             && EqualityComparer<bool>.Default.Equals(Repeats, o.Repeats)

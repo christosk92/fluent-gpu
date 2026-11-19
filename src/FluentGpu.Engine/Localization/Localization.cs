@@ -50,6 +50,10 @@ public static class Localization
     private static volatile ReadState s_read = new(false, System.Array.Empty<Dictionary<string, string>>(), "en-US");
     private static void PublishReadState() => s_read = new ReadState(_pseudo, _chain, _current);
 
+    // Every loaded culture's table by name, read by TryGetIn (a culture that need not be active). Tables itself is written in
+    // place under Gate, so RebuildChain publishes this copy beside the chain and the read stays lock-free like Get's.
+    private static volatile Dictionary<string, Dictionary<string, string>> s_tables = new(System.StringComparer.OrdinalIgnoreCase);
+
     // The NEUTRAL fallback floor: the built-in, ship-with-the-assembly neutral strings a library registers for its OWN
     // user-facing text (the control kit does this — see FluentGpu.Controls, whose generated module initializer calls
     // RegisterNeutral). It is consulted LAST in every resolution (after the active culture, its parent, and the default
@@ -284,6 +288,28 @@ public static class Localization
         return found;
     }
 
+    /// <summary>Read <paramref name="key"/>'s raw template from <paramref name="culture"/>'s own table, whether or not
+    /// that culture is active (settings search indexes the en-US terms beside the UI language this way). Consults the
+    /// culture's table, then its parent's (<c>nl-NL → nl</c>), never the default culture or the neutral floor, so a key
+    /// the culture lacks is a miss rather than another language's string. No placeholder formatting and no pseudo
+    /// transform: both belong to the active culture. Returns false when no table for the culture is loaded or the key
+    /// is absent. Reads the tables <see cref="LoadFolder"/> and friends already hold (nothing from disk), lock-free and
+    /// allocation-free, and subscribes the caller to <see cref="CultureEpoch"/> like <see cref="Get"/>, so a bound
+    /// thunk re-resolves after a reload.</summary>
+    public static bool TryGetIn(string culture, string key, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? value)
+    {
+        _ = CultureEpoch.Value;   // SUBSCRIBE: a reload (LoadFolder / AddStrings) bumps the epoch
+        value = null;
+        if (string.IsNullOrWhiteSpace(culture)) return false;
+        var tables = s_tables;
+        string name = Normalize(culture);
+        if (tables.TryGetValue(name, out var table) && table.TryGetValue(key, out value)) return true;
+        int dash = name.IndexOf('-');
+        return dash > 0
+            && tables.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(name.AsSpan(0, dash), out var parent)
+            && parent.TryGetValue(key, out value);
+    }
+
     // ── Internals ────────────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Walk the precomputed chain in order, returning the first table that has the key. The chain is
@@ -298,7 +324,8 @@ public static class Localization
     }
 
     /// <summary>Recompute the ordered resolution chain: active culture → its parent (strip the region: <c>fr-FR → fr</c>)
-    /// → default culture → default's parent. Duplicates and absent tables are dropped. Called under <see cref="Gate"/>.</summary>
+    /// → default culture → default's parent. Duplicates and absent tables are dropped. Also republishes the per-culture
+    /// table copy <see cref="TryGetIn"/> reads. Called under <see cref="Gate"/>.</summary>
     private static void RebuildChain()
     {
         var order = new List<Dictionary<string, string>>(4);
@@ -318,6 +345,7 @@ public static class Localization
         // all of them (or when none are loaded) still resolves to its built-in neutral string.
         if (_neutral.Count > 0) order.Add(_neutral);
         _chain = order.ToArray();
+        s_tables = new Dictionary<string, Dictionary<string, string>>(Tables, System.StringComparer.OrdinalIgnoreCase);
         PublishReadState();
     }
 
@@ -371,6 +399,9 @@ public static class Loc
     public static FluentGpu.Signals.Prop<string> Bind(string key) => Localization.Bind(key);
     /// <inheritdoc cref="Localization.BindF(string, ValueTuple{string, object}[])"/>
     public static FluentGpu.Signals.Prop<string> BindF(string key, params (string Name, object Value)[] args) => Localization.BindF(key, args);
+    /// <inheritdoc cref="Localization.TryGetIn"/>
+    public static bool TryGetIn(string culture, string key, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? value)
+        => Localization.TryGetIn(culture, key, out value);
     /// <inheritdoc cref="Localization.CurrentCulture"/>
     public static string CurrentCulture => Localization.CurrentCulture;
     /// <inheritdoc cref="Localization.SetCulture"/>

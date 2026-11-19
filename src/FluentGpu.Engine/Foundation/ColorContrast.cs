@@ -35,6 +35,27 @@ public static class ColorContrast
     /// (<see cref="NearBlackInk"/>) vs white.</summary>
     public static ColorF PickContrast(in ColorF bg) => PickContrast(bg, NearBlackInk, WhiteInk);
 
+    /// <summary>How far above the asked ratio <see cref="EnsureContrast"/> aims: the fill reaches the screen in 8-bit.</summary>
+    private const float QuantisationMargin = 0.05f;
+
+    /// <summary>The fill nearest <paramref name="bg"/> on which <paramref name="ink"/> reads at <paramref name="min"/> : 1: <paramref name="bg"/>
+    /// itself when it already does, else <paramref name="bg"/> mixed toward black (a light ink) or white (a dark ink) just far enough. Its hue
+    /// stays (a cover-coloured block where neither ink reaches AA, e.g. a mid-tone purple that gives white 4.47 : 1, darkens a shade).
+    /// Pure; no allocation (a fixed bisection).</summary>
+    public static ColorF EnsureContrast(in ColorF bg, in ColorF ink, float min = 4.5f)
+    {
+        if (Ratio(ink, bg) >= min) return bg;
+        float aim = min + QuantisationMargin;   // the fill is drawn in 8-bit: the bisection's exact edge rounds under min (4.49 : 1 measured)
+        ColorF away = RelativeLuminance(ink) > RelativeLuminance(bg) ? new ColorF(0f, 0f, 0f, bg.A) : new ColorF(1f, 1f, 1f, bg.A);
+        float lo = 0f, hi = 1f;
+        for (int i = 0; i < 16; i++)
+        {
+            float mid = 0.5f * (lo + hi);
+            if (Ratio(ink, ColorF.Lerp(bg, away, mid)) >= aim) hi = mid; else lo = mid;
+        }
+        return ColorF.Lerp(bg, away, hi);
+    }
+
     /// <summary>Relative luminance delta as a fraction of the lighter surface (for adjacent-layer checks).</summary>
     public static float LuminanceDelta(in ColorF a, in ColorF b)
     {

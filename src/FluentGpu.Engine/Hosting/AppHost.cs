@@ -315,6 +315,10 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// <summary>The panel's refresh interval (ms) as the host paced this frame — 8.33 at 120 Hz, 16.67 at 60 Hz. The
     /// frame budget every "slow frame" judgement is made against; a consumer never hard-codes 16.</summary>
     public double RefreshIntervalMs { get; init; }
+    /// <summary>ALWAYS-ON: JIT compile time spent on the UI thread inside this frame (ms; the
+    /// <c>System.Runtime.JitInfo.GetCompilationTime(currentThread: true)</c> delta across the Paint). A JIT build pays it the first
+    /// time a path runs; NativeAOT ships none (0 there), so a cost judge subtracts it to read the shipped frame.</summary>
+    public double JitMs { get; init; }
     /// <summary>Monotonic count of scene publications the render thread never adopted (a newer publication superseded
     /// them before it woke). Ordinary and cheap — record-dirty bits and the pending-removal ledger accumulate until a
     /// publication is CONSUMED, so a skipped one loses nothing. A sustained climb means the render thread is behind.</summary>
@@ -580,6 +584,7 @@ public sealed partial class AppHost : IDisposable
     // forced full is a one-shot: a motion re-present of the same publication must not re-raster the whole window again.
     private ulong _publicationRepaintSubmittedSeq;
     private long _lastRenderedTargetEpoch = -1;
+    private Size2 _lastRenderedFrameSize;   // render thread: the size of the last recorded publication (a change repaints whole)
     // UI→render mirror of _popupWindows.Count. The render thread must never present a skip candidate while a popup
     // window rides the same turn (RecordPopups submits its own swapchain from the same publication).
     private int _popupWindowCount;
@@ -1546,7 +1551,12 @@ public sealed partial class AppHost : IDisposable
     private readonly Dictionary<NodeHandle, ProjCapture> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
     private readonly List<NodeHandle> _projectionSuppressionRoots = new();          // changed projected containers that own descendant motion this commit
     private readonly List<NodeHandle> _liveReflowScratch = new(8);                  // nodes with a live LayoutW/H reflow row this commit (ApplyProjections shove suppression)
+    private readonly Dictionary<int, float> _revealSnapH = new(8);                  // ancestor idx → the height a FlowReveal's layout snap added to it this commit (AnimEngine.NoteRevealSnap): the reveal presents it, no size transition there may
     private readonly Dictionary<int, int> _reflowShoveFrames = new(16);             // parent idx → the child idx on a reflowing node's ancestor path ("the reflow-carrying child under this parent")
+    /// <summary>The most layout passes a frame runs after its layout for sizes its layout delivered (a measured width a part re-renders from).</summary>
+    private const int BoundsRelayoutPasses = 3;
+    private bool _frameResized;                                                   // this frame changed the window size (ApplyProjections: a drag frame re-renders nothing at the reflows' start)
+    private readonly List<NodeHandle> _resizeLandScratch = new(64);                   // ApplyProjections: the captured nodes a resize-only suppression lands
     private readonly List<NodeHandle> _reflowOwnedRoots = new(4);                   // SuppressDescendantTransitions containers a live sibling reflow resizes this commit: they land, they suppress nothing
     private readonly List<int> _positionScratch = new(64);                          // nodes with a position transition (RunReflowLayout's wrap watch)
     private readonly List<NodeHandle> _enterReflowsSeeded = new(8);                 // this frame's Reflow ENTERS (SeedReflowsFirst lays them out at 0)
@@ -1813,6 +1823,10 @@ public sealed partial class AppHost : IDisposable
     /// (phase times included). A struct argument, so the invoke allocates nothing; handlers must be cheap — they run
     /// inside the frame, after present has been handed off.</summary>
     public event Action<FrameStats>? FrameCompleted;
+    /// <summary>Opt-in (null: off, the default, and free): every relayout scope the frames solve is appended here (the root a
+    /// scoped pass re-solved, an escape absorbed in place, the window solve), with the measures it cost. A profiler sets a list,
+    /// reads it after each frame and clears it; the engine never clears it.</summary>
+    public List<RelayoutScope>? RelayoutScopeLog { get => _invalidator.ScopeLog; set => _invalidator.ScopeLog = value; }
     public event Action? SystemColorsChanged;
 
     /// <summary>
@@ -2224,7 +2238,7 @@ public sealed partial class AppHost : IDisposable
             // This host's OWN swapchain (the primary's or a detached child's), once, at the newest size.
             _ownResizesApplied++;
             long r0 = Stopwatch.GetTimestamp();
-            try { _swapchain.Resize(ownSize); }
+            try { _swapchain.Reserve(ownSize); }
             catch (Exception) when (_device.NoteIfDeviceLost()) { }
             NoteRenderResize(ownSize, ToMs(r0 - ownPostedQpc), ToMs(Stopwatch.GetTimestamp() - r0), ownCollapsed);
         }
@@ -2501,6 +2515,16 @@ public sealed partial class AppHost : IDisposable
         // presents it, without the UI ever parking this loop for it (the old Quiesce per pointer move).
         DrainPopupRenderActions();
         if (!_renderSeam.IsCurrentTarget(rf)) return;
+        // The swapchain takes the size this frame was laid out for (EnsureSize): a frame one step behind a live drag is shown at its own
+        // size rather than dropped. Within the buffers' room that is a source-size change only (D3D12: SetSourceSize).
+        Size2 frameSize = rf.Submit.SizePx;
+        if (frameSize.Width >= 1f && frameSize.Height >= 1f && frameSize != _swapchain.SizePx)
+        {
+            long r0 = Stopwatch.GetTimestamp();
+            try { _swapchain.Resize(frameSize); }
+            catch (Exception) when (_device.NoteIfDeviceLost()) { return; }
+            NoteRenderResize(frameSize, 0, ToMs(Stopwatch.GetTimestamp() - r0), 0);
+        }
         VideoApplier.DeferAll = rf.Freeze == Threading.FreezeKind.Hold;   // E2: a frozen frame defers every video placement and release until the thaw frame
         try
         {
@@ -2640,8 +2664,9 @@ public sealed partial class AppHost : IDisposable
                 repaint.Union(PublicationRepaintForTurn(rf.Submit.RepaintDamage,
                     alreadySubmitted: !fresh && rf.PublishSeq == _publicationRepaintSubmittedSeq,
                     crossfadesLive: sceneFrame.Images.HasCrossfades(imageClockMs)));
-                if (rf.TargetEpoch != _lastRenderedTargetEpoch)
+                if (rf.TargetEpoch != _lastRenderedTargetEpoch || rf.Submit.SizePx != _lastRenderedFrameSize)
                 {
+                    _lastRenderedFrameSize = rf.Submit.SizePx;   // a frame at another size than the last one: the swapchain was sized to it
                     // First frame on this target, or the UI re-created/resized it: nothing on the target is trustworthy.
                     // The publisher forces the same thing off its own LastConsumedTargetEpoch; ForceFull keeps the FIRST
                     // reason, so agreeing twice is idempotent — and this arm also covers the very first frame.
@@ -2888,6 +2913,7 @@ public sealed partial class AppHost : IDisposable
         }
         _renderPresentCount++;
         NotePresented(rf.PublishSeq);
+        _device.TurnPresented();   // after the present: restock what the turn drew down (IGpuDevice.TurnPresented)
         // Per target: this host's own GPU sample feeds this host's own depth policy, applied to this host's own
         // swapchain (a pop-out's GPU time never retunes the main window's present queue).
         ChoosePresentQueueDepth();
@@ -5734,6 +5760,7 @@ public sealed partial class AppHost : IDisposable
         _reconciler.Anim = _anim;
         _anim.ReflowSizeWritten = _reconciler.FollowReflowSize;   // an easing template root moves its parent (the anchors mirror it live)
         _reconciler.OnBoundsTransitionGained = CaptureGainedProjection;   // `Animate = cond ? X : null`: the first flip eases too
+        _scene.OnStructureChanged = CaptureStructureStep;   // a structure step on a resized frame: the parts under it that animate through it
         _reconciler.Connected = _connected;   // shared-element (connected-animation) participant registry, fed by Element.MorphId
         _reconciler.RequestFrame = WakeFrame;      // wake-only seam: mutate retained scene state, wake, DON'T re-render
         // KeepAlive park/un-park → quiesce/resume the parked subtree's animation + scroll tickers so a backgrounded tab's
@@ -5840,6 +5867,7 @@ public sealed partial class AppHost : IDisposable
         _reconciler.SetAmbient(SharedTransition.BeginConfigured, new Signal<object?>((Action<FluentGpu.Animation.ConnectedTransitionRequest>)_connected.Begin));
         _reconciler.SetAmbient(SharedTransition.SetMotion, new Signal<object?>((Action<FluentGpu.Animation.ConnectedMotion>)(m => _connected.FlyMotion = m)));   // live fly-curve switcher (app A/B)
         _reconciler.SetAmbient(SharedTransition.BeginNav, new Signal<object?>((Func<FluentGpu.Animation.ConnectedNavRequest, bool>)(r => _connected.BeginNav(in r))));   // connected navigation flight (a card's cover into its page)
+        _reconciler.SetAmbient(SharedTransition.NavOriginRect, new Signal<object?>((Func<FluentGpu.Animation.ConnectedOriginRequest, RectF>)(r => _connected.NavOriginRect(in r))));   // where a page that flies nothing grows from
         _connected.NavOrigin = () => _dispatcher.ActivatingNode is { IsNull: false } acting ? acting : _dispatcher.Focused;   // the element the user acted on
         // Window-visibility ambient: the channel value IS the visibility signal (an IReadSignal<bool>, never re-published),
         // so UseIsActive resolves it once and subscribes to the INNER signal — see Activation.IsActive.
@@ -6753,6 +6781,7 @@ public sealed partial class AppHost : IDisposable
             DeliverPendingPlatformEvents(includeSystemColors: true);
 
             long frameStart = Stopwatch.GetTimestamp();
+            TimeSpan jitAtFrameStart = System.Runtime.JitInfo.GetCompilationTime(currentThread: true);   // FrameStats.JitMs
             if (FrameLedger.Enabled) _ledgerAlloc = new LedgerPaintAlloc { Start = GC.GetAllocatedBytesForCurrentThread() };
             MountProf.FrameBegin();
             GapPaintStart(frameStart);                         // close + classify the UI gap since the last Paint (AppHost.UiGap.cs)
@@ -6774,6 +6803,7 @@ public sealed partial class AppHost : IDisposable
             long segStart = diagTick ? Stopwatch.GetTimestamp() : 0;
             ApplyPendingFullscreen();   // first: its SetWindowPos resizes the window, and THIS frame's EnsureSize + layout follow it
             bool resized = EnsureSize(keepAlive);
+            _frameResized = resized;
             _tiers.FrameResized = resized;   // a measured crossing stored during this frame's layout waits one more layout (TierRegistry.Store)
             if (_fzPhase != FreezePhase.None) FreezeFrameStart(resized);   // E2: a resize / DPI change or the watchdog cuts the freeze (and ends its snap scope) before this frame flushes
             if (_tx is not null || _txPending is not null) TxFrameStart();  // E5: the theme transaction's step (its apply flush is this frame)
@@ -6892,6 +6922,10 @@ public sealed partial class AppHost : IDisposable
             long db = 0, dt0 = 0;
             if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt0 = Stopwatch.GetTimestamp(); }
             _projectionCaptureOpen = false;
+            _layout.BeginFrameRects();   // a part that gains a transition after this frame's layout moved it is captured from the rect it was drawn at
+            _resizeStructureFrame = false;
+            _layout.NoteLineSteps = false;
+            _scene.StructureChanged.Clear();
             if (willReconcile && _everLaidOut && !_scene.Root.IsNull && !resized)
             {
                 _projectBefore.Clear();
@@ -6910,7 +6944,26 @@ public sealed partial class AppHost : IDisposable
                 // the modal loop: maximize / restore / snap / programmatic resizes arrive as a plain WM_SIZE with no
                 // InModalLoop, so gating the cancel on `resized` (not just _window.InModalLoop) covers them too. Capture
                 // is already skipped on a resize (above), so no NEW projection starts this frame either.
-                _anim.CancelStructuralAll(_scene.BoundsAnimatedNodes);
+                // A SizeMode.Reflow WIDTH row (LayoutW) and a declared box's SizeMode.Relayout row are no such tracks: they are layout
+                // inputs, and the (re)layout below solves the subtree at their interpolated size at the new window size (AnimEngine
+                // KeptThroughResize; a height reflow follows the width and is landed unless it opts in). So the reflows a tier commit started (a nav pane folding away,
+                // the page margins narrowing) keep easing through a live drag instead of landing in one frame at the next drag step; a
+                // width reflow in flight is probed again at the new size (the destination probe's resize arm).
+                _anim.CancelStructuralAll(_scene.BoundsAnimatedNodes, keepReflows: true);
+                // A transition that animates through a resize (LayoutTransition.AnimateDuringResize: a height reflow a width
+                // step changes): its rows were kept above (KeptThroughResize), and only such parts are captured. Whether one starts or re-aims an
+                // animation this frame is decided after the layout (ApplyProjections): only when a structure it declares changed under it (a form
+                // a grid chose, a run's line count: SceneStore.NoteStructureChanged, collected while this frame lays out), or its row is in
+                // flight. A size that only follows the width (a card's cover growing with its column) lands with the drag.
+                _projectBefore.Clear();
+                _scene.StructureChanged.Clear();
+                _resizeStructureFrame = true;
+                _layout.NoteLineSteps = true;
+                if (willReconcile)
+                {
+                    CaptureResizeProjections();
+                    capturedProjections = _projectBefore.Count > 0;
+                }
             }
             if (s_allocDiag) { db = Probe(SegFlip, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
@@ -6925,6 +6978,7 @@ public sealed partial class AppHost : IDisposable
                 _renderSeam.TryReclaimSceneCapacity(_scene, _images, _strings,
                     _connected.Detached, _popupWindows, _anim);
 
+            _scene.TextMeasureStamp++;   // this frame's text measures (TextMeasureEntry.Stamp): the recorder shapes the culled ones now
             long before = GC.GetAllocatedBytesForCurrentThread();
             _rebindFlushAllocBytesThisFrame = 0;   // P0: FrameStats.RebindFlushAllocBytes accumulates across this Paint's FlushRebindsToQuiescence call(s)
             _rxUnitsThisFrame = 0; _rxLongestTicksThisFrame = 0; _rxLongestUnitThisFrame = null;   // FrameStats.Reactive* (every flush of this Paint)
@@ -7086,6 +7140,7 @@ public sealed partial class AppHost : IDisposable
             }
             finally { if (themeChanged) _reconciler.SetThemeTransition(float.NaN); }
             // The capture window closes before layout; a node that gained a transition in the flush counts as captured.
+            bool captureWindow = _projectionCaptureOpen;   // this frame captured its "before": the bounds passes below re-open it
             if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
             // A commit that answers the record in place while a width reflow flies (SceneStore.ConsumeRecordAnswered: a page that takes the sizes
@@ -7134,7 +7189,9 @@ public sealed partial class AppHost : IDisposable
                 if (_needFullLayout || !_everLaidOut)
                 {
                     layoutPath = "full";
+                    int fullMeasures0 = _layout.DiagMeasure;
                     _layout.Run(_scene.Root, layoutSize);      // 6 full layout: first frame / resize / DPI / root change
+                    _invalidator.ScopeLog?.Add(new RelayoutScope(_scene.Root, _layout.DiagMeasure - fullMeasures0, RelayoutScopeKind.Full));
                     _needFullLayout = false;
                     _everLaidOut = true;
                     _navThrottleFrames = NavThrottleWindowFrames;   // P1b: a full layout is the nav shape → open the upload-throttle window
@@ -7181,15 +7238,28 @@ public sealed partial class AppHost : IDisposable
             int viewportArrivals = ScrollHandle.ViewportArrivals;
             bool viewportArrived = viewportArrivals != _viewportArrivalsSeen;
             _viewportArrivalsSeen = viewportArrivals;
-            if (!_scene.Root.IsNull && ((scrolledMidFrame && _reconciler.ReRealizeVirtuals()) || (viewportArrived && _runtime.HasPending)))
+            // So does state a measured size wrote: a part that re-renders from its own laid-out width (a bento grid packing its tiles to it, a
+            // board choosing its rhythm) drew a frame behind the width on every frame of a window drag, and caught up two widths at once
+            // whenever another cause re-ran this pass (a width step, then a still frame). Once, in this frame: what it lays out next waits.
+            bool boundsWrote = _layout.BoundsDeliveries > 0 && _runtime.HasPending;
+            if (!_scene.Root.IsNull && ((scrolledMidFrame && _reconciler.ReRealizeVirtuals()) || ((viewportArrived || boundsWrote) && _runtime.HasPending)))
             {
-                if (_runtime.HasPending) FlushRebindsToQuiescence();
-                _reconciler.ConsumeReconciled();
+                // A part that reads a measured size can sit inside another (a grid that fits its columns to its width, in a board tile the board
+                // packs to its own width): the inner one measures its new width only on the pass the outer one re-laid it, so it lays out again
+                // while a pass delivered a size that wrote state, a few times at most. One pass left the inner grid a width behind on every
+                // frame of a drag (its full rows' last card wrapped onto a line of its own: the grid stood a row taller).
+                // A part these passes re-render is this commit's like one the flush re-rendered: on a frame that captured its "before", a reused
+                // node that gains a bounds transition here (a bento grid's tile, whose re-flow animation a re-pack at a new structure turns back
+                // on after width-only re-packs held it off) is captured from the rect it still holds, so it eases from where it was drawn instead
+                // of standing at the new size for this frame (Zune Home crossing W1008: its full rows drawn 48 wider, then put back by the re-flow).
+                _projectionCaptureOpen = captureWindow;
+                RelayoutBoundsWrites(layoutSize);
                 reconciled = true;
-                _invalidator.RunDirty(layoutSize);
-                _scene.ClearLayoutDirty();
-                DrainLayoutEffects();                          // the rows this pass mounted queued theirs after the 6.5 drain: run them before they paint
+                if (_projectionCaptureOpen) { _projectionCaptureOpen = false; capturedProjections = _projectBefore.Count > 0; }
             }
+            // A resized frame's structure steps captured the parts under them as they were noted (CaptureStructureStep).
+            if (_resizeStructureFrame && _projectBefore.Count > 0) capturedProjections = true;
+            _layout.NoteLineSteps = false;
             // 6.6 SizeToContent (AppHost.SizeToContent.cs): only on frames whose layout ran; zero work when Manual.
             FitWindowToContent(layoutNeeded && !_scene.Root.IsNull, layoutSize);
             long tLayoutEffects = Stopwatch.GetTimestamp();
@@ -7268,6 +7338,7 @@ public sealed partial class AppHost : IDisposable
             _anim.HoldPendingStarts = entranceHeld;
             MountProf.Enter(MountProf.Anim);
             long tAnimTick0 = Stopwatch.GetTimestamp();
+            _anim.FollowRedeclaredSizes();                     // relayout rows whose declared size moved with no FLIP: shifted, not trailed
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             long tAnimTick1 = Stopwatch.GetTimestamp();
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
@@ -7299,10 +7370,16 @@ public sealed partial class AppHost : IDisposable
                 }
                 _scene.PlaceFollowRects();
             }
-            if (hasFollowers || _anim.HasFollowAnchors)   // the second term releases the anchors the frame the last follower goes
+            // A visible video surface's geometry chain is held the same way: its owner's pump places and clips the surface from this frame's
+            // UI-side pose (MediaPlayerElement: the node's transformed rect, cut by its clipping ancestors' presented extents), so a FLIP or
+            // a Reveal clip on that chain must not run render-owned (a video in a hover-widening tile trailed its tile, and its clip lagged
+            // into a dark band).
+            bool videoAnchors = _videoSurfaces.HasGeometryNodes;
+            if (hasFollowers || videoAnchors || _anim.HasFollowAnchors)   // the last term releases the anchors the frame the last one goes
             {
                 _followAnchors.Clear();
                 if (hasFollowers) _scene.CollectFollowAnchors(_followAnchors);
+                if (videoAnchors) _videoSurfaces.CollectGeometryAnchors(_scene, _followAnchors);
                 _anim.SetFollowAnchors(_followAnchors);
             }
             // 7.2 video pump: event/geometry/transport requests are coalesced into one post-layout turn per surface.
@@ -7443,6 +7520,7 @@ public sealed partial class AppHost : IDisposable
             // self-gates mouse/pen + a valid position + no touch pan/item-drag, and no-ops unless the hit actually CHANGED.
             else if (layoutNeeded) _dispatcher.RefreshHoverAfterLayoutMove();
 
+            AnchorScrolls();                                   // 7.65 scroll anchoring on the frame's live layout (AppHost.ScrollAnchor.cs)
             PoseScrollUi();                                    // 7.7 UI-side content pose + scroll effects (hit-test/publish truth; the render poser re-poses per tick)
             // 7.8 drop-spotlight re-collect. AFTER reconcile/layout/realize + the scroll writes above and BEFORE record,
             // so the scrim's cutouts describe the bindings and the geometry THIS frame paints. A recycling virtual list
@@ -7821,6 +7899,8 @@ public sealed partial class AppHost : IDisposable
                 }
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmit = Stopwatch.GetTimestamp();
+                // The inline host presented on this thread (no render thread): restock once the hot phases are closed.
+                if (_renderThread is null && _parentRenderThread is null) _device.TurnPresented();
             }
             if (FrameLedger.Enabled) _ledgerAlloc.Submit = GC.GetAllocatedBytesForCurrentThread();
             if (s_allocDiag) { db = Probe(SegSubmit, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
@@ -8023,6 +8103,7 @@ public sealed partial class AppHost : IDisposable
                 Gc2Delta = gc2,
                 Census = censusLine,
                 RefreshIntervalMs = refreshIntervalMs,
+                JitMs = (System.Runtime.JitInfo.GetCompilationTime(currentThread: true) - jitAtFrameStart).TotalMilliseconds,
             };
             GapPaintEnd(frameStart);                           // the next UI gap starts here (AppHost.UiGap.cs)
             if (FrameLedger.Enabled) _ledgerPaint = new LedgerPaintStamps(frameStart, tFlush, tLayout, tAnim, tRecord, tSubmit);
@@ -8623,6 +8704,70 @@ public sealed partial class AppHost : IDisposable
         if (w < nodes.Count) nodes.RemoveRange(w, nodes.Count - w);
     }
 
+    /// <summary>The capture of a frame a resize owns: only the nodes whose transition animates through it
+    /// (<see cref="LayoutTransition.AnimateDuringResize"/>) and whose size the layout solves (a <see cref="SizeMode.Reflow"/> body: what a
+    /// structure step under it changes), plus any such node whose animation is in flight (it is re-aimed). A part that only MOVES when a
+    /// structure changes (a grid's card) is captured when the step is noted (<see cref="CaptureStructureStep"/>). Every other node lands on the
+    /// geometry the resize solves.</summary>
+    private void CaptureResizeProjections()
+    {
+        var nodes = _scene.BoundsAnimatedNodes;
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            NodeHandle n = nodes[i];
+            if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
+            if (_anim.TryGetTransition(n, out var t) && t.AnimateDuringResize && (t.Size == SizeMode.Reflow || _anim.HasStructuralRow(n)))
+                CaptureProjection(n);
+        }
+    }
+
+    /// <summary>Set on a frame the window resized: a structure step noted while it lays out (<see cref="SceneStore.NoteStructureChanged"/>)
+    /// captures the parts under it that animate through a resize (<see cref="CaptureStructureStep"/>), and only the parts such a step lies under,
+    /// or whose animation flies, start or re-aim one (<see cref="KeepResizeCapture"/>).</summary>
+    private bool _resizeStructureFrame;
+
+    /// <summary>The nodes the frame's structure steps lie under (each step's node and its ancestors), built by <see cref="KeepResizeCapture"/>.</summary>
+    private readonly HashSet<NodeHandle> _structureStepAncestors = new();
+    private readonly List<NodeHandle> _resizeKeepScratch = new();
+
+    /// <summary>A structure step noted while a resized frame lays out (a grid chose other columns: its form box notes it from its bounds callback,
+    /// before it re-renders): its subtree still holds the rects this frame laid it out at, so the parts under it that animate through a resize
+    /// (a card that moves to its new cell) are captured from there and glide to where the new structure puts them.</summary>
+    private void CaptureStructureStep(NodeHandle node)
+    {
+        if (!_resizeStructureFrame || !_scene.IsLive(node)) return;
+        CaptureStepSubtree(node);
+    }
+
+    private void CaptureStepSubtree(NodeHandle n)
+    {
+        for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c))
+        {
+            if ((_scene.Flags(c) & NodeFlags.BoundsAnimated) != 0 && !_projectBefore.ContainsKey(c)
+                && _anim.TryGetTransition(c, out var t) && t.AnimateDuringResize)
+                CaptureProjection(c);
+            CaptureStepSubtree(c);
+        }
+    }
+
+    /// <summary>On a frame the window resized, does the captured <paramref name="n"/> start or re-aim its animation? Yes when it is a structure
+    /// step's part, or a step lies under it or above it (<see cref="SceneStore.StructureChanged"/>: a body whose grid chose other columns, a card
+    /// that grid moves), or when its animation is already in flight.</summary>
+    private bool KeepResizeCapture(NodeHandle n)
+    {
+        if (_anim.HasStructuralRow(n)) return true;
+        var steps = _scene.StructureChanged;
+        if (steps.Count == 0) return false;
+        if (_structureStepAncestors.Count == 0)
+            for (int i = 0; i < steps.Count; i++)
+                for (NodeHandle a = steps[i]; !a.IsNull && _scene.IsLive(a) && _structureStepAncestors.Add(a); a = _scene.Parent(a)) { }
+        if (_structureStepAncestors.Contains(n)) return true;
+        for (NodeHandle a = _scene.Parent(n); !a.IsNull && _scene.IsLive(a); a = _scene.Parent(a))
+            for (int i = 0; i < steps.Count; i++)
+                if (steps[i] == a) return true;
+        return false;
+    }
+
     private void CaptureProjection(NodeHandle n)
     {
         // FLIP relativeTarget: capture relative to the resolved shared-layout anchor (if any) instead of the parent,
@@ -8641,6 +8786,15 @@ public sealed partial class AppHost : IDisposable
     {
         if (!_projectionCaptureOpen || !_scene.IsLive(n) || _projectBefore.ContainsKey(n)) return;
         CaptureProjection(n);
+        // Gained after a layout pass of this frame placed it (the bounds passes after the commit's layout: a grid that re-packs at the width
+        // that layout delivered, then turns its re-flow on at a new structure): that layout is not where the user saw it, the frame's start is.
+        // (Zune Home crossing W1016 with the releases in view: a tile captured from the board's target-width pack, 240 above where it was drawn,
+        // held there by a FLIP the scroll anchoring then took back: the page jumped 240.)
+        if (_projectBefore.TryGetValue(n, out var cap) && _layout.TryFrameStartRect(n, out RectF start) && cap.Parent == _scene.Parent(n))
+        {
+            ref readonly NodePaint p = ref _scene.Paint(n);
+            _projectBefore[n] = cap with { Rel = new RectF(start.X + p.LocalTransform.Dx, start.Y + p.LocalTransform.Dy, start.W, start.H) };
+        }
     }
 
     // --fg motion per-node line (one word of OUTCOME + the captured/live rects). Static → zero capture, and only ever
@@ -8664,6 +8818,36 @@ public sealed partial class AppHost : IDisposable
         //  • ReducedMotion is a separate ACCESSIBILITY preference (gate-covered): it keeps its 1ms-tween snap and still
         //    lets opacity/etc. animate — behaviour left exactly as before.
         bool suppressed = Motion.LayoutTransitionsSuppressed || keepAliveSuppressed || _snapDepth > 0;   // SnapScope: every FLIP lands on the laid-out bounds
+        // A frame the window resized captured only the parts that animate through it (CaptureResizeProjections, CaptureStructureStep): one starts
+        // or re-aims its animation only when a structure step lies under or above it, or its row flies (KeepResizeCapture). The rest follow the
+        // drag: nothing of theirs flies, so there is nothing to land.
+        if (_resizeStructureFrame)
+        {
+            _structureStepAncestors.Clear();
+            foreach (var kv in _projectBefore)
+                if (_scene.IsLive(kv.Key) && _anim.TryGetTransition(kv.Key, out var kt) && kt.AnimateDuringResize && !KeepResizeCapture(kv.Key))
+                    _resizeKeepScratch.Add(kv.Key);
+            for (int i = 0; i < _resizeKeepScratch.Count; i++) _projectBefore.Remove(_resizeKeepScratch[i]);
+            _resizeKeepScratch.Clear();
+            _structureStepAncestors.Clear();
+            if (_projectBefore.Count == 0) return;   // a drag frame that steps nothing: no projection pass
+        }
+        // Suppressed by a resize alone (the modal size loop, a splitter drag): the nodes whose transition animates through it are this commit's
+        // whole capture; every other captured node lands on its layout now, as under any suppression.
+        if (suppressed && Motion.LayoutTransitionsSuppressedByResizeOnly && !keepAliveSuppressed && _snapDepth == 0)
+        {
+            _resizeLandScratch.Clear();
+            foreach (var kv in _projectBefore)
+                if (!_scene.IsLive(kv.Key) || !_anim.TryGetTransition(kv.Key, out var rt) || !rt.AnimateDuringResize) _resizeLandScratch.Add(kv.Key);
+            for (int i = 0; i < _resizeLandScratch.Count; i++)
+            {
+                NodeHandle n = _resizeLandScratch[i];
+                _projectBefore.Remove(n);
+                if (_scene.IsLive(n)) _anim.SnapStructuralToLayout(n);
+            }
+            _resizeLandScratch.Clear();
+            suppressed = false;
+        }
         bool reduced = Motion.ReducedMotion;
         // Suppressed by the user scroll alone: only the transitions that opt in (AnimateDuringScroll) still start.
         bool scrollOnly = suppressed && Motion.LayoutTransitionsSuppressedByScrollOnly && !keepAliveSuppressed && _snapDepth == 0;
@@ -8688,19 +8872,38 @@ public sealed partial class AppHost : IDisposable
         // Reveal-shove frames (SizeMode.FlowReveal): the reveal's presented flow IS the sibling's motion, so a node moved
         // by a reveal's layout snap must not position-FLIP. Carriers: a projected FlowReveal node whose height changed this
         // commit, a FlowReveal entrant mounted this commit, a FlowReveal exit orphaned this commit (under its old parent).
+        // The same carriers RESIZE their ancestors: what a snap adds to a box above it is the reveal's to present, so no size
+        // transition there animates it (_revealSnapH; ExplainRevealSnap at both seed points below). An About-the-show Expander in a
+        // list slot that eases its height through a Reflow for tier crossings: the toggle started the slot's 250 ms ease-out, which
+        // carried the rows under it on its own curve and, while it ran, stopped the reveal's flow at the slot (a box with a size row is
+        // a flow boundary). Opening, the rows ran ahead of the panel; closing, they rose over it, then stepped onto the reveal's
+        // remaining delta as the reflow ended (owner video 2026-11-18: "the content cuts ... every single time its a band-aid").
+        _revealSnapH.Clear();
         foreach (var kv in _projectBefore)
         {
             NodeHandle rn = kv.Key;
             if (!_scene.IsLive(rn) || !_anim.TryGetTransition(rn, out var rs) || rs.Size != SizeMode.FlowReveal) continue;
-            if (MathF.Abs(kv.Value.Rel.H - _scene.Bounds(rn).H) < SizeEps) continue;
+            float snap = _scene.Bounds(rn).H - kv.Value.Rel.H;
+            if (MathF.Abs(snap) < SizeEps) continue;
             AddShoveCarrier(rn, _scene.Parent(rn));
+            if ((rs.Channels & TransitionChannels.Size) != 0) _anim.NoteRevealSnap(rn, _scene.Parent(rn), snap, orphan: false, _revealSnapH);
+            if (s_motionDiag) LogMotionNode(rn.Raw.Index, "reveal-snap(" + _revealSnapH.Count + ")", kv.Value.Rel, _scene.Bounds(rn));
         }
         var revealEnters = _anim.PendingEnterReveal;
         for (int i = 0; i < revealEnters.Count; i++)
-            if (_scene.IsLive(revealEnters[i])) AddShoveCarrier(revealEnters[i], _scene.Parent(revealEnters[i]));
+        {
+            if (!_scene.IsLive(revealEnters[i])) continue;
+            AddShoveCarrier(revealEnters[i], _scene.Parent(revealEnters[i]));
+            _anim.NoteRevealSnap(revealEnters[i], _scene.Parent(revealEnters[i]), _scene.Bounds(revealEnters[i]).H, orphan: false, _revealSnapH);
+        }
         var revealExits = _anim.RevealExitCarriers;
         for (int i = 0; i < revealExits.Count; i++)
-            if (_scene.IsLive(revealExits[i].VisualParent)) AddShoveCarrier(revealExits[i].Node, revealExits[i].VisualParent);
+        {
+            if (!_scene.IsLive(revealExits[i].VisualParent)) continue;
+            AddShoveCarrier(revealExits[i].Node, revealExits[i].VisualParent);
+            if (_scene.IsLive(revealExits[i].Node))
+                _anim.NoteRevealSnap(revealExits[i].Node, revealExits[i].VisualParent, -_scene.Bounds(revealExits[i].Node).H, orphan: true, _revealSnapH);
+        }
         // Discover changed containers that explicitly own the visual projection for their subtree. A shell/card width
         // commit commonly changes dozens of descendant card/shelf bounds; allowing every descendant's authored
         // CardRefit/CardResize recipe to start here recreates per-frame Relayout/Reflow under the projected root. Keep
@@ -8727,8 +8930,21 @@ public sealed partial class AppHost : IDisposable
             // title bar's and the play bar's reflows at 3200: the detail page's columns under it) was skipped as below a root; seeded in the
             // main pass instead, the commit laid its subtree out at its target (the list's rows at their final width for one frame).
             // A seeded node is laid out at its start by then, so a later pass finds it unchanged and seeds only what became free.
+            int seedDelivered = _layout.BoundsDeliveries;
             for (int pass = 0; pass < SeedReflowPasses && SeedReflowsFirst(layoutSize, reduced, PosEps, SizeEps); pass++)
                 DiscoverProjectionRoots(PosEps, SizeEps);
+            // The commit is laid out at its reflows' start now, and a part that sizes itself from a measured width heard the start (a bento grid
+            // that packs its tiles to its own width): it re-renders at it in this frame, as after the commit's own pass (RelayoutBoundsWrites).
+            // Left to the next frame, it drew this one at the TARGET width the commit's pass delivered (Zune Home crossing W1008: its full rows
+            // 48 wider for one frame, then back at the start beside a page whose margins had only begun to ease).
+            // On a frame the window resized, only when this pass runs at all: a structure step or a row in flight (KeepResizeCapture; a drag frame
+            // that steps nothing returned above), whose start a box that follows its body (a board's row) hears here, in this frame. Run on
+            // every drag frame, it cost a board flush and relayout each.
+            if (_layout.BoundsDeliveries != seedDelivered && _runtime.HasPending)
+            {
+                RelayoutBoundsWrites(layoutSize);
+                DiscoverProjectionRoots(PosEps, SizeEps);
+            }
             // A width reflow this commit re-aimed (the panel toggled back mid-slide) or seeded beside another one in flight lands where no layout
             // has solved yet: probe it before any FLIP is measured, so a structure that re-decides for the new destination glides there.
             if (_anim.DestinationStale && ProbeReflowDestinations(layoutSize)) DiscoverProjectionRoots(PosEps, SizeEps);
@@ -8764,6 +8980,13 @@ public sealed partial class AppHost : IDisposable
                     NodeHandle frameNow = anchorNow.IsNull ? _scene.Parent(n) : anchorNow;
                     LogMotionNode(n.Raw.Index, frameNow != kv.Value.Parent ? "frame-mismatch" : "deadband", fLog, tLog);
                 }
+                continue;
+            }
+            // The height an inner reveal's snap added is the reveal's to present (see _revealSnapH): a change that is all of it starts nothing.
+            if (ExplainRevealSnap(n, ref from, in to) && MathF.Abs(from.X - to.X) < PosEps && MathF.Abs(from.Y - to.Y) < PosEps
+                && MathF.Abs(from.W - to.W) < SizeEps && MathF.Abs(from.H - to.H) < SizeEps)
+            {
+                if (s_motionDiag) LogMotionNode(n.Raw.Index, "reveal-explained", from, to);
                 continue;
             }
             var relation = _reflowShoveFrames.Count > 0 ? ReflowRelationOf(n) : ReflowRelation.None;
@@ -8817,12 +9040,29 @@ public sealed partial class AppHost : IDisposable
             // AnimateBounds consumes only deltas, so parent-relative rects feed it directly; for a purely local
             // move this is bit-identical to the old absolute pair (the ancestor sum cancels).
             _anim.AnimateBounds(n, from, to, spec, followLive);
+            // A vertical FLIP hold this frame: the scroll anchoring keeps it where it was drawn if it shifts the content (AppHost.ScrollAnchor.cs).
+            if ((spec.Channels & TransitionChannels.Position) != 0 && MathF.Abs(from.Y - to.Y) >= PosEps) _freshHolds.Add(n);
         }
         _projectionSuppressionRoots.Clear();
         _liveReflowScratch.Clear();
         _reflowShoveFrames.Clear();
+        _revealSnapH.Clear();
         _reflowOwnedRoots.Clear();
         _projectBefore.Clear();
+    }
+
+    /// <summary>Take out of <paramref name="before"/>'s height the part of <paramref name="n"/>'s change an inner FlowReveal's layout snap
+    /// explains (<see cref="_revealSnapH"/>), so a size transition here animates only the rest, and nothing when that is all of it. Bounded
+    /// by the change itself, in its own direction: a box whose own change runs the other way, or is smaller, keeps what is its own.
+    /// True when it moved <paramref name="before"/>.</summary>
+    private bool ExplainRevealSnap(NodeHandle n, ref RectF before, in RectF after)
+    {
+        if (_revealSnapH.Count == 0 || !_revealSnapH.TryGetValue((int)n.Raw.Index, out float snap)) return false;
+        float change = after.H - before.H;
+        float take = change > 0f ? Math.Clamp(snap, 0f, change) : Math.Clamp(snap, change, 0f);
+        if (take == 0f) return false;
+        before = before with { H = before.H + take };
+        return true;
     }
 
     /// <summary>True when this commit's FLIP capture holds a SizeMode.FlowReveal node (its height may change in the
@@ -8898,6 +9138,23 @@ public sealed partial class AppHost : IDisposable
     /// slide its displaced siblings take, instead of snapping there (the frames lane, 2026-11-07). Null when no ghost drag is live.</summary>
     private NodeHandle PointerOwnedNode => _dispatcher.Drag.ActiveLift == DragLift.Stationary ? NodeHandle.Null : _dispatcher.Drag.ActiveNode;
 
+    /// <summary>Flush and lay out again while a pass delivered a measured size that wrote state, <see cref="BoundsRelayoutPasses"/> times at most
+    /// (a measured grid inside a measured board re-renders one level per pass). Cost: one flush of the components the deliveries dirtied and one
+    /// scoped re-solve of their subtrees per pass; a frame whose deliveries write nothing pays one counter compare.</summary>
+    private void RelayoutBoundsWrites(Size2 layoutSize)
+    {
+        for (int pass = 0; pass < BoundsRelayoutPasses; pass++)
+        {
+            int delivered = _layout.BoundsDeliveries;
+            if (_runtime.HasPending) FlushRebindsToQuiescence();
+            _reconciler.ConsumeReconciled();
+            _invalidator.RunDirty(layoutSize);
+            _scene.ClearLayoutDirty();
+            DrainLayoutEffects();                      // the rows this pass mounted queued theirs after the 6.5 drain: run them before they paint
+            if (_layout.BoundsDeliveries == delivered || !_runtime.HasPending) break;
+        }
+    }
+
     private bool SeedReflowsFirst(Size2 layoutSize, bool reduced, float posEps, float sizeEps)
     {
         if (reduced) return false;
@@ -8911,7 +9168,14 @@ public sealed partial class AppHost : IDisposable
             if (!_anim.TryGetTransition(n, out var spec) || spec.Size != SizeMode.Reflow || (spec.Channels & TransitionChannels.Size) == 0) continue;
             if (_reflowOwnedRoots.Contains(n) || IsBelowProjectionSuppressionRoot(n)) continue;
             if (!TryProjectionRects(n, kv.Value, posEps, sizeEps, out RectF from, out RectF to)) continue;
-            if (MathF.Abs(from.W - to.W) < sizeEps && MathF.Abs(from.H - to.H) < sizeEps) continue;
+            // Not the height an inner reveal's snap added: the reveal presents it (see _revealSnapH).
+            ExplainRevealSnap(n, ref from, in to);
+            // On the axes the reflow animates only: a width reflow's box that only grew taller (a page gutter stretched down the content
+            // as a shelf below stands up) has nothing to start, and seeding it anyway re-presented the flying width row and re-probed the
+            // destinations on every such commit (the probe's second arrange of the page each frame of a window drag).
+            bool wChanged = (spec.Axes & SizeAxes.Width) != 0 && MathF.Abs(from.W - to.W) >= sizeEps;
+            bool hChanged = (spec.Axes & SizeAxes.Height) != 0 && MathF.Abs(from.H - to.H) >= sizeEps;
+            if (!wChanged && !hChanged) continue;
             if (s_motionDiag) LogMotionNode(n.Raw.Index, "reflow-first", from, to);
             // Size only: the main pass FLIPs the node's own move against the re-solved layout, and finds this row aimed already (its guards).
             _anim.AnimateBounds(n, from, to, spec with { Channels = TransitionChannels.Size });
@@ -10441,15 +10705,13 @@ public sealed partial class AppHost : IDisposable
         // render loop is still Resumed on both outcomes.
         if (OwningRenderThread is not null)
         {
-            // The swapchain resize rides this host's mailbox (F207), applied on the render thread - the swapchain's sole owner - at
-            // the top of its next turn: a bare wake runs it at once (DrainChildRenderSources), so it overlaps this frame's layout, and
-            // the turn that presents this frame's publication drains it again first (SubmitPresentOnRenderThread), so that
-            // publication can never meet the old buffers. The UI never parks the loop for it: the park (Quiesce) waited for the
-            // render thread to finish its turn, present slot included, and stalled every present for that long (40-55 ms at a
-            // full-screen exit). Latest wins (F093): the resizes a live drag posts between two turns collapse into one ResizeBuffers.
-            // Invalidate FIRST, then post: the turn that applies the op sees the new epoch, so a frame published at the old size is
-            // dropped there and can never be presented against the resized swapchain. A pop-out (its parent's thread) is the same.
-            _renderSeam.InvalidateTarget();
+            // The swapchain follows the PUBLICATIONS, not the window: each frame is drawn at the size it was laid out for, and the
+            // turn that presents it sizes the swapchain to it first (SubmitPresentOnRenderThread). A live drag posts a new size every
+            // frame; when a resize dropped every frame published at the size before it (the old epoch rule), a render thread one
+            // frame behind the UI presented almost nothing while the window moved (20 presents a second on a 100 Hz panel). The
+            // mailbox (F207, latest wins F093) only makes ROOM for the newest size (ISwapchain.Reserve) on the render thread, at once
+            // on a bare wake, so a growing drag's reallocation overlaps this frame's layout instead of the present. The UI never parks
+            // the loop for it (the old Quiesce stalled every present for a whole turn). A pop-out (its parent's thread) is the same.
             PostOwnResize(s);
         }
         else

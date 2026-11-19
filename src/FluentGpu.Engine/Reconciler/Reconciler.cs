@@ -399,6 +399,7 @@ public sealed partial class TreeReconciler
     private int _staggerDiffBase;
     private readonly Dictionary<string, NodeHandle> _keyNode = new();                 // MorphId → node: the shared-layout anchor a RelativeTo follower FLIPs against
     private readonly Dictionary<int, string> _morphKeyByNode = new();                 // node → MorphId; gates shared-element teardown to actual participants
+    private readonly HashSet<int> _skelHeldNodes = new();                             // shimmer stand-ins shown as themselves (SkeletonMode.Held)
     private readonly Dictionary<int, string> _relativeKey = new();                    // follower node → the MorphId key it FLIPs relative to (Element.RelativeTo)
     private readonly Dictionary<int, NodeHandle> _mirroredChild = new();             // transparent anchor → the child MirrorParticipation last mirrored (RemirrorAncestors)
     private static readonly LayoutInput EmptyBoundaryLayout = LayoutInput.Default;  // what an EMPTY boundary mirrors (MirrorParticipation)
@@ -1873,6 +1874,10 @@ public sealed partial class TreeReconciler
             _ => se.Content(),
         };
         bool branchChanged = lastBranch != 0 && branch != lastBranch;
+        // The connected-flight landings the outgoing shimmer showed as themselves (SkelHeld stand-ins carrying a MorphId): their real
+        // counterparts stay at rest through the reveal (SkeletonReveal.RevealAround). Derived bars keep their MorphId too (a flight may land
+        // on a reserved slot) but reveal as before. Read before the shimmer is orphaned.
+        HashSet<string>? heldKeys = branchChanged && lastBranch == 1 && branch == 2 ? HeldKeysUnder(_scene.FirstChild(node)) : null;
         if (branchChanged)
         {
             // Pending/ready/failed edges are semantic tree replacements even when both roots have the
@@ -1929,7 +1934,11 @@ public sealed partial class TreeReconciler
         {
             // Shimmer→real: blur-reveal the freshly-mounted real subtree (grouped regions reveal together).
             var realRoot = _scene.FirstChild(node);
-            void Reveal() { if (!realRoot.IsNull && _scene.IsLive(realRoot)) SkeletonReveal.Play(a2, _scene, se.Reveal, realRoot, se.Style); }
+            void Reveal()
+            {
+                if (realRoot.IsNull || !_scene.IsLive(realRoot)) return;
+                SkeletonReveal.Play(a2, _scene, se.Reveal, realRoot, se.Style, heldKeys is null ? null : MorphNodesUnder(realRoot, heldKeys));
+            }
             if (se.Group is { } g) SkelGroupCoordinator.Done(g, idx, Reveal);
             else Reveal();
         }
@@ -1940,6 +1949,43 @@ public sealed partial class TreeReconciler
 
         MirrorParticipation(node, _scene.FirstChild(node));
         RemirrorAncestors(node);   // a component/provider anchor above mirrors THIS anchor and did not re-render
+    }
+
+    /// <summary>The MorphIds carried inside the held stand-ins (<see cref="SkeletonMode.Held"/>) under <paramref name="root"/>, or null when
+    /// none: pre-order walks over the scene's links, allocating only for a shimmer that holds one.</summary>
+    HashSet<string>? HeldKeysUnder(NodeHandle root)
+    {
+        if (root.IsNull || !_scene.IsLive(root) || _skelHeldNodes.Count == 0 || _morphKeyByNode.Count == 0) return null;
+        HashSet<string>? keys = null;
+        for (var n = root; !n.IsNull; n = NextInSubtree(n, root))
+        {
+            if (!_skelHeldNodes.Contains((int)n.Raw.Index)) continue;
+            for (var m = n; !m.IsNull; m = NextInSubtree(m, n))
+                if (_morphKeyByNode.TryGetValue((int)m.Raw.Index, out string? key)) (keys ??= new HashSet<string>(StringComparer.Ordinal)).Add(key);
+        }
+        return keys;
+    }
+
+    /// <summary>The nodes under <paramref name="root"/> whose MorphId is one of <paramref name="keys"/>, or null when none.</summary>
+    List<NodeHandle>? MorphNodesUnder(NodeHandle root, HashSet<string> keys)
+    {
+        List<NodeHandle>? nodes = null;
+        for (var n = root; !n.IsNull; n = NextInSubtree(n, root))
+            if (_morphKeyByNode.TryGetValue((int)n.Raw.Index, out string? key) && keys.Contains(key)) (nodes ??= new List<NodeHandle>(1)).Add(n);
+        return nodes;
+    }
+
+    /// <summary>The next node of a pre-order walk of <paramref name="root"/>'s subtree, or null past its last node.</summary>
+    NodeHandle NextInSubtree(NodeHandle n, NodeHandle root)
+    {
+        var child = _scene.FirstChild(n);
+        if (!child.IsNull) return child;
+        for (var at = n; !at.IsNull && at != root; at = _scene.Parent(at))
+        {
+            var next = _scene.NextSibling(at);
+            if (!next.IsNull) return next;
+        }
+        return NodeHandle.Null;
     }
 
     // Stamp the derived shimmer ROOT with an Opacity EXIT terminal so Remove() cross-dissolves it out (as an orphan
@@ -2004,8 +2050,8 @@ public sealed partial class TreeReconciler
         if (p.IsNull) return false;
         ref readonly LayoutInput src = ref _scene.Layout(p);
         ref LayoutInput a = ref _scene.Layout(anchor);
-        if (a.Direction == src.Direction && a.Gap == src.Gap && a.Wrap == src.Wrap && a.AlignItems == src.AlignItems) return false;
-        a.Direction = src.Direction; a.Gap = src.Gap; a.Wrap = src.Wrap; a.AlignItems = src.AlignItems;
+        if (a.Direction == src.Direction && a.Gap == src.Gap && a.Wrap == src.Wrap && a.WrapLive == src.WrapLive && a.AlignItems == src.AlignItems) return false;
+        a.Direction = src.Direction; a.Gap = src.Gap; a.Wrap = src.Wrap; a.WrapLive = src.WrapLive; a.AlignItems = src.AlignItems;
         return true;
     }
 
@@ -5061,6 +5107,7 @@ public sealed partial class TreeReconciler
             RemoveMorphKey(node, morphKey);
             Connected?.CaptureOnLeave(node, removeTag: true);   // shared-element: only tagged nodes participate
         }
+        if (_skelHeldNodes.Count != 0) _skelHeldNodes.Remove(idx);
         if (_keepAliveState.Remove(idx, out var kas))
         {
             foreach (var ex in kas.Entries.Values)
@@ -5825,6 +5872,8 @@ public sealed partial class TreeReconciler
         }
         // FLIP relativeTarget: record the follower → anchor-key link (resolved live by ResolveRelativeTarget at capture).
         if (el.RelativeTo is { Length: > 0 } relKey) _relativeKey[nodeIdx] = relKey; else _relativeKey.Remove(nodeIdx);
+        // A shimmer stand-in shown as itself (SkelHeld): its region's reveal holds the real counterpart in place (HeldKeysUnder).
+        if (el.SkeletonMode == SkeletonMode.Held) _skelHeldNodes.Add(nodeIdx); else if (_skelHeldNodes.Count != 0) _skelHeldNodes.Remove(nodeIdx);
 
         // Scroll-linked effects (sticky / parallax / fade / scale): baked onto the scene's effect table for every element type.
         BakeScrollEffects(node, el);
@@ -6056,6 +6105,7 @@ public sealed partial class TreeReconciler
                 li.Justify = b.Justify;
                 li.AlignItems = b.AlignItems;
                 li.Wrap = b.Wrap;
+                li.WrapLive = b.WrapLive;
                 _scene.SetStackFallback(node, b.StackFallback);
                 li.MeasureUnboundedWidth = b.MeasureUnboundedWidth;
                 li.AspectRatio = b.AspectRatio;   // CSS aspect-ratio: FlexLayout.Measure derives the missing extent (Ui.AspectRatio)
@@ -6192,6 +6242,9 @@ public sealed partial class TreeReconciler
                 // play FAB must not be a handle for dragging the card). Discriminator only — same toggle-both-ways rule.
                 if (b.BlocksDragArm) ii.HandlerMask |= InteractionInfo.BlocksDragArmBit;
                 else ii.HandlerMask &= ~InteractionInfo.BlocksDragArmBit;
+                // BoxEl.ClaimsDescendantDrag: the arm walk climbs past the nearest draggable to this one (DragController.ArmTarget).
+                if (b.ClaimsDescendantDrag) ii.HandlerMask |= InteractionInfo.ClaimsDescendantDragBit;
+                else ii.HandlerMask &= ~InteractionInfo.ClaimsDescendantDragBit;
 
                 // BoxEl.HoverScopeTransparent: a pointer listener the hover cascade / mount seed look through (the
                 // ToolTip wrapper). Discriminator only — same toggle-both-ways rule.
@@ -6325,6 +6378,9 @@ public sealed partial class TreeReconciler
                     _scene.SetContextRequested(node, null);
                 }
 
+                // Press and hold (BoxEl.OnHold): a sparse side table + HoldBit, read by the touch arena and the mouse hold timer.
+                _scene.SetHold(node, b.Hold, b.OnHold, b.OnHoldReleased);
+
                 // Focus-change notification (WinUI GotFocus/LostFocus): no hit-test participation — the dispatcher
                 // delivers it on SetFocus; the bit only lets it skip the handler-column lookup.
                 if (onFocusChanged is not null)
@@ -6408,6 +6464,7 @@ public sealed partial class TreeReconciler
                 ss.Orientation = s.Horizontal ? (byte)1 : (byte)0;
                 ss.ContentSized = s.ContentSized;
                 ss.FitContentWidth = s.FitContentWidth;
+                ss.Anchoring = s.Anchoring;
                 ss.LineDip = s.ScrollLineDip > 0f ? s.ScrollLineDip : 0f;   // wheel line height hint (S6); 0 = viewport rule
                 // Pinch-zoom opt-in (Input owns the live ZoomFactor — re-reconciling the element must NOT reset a
                 // mid-gesture / committed zoom, so only the declared opt-in + clamp bounds are written here).
@@ -6869,7 +6926,7 @@ public sealed partial class TreeReconciler
            && a.FlexGrow.Equals(b.FlexGrow) && a.FlexShrink.Equals(b.FlexShrink) && a.FlexBasis.Equals(b.FlexBasis)
            && a.AlignSelf == b.AlignSelf && a.JustifySelf == b.JustifySelf
            && a.Justify == b.Justify && a.AlignItems == b.AlignItems
-           && a.Wrap == b.Wrap
+           && a.Wrap == b.Wrap && a.WrapLive == b.WrapLive
            && a.MeasureUnboundedWidth == b.MeasureUnboundedWidth
            && a.TextStyle == b.TextStyle;
 

@@ -426,7 +426,11 @@ public readonly record struct DrawPolylineStrokeCmd(RectF Rect, ColorF Color, fl
 // side; the flares fill the bottom-corner squares outside the body, minus a FlareRadius disc centred at the outer edge
 // FlareRadius above the bottom — the inverted-fillet base the tab "grows" out of. Drawn as a RoundRect-pipeline SDF
 // variant — deliberately NOT a general path tessellator (BUILD-ROADMAP row-27 scope).
-public readonly record struct DrawTabShapeCmd(RectF Rect, float TopRadius, float FlareRadius, ColorF Fill, Affine2D Transform, float Opacity);
+// <see cref="StrokeWidth"/> 0 fills the silhouette. Above 0 the op draws its OUTLINE instead, a band of that width centred on
+// the edge and OPEN AT THE FOOT: the top, the two sides and the two curve-outs, never the bottom edge, which is where the
+// tab runs into the surface under it (WinUI: TabViewSelectedItemBorderThickness 1,1,1,0).
+public readonly record struct DrawTabShapeCmd(RectF Rect, float TopRadius, float FlareRadius, ColorF Fill, Affine2D Transform, float Opacity,
+    float StrokeWidth = 0f);
 // A ThemedIcon vector-layer mask (see DrawOp.DrawIconMask). <see cref="Rect"/> is the node-local (DIP) icon box;
 // <see cref="PathId"/> is the interned IconGeometryTable.Shared geometry; <see cref="Tint"/> is the per-instance,
 // theme-resolved layer color (bound → re-fires on RethemeAll with NO re-raster — the mask is colorless). The backend
@@ -917,11 +921,13 @@ public sealed class DrawList
     /// <summary>The WinUI selected-tab shape (see <see cref="DrawTabShapeCmd"/>): <paramref name="rect"/> is the FULL
     /// shape box including both bottom flares; the tab body is inset by <paramref name="flareRadius"/> per side with
     /// <paramref name="topRadius"/> top corners. WinUI values: topRadius = OverlayCornerRadius (8), flareRadius = 4
-    /// (TabViewItem.cpp:106).</summary>
-    public void TabShape(in RectF rect, float topRadius, float flareRadius, in ColorF fill, in Affine2D transform, float opacity, ulong sortKey = 0)
+    /// (TabViewItem.cpp:106). <paramref name="strokeWidth"/> above 0 draws the silhouette's outline, open at its foot, in
+    /// <paramref name="fill"/> instead of filling it.</summary>
+    public void TabShape(in RectF rect, float topRadius, float flareRadius, in ColorF fill, in Affine2D transform, float opacity, ulong sortKey = 0,
+        float strokeWidth = 0f)
     {
         WriteOp(DrawOp.DrawTabShape);
-        WritePayload(new DrawTabShapeCmd(rect, MathF.Max(0f, topRadius), MathF.Max(0f, flareRadius), fill, transform, opacity));
+        WritePayload(new DrawTabShapeCmd(rect, MathF.Max(0f, topRadius), MathF.Max(0f, flareRadius), fill, transform, opacity, MathF.Max(0f, strokeWidth)));
         PushSort(sortKey);
     }
 

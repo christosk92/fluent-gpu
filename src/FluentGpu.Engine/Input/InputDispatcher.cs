@@ -149,6 +149,18 @@ public sealed partial class InputDispatcher
     // un-hovered until the user jiggles the mouse. Drained by the next frame's hover refresh (layout-move or scroll).
     private bool _hoverResolvePending;
 
+    // HOVER INTENT (owner, 2026-11-17: a Spine Shelf card that opened under a resting pointer started the preview of the song tile that slid
+    // under it). The stationary re-resolves (RefreshHoverAfterScroll, RefreshHoverAfterLayoutMove) keep the hover STATE true at once (the
+    // Hovered/HoverWithin flags, the cursor, the exits), but an enter they make was made by content moving, not by the pointer: the
+    // bare-hover handlers (OnHoverMove, the "pointer came onto me" intent that dwells, previews and tooltips arm on) are HELD until the pointer
+    // really moves (to another device pixel), then delivered to whichever held node the pointer is still in. _synthResolve is set while a
+    // stationary resolve runs; _heldEnters is a fixed set (no allocation).
+    private bool _synthResolve;
+    private bool _hoverIntentHeld;
+    private Point2 _hoverIntentAt;
+    private readonly NodeHandle[] _heldEnters = new NodeHandle[16];
+    private int _heldEnterCount;
+
     // ── pinch-zoom session (Phase-4; a singleton across the TWO pinching contacts — the DragController precedent) ──────
     // Opened when a second touch contact lands over the same Zoomable viewport a still-down contact is over; both contacts'
     // moves drive ZoomFor (the magnification about the gesture midpoint), and the FIRST up/cancel commits the scale and
@@ -379,6 +391,18 @@ public sealed partial class InputDispatcher
     private readonly PointerFsm[] _fsms = new PointerFsm[GestureArena.MaxArenas * GestureArena.MaxMembersPerArena];
     private int _activeArenaSlot = -1;   // the arena slot of the contact being processed (loaded by SlotIn, stored by SlotOut)
     private bool _holdFired;             // §7A the contact's Hold won + fired its context flyout (the up suppresses the tap-click; press visual still held until up)
+
+    // BoxEl.OnHold (pinned Home). Touch: the node whose Hold won (its OnHold fired) and how long ago, for "hold, then drag" and
+    // OnHoldReleased; one held contact at a time. Mouse: a hold timer on the pressed node when its spec names a mouse dwell.
+    private NodeHandle _touchHoldNode;
+    private float _touchHoldSinceMs;
+    private Point2 _touchHoldPos;
+    private NodeHandle _mouseHoldNode;
+    private HoldDecl _mouseHold;
+    private Point2 _mouseHoldPos;
+    private float _mouseHoldMs;
+    private bool _mouseHoldFired;
+    private PointerKind _mouseHoldPointer;
     private long _arenaClockUs;          // monotonic µs clock for the §7A timer resolutions (Hold long-press): synced
                                          // forward to the latest event stamp in Dispatch, advanced by dt in TickGestureArenas
 
@@ -429,7 +453,13 @@ public sealed partial class InputDispatcher
         // held, set by TickGestureArenas before this resolves). The press visual is still held: the contact owns the
         // _pressed singleton (the Hold never crossed slop, so the press was never cancelled), and it releases on the
         // eventual up — exactly the WinUI "show the flyout while the press is held" sequence.
-        if (m.Kind == GestureKind.Hold && !m.Node.IsNull && _scene.IsLive(m.Node)
+        // A BoxEl.OnHold node takes the hold instead of raising its context request (pinned Home's "hold, then drag").
+        if (m.Kind == GestureKind.Hold && _scene.TryGetHold(m.Node, out var hold))
+        {
+            _touchHoldNode = m.Node; _touchHoldSinceMs = 0f; _touchHoldPos = _gestureWinPos;
+            hold.OnHold(new HoldEventArgs(_gestureWinPos, _gestureWinPointer, m.Node));
+        }
+        else if (m.Kind == GestureKind.Hold && !m.Node.IsNull && _scene.IsLive(m.Node)
             && (_scene.Interaction(m.Node).HandlerMask & InteractionInfo.ContextBit) != 0)
             DispatchContextRequest(m.Node, _gestureWinPos, ContextRequestTrigger.Hold);
         if (!_scene.HasGestureSubs) return;   // no UseGesture anywhere in the scene → skip the §13 leg (the common case)
@@ -512,6 +542,44 @@ public sealed partial class InputDispatcher
         if (!_lastPointerValid || oldScale <= 0f || newScale <= 0f || oldScale == newScale) return;
         float k = oldScale / newScale;
         _lastPointerPx = new Point2(_lastPointerPx.X * k, _lastPointerPx.Y * k);
+        _hoverIntentAt = new Point2(_hoverIntentAt.X * k, _hoverIntentAt.Y * k);
+    }
+
+    /// <summary>True while the current hover was made by content moving under a STILL pointer (a relayout or a scroll slid a node under it):
+    /// the Hovered flags are set, but no bare-hover handler (<c>BoxEl.OnHoverMove</c>) has been told yet. The pointer's first real move
+    /// delivers the held enters. Features that arm on "the pointer came onto me" (a dwell, a preview, a tooltip) ride OnHoverMove, so they get
+    /// this rule for free; a feature that reads the Hovered state instead can read this.</summary>
+    public bool HoverIntentHeld => _hoverIntentHeld;
+
+    /// <summary>A bare-hover enter edge on <paramref name="n"/>: delivered now when the pointer made it, held (see <see cref="HoverIntentHeld"/>)
+    /// when a stationary resolve did.</summary>
+    private void DeliverHoverEnter(NodeHandle n, Point2 px)
+    {
+        if (_scene.GetHoverMove(n) is not { } hm) return;
+        if (!_synthResolve) { hm(LocalPos(n, px)); return; }
+        if (!_hoverIntentHeld) { _hoverIntentHeld = true; _hoverIntentAt = px; }
+        for (int i = 0; i < _heldEnterCount; i++) if (_heldEnters[i] == n) return;
+        if (_heldEnterCount < _heldEnters.Length) _heldEnters[_heldEnterCount++] = n;
+        if (Diag.Enabled) Diag.Event("hover", $"intent held node={n.Raw.Index} (content moved under a still pointer)");
+    }
+
+    /// <summary>The pointer really moved (<paramref name="px"/> is another device pixel than where the held hover began): deliver the held
+    /// enters, outermost first as the subtree-enter walk does, to the nodes the pointer is still inside. False while it has not moved.</summary>
+    private bool ReleaseHoverIntent(Point2 px)
+    {
+        if (!_hoverIntentHeld) return true;
+        if (MathF.Abs(px.X - _hoverIntentAt.X) < 1f && MathF.Abs(px.Y - _hoverIntentAt.Y) < 1f) return false;
+        _hoverIntentHeld = false;
+        int count = _heldEnterCount;
+        _heldEnterCount = 0;
+        for (int i = count - 1; i >= 0; i--)
+        {
+            NodeHandle n = _heldEnters[i];
+            _heldEnters[i] = NodeHandle.Null;
+            if (!_hovered.IsNull && _scene.IsLive(n) && IsSelfOrAncestorOf(n, _hovered) && _scene.GetHoverMove(n) is { } hm)
+                hm(LocalPos(n, px));
+        }
+        return true;
     }
 
     /// <summary>
@@ -556,7 +624,7 @@ public sealed partial class InputDispatcher
     /// — which emits no further input — still keeps frames coming, letting <see cref="TickGestureArenas"/> advance the
     /// long-press timer to the fire (§7A.4). Zero-cost when no arena is open; clears the instant the Hold resolves or the
     /// contact strays/lifts, so the idle mask returns to None right after the flyout fires.</summary>
-    public bool HasArmedHold => _arena.HasArmedHold();
+    public bool HasArmedHold => _arena.HasArmedHold() || (!_mouseHoldNode.IsNull && !_mouseHoldFired);
 
     /// <summary>True while a scrollable touch press is waiting out the 100ms WinUI pressed-visual delay.</summary>
     public bool HasPendingTouchPress
@@ -956,6 +1024,7 @@ public sealed partial class InputDispatcher
                         handled++;
                         break;
                     }
+                    if (!_mouseHoldNode.IsNull) MouseHoldMove(e.PositionPx, e.Pointer, e.Mods, e.TimestampMs);
                     if (Drag.IsArmed && Drag.Move(e.PositionPx, e.Mods, e.TimestampMs))
                     {
                         // Promoted on this move: the gesture is a drag now — kill the click candidate, the transient
@@ -972,6 +1041,9 @@ public sealed partial class InputDispatcher
                         handled++;
                         break;
                     }
+                    // A hover a stationary resolve made becomes intent on the pointer's first real move (the held enters are delivered
+                    // first, to the chain the pointer was resting in; this move's own enters then follow as usual).
+                    bool intent = ReleaseHoverIntent(e.PositionPx);
                     SetState(ref _hovered, HitTest(e.PositionPx), NodeFlags.Hovered);
                     // Hyperlink spans re-resolve the cursor on EVERY move over the same text node — the span boundary
                     // crossings happen inside one node, which the on-hover-change walk alone can't see (WinUI flips to
@@ -1021,7 +1093,7 @@ public sealed partial class InputDispatcher
                         _scene.GetDrag(_dragTarget)?.Invoke(PointToLocal(_dragTarget, e.PositionPx));
                         handled++;
                     }
-                    else if (!_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)   // bare-hover preview (RatingControl)
+                    else if (intent && !_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)   // bare-hover preview (RatingControl); none while a still pointer's hover is held
                     {
                         if (Diag.Enabled)
                         {
@@ -1114,6 +1186,7 @@ public sealed partial class InputDispatcher
                                 Local = local, ClickCount = _clickCount, Mods = e.Mods, Button = 0, Kind = e.Pointer,
                             });
                         NotifyPressListeners(_down, in e);
+                        ArmMouseHold(_down, e.PositionPx, e.Pointer);
                         if (_scene.GetDrag(_down) is not null) _dragTarget = _down;  // begin a drag gesture
                         else
                             // Arm a drag-reorder candidate on the nearest CanDrag ancestor (a press on a child of a
@@ -1168,6 +1241,25 @@ public sealed partial class InputDispatcher
                         break;
                     }
                     Drag.Disarm();   // armed but never promoted → a plain click; fall through to normal release
+                    if (!_mouseHoldNode.IsNull)
+                    {
+                        NodeHandle hn = _mouseHoldNode;
+                        bool fired = _mouseHoldFired;
+                        var decl = _mouseHold;
+                        Point2 hp = _mouseHoldPos;
+                        PointerKind hk = _mouseHoldPointer;
+                        ClearMouseHold();
+                        if (fired)
+                        {
+                            // The hold fired: the press's click is swallowed (as a touch long-press's).
+                            if (_scene.IsLive(hn)) decl.OnReleased?.Invoke(new HoldEventArgs(hp, hk, hn));
+                            SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+                            _down = NodeHandle.Null;
+                            _dragTarget = NodeHandle.Null;
+                            handled++;
+                            break;
+                        }
+                    }
 
                     if (!_scrollDragNode.IsNull)
                     {
@@ -1410,6 +1502,8 @@ public sealed partial class InputDispatcher
     /// then its slot is recycled.</summary>
     private void CancelPointer()
     {
+        ClearMouseHold();
+        _touchHoldNode = NodeHandle.Null;
         DragDrop.Cancel();   // L2 first: OnLeave fires on a live target while the session still exists
         Drag.Cancel();   // an in-flight item-drag aborts on capture loss (restores visuals, fires OnDragCanceled)
         SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
@@ -1428,6 +1522,7 @@ public sealed partial class InputDispatcher
     /// Runs inside the contact's SlotIn/SlotOut window, so it operates on the loaded working scalars.</summary>
     private void CancelPointerContact(in InputEvent e)
     {
+        if (e.Pointer != PointerKind.Touch) ClearMouseHold();
         // A captured item-drag/L2 session is single-pointer today (mouse/pen OR the arena-claimed touch reorder) —
         // cancel it on this contact's loss. L2 first: OnLeave fires on a live target while the session still exists.
         // An ARMED candidate (pressed, still inside the drag box) dies too, silently (Drag.Cancel just disarms it): left
@@ -1816,6 +1911,7 @@ public sealed partial class InputDispatcher
                 {
                     Local = local, ClickCount = _clickCount, Mods = e.Mods, Button = 0, Kind = e.Pointer,
                 });
+            NotifyPressListeners(_down, in e);   // press listeners hear a finger as they hear the mouse (a ToolTip hides, a tile tilts)
             if ((_scene.Interaction(_down).HandlerMask & (InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.ClickBit | InteractionInfo.DragBit)) != 0) handled = true;
         }
         else if (!_touchSuppressTap && scrollable.IsNull && !_focused.IsNull && _scene.IsLive(_focused))
@@ -2022,6 +2118,22 @@ public sealed partial class InputDispatcher
         // A claimed touch drag-reorder (the arena resolved DragReorder for this contact, §7A) owns the move: drive
         // DragController arena-governed (its YieldsToPan bypassed). The reorder visual / live-reorder runs exactly as the
         // mouse path; no content pan, no touch hover. The list does NOT scroll (Pan was swept).
+        // "Hold, then drag" (BoxEl.OnHold on a Draggable): after the hold fired, a move past its slop inside its drag window
+        // lifts the node's own drag (the pan was swept by the Hold win, so the page does not scroll).
+        if (_holdFired && !_touchReorder && _scene.TryGetHold(_touchHoldNode, out var th)
+            && _touchHoldSinceMs <= th.Spec.DragWindowMs && Dist(e.PositionPx, _touchHoldPos) > th.Spec.SlopDip)
+        {
+            NodeHandle dn = NearestCanDrag(_touchHoldNode);
+            if (!dn.IsNull)
+            {
+                _holdFired = false;
+                _touchHoldNode = NodeHandle.Null;
+                _reorderTarget = dn;
+                ClaimTouchReorder(in e);
+                return true;
+            }
+        }
+
         if (_touchReorder)
         {
             if (_scene.IsLive(_reorderTarget) && Drag.IsActive)
@@ -2188,6 +2300,9 @@ public sealed partial class InputDispatcher
                          && (_scene.Interaction(_down).HandlerMask
                              & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit)) != 0;
         NodeHandle dragReorder = (hasDrag || hasSwipe) ? NodeHandle.Null : NearestCanDrag(_down);   // DragController arms only off non-OnDrag chains
+        // A draggable that also holds (BoxEl.OnHold) drags on touch only after its hold ("hold, then drag"): no axis-locked
+        // DragReorder member at the down, so a pan still scrolls the page until the hold fires.
+        if (!dragReorder.IsNull && (_scene.Interaction(dragReorder).HandlerMask & InteractionInfo.HoldBit) != 0) dragReorder = NodeHandle.Null;
         // The touch long-press (Hold → context flyout) walks from the deepest VISUAL under the contact, not just the
         // interactively-hit _down. ContextBit IS in Hit's hit-anywhere mask (see Hit()), so a context-only node is
         // resolvable in its own right — but _down is only set when the DOWN route produced a press target, and a
@@ -2207,6 +2322,7 @@ public sealed partial class InputDispatcher
         _gesturePanNode = NodeHandle.Null;                          // fresh down: no UseGesture(Pan) member yet
         _pinchMember = -1;                                          // fresh down: no Pinch member yet (set below if enrolled)
         _holdFired = false;                                         // fresh down: the long-press hasn't fired its context yet
+        _touchHoldNode = NodeHandle.Null;
         if (!hasDrag && !hasSwipe && !hasPan && !hasPinch && !clickable && dragReorder.IsNull && holdChain.IsNull && gestureNode.IsNull) return;
 
         long timeUs = ToUs(e.TimestampMs);
@@ -2265,7 +2381,11 @@ public sealed partial class InputDispatcher
         if (!holdChain.IsNull)
         {
             m = _arena.Enroll(slot, holdChain, GestureKind.Hold);
-            if (m >= 0) ArmMemberFsm(m, GestureKind.Hold, e.PositionPx, timeUs);
+            if (m >= 0)
+            {
+                ArmMemberFsm(m, GestureKind.Hold, e.PositionPx, timeUs);
+                if (_scene.TryGetHold(holdChain, out var hd) && hd.Spec.TouchMs > 0f) _fsms[m].HoldThresholdUs = (long)(hd.Spec.TouchMs * 1000f);
+            }
         }
         if (hasPan)
         {
@@ -2543,14 +2663,7 @@ public sealed partial class InputDispatcher
     /// <summary>Nearest <c>CanDrag</c> (drag-reorder source, <see cref="InteractionInfo.DragBit"/>) self-or-ancestor of
     /// <paramref name="from"/>, or null. Mirrors <see cref="DragController.TryArm"/>'s chain walk so the DragReorder
     /// member is enrolled exactly where the controller would arm.</summary>
-    private NodeHandle NearestCanDrag(NodeHandle from)
-    {
-        for (var n = from; !n.IsNull; n = _scene.Parent(n))
-            if (_scene.IsLive(n) && (_scene.Interaction(n).HandlerMask & InteractionInfo.DragBit) != 0
-                && (_scene.Flags(n) & NodeFlags.Disabled) == 0)
-                return n;
-        return NodeHandle.Null;
-    }
+    private NodeHandle NearestCanDrag(NodeHandle from) => DragController.ArmTarget(_scene, from);
 
     /// <summary>Nearest enabled DragYieldsToPan content-pan drag node (SwipeControl/FlipView) self-or-ancestor of
     /// <paramref name="from"/>, or null — the §7A.1 route walk that enrolls a swipe/flip wrapper AROUND an interactive
@@ -2570,13 +2683,52 @@ public sealed partial class InputDispatcher
     /// <summary>Nearest enabled context-request (<see cref="InteractionInfo.ContextBit"/>) self-or-ancestor of
     /// <paramref name="from"/>, or null — the chain a touch long-press (Hold → context flyout) would target. Touch has no
     /// right button, so the Hold member is the only path to a context request on the touch surface.</summary>
+    /// <summary>Arms the mouse hold timer when the press's chain has a <c>BoxEl.OnHold</c> whose spec names a mouse dwell.</summary>
+    private void ArmMouseHold(NodeHandle down, Point2 pos, PointerKind pointer)
+    {
+        ClearMouseHold();
+        for (var n = down; !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.HoldBit) == 0) continue;
+            if (_scene.TryGetHold(n, out var decl) && decl.Spec.MouseMs > 0f && (_scene.Flags(n) & NodeFlags.Disabled) == 0)
+            {
+                _mouseHoldNode = n; _mouseHold = decl; _mouseHoldPos = pos; _mouseHoldMs = 0f; _mouseHoldFired = false; _mouseHoldPointer = pointer;
+            }
+            return;   // the nearest holding node decides
+        }
+    }
+
+    /// <summary>A mouse move while a hold is armed: past the slop before the dwell cancels it; after the hold fired, a move
+    /// past the slop inside the drag window arms the node's own drag (the existing promotion then lifts it).</summary>
+    private void MouseHoldMove(Point2 pos, PointerKind pointer, KeyModifiers mods, uint timestampMs)
+    {
+        bool past = Dist(pos, _mouseHoldPos) > _mouseHold.Spec.SlopDip;
+        if (!_mouseHoldFired) { if (past) ClearMouseHold(); return; }
+        if (!past || Drag.IsActive || Drag.IsArmed || _mouseHoldMs > _mouseHold.Spec.DragWindowMs) return;
+        NodeHandle dn = NearestCanDrag(_mouseHoldNode);
+        if (!dn.IsNull) Drag.TryArm(dn, _mouseHoldPos, pointer, mods, timestampMs);
+    }
+
+    private void ClearMouseHold()
+    {
+        _mouseHoldNode = NodeHandle.Null; _mouseHold = default; _mouseHoldMs = 0f; _mouseHoldFired = false;
+    }
+
     private NodeHandle NearestContextOrHold(NodeHandle from)
     {
+        // The nearest context-or-hold node; above it, a holding node that claims its descendants' drags (a pinned-Home tile in its
+        // board's reorder context) takes the hold instead, so a hold on a row inside the tile can still become the TILE's drag
+        // (and a release without one raises the tile's context request).
+        NodeHandle found = NodeHandle.Null;
+        const uint claim = InteractionInfo.HoldBit | InteractionInfo.ClaimsDescendantDragBit;
         for (var n = from; !n.IsNull; n = _scene.Parent(n))
-            if (_scene.IsLive(n) && (_scene.Interaction(n).HandlerMask & InteractionInfo.ContextBit) != 0
-                && (_scene.Flags(n) & NodeFlags.Disabled) == 0)
-                return n;
-        return NodeHandle.Null;
+        {
+            if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            uint mask = _scene.Interaction(n).HandlerMask;
+            if (found.IsNull) { if ((mask & (InteractionInfo.ContextBit | InteractionInfo.HoldBit)) != 0) found = n; }
+            else if ((mask & claim) == claim) found = n;
+        }
+        return found;
     }
 
     /// <summary>The §7A "OnFrameEnd" timer tick (§7A.4): advance the arena clock by the frame's <paramref name="dtMs"/>
@@ -2589,6 +2741,26 @@ public sealed partial class InputDispatcher
     /// per-frame heap: it scans the fixed slab only while arenas are open. No-op when nothing is open.</summary>
     public void TickGestureArenas(float dtMs)
     {
+        if (dtMs > 0f)
+        {
+            if (!_touchHoldNode.IsNull) _touchHoldSinceMs += dtMs;
+            if (!_mouseHoldNode.IsNull)
+            {
+                _mouseHoldMs += dtMs;
+                if (!_mouseHoldFired && _mouseHoldMs >= _mouseHold.Spec.MouseMs)
+                {
+                    _mouseHoldFired = true;
+                    _mouseHoldMs = 0f;   // from here: the time since the hold fired (the drag window)
+                    if (_scene.IsLive(_mouseHoldNode))
+                    {
+                        // The press visual is released: the hold is the gesture now (as a touch long-press's).
+                        SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+                        _mouseHold.OnHold(new HoldEventArgs(_mouseHoldPos, _mouseHoldPointer, _mouseHoldNode));
+                    }
+                    else ClearMouseHold();
+                }
+            }
+        }
         if (dtMs > 0f)
         {
             for (int si = 0; si < _slots.Length; si++)
@@ -2672,6 +2844,14 @@ public sealed partial class InputDispatcher
         // does not also click the element on release) and no fling. Nulling _down frees the arena seat in SlotOut.
         if (_holdFired)
         {
+            // Released after the hold with no drag: the node's OnHoldReleased, else its context request (the touch long-press menu,
+            // deferred to the release so the hold could still become a drag).
+            if (_scene.TryGetHold(_touchHoldNode, out var hr))
+            {
+                if (hr.OnReleased is { } released) released(new HoldEventArgs(_touchHoldPos, PointerKind.Touch, _touchHoldNode));
+                else DispatchContextRequest(_touchHoldNode, _touchHoldPos, ContextRequestTrigger.Hold);
+            }
+            _touchHoldNode = NodeHandle.Null;
             if (_pressed == _down) SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
             _down = NodeHandle.Null; _panTarget = NodeHandle.Null; _panClaimed = false;
             _holdFired = false;
@@ -3252,6 +3432,7 @@ public sealed partial class InputDispatcher
     {
         if (!_lastPointerValid || _lastPointerKind == PointerKind.Touch || _panClaimed || Drag.IsActive) return;
         _hoverResolvePending = false;   // this path re-resolves unconditionally — it IS the arming's service
+        _synthResolve = true;   // content moved, the pointer did not: enters are held (HoverIntentHeld)
         NodeHandle before = _hovered;
         NodeHandle next = HitTest(_lastPointerPx);
         // Recycled virtual-list slot: a boundary-crossing scroll rebinds the slot HANDLE still under the cursor to a new
@@ -3274,10 +3455,10 @@ public sealed partial class InputDispatcher
         UpdateScrollHover(_lastPointerPx);   // scrollbar-reveal target follows the content (early-outs with no subscribers)
         // Bare-hover preview (OnHoverMove) ONLY when the hovered node actually CHANGED this refresh — never re-fire it for
         // an unchanged target (SetState's early-out already covers the flag/enter/leave).
-        if (before != _hovered && !_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)
-            hm(LocalPos(_hovered, _lastPointerPx));
+        if (before != _hovered && !_hovered.IsNull) DeliverHoverEnter(_hovered, _lastPointerPx);
         if (_down.IsNull && _dragTarget.IsNull && _scrollDragNode.IsNull && !_selDragging)
             DeliverPointerMoveWithin(_hovered, _lastPointerPx);
+        _synthResolve = false;
     }
 
     /// <summary>Layout-move companion to <see cref="RefreshHoverAfterScroll"/> (input-a11y.md §5.4/§15/§1056: hover re-resolves
@@ -3351,6 +3532,7 @@ public sealed partial class InputDispatcher
     /// CHANGED) and the container-aware move. Zero managed allocation — scalar walks over the existing chokepoints.</summary>
     private void ResolveHoverAt(Point2 px)
     {
+        _synthResolve = true;   // a stationary resolve: content moved, the pointer did not (HoverIntentHeld)
         NodeHandle before = _hovered;
         NodeHandle next = HitTest(px);
         SetState(ref _hovered, next, NodeFlags.Hovered);
@@ -3358,10 +3540,10 @@ public sealed partial class InputDispatcher
             && (_scene.Interaction(_hovered).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
             UpdateSpanCursor(_hovered, px);
         UpdateScrollHover(px);   // scrollbar-reveal target follows the moved content (early-outs with no subscribers)
-        if (before != _hovered && !_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)
-            hm(LocalPos(_hovered, px));
+        if (before != _hovered && !_hovered.IsNull) DeliverHoverEnter(_hovered, px);
         if (_down.IsNull && _dragTarget.IsNull && _scrollDragNode.IsNull && !_selDragging)
             DeliverPointerMoveWithin(_hovered, px);
+        _synthResolve = false;
     }
 
     /// <summary>Is <paramref name="n"/> inside a subtree the reconciler has orphaned? <c>SceneStore.Orphan</c> detaches
@@ -3556,7 +3738,7 @@ public sealed partial class InputDispatcher
                 OnHoverChanged?.Invoke(n, true);
                 // Subtree-enter → the node's own bare-hover handler (the ToolTip.Wrap trigger). n == prev means the
                 // pointer moved from this node DOWN onto a child — it was already hovered, no re-enter.
-                if (n != prev) _scene.GetHoverMove(n)?.Invoke(LocalPos(n, _lastPointerPx));
+                if (n != prev) DeliverHoverEnter(n, _lastPointerPx);
             }
         }
     }
@@ -4608,7 +4790,7 @@ public sealed partial class InputDispatcher
             // needing a click/pointer handler. Left-clicks on it walk up past it exactly like any handler-less hit.
             const int hitAnywhere = InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit
                 | InteractionInfo.DragBit | InteractionInfo.CursorBit | InteractionInfo.SelectableTextBit | InteractionInfo.GestureBit
-                | InteractionInfo.ContextBit;
+                | InteractionInfo.ContextBit | (int)InteractionInfo.HoldBit;
             if ((flags & NodeFlags.Disabled) == 0 && inside && !YieldsToPassThrough(node)   // disabled nodes don't hit-test
                 && PathGeometryAdmits(node, in np, local, hitW, hitH))
             {
@@ -4636,5 +4818,5 @@ public sealed partial class InputDispatcher
     /// <summary>The handlers that make a box a whole-box target (the hit walk's hitAnywhere set, less the cursor and text selection): only such a
     /// box takes hits in its slop.</summary>
     private const int SlopHandlers = InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit
-        | InteractionInfo.DragBit | InteractionInfo.GestureBit | InteractionInfo.ContextBit;
+        | InteractionInfo.DragBit | InteractionInfo.GestureBit | InteractionInfo.ContextBit | (int)InteractionInfo.HoldBit;
 }

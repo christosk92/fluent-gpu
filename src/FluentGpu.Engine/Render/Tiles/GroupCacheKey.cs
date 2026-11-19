@@ -33,7 +33,7 @@ public static class GroupCacheKey
     /// </summary>
     public static PixelRect Region(in CompositeItem it, int halo, int windowW, int windowH)
     {
-        if (it.Kind == CompositeKind.Group && (it.SubPxX != 0f || it.SubPxY != 0f)) return SlideRegion(in it, halo, windowW, windowH);
+        if (it.Kind == CompositeKind.Group && it.Displaced) return SlideRegion(in it, halo, windowW, windowH);
         if (it.Footprint.W > 0f && it.Footprint.H > 0f)
         {
             var fp = new PixelRect((int)MathF.Floor(it.Footprint.X), (int)MathF.Floor(it.Footprint.Y),
@@ -51,8 +51,9 @@ public static class GroupCacheKey
     }
 
     /// <summary>A SLIDE GROUP's region (SliceRecorder.PlaceChild): what it shows this turn — its footprint ∩ its clip ∩ the
-    /// window, where it is drawn — carried back by its pose (<see cref="CompositeItem.SubPxX"/>, px) to the REST position its
-    /// surface is rendered at, + 1 px on every side for the bilinear sample's reach.</summary>
+    /// window, where it is drawn — carried back by its pose (<see cref="CompositeItem.SubPxX"/>, px, and its slide scale
+    /// <see cref="CompositeItem.SlideScaleX"/>) to the REST position its surface is rendered at, + the bilinear sample's reach on
+    /// every side.</summary>
     private static PixelRect SlideRegion(in CompositeItem it, int halo, int windowW, int windowH)
     {
         float l = 0f, t = 0f, r = windowW, b = windowH;
@@ -67,9 +68,23 @@ public static class GroupCacheKey
             r = MathF.Min(r, it.Footprint.Right); b = MathF.Min(b, it.Footprint.Bottom);
         }
         if (r <= l || b <= t) return default;
-        var rest = new PixelRect((int)MathF.Floor(l - it.SubPxX) - 1, (int)MathF.Floor(t - it.SubPxY) - 1,
-            (int)MathF.Ceiling(r - it.SubPxX) + 1, (int)MathF.Ceiling(b - it.SubPxY) + 1);
+        // a scaled slide group's sample reaches 1/scale rest px past a drawn pixel: 2 px of margin covers every scale above 1/2
+        float sx = it.ScaleX, sy = it.ScaleY;
+        int m = it.Scaled ? 2 : 1;
+        var rest = new PixelRect((int)MathF.Floor((l - it.SubPxX) / sx) - m, (int)MathF.Floor((t - it.SubPxY) / sy) - m,
+            (int)MathF.Ceiling((r - it.SubPxX) / sx) + m, (int)MathF.Ceiling((b - it.SubPxY) / sy) + m);
         return OnSliceGrid(in it, rest);
+    }
+
+    /// <summary>Where a DISPLACED surface (<see cref="CompositeItem.Displaced"/>: a posed self-blur, a slide group) whose window-px
+    /// region is <paramref name="region"/> lands when drawn: the region through its pose (<c>p · SlideScale + SubPx</c>), rounded
+    /// out and grown by the bilinear sample's 1 px reach. A surface drawn in place lands on its region.</summary>
+    public static PixelRect Drawn(in CompositeItem it, in PixelRect region)
+    {
+        if (!it.Displaced || region.IsEmpty) return region;
+        float sx = it.ScaleX, sy = it.ScaleY;
+        return new PixelRect((int)MathF.Floor(region.Left * sx + it.SubPxX) - 1, (int)MathF.Floor(region.Top * sy + it.SubPxY) - 1,
+            (int)MathF.Ceiling(region.Right * sx + it.SubPxX) + 1, (int)MathF.Ceiling(region.Bottom * sy + it.SubPxY) + 1);
     }
 
     /// <summary><paramref name="r"/> with its top-left floored onto <see cref="TileGrid.OriginGrid"/> of the item's space

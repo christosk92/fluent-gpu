@@ -193,7 +193,7 @@ public sealed partial class FlexLayout
         MixF(ref h, li.MinW); MixF(ref h, li.MinH); MixF(ref h, li.MaxW); MixF(ref h, li.MaxH);
         MixF(ref h, li.FlexGrow); MixF(ref h, li.FlexShrink); MixF(ref h, li.FlexBasis);
         MixU(ref h, (uint)li.AlignSelf); MixU(ref h, (uint)li.Justify); MixU(ref h, (uint)li.AlignItems);
-        MixU(ref h, li.Wrap ? 1u : 0u);
+        MixU(ref h, li.Wrap ? 1u : 0u); MixU(ref h, li.WrapLive ? 1u : 0u);
         return h;
     }
 

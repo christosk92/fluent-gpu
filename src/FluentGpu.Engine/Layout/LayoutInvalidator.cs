@@ -34,6 +34,9 @@ public sealed class LayoutInvalidator
     /// asserts on (MeasureCount/ArrangeCount are only populated under --fg layout).</summary>
     public int DirtyMarksThisFrame { get; private set; }
 
+    /// <summary>Opt-in scope log (<see cref="FluentGpu.Hosting.AppHost.RelayoutScopeLog"/>): null is off and costs nothing.</summary>
+    public List<RelayoutScope>? ScopeLog;
+
     /// <summary>DEBUG-only best-effort node→key resolver for the escape message (wired by the host to the reconciler).
     /// Invoked only inside the throttled, --fg diag-gated message path, so it costs nothing on Release / when quiet.</summary>
     public Func<NodeHandle, string?>? DebugKeyResolver;
@@ -176,6 +179,7 @@ public sealed class LayoutInvalidator
                 int mp0 = _layout.DiagMeasure;
                 bool stable = _layout.TryResolveSizeStable(n);
                 FluentGpu.Hosting.MountProf.MeasProbe += _layout.DiagMeasure - mp0;
+                ScopeLog?.Add(new RelayoutScope(n, _layout.DiagMeasure - mp0, stable ? RelayoutScopeKind.EscapeResolved : RelayoutScopeKind.EscapeProbe));
                 if (stable) LocalResolvesThisFrame++;
                 else rootScheduled = true;
             }
@@ -199,7 +203,17 @@ public sealed class LayoutInvalidator
             int m0 = _layout.DiagMeasure;
             if (r == _scene.Root) { _layout.Run(r, window); FluentGpu.Hosting.MountProf.MeasRoot += _layout.DiagMeasure - m0; }
             else { _layout.RunSubtree(r); FluentGpu.Hosting.MountProf.MeasSub += _layout.DiagMeasure - m0; }
+            ScopeLog?.Add(new RelayoutScope(r, _layout.DiagMeasure - m0, r == _scene.Root ? RelayoutScopeKind.Window : RelayoutScopeKind.Scoped));
             if (FluentGpu.Hosting.MountProf.On) FluentGpu.Hosting.MountProf.Events.Append(r == _scene.Root ? "R" : "s").Append(_layout.DiagMeasure - m0).Append(',');
         }
     }
 }
+
+/// <summary>What a <see cref="RelayoutScope"/> solved: a scoped pass's root, the window (a scoped pass that escaped to the root, or the
+/// full layout of a first frame, a resize or a DPI change), or an escaped mark re-solved in place (resolved) or probed and then left to
+/// the window solve (probe).</summary>
+public enum RelayoutScopeKind : byte { Scoped, Window, Full, EscapeResolved, EscapeProbe }
+
+/// <summary>One relayout scope a frame solved: its root node, the real measures it cost and what kind of solve it was.</summary>
+public readonly record struct RelayoutScope(NodeHandle Root, int Measures, RelayoutScopeKind Kind);
+

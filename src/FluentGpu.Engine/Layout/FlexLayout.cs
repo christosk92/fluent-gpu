@@ -30,6 +30,12 @@ public sealed partial class FlexLayout
     /// baseline those edges compare against.</summary>
     public bool SuppressBoundsDelivery { get; set; }
 
+    /// <summary>How many arranged rects this frame's passes delivered to an <c>Element.OnBoundsChanged</c> handler or a measured-bounds hook
+    /// (<c>UseMeasuredBounds</c>/<c>UseMeasuredWidth</c>). The host reads it after the frame's layout: a delivery that wrote state (a grid packing
+    /// to its measured width) re-renders and lays out once more in the same frame, so what reads a measured size never draws a frame behind it.
+    /// Reset with the frame's counters.</summary>
+    public int BoundsDeliveries { get; private set; }
+
     /// <summary>Host-set per frame: a run of more than one line breaks at the width it LANDS at while a width reflow resizes it (see the text
     /// measure). True from the frame AFTER the reflow's destination was first recorded: the slide's first frame is the one the tree answers the
     /// landing width on (a page that swaps its form for it re-renders on the next commit), so a run whose tree is about to be replaced never
@@ -48,6 +54,10 @@ public sealed partial class FlexLayout
     }
     private bool _breakTextAtLanding;
     private const float LandingBreakSlack = 1f / 64f;
+
+    /// <summary>Host-set per frame: a multi-line run re-measured into another number of lines notes a structure step
+    /// (<see cref="SceneStore.NoteStructureChanged"/>). On while the host lays out a frame the window resized.</summary>
+    public bool NoteLineSteps { get; set; }
 
     // `--fg layout` (EngineSwitches.LayoutDiag): per-Run layout-cost diagnostic — Measure/Arrange node-visit counts + text-shape hit/miss. A
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
@@ -172,7 +182,7 @@ public sealed partial class FlexLayout
 
     /// <summary>Host-driven per-frame reset: zero the diag counters at the top of a frame so DiagMeasure/Arrange/TextMiss
     /// read that frame's total after all layout (full + scoped + phase-7 reflow) has run. Cheap; no-op meaning when off.</summary>
-    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dTextSharedHit = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = _dMeasureFlatHit = 0; if (MeasureCensusEnabled) CensusFrameStart(); }
+    public void ResetFrameDiagCounters() { BoundsDeliveries = 0; _dMeasure = _dTextHit = _dTextMiss = _dTextSharedHit = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = _dMeasureFlatHit = 0; if (MeasureCensusEnabled) CensusFrameStart(); }
 
     // Within-pass Measure memo. Measure(node, availW) is a PURE function of the node's subtree content + availW within
     // ONE layout solve (it has no external mutable input; its only side effect is writing the node's Bounds W/H). But the
@@ -259,6 +269,7 @@ public sealed partial class FlexLayout
         // way (it is keyed by generation).
         if (_memo.Length < cap) System.Array.Resize(ref _memo, cap);
         if (_arranged.Length < cap) System.Array.Resize(ref _arranged, cap);
+        if (_frameStartRect.Length < cap) { System.Array.Resize(ref _frameStartRect, cap); System.Array.Resize(ref _frameStartStamp, cap); }
         if (_arrangedVer.Length < cap) System.Array.Resize(ref _arrangedVer, cap);
         if (_measuredPass.Length < cap) System.Array.Resize(ref _measuredPass, cap);
         if (_gridCellW.Length < cap) System.Array.Resize(ref _gridCellW, cap);
@@ -364,7 +375,7 @@ public sealed partial class FlexLayout
         MixF(ref h, li.MinW); MixF(ref h, li.MinH); MixF(ref h, li.MaxW); MixF(ref h, li.MaxH);
         MixF(ref h, li.FlexGrow); MixF(ref h, li.FlexShrink); MixF(ref h, li.FlexBasis);
         MixU(ref h, (uint)li.AlignSelf); MixU(ref h, (uint)li.Justify); MixU(ref h, (uint)li.AlignItems);
-        MixU(ref h, li.Wrap ? 1u : 0u);
+        MixU(ref h, li.Wrap ? 1u : 0u); MixU(ref h, li.WrapLive ? 1u : 0u);
         return h;
     }
 
@@ -460,6 +471,9 @@ public sealed partial class FlexLayout
         }
         for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c)) PrefetchText(c);
     }
+
+    private static bool LineStep(in TextMeasureEntry was, StringId text, in TextStyle style, int fontEpoch, float h)
+        => SameShape(in was, text, in style, fontEpoch) && MathF.Abs(was.Size.Height - h) > 0.5f;
 
     private static bool SameShape(in TextMeasureEntry e, StringId text, in TextStyle style, int fontEpoch)
         => e.Valid && e.Text == text && e.FontEpoch == fontEpoch && e.Style == style;
@@ -733,6 +747,26 @@ public sealed partial class FlexLayout
     // (which Measure also scribbles hypothetical W/H into for a not-yet-arranged pass). AuxFlags.ArrangedValid says
     // whether the slot holds a real value yet (false for a fresh/recycled node index — cleared on CreateNode).
     private RectF[] _arranged = System.Array.Empty<RectF>();
+
+    // The rect each node had when the frame began (the one the last frame presented), kept on its first placement in a frame: a part that
+    // gains a bounds transition after this frame's layout already moved it (a bento grid re-packed at the commit's target width, then
+    // re-flowed at a new structure in the same frame) is captured from where it was drawn, not from a rect no frame showed.
+    private RectF[] _frameStartRect = System.Array.Empty<RectF>();
+    private uint[] _frameStartStamp = System.Array.Empty<uint>();
+    private uint _frameStamp = 1;
+
+    /// <summary>A new frame: the next placement of each node keeps the rect it had before it (<see cref="TryFrameStartRect"/>).</summary>
+    public void BeginFrameRects() => _frameStamp++;
+
+    /// <summary>The rect <paramref name="node"/> had when the frame began, when a layout pass of this frame has placed it since. False when
+    /// nothing placed it this frame: its bounds are still the ones the frame began with.</summary>
+    public bool TryFrameStartRect(NodeHandle node, out RectF rect)
+    {
+        uint ai = node.Raw.Index;
+        if (ai < (uint)_frameStartStamp.Length && _frameStartStamp[ai] == _frameStamp) { rect = _frameStartRect[ai]; return true; }
+        rect = default;
+        return false;
+    }
     // The node's SubtreeVersion when that rect was placed. The Arrange early-out requires it unchanged: the frame-scoped clean
     // bit only says nothing below was marked THIS frame, and a mark can be cleared at the frame's end without any solve having
     // visited the node - a bind firing on a row of a detached, KeepAlive-parked subtree (its dirty chain stops at the detached
@@ -775,6 +809,12 @@ public sealed partial class FlexLayout
         _scene.NoteCaptureChanged((int)node.Raw.Index);
         if (s_layoutOverflow) ReportOverflow(node, in next);
         uint ai = node.Raw.Index;
+        if (ai < (uint)_frameStartStamp.Length && _frameStartStamp[ai] != _frameStamp)
+        {
+            // The first placement this frame: keep the rect the frame started with (the one the last frame presented).
+            _frameStartStamp[ai] = _frameStamp;
+            _frameStartRect[ai] = ai < (uint)_arranged.Length && _scene.IsArrangedValid(node) ? _arranged[ai] : next;
+        }
         if (ai < (uint)_arranged.Length) { _arranged[ai] = next; _arrangedVer[ai] = _scene.SubtreeVersion(node); }
         _scene.SetArrangedValid(node);
         NoteVerifySig(node);   // DEBUG tripwire baseline: the layout inputs this placement was computed from
@@ -795,6 +835,7 @@ public sealed partial class FlexLayout
         {
             if (pending) _scene.Unmark(node, NodeFlags.BoundsChangedPending);
             delivered = next;
+            BoundsDeliveries++;
             handler?.Invoke(next);
             hook?.Invoke(next);
         }
@@ -812,6 +853,7 @@ public sealed partial class FlexLayout
         _scene.Unmark(node, NodeFlags.BoundsChangedPending);
         ref RectF delivered = ref _scene.BoundsDeliveredRef(node);
         delivered = current;
+        if (handler is not null || hook is not null) BoundsDeliveries++;
         handler?.Invoke(current);
         hook?.Invoke(current);
     }
@@ -1020,6 +1062,11 @@ public sealed partial class FlexLayout
                 var m = mc.Valid ? _fonts.Measure(paint.Text, eff, maxW) : MeasureTextShared(paint.Text, in eff, maxW, fontEpoch, fit > 0f);
                 FluentGpu.Hosting.MountProf.Exit();
                 w = m.Size.Width; h = m.Size.Height;
+                // The same run at another width that breaks into another number of lines: a step of its structure, which a part that animates
+                // through a resize eases (SceneStore.NoteStructureChanged). Only while the host collects them (a frame the window resized).
+                if (NoteLineSteps && !Verifying && mc.Valid && li.TextStyle.Wrap != Foundation.TextWrap.NoWrap
+                    && LineStep(mc.Last, paint.Text, in li.TextStyle, fontEpoch, h))
+                    _scene.NoteStructureChanged(node);
                 // Retain the face's decoration metrics alongside the size: the recorder places underline/strikethrough
                 // bars (NodePaint.TextDecorations) from this row at record time without re-touching the font seam.
                 mc.Store(new TextMeasureEntry
@@ -1027,7 +1074,7 @@ public sealed partial class FlexLayout
                     Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h),
                     FitSize = fit, FontEpoch = fontEpoch,
                     UnderlineY = m.UnderlineY, UnderlineThickness = m.UnderlineThickness, StrikeY = m.StrikeY,
-                    FirstLineWidth = m.FirstLineWidth, Structured = structured,
+                    FirstLineWidth = m.FirstLineWidth, Structured = structured, Stamp = _scene.TextMeasureStamp,
                 });
             }
             // C1: unbounded maxW = the run does not depend on the offer; otherwise it is the same at any maxW in [laid width, maxW]. A run
@@ -2448,8 +2495,11 @@ public sealed partial class FlexLayout
     private (float w, float h) MeasureWrap(NodeHandle node, in LayoutInput li, bool row, float mainLimit)
     {
         float availMain = MathF.Max(0f, mainLimit - (row ? li.Padding.Horizontal : li.Padding.Vertical));
-        // A row's lines break at the width its structure is chosen for (StructureW: the landing width while a reflow resizes it).
-        float breakMain = row ? MathF.Max(0f, ClampMain(in li, row, StructureW(node, mainLimit)) - li.Padding.Horizontal) : availMain;
+        // A row's lines break at the width its structure is chosen for (StructureW: the landing width while a reflow resizes it), unless its
+        // cells are shares of its live width (WrapLive).
+        float breakMain = !row ? availMain
+            : li.WrapLive ? availMain
+            : MathF.Max(0f, ClampMain(in li, row, StructureW(node, mainLimit)) - li.Padding.Horizontal);
         // Text (MaxLines=1 + Trim) must measure against the LINE width so a lone over-long item ellipsizes
         // instead of overflowing. Never the leftover: leftover would crush a shrinkable run instead of wrapping.
         float childAvailW = row ? availMain : float.PositiveInfinity;
@@ -2503,7 +2553,7 @@ public sealed partial class FlexLayout
         float padMainStart = row ? li.Padding.Left : li.Padding.Top;
         float padCrossStart = row ? li.Padding.Top : li.Padding.Left;
         float availMain = (row ? finalW : finalH) - (row ? li.Padding.Horizontal : li.Padding.Vertical);
-        float breakMain = row ? ClampMain(in li, row, StructureW(node, finalW)) - li.Padding.Horizontal : availMain;   // as MeasureWrap
+        float breakMain = row && !li.WrapLive ? ClampMain(in li, row, StructureW(node, finalW)) - li.Padding.Horizontal : availMain;   // as MeasureWrap
         // MeasureWrap's childAvailW: the line width on a row (text MaxLines=1 + Trim ellipsizes against it), unbounded on a column.
         float childAvailW = row ? MathF.Max(0f, availMain) : float.PositiveInfinity;
         float lineTop = padCrossStart;

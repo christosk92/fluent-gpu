@@ -2217,21 +2217,28 @@ public sealed class FakeImageDecoder : IImageDecoder
     public static void Paint(string? source, Span<byte> bgra, int w, int h) => FillPattern(bgra, SeedOf(source), Math.Max(1, w), Math.Max(1, h));
 
     // A stable per-source diagonal gradient with a source-derived hue so each decoded tile looks distinct on screen.
+    // A pixel's colour depends on x + y alone, so the w + h - 1 diagonal colours are worked out once and every row is a copy of a window of
+    // them: this decoder paints INLINE in the UI thread's pump (a real decode runs on a worker), and the per-pixel arithmetic of a 512
+    // canvas still cost the inspector's Debug build a 20 ms frame the first time a Home card scrolled into view, a cost no app frame pays.
+    // The bytes are the per-pixel formula's, to the bit.
     private static void FillPattern(Span<byte> buf, uint seed, int w, int h)
     {
         uint s = unchecked(seed * 2654435761u);
         byte br = (byte)(80 + (s & 0x7F)), bg = (byte)(80 + ((s >> 7) & 0x7F)), bb = (byte)(80 + ((s >> 14) & 0x7F));
-        for (int y = 0; y < h; y++)
+        int n = w + h - 1;
+        var table = s_diagonal;
+        if (table is null || table.Length < n * 4) s_diagonal = table = new byte[Math.Max(n * 4, (table?.Length ?? 0) * 2)];
+        var diag = table.AsSpan(0, n * 4);
+        for (int d = 0; d < n; d++)
         {
-            for (int x = 0; x < w; x++)
-            {
-                int i = (y * w + x) * 4;
-                float t = (x + y) / (float)(w + h);            // 0..1 corner→corner
-                buf[i + 0] = (byte)(bb * (0.45f + 0.55f * t));  // B
-                buf[i + 1] = (byte)(bg * (0.45f + 0.55f * t));  // G
-                buf[i + 2] = (byte)(br * (0.45f + 0.55f * t));  // R
-                buf[i + 3] = 255;                                // A (opaque)
-            }
+            float t = d / (float)(w + h);                      // 0..1 corner→corner (d = x + y)
+            diag[d * 4 + 0] = (byte)(bb * (0.45f + 0.55f * t));  // B
+            diag[d * 4 + 1] = (byte)(bg * (0.45f + 0.55f * t));  // G
+            diag[d * 4 + 2] = (byte)(br * (0.45f + 0.55f * t));  // R
+            diag[d * 4 + 3] = 255;                                // A (opaque)
         }
+        for (int y = 0; y < h; y++) diag.Slice(y * 4, w * 4).CopyTo(buf.Slice(y * w * 4, w * 4));
     }
+
+    [ThreadStatic] private static byte[]? s_diagonal;   // Paint may be called off the UI thread
 }

@@ -39,7 +39,13 @@ public sealed unsafe class MmDeviceWatcher : IDeviceWatcher, IDisposable
     /// <inheritdoc/>
     public event Action? DefaultDeviceChanged;
 
+    /// <summary>An endpoint's state changed or it was removed (the COM notification thread): its id. A chosen endpoint that is
+    /// unplugged, disabled or plugged back in arrives here; a default-device change does not (see <see cref="DefaultDeviceChanged"/>).</summary>
+    public event Action<string>? EndpointStateChanged;
+
     internal void RaiseDefaultChanged() => DefaultDeviceChanged?.Invoke();
+
+    internal void RaiseEndpointChanged(string id) => EndpointStateChanged?.Invoke(id);
 
     private void Register()
     {
@@ -71,8 +77,8 @@ public sealed unsafe class MmDeviceWatcher : IDeviceWatcher, IDisposable
 
 /// <summary>Hand-rolled CCW for <c>IMMNotificationClient</c> (8 vtable slots). Carries a <see cref="GCHandle"/> to its
 /// owning <see cref="MmDeviceWatcher"/> so the static <c>[UnmanagedCallersOnly]</c> thunks route back to the instance.
-/// Mirrors <c>MediaEngineNotifyCcw</c>. Only <c>OnDefaultDeviceChanged</c> (render/console) raises an event; the rest
-/// return <c>S_OK</c>.</summary>
+/// Mirrors <c>MediaEngineNotifyCcw</c>. <c>OnDefaultDeviceChanged</c> (render/console) raises the default event,
+/// <c>OnDeviceStateChanged</c> and <c>OnDeviceRemoved</c> the endpoint event; the rest return <c>S_OK</c>.</summary>
 internal unsafe struct MmNotificationCcw
 {
     public void** Vtbl;   // COM "this" vptr (first field)
@@ -116,11 +122,22 @@ internal unsafe struct MmNotificationCcw
     private static uint Release(MmNotificationCcw* self) => (uint)Interlocked.Decrement(ref self->Rc);
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
-    private static int OnDeviceStateChanged(MmNotificationCcw* self, ushort* id, uint newState) => 0;
+    private static int OnDeviceStateChanged(MmNotificationCcw* self, ushort* id, uint newState) => RaiseEndpoint(self, id);
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
     private static int OnDeviceAdded(MmNotificationCcw* self, ushort* id) => 0;
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
-    private static int OnDeviceRemoved(MmNotificationCcw* self, ushort* id) => 0;
+    private static int OnDeviceRemoved(MmNotificationCcw* self, ushort* id) => RaiseEndpoint(self, id);
+
+    private static int RaiseEndpoint(MmNotificationCcw* self, ushort* id)
+    {
+        try
+        {
+            if (id != null && GCHandle.FromIntPtr(self->Owner).Target is MmDeviceWatcher w)
+                w.RaiseEndpointChanged(new string((char*)id));
+        }
+        catch { /* never throw across the COM boundary */ }
+        return 0;
+    }
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
     private static int OnDefaultDeviceChanged(MmNotificationCcw* self, EDataFlow flow, ERole role, ushort* id)
     {

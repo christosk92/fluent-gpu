@@ -27,4 +27,9 @@ public static class SharedTransition
     /// empty key when it has none. True when a flyer is up (a card's cover flies into the page's hero, or back): the shell then
     /// plays a quiet page swap under it. Null when no host published one (headless/test).</summary>
     public static readonly Context<System.Func<FluentGpu.Animation.ConnectedNavRequest, bool>?> BeginNav = new(null);
+
+    /// <summary>Host-provided origin of a navigation that flies nothing (<see cref="FluentGpu.Animation.ConnectedAnimation.NavOriginRect"/>): the
+    /// rect, window DIP, of the element the user activated (remembered under the page's key), or of the element remembered for a key (Back,
+    /// mouse Forward); empty for none. The shell grows the page out of it. Null when no host published one (headless/test).</summary>
+    public static readonly Context<System.Func<FluentGpu.Animation.ConnectedOriginRequest, FluentGpu.Foundation.RectF>?> NavOriginRect = new(null);
 }

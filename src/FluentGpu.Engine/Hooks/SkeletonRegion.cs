@@ -13,7 +13,8 @@ public enum SkelReveal : byte
 {
     /// <summary>The whole content blur-rises in as one (Opacity + TranslateY + Blur → rest). The default scalar reveal.</summary>
     Soft,
-    /// <summary>Each row blur-rises 40ms behind the last (the track-list reveal — walks the mounted children).</summary>
+    /// <summary>Each row blur-rises 40ms behind the last (the track-list reveal — walks the mounted children). Bounded: a
+    /// row past the 24th rung rides it, so the last row of any stack starts within a second.</summary>
     StaggerRows,
     /// <summary>A plain opacity cross-fade (no translate/blur) — for content that should not move.</summary>
     FadeOnly,
@@ -33,9 +34,13 @@ public enum SkelReveal : byte
 /// <see cref="Expressive.Fast"/> dissolve. For <see cref="SkelReveal.None"/> the engine floors it at
 /// <see cref="Expressive.Slow"/> (the content owns its entrance, so the placeholder has to linger across it). Ignored under
 /// <c>Motion.ReducedMotion</c> — the swap snaps. A page that wants a "this is taking a while" bar counts its pending
-/// regions with a <see cref="LoadingScope"/>.</summary>
+/// regions with a <see cref="LoadingScope"/>.
+/// <para><c>DeriveComponents</c>: every component the shimmer source nests (a slot host, a chrome, a list that fits its box) mounts in the pending
+/// tree and its rendered output is derived (<see cref="ComponentEl.DeriveRenderedOutput"/>), instead of one default bar for each one that set no
+/// <see cref="ComponentEl.SkeletonProxy"/>. For a source whose components are pure for their props (they draw; they register, play or fetch
+/// nothing): a whole view template, chrome and all, shimmers at its loaded shape.</para></summary>
 public readonly record struct SkeletonStyle(
-    ColorF BarColor, float RowGap = 8f, float BarRadius = 4f, float TextRatio = 0.72f, float ExitMs = Expressive.Fast)
+    ColorF BarColor, float RowGap = 8f, float BarRadius = 4f, float TextRatio = 0.72f, float ExitMs = Expressive.Fast, bool DeriveComponents = false)
 {
     public static SkeletonStyle Default => new(Tok.FillSubtleSecondary);
 }
@@ -158,9 +163,15 @@ public static class Skel
 /// Walks the mounted real subtree for the staggered row case. Called by the reconciler (a reconcile-edge event).</summary>
 internal static class SkeletonReveal
 {
-    public static void Play(AnimEngine anim, SceneStore scene, SkelReveal reveal, NodeHandle realRoot, in SkeletonStyle style)
+    /// <summary>The last row of a <see cref="SkelReveal.StaggerRows"/> cascade that gets a rung of its own (24 rungs of
+    /// <see cref="Expressive.Stagger"/>: the cascade starts its last row within a second, however long the stack).</summary>
+    internal const int MaxStaggerRungs = 24;
+
+    public static void Play(AnimEngine anim, SceneStore scene, SkelReveal reveal, NodeHandle realRoot, in SkeletonStyle style,
+        List<NodeHandle>? held = null)
     {
         if (realRoot.IsNull || !scene.IsLive(realRoot)) return;
+        if (held is { Count: > 0 } && reveal != SkelReveal.None) { RevealAround(anim, scene, reveal, realRoot, held); return; }
         switch (reveal)
         {
             case SkelReveal.None:
@@ -181,15 +192,55 @@ internal static class SkeletonReveal
                 int n = 0;
                 for (var c = scene.FirstChild(rowParent); !c.IsNull; c = scene.NextSibling(c)) n++;
                 if (n == 0) { anim.SoftReveal(realRoot); break; }
-                var rows = new NodeHandle[n];
+                // One gesture, bounded: a row past MaxStaggerRungs rides the last rung. A long stack that is not virtualized (a book's hundred
+                // chapters) was otherwise still arriving four seconds after its first row, a rung at a time, with a frame produced for each
+                // one where nobody can see it.
                 int k = 0;
-                for (var c = scene.FirstChild(rowParent); !c.IsNull; c = scene.NextSibling(c)) rows[k++] = c;
-                anim.SoftRevealStaggered(rows, dy: 8f, blur: Expressive.BlurMedium, durationMs: Expressive.VerySlow, staggerMs: Expressive.Stagger);
+                for (var c = scene.FirstChild(rowParent); !c.IsNull; c = scene.NextSibling(c), k++)
+                    anim.SoftReveal(c, dy: 8f, blur: Expressive.BlurMedium, durationMs: Expressive.VerySlow,
+                        delayMs: Math.Min(k, MaxStaggerRungs) * Expressive.Stagger);
                 break;
             }
             default:
                 anim.SoftReveal(realRoot, dy: 8f, blur: Expressive.BlurMedium);
                 break;
+        }
+    }
+
+    /// <summary>The reveal with HELD parts: nodes the shimmer already showed as themselves (a connected flight's landing that stood in the
+    /// placeholder, <see cref="SkeletonExtensions.SkelHeld{T}"/>). A held node and the chain of boxes down to it stay at rest; every other subtree
+    /// hanging off that chain takes the region's recipe on its own. The root reveal would carry the held part with it: a cover already on
+    /// screen faded, blurred and rose 8 DIP into its own place over its sharp copy, and a flight landing on it mid-reveal handed off to a
+    /// half-revealed picture.</summary>
+    static void RevealAround(AnimEngine anim, SceneStore scene, SkelReveal reveal, NodeHandle realRoot, List<NodeHandle> held)
+    {
+        var onPath = new HashSet<uint>();
+        var isHeld = new HashSet<uint>();
+        foreach (var h in held)
+        {
+            if (!scene.IsLive(h)) continue;
+            isHeld.Add(h.Raw.Index);
+            for (var n = scene.Parent(h); !n.IsNull && scene.IsLive(n); n = scene.Parent(n))
+            {
+                onPath.Add(n.Raw.Index);
+                if (n == realRoot) break;
+            }
+        }
+        if (isHeld.Count == 0 || !onPath.Contains(realRoot.Raw.Index)) { Play(anim, scene, reveal, realRoot, default); return; }
+        anim.SettlePresentation(realRoot);
+        Around(realRoot);
+
+        // The chain and the held part take no mount entrance either (a form's own Enter fade carried the cover in again).
+        void Around(NodeHandle parent)
+        {
+            for (var c = scene.FirstChild(parent); !c.IsNull; c = scene.NextSibling(c))
+            {
+                uint i = c.Raw.Index;
+                if (isHeld.Contains(i)) { anim.SettlePresentation(c); continue; }
+                if (onPath.Contains(i)) { anim.SettlePresentation(c); Around(c); continue; }
+                if (reveal == SkelReveal.FadeOnly) anim.Animate(c, AnimChannel.Opacity, 0f, 1f, Expressive.Fast, Easing.SmoothOut);
+                else anim.SoftReveal(c, dy: 8f, blur: Expressive.BlurMedium);
+            }
         }
     }
 

@@ -822,6 +822,11 @@ public sealed partial class PcmAudioSession : IMediaSession
     }
     private System.Collections.Generic.List<IDisposable>? _owned;
 
+    /// <summary>Ask the registered <see cref="AudioDeviceController"/> to rebuild the sink (the host chose another output): the same
+    /// debounced, feed-parked swap a default-device change takes, so the graph, the queue and the position survive and a rate change goes
+    /// through <see cref="DeviceFormatChanged"/>. A no-op on a session with no controller (headless, the silent endpoint).</summary>
+    public void RequestDeviceRebuild() => _deviceController?.RequestRebuild();
+
     /// <summary>The device-recovery state of the registered <see cref="AudioDeviceController"/> (spec §7.9), or null on a
     /// session with no controller (headless/tests). A host logs its edges (<c>Running → Reinitializing → Retrying → …</c>)
     /// so a silent device switch is diagnosable from the log alone.</summary>
