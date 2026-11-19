@@ -99,7 +99,13 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
             Volatile.Write(ref _ready, false);
             FormatSink?.Invoke(FormatOpenFailure("exception", ex.HResult) + " msg=" + ex.Message);
         }
+        OpenResultSink?.Invoke(EndpointInfo, IsReady);
     }
+
+    /// <summary>Every open's outcome, on the opening thread (off the RT path; a probe, a session open, a rebuild): the endpoint it reached
+    /// (null when it failed before one was chosen) and whether it can render. An app marks an output that did not open ("Not responding")
+    /// instead of leaving the failure in the log alone.</summary>
+    public static Action<WasapiEndpointInfo?, bool>? OpenResultSink;
 
     /// <inheritdoc cref="IAudioSink.Format"/>
     public MixFormat Format { get; private set; }
