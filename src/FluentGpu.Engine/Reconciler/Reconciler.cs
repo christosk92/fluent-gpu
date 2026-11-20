@@ -6254,6 +6254,9 @@ public sealed partial class TreeReconciler
                 // BoxEl.FocusRingHost: the focused ancestor's ring is painted on this box (SceneRecorder.FocusRingHostRect). Paint-only discriminator.
                 if (b.FocusRingHost) ii.HandlerMask |= InteractionInfo.FocusRingHostBit;
                 else ii.HandlerMask &= ~InteractionInfo.FocusRingHostBit;
+                // BoxEl.TakesUnfocusedKeys: a key typed with nothing focused bubbles from here (InputDispatcher.UnfocusedKeyTarget). Discriminator only.
+                if (b.TakesUnfocusedKeys) ii.HandlerMask |= InteractionInfo.TakesUnfocusedKeysBit;
+                else ii.HandlerMask &= ~InteractionInfo.TakesUnfocusedKeysBit;
 
                 // BoxEl.Attachment (PERF r3 UI): bind the spec to this node (its per-node state survives every rewrite of the
                 // box) and merge the state's handlers into the box's, the box's own winning; the masks and flags below then

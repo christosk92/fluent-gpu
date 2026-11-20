@@ -18,7 +18,8 @@ public enum FocusDirection : byte { Left, Right, Up, Down }
 /// never takes pointer focus; nothing focusable in the chain → focus is CLEARED iff the press hit INERT background — a node
 /// with no press handlers, AnyInteractiveMask == 0, and (touch) no pan candidate — else unchanged: a FluentGpu §8
 /// divergence); keyboard routes to the focused node and bubbles up ancestors
-/// (Handled stops it); Tab moves focus through focusable nodes; Enter/Space activates a focused clickable (the
+/// (Handled stops it), and with nothing focused it bubbles from the window's unfocused-key target (BoxEl.TakesUnfocusedKeys,
+/// a browser's body; none = dropped); Tab moves focus through focusable nodes; Enter/Space activates a focused clickable (the
 /// "one declaration, three modalities" contract). The full engine adds tunnel(Preview), gesture arena, XY-focus.
 /// </summary>
 public sealed partial class InputDispatcher
@@ -4052,17 +4053,11 @@ public sealed partial class InputDispatcher
 
         if (key == Keys.Tab)
         {
-            // Offer Tab to the focused node first so a control can consume it (AutoSuggestBox ghost accept). Unhandled
-            // Tab still moves focus — empty Completion must not steal the leave-field gesture.
-            if (!_focused.IsNull)
-            {
-                var tabArgs = new KeyEventArgs(key, e.Mods, e.IsRepeat);
-                for (var n = _focused; !n.IsNull; n = _scene.Parent(n))
-                {
-                    if ((_scene.Flags(n) & NodeFlags.Disabled) == 0) _scene.GetKeyHandler(n)?.Invoke(tabArgs);
-                    if (tabArgs.Handled) return;
-                }
-            }
+            // Offer Tab to the focused node first so a control can consume it (AutoSuggestBox ghost accept); with nothing
+            // focused, to the unfocused-key target (a frame's Ctrl+Tab). Unhandled Tab still moves focus — empty Completion
+            // must not steal the leave-field gesture.
+            var tabFrom = !_focused.IsNull ? _focused : UnfocusedKeyTarget();
+            if (!tabFrom.IsNull && BubbleKey(tabFrom, new KeyEventArgs(key, e.Mods, e.IsRepeat))) return;
             MoveFocus(forward: (e.Mods & KeyModifiers.Shift) == 0);
             return;
         }
@@ -4106,18 +4101,21 @@ public sealed partial class InputDispatcher
             }
 
             // Route to the focused node and bubble up ancestors until Handled (disabled nodes don't receive keys).
-            var args = new KeyEventArgs(key, e.Mods, e.IsRepeat);
-            for (var n = _focused; !n.IsNull; n = _scene.Parent(n))
-            {
-                if ((_scene.Flags(n) & NodeFlags.Disabled) == 0) _scene.GetKeyHandler(n)?.Invoke(args);
-                if (args.Handled) return;
-            }
+            if (BubbleKey(_focused, new KeyEventArgs(key, e.Mods, e.IsRepeat))) return;
 
             // No element handler consumed the key — arrow/PageUp/PageDown/Home/End glide the nearest scrollable
             // self-or-ancestor of the focused node that can move that way, chaining outward past a cross-axis or pinned
             // one (scroll rework §4). An Alt chord is a system key (WM_SYSKEYDOWN),
             // never a scroll: Alt+Left/Right must reach the app's Back/Forward accelerator below.
             if ((e.Mods & KeyModifiers.Alt) == 0 && ScrollKey(key, NearestScrollableSelfOrAncestor(_focused))) return;
+        }
+        else
+        {
+            // Nothing has focus (start-up, a press on inert background, the focused node gone): the key bubbles from the
+            // window's unfocused-key target (BoxEl.TakesUnfocusedKeys, a browser's body) as it would from a focused node, minus
+            // what only a focused node gets (Space/Enter activation, keyboard scroll). With no target it is dropped here, as before.
+            var target = UnfocusedKeyTarget();
+            if (!target.IsNull && BubbleKey(target, new KeyEventArgs(key, e.Mods, e.IsRepeat))) return;
         }
 
         // Unhandled Escape is the app-wide "leave keyboard focus" gesture. Controls and overlays get first refusal
@@ -4183,6 +4181,23 @@ public sealed partial class InputDispatcher
         if (fire && node == _focused && (_scene.Flags(node) & NodeFlags.Disabled) == 0)
             InvokeActivation(node, ContextRequestTrigger.Keyboard);   // Space/Enter key-up activation: a ClickRequestsContext node opens keyboard-anchored (first item focused)
     }
+
+    /// <summary>Offer a key to <paramref name="from"/>'s <c>OnKeyDown</c> and then its ancestors', nearest first, until one sets
+    /// <see cref="KeyEventArgs.Handled"/> (a disabled node gets none). True = handled.</summary>
+    private bool BubbleKey(NodeHandle from, KeyEventArgs args)
+    {
+        for (var n = from; !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Disabled) == 0) _scene.GetKeyHandler(n)?.Invoke(args);
+            if (args.Handled) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Where a key starts while nothing has focus (<see cref="Dsl.BoxEl.TakesUnfocusedKeys"/>): the frontmost such node inside the
+    /// innermost shown focus scope, so a dialog, menu or trapping flyout open with nothing focused keeps the page behind it out of its keys.
+    /// Null = none, and the key is dropped as it always was.</summary>
+    private NodeHandle UnfocusedKeyTarget() => _scene.FindUnfocusedKeyTarget(ScopeRoot);
 
     private bool InvokeAccessKey(char key)
     {

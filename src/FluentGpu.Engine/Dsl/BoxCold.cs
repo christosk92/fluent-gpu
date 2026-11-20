@@ -155,6 +155,7 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
     public bool ClaimsDescendantDrag;
     public bool HoverScopeTransparent;
     public bool FocusRingHost;
+    public bool TakesUnfocusedKeys;
     public NodeAttachment? Attachment;
 
     public BoxColdInput CloneFor(BoxEl owner)
@@ -185,6 +186,7 @@ internal sealed class BoxColdInput : IEquatable<BoxColdInput>
             && EqualityComparer<bool>.Default.Equals(ClaimsDescendantDrag, o.ClaimsDescendantDrag)
             && EqualityComparer<bool>.Default.Equals(HoverScopeTransparent, o.HoverScopeTransparent)
             && EqualityComparer<bool>.Default.Equals(FocusRingHost, o.FocusRingHost)
+            && EqualityComparer<bool>.Default.Equals(TakesUnfocusedKeys, o.TakesUnfocusedKeys)
             && EqualityComparer<NodeAttachment?>.Default.Equals(Attachment, o.Attachment);
     }
 

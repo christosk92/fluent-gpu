@@ -1473,6 +1473,44 @@ public sealed partial class SceneStore : ISceneBackend
         return NodeHandle.Null;
     }
 
+    /// <summary>Where a key typed while nothing has focus starts (<see cref="Dsl.BoxEl.TakesUnfocusedKeys"/>): the frontmost (latest in
+    /// document order) live, enabled, visible node carrying the bit that is linked under <paramref name="scope"/> (the innermost shown focus
+    /// scope's root, else <see cref="Root"/>). A node under a presence-collapsed ancestor does not count, nor a KeepAlive-parked one (detached).
+    /// Null when there is none. Cold keydown path, O(high), like <see cref="FindAccelerator"/>.</summary>
+    public NodeHandle FindUnfocusedKeyTarget(NodeHandle scope)
+    {
+        if (scope.IsNull || !IsLive(scope) || !IsAttachedToRoot((int)scope.Raw.Index)) return NodeHandle.Null;
+        int scopeIdx = (int)scope.Raw.Index, best = 0;
+        for (int i = 1; i < _high; i++)
+        {
+            if (_gen[i] == 0 || (_interaction[i].HandlerMask & InteractionInfo.TakesUnfocusedKeysBit) == 0) continue;
+            var h = new NodeHandle(new Handle((uint)i, _gen[i]));
+            if (!IsLive(h)) continue;
+            if ((_flags[i] & (NodeFlags.Visible | NodeFlags.Disabled)) != NodeFlags.Visible) continue;
+            if (!IsAttachedUnder(i, scopeIdx)) continue;   // outside the open scope (a dialog with nothing focused), or parked
+            if (InCollapsedSubtree(h)) continue;           // a collapsed ancestor clears only its own Visible bit
+            if (best == 0 || FollowsInDocumentOrder(i, best)) best = i;
+        }
+        return Wrap(best);
+    }
+
+    /// <summary>Does node <paramref name="a"/> come after node <paramref name="b"/> in document (pre-) order? A descendant follows its
+    /// ancestor; otherwise the order of the two branches under their nearest common ancestor decides. Both must be linked into one tree.</summary>
+    private bool FollowsInDocumentOrder(int a, int b)
+    {
+        int da = 0, db = 0;
+        for (int n = _parent[a]; n != 0; n = _parent[n]) da++;
+        for (int n = _parent[b]; n != 0; n = _parent[n]) db++;
+        int x = a, y = b;
+        while (da > db) { x = _parent[x]; da--; }
+        while (db > da) { y = _parent[y]; db--; }
+        if (x == y) return a != b && x == b;   // one is the other's ancestor: the descendant (a, when b is the ancestor) follows
+        while (_parent[x] != _parent[y]) { x = _parent[x]; y = _parent[y]; }
+        for (int s = _nextSib[y]; s != 0; s = _nextSib[s])
+            if (s == x) return true;           // a's branch comes after b's under the common parent
+        return false;
+    }
+
     /// <summary>Is this chord owner linked under <see cref="Root"/>? A KeepAlive-parked page, a parked virtual-list slot and
     /// an exit orphan stay live with their handlers but are detached, so without this a hidden page's Ctrl+R (lower slot
     /// index, first match) shadows the shown page's same chord.</summary>

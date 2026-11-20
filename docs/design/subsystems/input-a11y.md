@@ -839,6 +839,15 @@ internal struct AcceleratorEntry {        // SlabAllocator<AcceleratorEntry>
 5. Built-ins          (Tab/Shift-Tab → FocusEngine; arrows → XYFocus or caret; Space/Enter → Invoke focused; Esc → close scope)
 ```
 
+**Keys with nothing focused (as-built).** FluentGpu's focus is often null where WinUI's never is: no initial focus, the
+inert-background press clears it (§8), and a focused node that goes away leaves none. A browser sends such a key to `body`; a
+desktop window hears it itself. Step 4 does the same through `BoxEl.TakesUnfocusedKeys`: with nothing focused, the key (Tab
+included, before focus moves) bubbles from the frontmost such box inside the innermost shown focus scope, through its ancestors'
+`OnKeyDown`, as from a focused node minus what only a focused node gets (Space/Enter activation, keyboard scroll). An app sets it on
+the frame that owns the window's bare keys (Wavee's frame column: Space play/pause, Escape out of a full-screen layer, Ctrl+Tab). A
+dialog, menu or trapping flyout open with nothing focused is its own scope, so the frame behind it hears nothing. No such box: the
+key is dropped, as before. `InputDispatcher.UnfocusedKeyTarget`, `SceneStore.FindUnfocusedKeyTarget`.
+
 `AcceleratorRegistry` (`SlabAllocator<AcceleratorEntry>`) is matched against the `(Vk, Mods)` with scope filtering (an accelerator scoped to a panel fires only when focus is within it). **Access keys (Alt)** push a transient **KeyTips overlay** (badges drawn via `DrawAccessKeyBadgeCmd`, the sibling opcode to `DrawFocusRingCmd`; architecture-spec §4.5). Commands are matched by `CommandSlot` → invoke `Command.Execute` (the GC edge), guarded by `CanExecute`. `UseCommand` (hook) registers/unregisters an entry on mount/unmount with a try/finally cleanup (Reactor philosophy: do not hide user bugs).
 
 **App-zoom chord constants (as-built).** `Keys` (`Foundation/Events.cs`) gained the browser-zoom virtual keys —

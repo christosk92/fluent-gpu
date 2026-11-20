@@ -855,6 +855,9 @@ public record struct InteractionInfo
                                                             // in its own right; the touch arena enrolls a Hold member on it with the node's own
                                                             // dwell, the mouse path runs a hold timer when its spec names one, and a Draggable
                                                             // node carrying it drags only after the hold ("hold, then drag").
+    public const uint TakesUnfocusedKeysBit = 1u << 25;     // BoxEl.TakesUnfocusedKeys: a key typed while nothing has focus bubbles from this node
+                                                            // (InputDispatcher.UnfocusedKeyTarget, SceneStore.FindUnfocusedKeyTarget). Discriminator only:
+                                                            // never a hit-test, focus or handler bit, outside AnyInteractiveMask.
     public const uint FocusRingHostBit = 1u << 22;          // BoxEl.FocusRingHost: paints its nearest focused ancestor's keyboard-focus ring on its
                                                             // own rect (the recorder's ring emission looks for it). Paint-only discriminator: never a
                                                             // hit-test or handler bit.
