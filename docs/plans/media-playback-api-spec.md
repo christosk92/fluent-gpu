@@ -903,6 +903,17 @@ its replacement buffers. Seeking uses 5 ms fade-out, stopped-device reset, decod
 No operation modifies the saved master volume to implement a transport fade. Pause completion acknowledges the
 held, drained device, or completes as superseded when a newer transport request changes intent.
 
+**The output hand-over (2026-11).** An open builds a new session, and a retiring session used to stop and release its
+endpoint, so a track switch left the endpoint with no running stream until the next open (on Bluetooth: the link idles,
+the tail in flight at the stop is cut and the next stream's head is lost). With `PcmAudioPlayer.KeepOutput` set (the
+host's "is this still the output I want?"), `PcmAudioSession.HandOverOutputAsync` fades the whole mix into the seek hold
+(gain 0, still rendering, device running), the facade's retire leaves it running (`PauseAsync` is a no-op while held), and
+`DisposeAsync` parks the endpoint in the backend; the next `OpenAsync` adopts it instead of opening a device. The adopted
+session maps its clock with the device-frame origin (`-WrittenFrames` at adoption) and re-arms the device-underrun rule
+(`IBufferedAudioSink.ExpectRefill`). Bounds: a held session gives up after `HandOverHoldMs` (`CancelHandOver`), a parked
+endpoint is released after `PcmAudioPlayer.ParkedOutputMs`, an adopted stream nobody plays is reset after 1 s or at once on
+pause; a format reload, an invalidated client or a different output always opens fresh.
+
 Before consuming PCM, the mixer preflights every active ring. A depleted ring freezes source and envelope progression.
 If the queued output cushion drains before PCM is ready, the endpoint stops and resets; a device-frame origin maps the
 new hardware epoch back to unchanged content frames. Recovery waits for a real PCM cushion and fades in over 5 ms.

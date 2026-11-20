@@ -16,6 +16,11 @@ public static class WasapiPcm
     /// An unavailable audio service returns an empty list; this never substitutes a remembered preference.</summary>
     public static WasapiEndpointInfo[] EnumerateEndpoints() => WasapiEndpoints.Enumerate();
 
+    /// <summary>The console default render endpoint's id right now (null when there is none), without reading every endpoint's
+    /// properties: the check a host makes before a running stream it opened on "the default" is handed to the next session
+    /// (<see cref="PcmAudioPlayer.KeepOutput"/>). Off the audio thread.</summary>
+    public static string? DefaultEndpointId() => WasapiEndpoints.DefaultId();
+
     /// <summary>Probe the default render endpoint's shared-mode mix format (rate/stereo), or a 48k/stereo fallback if no
     /// device is available.</summary>
     public static MixFormat ProbeFormat()

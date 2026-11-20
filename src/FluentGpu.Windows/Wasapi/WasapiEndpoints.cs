@@ -151,6 +151,28 @@ internal static unsafe class WasapiEndpoints
         finally { PropVariantClear(&value); }
     }
 
+    /// <summary>The console default render endpoint's id right now, or null (no audio service, no endpoint). One enumerator, one
+    /// default lookup, no property store: what a caller asks before it keeps an open stream on an endpoint it opened as "the default".</summary>
+    internal static string? DefaultId()
+    {
+        int initialized = CoInitializeEx(null, (uint)(COINIT.COINIT_MULTITHREADED | COINIT.COINIT_DISABLE_OLE1DDE));
+        IMMDeviceEnumerator* enumerator = null;
+        IMMDevice* device = null;
+        try
+        {
+            Guid clsid = CLSID.CLSID_MMDeviceEnumerator, iid = IID.IID_IMMDeviceEnumerator;
+            if (CoCreateInstance(&clsid, null, 0x17, &iid, (void**)&enumerator) < 0) return null;
+            if (enumerator->GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eConsole, &device) < 0 || device == null) return null;
+            return IdOf(device);
+        }
+        finally
+        {
+            if (device != null) device->Release();
+            if (enumerator != null) enumerator->Release();
+            if (initialized >= 0) CoUninitialize();
+        }
+    }
+
     internal static WasapiEndpointInfo[] Enumerate()
     {
         int initialized = CoInitializeEx(null, (uint)(COINIT.COINIT_MULTITHREADED | COINIT.COINIT_DISABLE_OLE1DDE));

@@ -204,6 +204,12 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
     }
 
     /// <inheritdoc/>
+    /// <remarks>The client keeps RUNNING across the hand-over (no Stop, no Reset), so the rule's "a full buffer since the last
+    /// start" is re-armed here instead: the next session's first write may find the queue empty after the gap between the two
+    /// feeds, and that is a refill, not a glitch.</remarks>
+    public void ExpectRefill() => _writtenSinceStart = 0;
+
+    /// <inheritdoc/>
     public int CapacityFrames => (int)_bufferFrames;
     /// <inheritdoc/>
     public int WritableFrames

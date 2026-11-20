@@ -349,6 +349,10 @@ public interface IBufferedAudioSink : IAudioSink
     /// hardware played silence whatever the app's own xrun counter says (a late RT callback, an audiodg stall). 0 for a sink that
     /// cannot tell. Cumulative since the sink was built; any thread may read it.</summary>
     long DeviceUnderruns => 0;
+    /// <summary>A RUNNING stream changes hands (<see cref="PcmAudioSession.HandOverOutputAsync"/>): the next writes refill a queue that
+    /// may have sat empty between the two sessions' feeds, exactly like a start or a post-seek refill, so they must not count as
+    /// <see cref="DeviceUnderruns"/>. Called off the RT path while no feed writes to the sink. Default: nothing to re-arm.</summary>
+    void ExpectRefill() { }
 }
 
 /// <summary>The played-frames master clock (spec §7.6) — WASAPI <c>IAudioClock</c> / CoreAudio timestamp. Position is

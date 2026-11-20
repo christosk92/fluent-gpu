@@ -234,6 +234,82 @@ public sealed class PcmAudioPlayer : IMediaBackend, IPreparableBackend
                                         or CodecId.Opus or CodecId.Flac or CodecId.Mp3,
     };
 
+    // ── the output hand-over: a track switch keeps ONE running stream ───────────────────────────────────────────────────
+    // Every open used to build a fresh endpoint and every retiring session stopped and released its own, so a track switch
+    // left the endpoint with NO running stream for the whole next open (a Wavee log on Bluetooth: the old client stopped once its
+    // fade had drained the 100 ms queue, the new one opened 607 ms after the switch, same 44.1 kHz/stereo/float, `bufFrames=4410`).
+    // An endpoint with no stream goes idle: a Bluetooth link suspends and resumes, the tail in flight at the stop is cut and
+    // the head of the next song is spent waking the link (heard as the old song scratching for a couple of buffers and the
+    // new one starting ~0.3 s in). A session the host asked to hand over (PcmAudioSession.HandOverOutputAsync) holds its mix
+    // at silence with the client still RUNNING, and parks the endpoint here when it is disposed; the next open adopts it
+    // instead of opening a device, so the stream never stops at an unchanged format.
+
+    /// <summary>The host's say on a parked running endpoint at the next open: true = still the output it wants (the same chosen
+    /// endpoint, or still the default), so the session adopts it instead of opening a device. Null (the default) disables the
+    /// hand-over entirely: every open builds its endpoint and every session stops its own, as before. Called off the RT path;
+    /// an endpoint that went inert or invalidated (a format change invalidates a WASAPI client) is never offered.</summary>
+    public Func<IAudioEndpoint, bool>? KeepOutput { get; set; }
+
+    /// <summary>How long a parked endpoint waits for an open to adopt it before it is stopped and released (a hand-over whose
+    /// next open never came: a failed load, a stop): a running stream holds the endpoint awake and keeps the machine from
+    /// sleeping, so it must never outlive the switch it was kept for.</summary>
+    public const int ParkedOutputMs = 3_000;
+
+    private readonly object _parkGate = new();
+    private IAudioEndpoint? _parked;          // _parkGate: a running endpoint a retired session handed over, not yet adopted
+    private Timer? _parkTimer;                // _parkGate: releases _parked after ParkedOutputMs
+
+    // Session → backend, from the retiring session's DisposeAsync (its feed already stopped): take its RUNNING endpoint for the
+    // next open. False = not taken (the hand-over is off): the session stops and releases it itself.
+    private bool ParkOutput(IAudioEndpoint endpoint)
+    {
+        if (KeepOutput is null) return false;
+        IAudioEndpoint? previous;
+        lock (_parkGate)
+        {
+            previous = _parked;
+            _parked = endpoint;
+            _parkTimer ??= new Timer(static s => ((PcmAudioPlayer)s!).ReleaseParked(), this, Timeout.Infinite, Timeout.Infinite);
+            _parkTimer.Change(ParkedOutputMs, Timeout.Infinite);
+        }
+        if (previous is not null && !ReferenceEquals(previous, endpoint)) ReleaseEndpoint(previous);
+        return true;
+    }
+
+    // The open's side: the parked endpoint when it is still live and still the output the host wants; anything else is released
+    // here and the open builds a fresh one. WritableFrames is the liveness probe (GetCurrentPadding): a client the OS invalidated
+    // while parked (a device-format change, an unplug) answers −1 even before IsReady has noticed.
+    private IAudioEndpoint? TakeParkedOutput()
+    {
+        IAudioEndpoint? parked;
+        lock (_parkGate)
+        {
+            parked = _parked;
+            _parked = null;
+            _parkTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+        }
+        if (parked is null) return null;
+        bool keep;
+        try { keep = parked.IsReady && (parked.Sink is not IBufferedAudioSink live || live.WritableFrames >= 0) && KeepOutput?.Invoke(parked) == true; }
+        catch { keep = false; }
+        if (keep) return parked;
+        ReleaseEndpoint(parked);
+        return null;
+    }
+
+    private void ReleaseParked()
+    {
+        IAudioEndpoint? parked;
+        lock (_parkGate) { parked = _parked; _parked = null; }
+        if (parked is not null) ReleaseEndpoint(parked);
+    }
+
+    private static void ReleaseEndpoint(IAudioEndpoint endpoint)
+    {
+        try { endpoint.Sink.Stop(); } catch { /* teardown never throws */ }
+        try { endpoint.Dispose(); } catch { /* teardown never throws */ }
+    }
+
     /// <inheritdoc/>
     public async ValueTask<IMediaSession> OpenAsync(MediaSource source, MediaOpenOptions opts, CancellationToken ct)
     {
@@ -248,7 +324,10 @@ public sealed class PcmAudioPlayer : IMediaBackend, IPreparableBackend
             byteSource = ResolveByteSource(source)
                 ?? throw new NotSupportedException("PCM playback requires a supported byte source.");
             using var cancellation = ct.Register(static state => ((IMediaByteSource)state!).Cancel(), byteSource);
-            endpoint = _endpointFactory(Format);
+            // A running endpoint the previous session handed over is the output, as it is: no device open, no stop/start.
+            endpoint = TakeParkedOutput();
+            bool adopted = endpoint is not null;
+            endpoint ??= _endpointFactory(Format);
             var mix = endpoint.Sink.Format;
             decoder = _decoderFactory(mix);
             DecodedInfo info = default;
@@ -263,6 +342,8 @@ public sealed class PcmAudioPlayer : IMediaBackend, IPreparableBackend
             var loudness = ResolveLoudness(source, info);
             voice = BuildTrimmedVoice(decoder, loudness, mix, info.Duration, out long totalFrames, byteSource, lease);
             session = new PcmAudioSession(mix, endpoint.Sink, endpoint.Clock, _maxBlock, _driveWithOwnThread, endpoint);
+            if (adopted) session.AdoptRunningOutput();   // before the feed attaches: the clock origin and the refill are set while nothing writes
+            if (KeepOutput is not null) session.ParkOutput = ParkOutput;
             _lastSession = new WeakReference<PcmAudioSession>(session);
             session.Configure(BuildGraphSpec(_effects, mix));
             // The backend's effects surface is the LIVE one for every session it opens. Without this bind the session's live
@@ -476,6 +557,138 @@ public sealed partial class PcmAudioSession : IMediaSession
     private long _transportRevision;
     private long _seekRevision;
     private readonly SemaphoreSlim _replacementGate = new(1, 1);
+
+    // ── the output hand-over (PcmAudioPlayer.KeepOutput): a track switch keeps ONE running stream ─────────────────────────
+    /// <summary>The backend's park, set when it opened this session with the hand-over on; null (a host-built session, a silent
+    /// endpoint, the hand-over off) means this stream is never handed over and <see cref="HandOverOutputAsync"/> refuses.</summary>
+    internal Func<IAudioEndpoint, bool>? ParkOutput;
+    private volatile bool _handOver;      // armed by HandOverOutputAsync: Pause keeps the stream running, Dispose parks the endpoint
+    private long _handOverDeadline;       // TickCount64 (Volatile): the clock thread gives up a hold no open took over by then
+    private bool _adoptedOutput;          // this session renders into a running stream the previous session handed over
+    // Switch diagnostics: plain RT stores (once per session / at a fade's end), read anywhere through Volatile. No allocation, no lock.
+    private long _firstContentQpc;        // QPC of the first block rendered from content; 0 = none yet
+    private long _firstContentFrame = -1; // the active voice's content frame that first block began at (0 = the song's first frame)
+    private long _fadeEndSubmit = -1;     // the device submit index where the last fade-out ended (silence from there); −1 = not yet
+
+    /// <summary>How long a hand-over holds the stream at silence for an open to take it over before the session gives up and stops
+    /// it like a pause (the clock thread checks; <see cref="CancelHandOver"/>): a load that failed or was stopped must not leave a
+    /// silent stream running — it keeps the endpoint awake and the machine from sleeping.</summary>
+    public const int HandOverHoldMs = 4_000;
+
+    /// <summary>How long <see cref="HandOverOutputAsync"/> waits for the fade to land in the silent hold. A 20 ms fade lands in about
+    /// one device period once the RT applies it; the bound only matters when the RT is not rendering.</summary>
+    private const int HandOverLandMs = 250;
+
+    /// <summary>True when this session took over a RUNNING stream from the session before it (no device open, no start).</summary>
+    public bool AdoptedOutput => _adoptedOutput;
+
+    /// <summary><c>Stopwatch</c> timestamp of the first block this session rendered from content (0 until then).</summary>
+    public long FirstContentQpc => Volatile.Read(ref _firstContentQpc);
+
+    /// <summary>The content frame the first rendered block began at, in mix frames (−1 until a block was rendered): 0 for a start
+    /// from the song's beginning — nothing before it was dropped — or the target of a load that started at a position.</summary>
+    public long FirstContentFrame => Volatile.Read(ref _firstContentQpc) == 0 ? -1 : Volatile.Read(ref _firstContentFrame);
+
+    /// <summary>The device submit index (<see cref="SubmittedFrames"/> domain) where the last requested fade-out
+    /// (<see cref="FadeOutAsync"/>, <see cref="HandOverOutputAsync"/>) ended — every frame written after it is silence; −1 while
+    /// it has not ended. With the submitted and played counts at the request it says how much of the old audio the listener
+    /// still heard after it, the device queue included (a fade can only shape frames not yet written).</summary>
+    public long FadeEndSubmitIndex => Volatile.Read(ref _fadeEndSubmit);
+
+    /// <summary>Adopt the RUNNING endpoint the backend handed this session at open (<see cref="PcmAudioPlayer.KeepOutput"/>), before
+    /// the feed attaches: the device's counters run on from the session that played into it, so frame k of THIS session is device
+    /// frame <c>written + k</c> (the clock origin), and the first writes refill a queue that may have run empty between the feeds
+    /// (<see cref="IBufferedAudioSink.ExpectRefill"/>). The device is never started here: it is running; the first write's Start is
+    /// a no-op on it.</summary>
+    internal void AdoptRunningOutput()
+    {
+        _adoptedOutput = true;
+        Volatile.Write(ref _adoptedIdleDeadline, Environment.TickCount64 + AdoptedIdleMs);
+        Interlocked.Exchange(ref _deviceFrameOrigin, -_clock.WrittenFrames);
+        (_out as IBufferedAudioSink)?.ExpectRefill();
+    }
+
+    /// <summary>How long an adopted running stream may stay running under a session that has neither started rendering nor been
+    /// asked to play (a paused load, a load that faulted after its open) before it is stopped. A fresh device would have sat
+    /// unstarted; an adopted one must not hold the endpoint awake instead.</summary>
+    private const int AdoptedIdleMs = 1_000;
+    private long _adoptedIdleDeadline;    // TickCount64 (Volatile)
+    private int _adoptedReleased;         // 1 once ReleaseAdoptedOutput posted its reset
+
+    // The adopted stream is not going to play now: stop it the way a never-started session's device is — CmdReset on the RT (Stop,
+    // flush, counters and the clock origin back to 0). The session is then an ordinary unstarted one: a later Play starts the
+    // device on its first write exactly as a fresh open does. Once per session; posted only while nothing has been submitted.
+    private void ReleaseAdoptedOutput()
+    {
+        if (_disposed || SubmittedFrames != 0 || Interlocked.Exchange(ref _adoptedReleased, 1) != 0) return;
+        TryEnqueueMixerCmd(new MixerCmd { Kind = CmdReset }, out _);
+    }
+
+    /// <summary>Hand this session's output stream to the NEXT open on the same backend — a track switch. The whole mix fades to
+    /// silence over <paramref name="fade"/> and HOLDS there with the device still RUNNING (the seek hold, phase 4: the RT keeps
+    /// writing silence, never Stop/Reset), a later <see cref="PauseAsync"/> leaves it running, and <see cref="DisposeAsync"/> parks
+    /// the endpoint in the backend instead of releasing it, where the next <see cref="PcmAudioPlayer.OpenAsync"/> adopts it. The
+    /// listener hears the device queue that was already written (≈ the 100 ms buffer: a fade can only shape frames not yet
+    /// written), the fade, then silence, and the next song from its first frame on the same stream: the endpoint never goes idle,
+    /// so a Bluetooth link is never suspended under the switch.
+    /// <para>Returns false — nothing changed, use <see cref="FadeOutAsync"/> — when the backend has the hand-over off, there is no RT
+    /// feed, the device is not running (paused, not started, draining), or the graph awaits a device-format reload. An Ended
+    /// session (the queue already drained, nothing renders) is handed over as it is. Gives up by itself after
+    /// <see cref="HandOverHoldMs"/> (<see cref="CancelHandOver"/>).</para></summary>
+    public async ValueTask<bool> HandOverOutputAsync(TimeSpan fade, CancellationToken ct = default)
+    {
+        // An adopted stream this session has not written to yet (the listener switched again before its first block) is running
+        // too: it is the previous session's silence, and it goes on to the next open the same way.
+        bool adoptedIdle = _adoptedOutput && !_started && Volatile.Read(ref _adoptedReleased) == 0;
+        if (ParkOutput is null || _feed is null || _disposed || _formatRequiresReload || !OutputLive || !(_started || adoptedIdle)) return false;
+        if (Volatile.Read(ref _transportPhase) is 2 or 3) return false;   // a pause is draining or has stopped the device
+        Volatile.Write(ref _fadeEndSubmit, -1);
+        Volatile.Write(ref _handOverDeadline, Environment.TickCount64 + HandOverHoldMs);
+        Interlocked.Increment(ref _transportRevision);   // a FadeOutAsync still waiting for its phase-3 hold ends instead
+        _transportHoldRequested = true;                  // nothing may fade this transport back in (a seek's resume, a Ready edge)
+        _fadeInSpecified = false;
+        _handOver = true;
+        if (adoptedIdle)
+        {
+            // Never rendered: keep it that way (no play request, the transport parked at 0 — CmdFadeOut on an unstarted device is
+            // phase 3 with no Stop), so the superseded song never starts on the stream it is handing on.
+            _playRequested = false;
+            TryEnqueueMixerCmd(new MixerCmd { Kind = CmdFadeOut, Frames = 1 }, out _);
+            Volatile.Write(ref _fadeEndSubmit, 0);
+            return true;
+        }
+        if (_state == PlaybackState.Ended)
+        {
+            // RtRenderOnce renders nothing after the end: the drained stream is already silent and running.
+            Volatile.Write(ref _fadeEndSubmit, SubmittedFrames);
+            return true;
+        }
+        int frames = Math.Max(1, (int)Math.Round(fade.TotalSeconds * _format.SampleRate));
+        long seq = await PostMixerCommandAsync(new MixerCmd { Kind = CmdFadeOutHold, Frames = frames }, ct).ConfigureAwait(false);
+        await WaitAppliedAsync(seq, ct).ConfigureAwait(false);
+        long deadline = Environment.TickCount64 + HandOverLandMs;
+        try
+        {
+            await UntilAsync(_phaseWake, () => Volatile.Read(ref _transportPhase) != 1 || !_started || Environment.TickCount64 >= deadline, ct)
+                .ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException) when (_disposed) { }
+        return true;
+    }
+
+    /// <summary>Give up a hand-over no open took over (a failed or stopped load; the clock thread after <see cref="HandOverHoldMs"/>):
+    /// the held stream — silent already — fades over one frame, drains and stops exactly as a pause does, and a later dispose
+    /// releases the endpoint as before. An Ended session is left as an Ended session always is. Idempotent; any thread.</summary>
+    public void CancelHandOver()
+    {
+        if (!_handOver) return;
+        _handOver = false;
+        _playRequested = false;
+        if (_disposed) return;
+        if (_adoptedOutput && !_started) { ReleaseAdoptedOutput(); return; }   // it never wrote to the stream: stop it outright
+        if (_state == PlaybackState.Ended) return;
+        TryEnqueueMixerCmd(new MixerCmd { Kind = CmdFadeOut, Frames = 1 }, out _);
+    }
 
     // ── seek (D3): the jump inside the ring (B), the voice swap (A) and the in-place seek (fallback) ───────────────────────
     // Engine-issued voice ids start far above both the app's own counter and VoiceScheduler's (1_000_000 + n), so a swap / scrub voice
@@ -1001,6 +1214,7 @@ public sealed partial class PcmAudioSession : IMediaSession
     public async ValueTask FadeOutAsync(TimeSpan duration, CancellationToken ct = default)
     {
         long revision = Interlocked.Increment(ref _transportRevision);
+        Volatile.Write(ref _fadeEndSubmit, -1);
         _transportHoldRequested = true;
         _fadeInSpecified = false;
         long sequence = await PostMixerCommandAsync(new MixerCmd { Kind = CmdFadeOut,
@@ -1247,9 +1461,9 @@ public sealed partial class PcmAudioSession : IMediaSession
                 case CmdFadeOut:
                     _holdNoStop = false;   // a real pause supersedes a seek hold: its completion must STOP the device
                     if (!_started)
-                    { _transport = new TransportRamp(0f); SetPhase(3); }
+                    { _transport = new TransportRamp(0f); Volatile.Write(ref _fadeEndSubmit, _submittedFrames); SetPhase(3); }
                     else if (_starvationPhase != 0)
-                    { _fadeTailSubmitted = _submittedFrames; SetPhase(2); }
+                    { _fadeTailSubmitted = _submittedFrames; Volatile.Write(ref _fadeEndSubmit, _submittedFrames); SetPhase(2); }
                     else
                     { _transport.Retarget(0f, _mixer.ConsumeSeq, c.Frames); SetPhase(1); }
                     break;
@@ -1888,6 +2102,7 @@ public sealed partial class PcmAudioSession : IMediaSession
     public ValueTask PlayAsync()
     {
         if (_disposed) return ValueTask.CompletedTask;
+        _handOver = false;   // a play request makes this session live again: no hand-over (its fade-in below lifts the hold)
         // F5: the RT thread may start rendering (and the device may Start) the moment play is requested and the ring is ready —
         // before the clock thread's next tick — so the one-time page-in pass must already be behind us (see WarmUp).
         if (!_started) WarmUp();
@@ -1903,10 +2118,14 @@ public sealed partial class PcmAudioSession : IMediaSession
     public async ValueTask PauseAsync()
     {
         if (_disposed) return;
+        // A hand-over holds the stream at silence for the next open (HandOverOutputAsync): the facade pauses every session it
+        // retires, and a pause fade ends in Stop — exactly the idle endpoint the hand-over exists to avoid. It is silent already.
+        if (_handOver) return;
         _playRequested = false;
         _transportHoldRequested = true;
         _fadeInSpecified = false;
         _sink?.PlayRequested(false);
+        if (_adoptedOutput && !_started) ReleaseAdoptedOutput();   // a paused load must not keep the adopted stream running
         if (_state is PlaybackState.Playing or PlaybackState.Stalled)
         {
             await FadeOutAsync(TimeSpan.FromMilliseconds(20)).ConfigureAwait(false);
@@ -2543,10 +2762,14 @@ public sealed partial class PcmAudioSession : IMediaSession
 
     private PlaybackState Advance(int frames, bool renderInline)
     {
+        // An adopted stream nobody asked to play (no signals connected yet counts too): stopped after AdoptedIdleMs (ReleaseAdoptedOutput).
+        if (_adoptedOutput && !_started && !_playRequested && !_handOver && Environment.TickCount64 >= Volatile.Read(ref _adoptedIdleDeadline))
+            ReleaseAdoptedOutput();
         if (_disposed || _sink is null) return _state;
         var sink = _sink;
         frames = Math.Clamp(frames, 1, _maxBlock);
 
+        if (_handOver && Environment.TickCount64 >= Volatile.Read(ref _handOverDeadline)) CancelHandOver();   // no open took the stream
         ReconcileEffects();   // control-thread: fold live effect-signal changes into the graph/plane (spec §7.10)
         if (_replacementGate.CurrentCount != 0) UpdateSeekRebufferSuppression();   // fix 2: clear the seek/flush xrun-suppression window once the ring refills
 
@@ -2717,6 +2940,13 @@ public sealed partial class PcmAudioSession : IMediaSession
         var buf = _mixBuf.AsSpan(0, frames * _format.Channels);
         var ctx = new BlockCtx(_mixer.ConsumeSeq, _format.SampleRate, _format.Channels, _plane);
         var graph = _graph.Live;
+        if (_firstContentQpc == 0)
+        {
+            // Switch diagnostics, once per session (FirstContentFrame): where the first content block starts in the active voice
+            // and when. Two plain stores and a QPC read — the same clock read the tripwire makes — before the tripwire opens.
+            _firstContentFrame = Volatile.Read(ref _activeRateSource)?.PositionFrames ?? _mixer.ConsumeSeq;
+            Volatile.Write(ref _firstContentQpc, Stopwatch.GetTimestamp());
+        }
         AudioTripwire.BeginBlock();
         _masterGain.SetTargetLinear(_muted ? 0f : _volume, _plane.DefaultRampSamples);
         _masterChannel.SetTargetBalance(_balanceTarget, _plane.DefaultRampSamples);   // applied HERE: the control thread only publishes the target
@@ -2747,6 +2977,7 @@ public sealed partial class PcmAudioSession : IMediaSession
         _pendingSilence = false;
         if (_transportPhase == 1 && _mixer.ConsumeSeq > _transport.EndFrame)
         {
+            Volatile.Write(ref _fadeEndSubmit, _submittedFrames + frames);   // the fade's last frame is in this block: silence after it
             if (_holdNoStop) SetPhase(4);   // a seek hold: gain is 0 and the transport keeps RUNNING — no drain, no Stop, no restart
             else
             {
@@ -2769,6 +3000,7 @@ public sealed partial class PcmAudioSession : IMediaSession
         if (Volatile.Read(ref _transportPhase) == 1)
         {
             _transport = new TransportRamp(0f);
+            Volatile.Write(ref _fadeEndSubmit, _submittedFrames);   // the ring ran dry mid-fade: what was written is all that sounds
             if (_holdNoStop) SetPhase(4);
             else
             {
@@ -3247,8 +3479,21 @@ public sealed partial class PcmAudioSession : IMediaSession
         _pumpThread?.Join(2000);
         while (_pumpThread is { IsAlive: true }) await Task.Delay(20).ConfigureAwait(false);
         _pumpThread = null;
-        try { _out.Stop(); } catch { /* teardown never throws */ }
-        try { _endpoint?.Dispose(); } catch { /* teardown never throws */ }
+        // The output hand-over (HandOverOutputAsync): a stream held at silence — the fade landed in the hold, or the queue had already
+        // ended — is parked RUNNING in the backend for the next open instead of stopped. The feed is stopped, so nothing writes to it
+        // until the next session's does; the device plays out the silence it holds meanwhile. Anything else stops and releases as ever.
+        bool parked = false;
+        if (_handOver && ParkOutput is { } park && !_formatRequiresReload && _endpoint is IAudioEndpoint { IsReady: true } live
+            && (Volatile.Read(ref _transportPhase) == 4 || _state == PlaybackState.Ended || (_adoptedOutput && !_started)))
+        {
+            try { parked = park(live); } catch { parked = false; }
+            if (parked) _endpoint = null;
+        }
+        if (!parked)
+        {
+            try { _out.Stop(); } catch { /* teardown never throws */ }
+            try { _endpoint?.Dispose(); } catch { /* teardown never throws */ }
+        }
         // Publish the terminal state BEFORE severing the sink — without this, a torn-down session leaves
         // MediaPlayerCore.State pinned at whatever it last was (often Playing) forever, because nothing else ever
         // writes to it again once _sink goes null.
