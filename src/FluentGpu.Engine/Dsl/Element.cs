@@ -578,6 +578,15 @@ public sealed record BoxEl : Element
     /// node wins (a shallow search, at most a few levels down); none found: the focused node's own ring, as before. Paint only: focus, hit-testing and
     /// navigation are unchanged.</summary>
     public bool FocusRingHost { get => (_cInput ?? BoxColdInput.Default).FocusRingHost; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).FocusRingHost, value)) CInput.FocusRingHost = value; } }
+    /// <summary>This box takes the keys typed while NOTHING has keyboard focus (a browser's <c>body</c>, a desktop window's own key handler):
+    /// such a key bubbles from this box up through its ancestors' <see cref="OnKeyDown"/> as it would from a focused node, with no Space/Enter
+    /// activation, no focus ring and no keyboard scroll. Nothing has focus at start-up, after a press on inert background (which clears it) and
+    /// after the focused node goes away; with no such box those keys are dropped. Set it on the app frame that owns the window's bare keys
+    /// (Space play/pause, Escape out of a full-screen layer), where its <see cref="OnKeyDown"/> already hears what a focused node declines.
+    /// It counts only inside the innermost shown focus scope (a dialog, menu or trapping flyout open with nothing focused keeps the frame
+    /// behind it out of its keys) and only while it is live, enabled, shown and linked into the tree; with several, the frontmost (the
+    /// latest in document order) takes the keys. Tab is offered to it first too, before focus moves. Focus itself never moves to it.</summary>
+    public bool TakesUnfocusedKeys { get => (_cInput ?? BoxColdInput.Default).TakesUnfocusedKeys; init { if (!EqualityComparer<bool>.Default.Equals((_cInput ?? BoxColdInput.Default).TakesUnfocusedKeys, value)) CInput.TakesUnfocusedKeys = value; } }
 
     /// <summary>Clip-ESCAPE root for a hover-elevated descendant (pairs with <see cref="HoverElevatePaint"/>): set on a
     /// clipping viewport (a shelf's paged strip) to let the hovered card's lift + halo paint OUTSIDE this clip. The
