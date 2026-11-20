@@ -173,6 +173,18 @@ internal sealed partial class SceneRecordingContext
     internal SceneRecordingSnapshot? InlineSnapshot => _inlineScene;
     internal void ReleaseInlineResources() => _inlineScene?.ReleaseResources();
 
+    /// <summary>The inline capture's snapshot, sized on creation to the store it mirrors (Item E, as the render seam's ring slots
+    /// are: <c>SceneFramePublisher.InitialSceneCapacity</c>). A host that starts its store at its steady-state size
+    /// (<c>AppHost</c>'s <c>initialSceneCapacity</c>) then never pays the doubling growth on this copy either: grown lazily from 16,
+    /// it doubled every column (and the recorder's span table after it, <see cref="SpanTable.BeginFrame"/> follows the snapshot's
+    /// capacity) the frame a reachable index first passed it, megabytes on the large-object heap inside a scroll.</summary>
+    private static SceneRecordingSnapshot NewInlineSnapshot(SceneStore scene)
+    {
+        var snapshot = new SceneRecordingSnapshot();
+        snapshot.ReserveNodeCapacity(scene.Capacity);
+        return snapshot;
+    }
+
     /// <summary>The frame's authoritative capture — always re-walks the scene (perf plan item 1: image inputs are
     /// narrowed to <see cref="SceneRecordingSnapshot.ReferencedImageIds"/>, the set the recorder can actually draw).
     /// Called by <see cref="Record"/>, which is always the first of the (Record, RecordDetached, N×RecordSubtree)
@@ -180,7 +192,7 @@ internal sealed partial class SceneRecordingContext
     /// <see cref="CaptureInlineForFrame"/> for the sibling calls that reuse this result instead of re-capturing.</summary>
     internal SceneRecordingSnapshot CaptureInline(SceneStore scene, ImageCache? images)
     {
-        var snapshot = _inlineScene ??= new SceneRecordingSnapshot();
+        var snapshot = _inlineScene ??= NewInlineSnapshot(scene);
         snapshot.Capture(scene);
         // The slice recorder reads the scroll-effect rows (which nodes are translation-effect roots) off the capture,
         // exactly as the render thread's publication carries them.
