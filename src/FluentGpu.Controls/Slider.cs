@@ -38,11 +38,13 @@ public static partial class Slider
     /// keyboard + tooltip mechanics. Owned: OnPointerDown, OnDrag, OnKeyDown, OnRealized (track ref), Role, Children —
     /// plus, while the tooltip is enabled, the tooltip wiring (OnClick/OnHoverMove/OnPointerExit/OnFocusChanged).</summary>
     public const string PartContainer = "Container";
-    /// <summary>The 4px resting rail (WinUI HorizontalTrackRect / VerticalTrackRect). Owned: nothing — pure styling
+    /// <summary>The 4px resting rail (WinUI HorizontalTrackRect / VerticalTrackRect). It spans the thumb centre's travel: half a thumb in
+    /// from either end of the control, so the minimum sits on its start and the maximum on its end. Owned: nothing — pure styling
     /// (the hover/press fill pins are stock state styling a modifier may override).</summary>
     public const string PartRail = "Rail";
     /// <summary>The accent value fill (WinUI HorizontalDecreaseRect / VerticalDecreaseRect). Owned: the value-position
-    /// geometry — a composited Transform bound to the signal (grow-from-left / grow-from-bottom over the full track).</summary>
+    /// geometry — a composited Transform bound to the signal (grow from the rail's start / its bottom to the thumb's centre) —
+    /// and its bound Opacity (no fill at all at the minimum).</summary>
     public const string PartValueFill = "ValueFill";
     /// <summary>The static 22px thumb ring (WinUI HorizontalThumb / VerticalThumb). Owned: Children (the inner dot),
     /// OnRealized (the tooltip anchor, chained), and the composited value-position TransformBind.</summary>
@@ -355,7 +357,7 @@ internal sealed partial class SliderCore : Component
 
     /// <summary>The dynamic geometry the compositor binds read (a UseRef cell, overwritten each render): keeps the
     /// mount-time bind thunks current even if range / length / style are re-pushed, while never re-wiring the bind.</summary>
-    private struct Geo { public float Min, Range, Length, Thickness, TrackHeight, RingD, Half; }
+    private struct Geo { public float Min, Range, Thickness, TrackHeight, Half, Travel; }
 
     public override Element Render()
     {
@@ -371,6 +373,12 @@ internal sealed partial class SliderCore : Component
         float max = o.Min + range;
         bool vertical = o.Vertical;
         float ringD = s.ThumbRingDiameter, half = ringD * 0.5f;
+        // THE ENDS ARE THE ENDS. The rail runs between two half-thumb insets and the thumb's CENTRE travels it linearly: the minimum sits on
+        // the rail's start, the maximum on its end, and the thumb stays inside the control's box at both. (The rail once spanned the whole
+        // length under a thumb that stopped flush with it, so the minimum stood half a thumb inside the rail, a silent volume rail read as a
+        // little volume, and below half a thumb's share of the length the thumb did not move at all.) The fill runs from the rail's start
+        // to the thumb's centre; the pointer, the keyboard tooltip's anchor and the ticks all map on the same line.
+        float travel = MathF.Max(length - ringD, 1f);
         // SmallChange/LargeChange: 0 = auto — (range)/100 and (range)/10, reproducing WinUI's absolute defaults 1/10 on
         // its default 0–100 range (SLIDER_DEFAULT_SMALL_CHANGE/LARGE_CHANGE/MAXIMUM, Slider_Partial.h:13-15).
         float smallChange = o.SmallChange > 0f ? o.SmallChange : range / 100f;
@@ -385,7 +393,7 @@ internal sealed partial class SliderCore : Component
         var tip = UseRef<OverlayHandle?>(null);
         var tipPhase = UseSignal(0);                       // 0 idle · 1 hover-arm (initial show delay) · 2 open
         var svc = UseContext(Overlay.Service);
-        geoRef.Value = new Geo { Min = min, Range = range, Length = length, Thickness = thickness, TrackHeight = s.TrackHeight, RingD = ringD, Half = half };
+        geoRef.Value = new Geo { Min = min, Range = range, Thickness = thickness, TrackHeight = s.TrackHeight, Half = half, Travel = travel };
         var geo = geoRef;
 
         ColorF railFill = isEnabled ? s.RailFill : s.RailFillDisabled;
@@ -401,7 +409,8 @@ internal sealed partial class SliderCore : Component
         // ── value writes (write the signal FIRST — the compositor binds update — then fire onChange once) ──
         void Set(Point2 p)
         {
-            float raw = Math.Clamp(vertical ? 1f - p.Y / MathF.Max(length, 1f) : p.X / MathF.Max(length, 1f), 0f, 1f);
+            // The thumb's centre is under the pointer: the rail runs from half a thumb in to half a thumb before the far end.
+            float raw = Math.Clamp(vertical ? 1f - (p.Y - half) / travel : (p.X - half) / travel, 0f, 1f);
             float v = min + raw * range;
             // StepFrequency drag snapping — value goes to the closest Step multiple at the WRITE site (MoveThumbToPoint,
             // Slider_Partial.cpp:2012-2029 via GetClosestStep).
@@ -480,9 +489,9 @@ internal sealed partial class SliderCore : Component
         {
             if (!tooltipEnabled || tip.Value is { IsOpen: true }) return;
             // Hovering the THUMB arms the ToolTipService-style delayed open (the WinUI thumb's attached ToolTip part,
-            // Slider_Partial.cpp:2037-2120). The ring is 22px, centred at the CURRENT value position, clamped in-track.
+            // Slider_Partial.cpp:2037-2120). The ring is 22px, centred at the CURRENT value position on the rail.
             float t = Math.Clamp((sig.Peek() - min) / range, 0f, 1f);
-            float cMain = Math.Clamp(vertical ? (1f - t) * length : t * length, half, MathF.Max(half, length - half));
+            float cMain = half + (vertical ? 1f - t : t) * travel;
             float mainAxis = vertical ? p.Y : p.X;
             float cross = vertical ? p.X : p.Y;
             bool overThumb = MathF.Abs(mainAxis - cMain) <= half && MathF.Abs(cross - thickness * 0.5f) <= half;
@@ -511,32 +520,35 @@ internal sealed partial class SliderCore : Component
                 OpenTip();
         }
 
-        // ── value-position compositor binds (grow-from-left / grow-from-bottom); center-origin transforms (see the
-        //    proven horizontal fill math). The mount-time thunks read the live `geo` cell, so a re-pushed range/length
-        //    stays correct without re-wiring. ──
+        // ── value-position compositor binds (grow-from-the-rail's-start / grow-from-its-bottom); center-origin transforms
+        //    (see the proven horizontal fill math). The mount-time thunks read the live `geo` cell, so a re-pushed
+        //    range/length stays correct without re-wiring. The fill is a rail-long box scaled about its centre and slid
+        //    onto the rail; at the minimum it is gone outright (its bound opacity): a scale held off zero rasterised as a
+        //    sliver of value at 125 % and 150 %. ──
         Func<Affine2D> fillBind = vertical
             ? () => { var g = geo.Value; float t = Math.Clamp((sig.Value - g.Min) / g.Range, 0f, 1f); float v = MathF.Max(t, 1e-4f);
-                      return Affine2D.Translation((g.Thickness - g.TrackHeight) * 0.5f, g.Length * (1f - v) * 0.5f).Multiply(Affine2D.Scale(1f, v)); }
+                      return Affine2D.Translation((g.Thickness - g.TrackHeight) * 0.5f, g.Half + g.Travel * (1f - v) * 0.5f).Multiply(Affine2D.Scale(1f, v)); }
             : () => { var g = geo.Value; float t = Math.Clamp((sig.Value - g.Min) / g.Range, 0f, 1f); float v = MathF.Max(t, 1e-4f);
-                      return Affine2D.Translation(-g.Length * (1f - v) * 0.5f, (g.Thickness - g.TrackHeight) * 0.5f).Multiply(Affine2D.Scale(v, 1f)); };
+                      return Affine2D.Translation(g.Half - g.Travel * (1f - v) * 0.5f, (g.Thickness - g.TrackHeight) * 0.5f).Multiply(Affine2D.Scale(v, 1f)); };
+        Prop<float> fillOpacity = Prop.Of(() => sig.Value > geo.Value.Min ? 1f : 0f);
         Func<Affine2D> thumbBind = vertical
             ? () => { var g = geo.Value; float t = Math.Clamp((sig.Value - g.Min) / g.Range, 0f, 1f);
-                      return Affine2D.Translation(0f, Math.Clamp((1f - t) * g.Length - g.Half, 0f, MathF.Max(0f, g.Length - g.RingD))); }
+                      return Affine2D.Translation(0f, (1f - t) * g.Travel); }
             : () => { var g = geo.Value; float t = Math.Clamp((sig.Value - g.Min) / g.Range, 0f, 1f);
-                      return Affine2D.Translation(Math.Clamp(t * g.Length - g.Half, 0f, MathF.Max(0f, g.Length - g.RingD)), 0f); };
+                      return Affine2D.Translation(t * g.Travel, 0f); };
 
-        // ── rail + value fill container ──
+        // ── rail + value fill container: both span the thumb centre's travel, half a thumb in from either end ──
         var rail = vertical
-            ? new BoxEl { Width = s.TrackHeight, Height = length, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = railFill, HoverFill = railFill, PressedFill = railFill, OffsetX = (thickness - s.TrackHeight) * 0.5f }
-            : new BoxEl { Width = length, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = railFill, HoverFill = railFill, PressedFill = railFill, OffsetY = (thickness - s.TrackHeight) * 0.5f };
+            ? new BoxEl { Width = s.TrackHeight, Height = travel, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = railFill, HoverFill = railFill, PressedFill = railFill, OffsetX = (thickness - s.TrackHeight) * 0.5f, OffsetY = half }
+            : new BoxEl { Width = travel, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = railFill, HoverFill = railFill, PressedFill = railFill, OffsetX = half, OffsetY = (thickness - s.TrackHeight) * 0.5f };
         rail = parts.Apply(Slider.PartRail, rail);
-        // The bind OWNS LocalTransform (a bound node's static Offset* is ignored), so the fill's cross-axis centering
+        // The bind OWNS LocalTransform (a bound node's static Offset* is ignored), so the fill's placement on the rail
         // rides inside the bind's translation, not a static Offset.
         var fill = vertical
-            ? new BoxEl { Width = s.TrackHeight, Height = length, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = valueFill, HoverFill = valueHover, PressedFill = valuePress, Transform = fillBind }
-            : new BoxEl { Width = length, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = valueFill, HoverFill = valueHover, PressedFill = valuePress, Transform = fillBind };
+            ? new BoxEl { Width = s.TrackHeight, Height = travel, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = valueFill, HoverFill = valueHover, PressedFill = valuePress, Transform = fillBind, Opacity = fillOpacity }
+            : new BoxEl { Width = travel, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = valueFill, HoverFill = valueHover, PressedFill = valuePress, Transform = fillBind, Opacity = fillOpacity };
         if (parts is not null)
-            fill = parts.Apply(Slider.PartValueFill, fill) with { Transform = fillBind };   // the signal bind + full-track basis always win
+            fill = parts.Apply(Slider.PartValueFill, fill) with { Transform = fillBind, Opacity = fillOpacity };   // the signal binds + rail basis always win
 
         bool hasTicks = o.TickFrequency > 0f && o.TickPlacement != Slider.TickPlacement.None;
         bool inlineTicks = hasTicks && o.TickPlacement == Slider.TickPlacement.Inline;
@@ -591,8 +603,8 @@ internal sealed partial class SliderCore : Component
 
         // ── tick marks (TickBar: 1px marks, SliderOutsideTickBarThemeHeight = 4, Slider_themeresources.xaml:5;
         //    outside bars sit 4px off the track, lines 413/415; visibility per TickPlacement, Slider_Partial.cpp:2248-2303).
-        //    Marks sit at tt·length — aligned with this engine's raw value mapping (WinUI insets by the half thumb because
-        //    ITS pointer mapping is thumb-compensated; ours is not, so full-span keeps ticks on-value). ──
+        //    Marks sit where the thumb's centre stands at their value, half + tt·travel: inset by half a thumb, as WinUI's
+        //    are (its pointer mapping is thumb-compensated, and so is this one). ──
         Element OutsideTicks()
         {
             var marks = new List<Element>();
@@ -600,8 +612,8 @@ internal sealed partial class SliderCore : Component
             {
                 float tt = Math.Clamp((tv - min) / range, 0f, 1f);
                 marks.Add(vertical
-                    ? new BoxEl { Width = 4f, Height = 1f, Fill = tickFill, HoverFill = tickFill, PressedFill = tickFill, OffsetY = (1f - tt) * length }
-                    : new BoxEl { Width = 1f, Height = 4f, Fill = tickFill, HoverFill = tickFill, PressedFill = tickFill, OffsetX = tt * length });
+                    ? new BoxEl { Width = 4f, Height = 1f, Fill = tickFill, HoverFill = tickFill, PressedFill = tickFill, OffsetY = half + (1f - tt) * travel }
+                    : new BoxEl { Width = 1f, Height = 4f, Fill = tickFill, HoverFill = tickFill, PressedFill = tickFill, OffsetX = half + tt * travel });
             }
             var bar = vertical
                 ? new BoxEl { ZStack = true, Width = 4f, Height = length, Children = marks.ToArray() }
@@ -618,8 +630,8 @@ internal sealed partial class SliderCore : Component
             {
                 float tt = Math.Clamp((tv - min) / range, 0f, 1f);
                 marks.Add(vertical
-                    ? new BoxEl { Width = s.TrackHeight, Height = 1f, Fill = s.InlineTickFill, HoverFill = s.InlineTickFill, PressedFill = s.InlineTickFill, OffsetY = (1f - tt) * length }
-                    : new BoxEl { Width = 1f, Height = s.TrackHeight, Fill = s.InlineTickFill, HoverFill = s.InlineTickFill, PressedFill = s.InlineTickFill, OffsetX = tt * length });
+                    ? new BoxEl { Width = s.TrackHeight, Height = 1f, Fill = s.InlineTickFill, HoverFill = s.InlineTickFill, PressedFill = s.InlineTickFill, OffsetY = half + (1f - tt) * travel }
+                    : new BoxEl { Width = 1f, Height = s.TrackHeight, Fill = s.InlineTickFill, HoverFill = s.InlineTickFill, PressedFill = s.InlineTickFill, OffsetX = half + tt * travel });
             }
             var bar = vertical
                 ? new BoxEl { ZStack = true, Width = s.TrackHeight, Height = length, OffsetX = (thickness - s.TrackHeight) * 0.5f, Children = marks.ToArray() }
