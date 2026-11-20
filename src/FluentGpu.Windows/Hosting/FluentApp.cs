@@ -965,6 +965,10 @@ public static class FluentApp
     /// <summary>The running host's <see cref="AppHost.IsSettledForPause"/> (true when no host runs). UI thread.</summary>
     public static bool IsSettledForPause(long interactionQuietMs) => s_host?.IsSettledForPause(interactionQuietMs) ?? true;
 
+    /// <summary>The running host's <see cref="AppHost.MsSinceInteraction"/>: milliseconds since the last press, key or
+    /// wheel on the cold-maintenance clock (-1 = none yet, or no host runs). UI thread.</summary>
+    public static long MsSinceInteraction => s_host?.MsSinceInteraction ?? -1;
+
     /// <summary>Compact per-class GPU residency fragment (top tracked-resource classes, render-target pool
     /// occupancy, upload-arena counters) — see <see cref="D3D12Device.DiagGpuCensusLine"/>. Pairs with <see
     /// cref="GpuResidency"/> in an app's memory sampler: `gpu bytes=… resources=…` plus this fragment appended
