@@ -88,6 +88,18 @@ internal static partial class WindowsApiSmoke
     /// Run the full four-pillar smoke. Returns the number of failed checks (0 = clean) — used directly as the process
     /// exit code by <c>Program.Main</c>.
     /// </summary>
+    /// <summary><c>--drop-smoke</c>: only the [6c] OS-drop section (the CCW vtable, the link/text formats, the multi-format
+    /// matching on a headless host) — no toast, credential or registry round-trips, so it is safe to run anywhere.
+    /// Returns the failure count.</summary>
+    public static int RunDrop()
+    {
+        s_total = 0;
+        s_failures = 0;
+        DropTargetSuite();
+        Console.WriteLine(s_failures == 0 ? $"\nDROP SMOKE PASS — {s_total} checks." : $"\nDROP SMOKE: {s_failures}/{s_total} CHECK(S) FAILED.");
+        return s_failures;
+    }
+
     public static int Run()
     {
         Console.WriteLine("FluentGpu.WindowsApi — smoke harness (headless; real OS round-trips)\n");
@@ -618,6 +630,96 @@ internal static partial class WindowsApiSmoke
             Check("6c.1 IDropTarget CCW dispatches via its vtable, no crash, sane effects (the crash-fix regression guard)", ok, detail);
         }
         catch (Exception ex) { Check("6c.1 IDropTarget CCW vtable round-trip", false, ex.Message); }
+
+        try
+        {
+            bool ok = Win32DropTarget.SelfTestFormats(out string detail);
+            Check("6c.2 link/text formats (CF_UNICODETEXT, UniformResourceLocatorW, text/uri-list) read once on enter, through the CCW", ok, detail);
+        }
+        catch (Exception ex) { Check("6c.2 link/text formats", false, ex.Message); }
+
+        try { DropOfferMatching(); }
+        catch (Exception ex) { Check("6c.3 multi-format drop matching (headless host)", false, ex.ToString()); }
+    }
+
+    /// <summary>[6c.3] The engine half of a multi-format OS drag, on a real headless <c>AppHost</c> through the same
+    /// <c>InputHooks.ExternalDrag*</c> seam the OLE host calls: which target takes which offer, the effect, the refusal
+    /// caption and the nearest-target rule, plus a files drag unchanged. Layout (300×200): three 100-wide columns —
+    /// A accepts [Text]; B is a typed <c>Drop.Target&lt;TextDropData&gt;</c> over [Uri, Text]; C accepts [Uri] for
+    /// <c>spotify:</c> links only (refusal caption "Only Spotify links") — under a root that accepts [Files].</summary>
+    private static void DropOfferMatching()
+    {
+        var strings = new FluentGpu.Foundation.StringTable();
+        using var app = new FluentGpu.Pal.Headless.HeadlessPlatformApp();
+        var window = new FluentGpu.Pal.Headless.HeadlessWindow(new FluentGpu.Pal.WindowDesc("drop-offers", new FluentGpu.Foundation.Size2(300, 200), 1f));
+        window.Show();
+        var device = new FluentGpu.Rhi.Headless.HeadlessGpuDevice();
+        var fonts = new FluentGpu.Text.Headless.HeadlessFontSystem(strings);
+        using var host = new FluentGpu.Hosting.AppHost(app, window, device, fonts, strings, new DropOfferProbe());
+        for (int i = 0; i < 3; i++) host.RunFrame();
+
+        var hooks = FluentGpu.Hooks.InputHooks.Current.Default;
+        var log = DropOfferProbe.Log;
+        var none = FluentGpu.Foundation.KeyModifiers.None;
+        var a = new FluentGpu.Foundation.Point2(50, 100);
+        var b = new FluentGpu.Foundation.Point2(150, 100);
+        var c = new FluentGpu.Foundation.Point2(250, 100);
+        const string Spotify = "spotify:track:4uLU6hMCjMI75M1A2tKUQC";
+        const string Https = "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC";
+        FluentGpu.Foundation.ExternalDragOffer Mixed(string uri) => new(null, new([uri]), new(uri));
+
+        // 1. A browser link (Uri + Text) over A: the Text-only target takes the Text offer, Copy; the drop delivers Text.
+        log.Clear();
+        var e1 = hooks.ExternalDragEnter!(a, Mixed(Https), none);
+        var s1 = hooks.GetDragState!();
+        bool dropped1 = hooks.ExternalDrop!(a, none);
+        Check("6c.3a mixed link over a [Text] target: takes Text, Copy, OnDrop sees TextDropData",
+              e1 == FluentGpu.Foundation.DropEffect.Copy && s1.Offers(FluentGpu.Foundation.DropKinds.Uri) && s1.Offers(FluentGpu.Foundation.DropKinds.Text)
+              && dropped1 && log is ["A.enter os.text", "A.drop text " + Https], $"effect={e1} log=[{string.Join(", ", log)}]");
+
+        // 2. Over B, a typed Drop.Target<TextDropData> over [Uri, Text]: its CanAccept turns the Uri offer away and takes Text.
+        log.Clear();
+        var e2 = hooks.ExternalDragEnter!(b, Mixed(Https), none);
+        bool dropped2 = hooks.ExternalDrop!(b, none);
+        Check("6c.3b typed target over [Uri, Text]: CanAccept walks the offers in its order, takes Text",
+              e2 == FluentGpu.Foundation.DropEffect.Copy && dropped2 && log is ["B.drop " + Https], $"effect={e2} log=[{string.Join(", ", log)}]");
+
+        // 3. Over C, an https link: C refuses through CanAccept, nothing above takes a link → the refusal cue + caption.
+        log.Clear();
+        var e3 = hooks.ExternalDragEnter!(c, Mixed(Https), none);
+        var s3 = hooks.GetDragState!();
+        bool dropped3 = hooks.ExternalDrop!(c, none);
+        Check("6c.3c refused link: no effect, RefusedTarget + RefusalCaption published, no drop",
+              e3 == FluentGpu.Foundation.DropEffect.None && s3.Refused && s3.Caption == "Only Spotify links" && !dropped3 && log.Count == 0,
+              $"effect={e3} refused={s3.Refused} caption='{s3.Caption}' log=[{string.Join(", ", log)}]");
+
+        // 4. Over C, a spotify: uri: C takes the Uri offer with the Link effect; moving to A hands over to the Text target.
+        log.Clear();
+        var e4 = hooks.ExternalDragEnter!(c, Mixed(Spotify), none);
+        var e4b = hooks.ExternalDragOver!(a, none);
+        var e4c = hooks.ExternalDragOver!(c, none);
+        bool dropped4 = hooks.ExternalDrop!(c, none);
+        Check("6c.3d spotify link: C takes Uri with Link; over A the Text target takes over with Copy; drop on C sees UriDropData",
+              e4 == FluentGpu.Foundation.DropEffect.Link && e4b == FluentGpu.Foundation.DropEffect.Copy && e4c == FluentGpu.Foundation.DropEffect.Link && dropped4
+              && log is ["C.enter os.uri", "C.leave os.uri", "A.enter os.text", "A.leave os.text", "C.enter os.uri", "C.drop " + Spotify],
+              $"effects={e4}/{e4b}/{e4c} log=[{string.Join(", ", log)}]");
+
+        // 5. Files only (Explorer): unchanged — the root's [Files] takes it with Copy over every column, paths at drop.
+        log.Clear();
+        var e5 = hooks.ExternalDragEnter!(a, new(new FluentGpu.Foundation.FileDropData([]), null, null), none);
+        var s5 = hooks.GetDragState!();
+        bool dropped5 = hooks.ExternalDropFiles!(a, [@"C:\music\a.flac", @"C:\music\b.flac"], none);
+        Check("6c.3e files drag unchanged: single-kind session, root takes it with Copy, OnDrop sees the dropped paths",
+              e5 == FluentGpu.Foundation.DropEffect.Copy && s5.OfferedKinds is null && s5.Kind == FluentGpu.Foundation.DropKinds.Files
+              && dropped5 && log is ["root.enter os.files 0", "root.drop 2"], $"effect={e5} log=[{string.Join(", ", log)}]");
+
+        // 6. Text only over C ([Uri] only, root [Files]): nothing matches the kind → no refusal accusation, no effect.
+        log.Clear();
+        var e6 = hooks.ExternalDragEnter!(c, new(null, null, new("hello")), none);
+        var s6 = hooks.GetDragState!();
+        hooks.ExternalDragLeave!();
+        Check("6c.3f text over a target that lists no Text: passes through silently (no refusal), effect None",
+              e6 == FluentGpu.Foundation.DropEffect.None && !s6.Refused && log.Count == 0, $"effect={e6} refused={s6.Refused}");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -956,5 +1058,45 @@ internal static partial class WindowsApiSmoke
             }
             _ready.Dispose();
         }
+    }
+}
+
+/// <summary>The [6c.3] drop surface: three 100-wide columns under a root that accepts OS files. A takes [Text]; B is a
+/// typed <c>Drop.Target&lt;TextDropData&gt;</c> over [Uri, Text]; C takes [Uri] for <c>spotify:</c> links only, with a
+/// refusal caption. Every handler logs "who.what kind/payload" so the smoke asserts the exact sequence.</summary>
+internal sealed class DropOfferProbe : FluentGpu.Hooks.Component
+{
+    public static readonly List<string> Log = new();
+
+    public override FluentGpu.Dsl.Element Render()
+    {
+        var a = new FluentGpu.Foundation.DropTargetSpec([FluentGpu.Foundation.DropKinds.Text],
+            OnEnter: s => Log.Add("A.enter " + s.Kind),
+            OnLeave: s => Log.Add("A.leave " + s.Kind),
+            OnDrop: s => Log.Add("A.drop text " + (s.Payload as FluentGpu.Foundation.TextDropData)?.Text));
+        var b = FluentGpu.Controls.Drop.Target<FluentGpu.Foundation.TextDropData>(
+            [FluentGpu.Foundation.DropKinds.Uri, FluentGpu.Foundation.DropKinds.Text],
+            onDrop: (t, _) => Log.Add("B.drop " + t.Text));
+        var c = new FluentGpu.Foundation.DropTargetSpec([FluentGpu.Foundation.DropKinds.Uri],
+            OnEnter: s => Log.Add("C.enter " + s.Kind),
+            OnLeave: s => Log.Add("C.leave " + s.Kind),
+            OnDrop: s => Log.Add("C.drop " + (s.Payload as FluentGpu.Foundation.UriDropData)?.Uris[0]))
+        {
+            CanAccept = static s => s.Payload is FluentGpu.Foundation.UriDropData u && u.Uris[0].StartsWith("spotify:", StringComparison.Ordinal),
+            RefusalCaption = static _ => "Only Spotify links",
+        };
+        var root = new FluentGpu.Foundation.DropTargetSpec([FluentGpu.Foundation.DropKinds.Files],
+            OnEnter: s => Log.Add($"root.enter {s.Kind} {(s.Payload as FluentGpu.Foundation.FileDropData)?.Count}"),
+            OnDrop: s => Log.Add($"root.drop {(s.Payload as FluentGpu.Foundation.FileDropData)?.Count}"));
+        return new FluentGpu.Dsl.BoxEl
+        {
+            Width = 300f, Height = 200f, DropTarget = root,
+            Children =
+            [
+                new FluentGpu.Dsl.BoxEl { Width = 100f, Height = 200f, DropTarget = a },
+                new FluentGpu.Dsl.BoxEl { Width = 100f, Height = 200f, DropTarget = b },
+                new FluentGpu.Dsl.BoxEl { Width = 100f, Height = 200f, DropTarget = c },
+            ],
+        };
     }
 }

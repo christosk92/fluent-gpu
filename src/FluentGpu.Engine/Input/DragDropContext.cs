@@ -69,6 +69,10 @@ public sealed class DragDropContext
     private DragLift _lift;              // L1's lift mode for this gesture (see PruneDead's dead-source rule)
     private DropEffect _defaultEffect = DropEffect.Move;   // the engine's advisory effect over an accepting target;
                                                            // Move for in-app drags, Copy for an OS file drop (Explorer convention)
+    private bool _linkUris;              // an OS multi-format drag: a Uri offer's advisory effect is Link, not _defaultEffect
+    // The offer (DragSession.Select) each tracked target matched — selected again before any of that target's delegates
+    // run, so every target reads its own kind's payload whatever the walk selected last. 0 for a single-kind session.
+    private int _overOffer, _refusedOffer, _springOffer;
 
     // Edge auto-scroll (armed by Move, driven by the host's Tick).
     private NodeHandle _scrollViewport;
@@ -129,6 +133,7 @@ public sealed class DragDropContext
         {
             if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
             if (!_scene.TryGetDragSource(n, out var src) || src is null) continue;
+            _session.ClearOffers();
             _session.Payload = src.PayloadFactory();   // resolved ONCE at promotion (cold edge), never per move
             _session.Kind = src.Kind;
             _session.Position = abs;
@@ -142,6 +147,8 @@ public sealed class DragDropContext
             _session.Mods = mods;
             _session.Pointer = kind;
             _defaultEffect = DropEffect.Move;   // in-app reorder/transfer
+            _linkUris = false;
+            _overOffer = _refusedOffer = 0;
             _lift = lift;
             _active = true;
             _over = NodeHandle.Null;
@@ -169,8 +176,34 @@ public sealed class DragDropContext
     {
         if (_active) return false;
         if (_scene.Root.IsNull) return false;   // a never-rendered tree has no surface to drop onto
+        _session.ClearOffers();
         _session.Payload = payload;
         _session.Kind = kind;
+        _linkUris = false;
+        OpenExternal(abs, mods, defaultEffect);
+        return true;
+    }
+
+    /// <summary>
+    /// Open an OS drag that carries SEVERAL formats at once (<paramref name="kinds"/>/<paramref name="payloads"/>,
+    /// parallel, at least one, in the source's order): each is one offer (<see cref="DragSession.OfferedKinds"/>). A
+    /// target is matched against the offers in ITS AcceptKinds order, and the matched offer is selected into
+    /// <c>Kind</c>/<c>Payload</c> before any of its delegates run, so CanAccept, the refusal caption, the nearest-target
+    /// rule and the handlers work exactly as for a single kind. The advisory effect over an accepting target is Copy,
+    /// or Link when the target took a <see cref="DropKinds.Uri"/> offer. Returns false if a session is already live.
+    /// </summary>
+    public bool ExternalBegin(string[] kinds, object?[] payloads, Point2 abs, KeyModifiers mods)
+    {
+        if (_active) return false;
+        if (_scene.Root.IsNull || kinds.Length == 0 || kinds.Length != payloads.Length) return false;
+        _session.SetOffers(kinds, payloads);
+        _linkUris = true;
+        OpenExternal(abs, mods, DropEffect.Copy);
+        return true;
+    }
+
+    private void OpenExternal(Point2 abs, KeyModifiers mods, DropEffect defaultEffect)
+    {
         _session.Position = abs;
         _session.VelocityX = 0f;
         _session.VelocityY = 0f;
@@ -188,9 +221,9 @@ public sealed class DragDropContext
         _overSpec = null;
         _refused = NodeHandle.Null;
         _refusedSpec = null;
+        _overOffer = _refusedOffer = 0;
         ClearSpring();
         RefreshSpotlight(force: true);
-        return true;
     }
 
     /// <summary>Per pointer move while the session is live: update the session coords/velocity, resolve the nearest
@@ -216,19 +249,23 @@ public sealed class DragDropContext
         if (!_active) return;
         RefreshSpotlight(force: false);
 
-        var next = FindTarget(hit, out var refuser, out var refuserSpec, out var springHost, out var springSpec);
+        var next = FindTarget(hit, out int nextOffer, out var refuser, out var refuserSpec, out int refuserOffer,
+                              out var springHost, out var springSpec, out int springOffer);
         if (next != _over)
         {
             if (!_over.IsNull && _scene.IsLive(_over))
             {
                 _session.OverTarget = _over;             // Leave still reports the target being left
+                _session.Select(_overOffer);             // ...and the offer it was reading
                 _overSpec?.OnLeave?.Invoke(_session);
             }
             _over = next;
+            _overOffer = nextOffer;
             _overSpec = !next.IsNull && _scene.TryGetDropTarget(next, out var spec) ? spec : null;
             _scene.SetDropSpotlightOver(next);
             _session.OverTarget = next;
-            _session.Effect = next.IsNull ? DropEffect.None : _defaultEffect;   // targets may refine in OnEnter/OnOver
+            _session.Select(_overOffer);
+            _session.Effect = next.IsNull ? DropEffect.None : DefaultEffect();   // targets may refine in OnEnter/OnOver
             _session.Caption = null;   // the caption belongs to the target being ENTERED — a target never has to unset it
             if (!next.IsNull) _overSpec?.OnEnter?.Invoke(_session);
             _requestRerender();
@@ -236,13 +273,34 @@ public sealed class DragDropContext
         else
         {
             _session.OverTarget = _over;
+            if (!_over.IsNull && nextOffer != _overOffer)
+            {
+                // Same target, another offer (its CanAccept now takes a different representation): re-advise the effect.
+                _overOffer = nextOffer;
+                _session.Select(_overOffer);
+                _session.Effect = DefaultEffect();
+                _requestRerender();
+            }
         }
+        _session.Select(_overOffer);
         if (!_over.IsNull && _scene.IsLive(_over)) _overSpec?.OnOver?.Invoke(_session);
         // The refusal cue is resolved LAST so an accepting target's own Caption always wins: a refuser is published
         // only when nothing on the chain accepted, in which case the caption slot is free by construction.
+        _refusedOffer = refuserOffer;
         UpdateRefusal(_over.IsNull ? refuser : NodeHandle.Null, _over.IsNull ? refuserSpec : null);
-        UpdateSpring(springHost, springSpec);
+        UpdateSpring(springHost, springSpec, springOffer);
+        SelectResting();
     }
+
+    /// <summary>The engine's advisory effect for the selected offer over an accepting target: Link for an OS link (the
+    /// browser and Explorer convention for a dropped URL), else the session default (Move in-app, Copy from the OS).</summary>
+    private DropEffect DefaultEffect()
+        => _linkUris && string.Equals(_session.Kind, DropKinds.Uri, StringComparison.Ordinal) ? DropEffect.Link : _defaultEffect;
+
+    /// <summary>Leave the session showing the offer that matters between moves (the <c>DragState</c> snapshot and the
+    /// edge-scroll <c>OnOver</c> read it): the accepting target's, else the refuser's, else the source's first.</summary>
+    private void SelectResting()
+        => _session.Select(!_over.IsNull ? _overOffer : !_refused.IsNull ? _refusedOffer : 0);
 
     /// <summary>Release: when the pointer is over an accepting target, fire <c>OnDrop(session)</c> and close the
     /// session — called by the dispatcher BEFORE the L1 <see cref="DragController.Complete"/> so the target reads the
@@ -261,7 +319,8 @@ public sealed class DragDropContext
         if (dropped)
         {
             _session.OverTarget = target;
-            if (_session.Effect == DropEffect.None) _session.Effect = _defaultEffect;
+            _session.Select(_overOffer);
+            if (_session.Effect == DropEffect.None) _session.Effect = DefaultEffect();
             spec!.OnDrop?.Invoke(_session);
             settleGlide = spec.SettleOnDrop;
         }
@@ -279,6 +338,7 @@ public sealed class DragDropContext
         if (!_over.IsNull && _scene.IsLive(_over))
         {
             _session.OverTarget = _over;
+            _session.Select(_overOffer);
             _overSpec?.OnLeave?.Invoke(_session);
         }
         End();
@@ -385,7 +445,7 @@ public sealed class DragDropContext
         }
         // The pointer did not move, but the target's content geometry did. Re-run the current destination's projection
         // so insertion slots/previews track edge autoscroll continuously instead of lagging until the next mouse event.
-        if (!_over.IsNull && _scene.IsLive(_over)) _overSpec?.OnOver?.Invoke(_session);
+        if (!_over.IsNull && _scene.IsLive(_over)) { _session.Select(_overOffer); _overSpec?.OnOver?.Invoke(_session); }
         _requestRerender();
         return true;
     }
@@ -404,20 +464,29 @@ public sealed class DragDropContext
     /// targets do NOT block accepting ancestors (Flutter DragTarget pass-through).
     /// <para><paramref name="refuser"/> reports the NEAREST target that matched the kind but was turned away by its
     /// <see cref="DropTargetSpec.CanAccept"/> — the surface the user aimed at and that owes them a reason. It is
-    /// meaningful only when the return value is Null (an accepting ancestor makes the drop succeed anyway).</para></summary>
-    private NodeHandle FindTarget(NodeHandle hit, out NodeHandle refuser, out DropTargetSpec? refuserSpec,
-                                 out NodeHandle springHost, out DropTargetSpec? springSpec)
+    /// meaningful only when the return value is Null (an accepting ancestor makes the drop succeed anyway).</para>
+    /// <para>Each out offer is the <see cref="DragSession"/> offer that node matched (0 for a single-kind session): the
+    /// first one its AcceptKinds lists, or for the returned target the first its CanAccept takes. The walk leaves the
+    /// session's selection wherever it stopped; <see cref="Retarget"/> re-selects per target.</para></summary>
+    private NodeHandle FindTarget(NodeHandle hit, out int offer, out NodeHandle refuser, out DropTargetSpec? refuserSpec,
+                                 out int refuserOffer, out NodeHandle springHost, out DropTargetSpec? springSpec,
+                                 out int springOffer)
     {
+        offer = 0;
         refuser = NodeHandle.Null;
         refuserSpec = null;
+        refuserOffer = 0;
         springHost = NodeHandle.Null;
         springSpec = null;
+        springOffer = 0;
         if (!_scene.HasDropTargets) return NodeHandle.Null;
         for (var n = hit; !n.IsNull; n = _scene.Parent(n))
         {
             if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
             if (!_scene.TryGetDropTarget(n, out var spec) || spec is null) continue;
-            if (!spec.Accepts(_session.Kind)) continue;
+            int first = _session.FirstMatch(spec, 0, out int firstPos);   // the target's kind order picks the offer
+            if (first < 0) continue;
+            _session.Select(first);
             // The spring host is the NEAREST kind-matched target that configures one, decided BEFORE acceptance: a
             // spring-load opens a container, it does not receive a payload, so a folder that refuses this drop (and a
             // pure SpringLoadOnly waypoint) must still be able to open itself under the pointer.
@@ -425,6 +494,7 @@ public sealed class DragDropContext
             {
                 springHost = n;
                 springSpec = spec;
+                springOffer = first;
             }
             // Per-session transparency (DropTargetSpec.Transparent): "this gesture is none of my business". Tested
             // BEFORE acceptance AND before the refusal candidate is recorded, so the walk passes through as though the
@@ -432,11 +502,15 @@ public sealed class DragDropContext
             // not-allowed glyph while the drag merely crosses it on the way to the list (B2).
             if (spec.Transparent is { } transparent && transparent(_session)) continue;
             if (spec.SpringLoadOnly) continue;   // a waypoint: never a destination, never a refusal
-            if (spec.CanAccept is { } canAccept && !canAccept(_session))
+            // Every offer this target lists gets its CanAccept turn, in the target's order (a typed Drop.Target<T> over
+            // [Uri, Text] whose T is TextDropData turns the Uri offer away and takes the Text one).
+            int taken = _session.AcceptingOffer(spec, first, firstPos);
+            if (taken < 0)
             {
-                if (refuser.IsNull) { refuser = n; refuserSpec = spec; }   // nearest refuser wins the cue
+                if (refuser.IsNull) { refuser = n; refuserSpec = spec; refuserOffer = first; }   // nearest refuser wins the cue
                 continue;
             }
+            offer = taken;
             return n;
         }
         return NodeHandle.Null;
@@ -459,14 +533,16 @@ public sealed class DragDropContext
             _requestRerender();
         }
         if (_refused.IsNull) return;
+        _session.Select(_refusedOffer);
         _session.Caption = _refusedSpec?.RefusalCaption?.Invoke(_session);
     }
 
     /// <summary>Re-home the spring-load dwell. A CHANGE of host restarts the clock and re-arms the one-shot; staying on
     /// the same node keeps counting (a pointer that jitters inside a folder is still dwelling on it). 0-alloc; no
     /// re-render — nothing is published until the spring actually fires.</summary>
-    private void UpdateSpring(NodeHandle node, DropTargetSpec? spec)
+    private void UpdateSpring(NodeHandle node, DropTargetSpec? spec, int offer)
     {
+        _springOffer = offer;
         if (node != _spring)
         {
             _spring = node;
@@ -493,7 +569,9 @@ public sealed class DragDropContext
         _springDwellMs += dtMs;
         if (_springDwellMs < _springSpec!.SpringLoadDelayMs) return true;
         _springFired = true;
+        _session.Select(_springOffer);
         _springSpec.OnSpringLoad!(_session);
+        SelectResting();
         _requestRerender();
         return false;
     }
@@ -603,9 +681,12 @@ public sealed class DragDropContext
         _refusedSpec = null;
         ClearSpring();
         _defaultEffect = DropEffect.Move;
+        _linkUris = false;
+        _overOffer = _refusedOffer = _springOffer = 0;
         _scrollViewport = NodeHandle.Null;
         _edgeVelocity = 0f;
         _edgeScrolling = false;
+        _session.ClearOffers();             // release the offers' GC edges with the gesture
         _session.Payload = null;            // release the payload's GC edge with the gesture
         _session.Kind = "";
         _session.Source = NodeHandle.Null;

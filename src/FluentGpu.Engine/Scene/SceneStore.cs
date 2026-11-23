@@ -2649,11 +2649,17 @@ public sealed partial class SceneStore : ISceneBackend
     public void RefreshDropSpotlight(DragSession session)
     {
         _dropSpotlightRoots.Clear();
+        // A multi-format OS drag (DragSession offers) is matched per target in the target's kind order, which moves the
+        // session's selected offer; put back what the drag context selected so a handler it calls next reads its own.
+        int selected = session.SelectedOffer;
         foreach (var pair in _dropTargets)
         {
             int idx = pair.Key;
             var spec = pair.Value;
-            if (spec.VisualPolicy != DropTargetVisualPolicy.Spotlight || !spec.Accepts(session.Kind)) continue;
+            if (spec.VisualPolicy != DropTargetVisualPolicy.Spotlight) continue;
+            int first = session.FirstMatch(spec, 0, out int firstPos);
+            if (first < 0) continue;
+            session.Select(first);
             var node = new NodeHandle(new Handle((uint)idx, _gen[idx]));
             if (!IsLive(node) || (_flags[idx] & NodeFlags.Disabled) != 0) continue;
             // Reachability: the hit-test PRUNES any subtree whose root has HitTestVisible cleared (InputDispatcher), so
@@ -2673,16 +2679,19 @@ public sealed partial class SceneStore : ISceneBackend
                 if (Diag.CompiledIn && Diag.Enabled) Diag.Set("input.dragdrop", "spotlight.unreachable.last", idx);
                 continue;
             }
-            if (spec.CanAccept is { } canAccept && !canAccept(session)) continue;
             // A target that is TRANSPARENT for this session accepts nothing and refuses nothing, so it must not
-            // advertise itself as a destination either (DropTargetSpec.Transparent).
+            // advertise itself as a destination either (DropTargetSpec.Transparent). Asked with the first offer the
+            // target lists, as the drag context's discovery walk asks it.
             if (spec.Transparent is { } transparent && transparent(session)) continue;
+            // CanAccept gets each listed offer in turn, as discovery does (DragSession.AcceptingOffer).
+            if (session.AcceptingOffer(spec, first, firstPos) < 0) continue;
             // Per-SESSION policy (DropTargetSpec.SpotlightWhen): a target may opt into the dim in general and still
             // refuse it for THIS gesture — a same-list reorder must not scrim the app it is reordering inside (A14).
             // Evaluated here, on the cold refresh edge, so record stays free of policy delegates.
             if (spec.SpotlightWhen is { } spotlightWhen && !spotlightWhen(session)) continue;
             if (!_dropSpotlightRoots.Contains(idx)) _dropSpotlightRoots.Add(idx);
         }
+        session.Select(selected);
         _dropSpotlightActive = _dropSpotlightRoots.Count != 0;
         if (!_dropSpotlightActive || !_dropSpotlightRoots.Contains((int)_dropSpotlightOver.Raw.Index))
             _dropSpotlightOver = NodeHandle.Null;
