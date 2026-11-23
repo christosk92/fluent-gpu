@@ -126,6 +126,12 @@ static class Program
             Environment.Exit(WindowsApiSmoke.Run());
             return;
         }
+        // The [6c] OS-drop section alone (files, links, text through the OLE host and a headless host); exit = failures.
+        if (Array.IndexOf(args, "--drop-smoke") >= 0 && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
+        {
+            Environment.Exit(WindowsApiSmoke.RunDrop());
+            return;
+        }
         // Headless NLM-off-thread deadlock probe (regression gate for the "Windows APIs" page hang). Runs the exact
         // NetworkCard pattern — Task.Run(() => { _ = NetworkStatus.IsOnline; _ = NetworkStatus.GetConnectivity(); }) — on
         // pool threads with a hard per-read timeout, NO window/GPU. exit 0 = no hang (fixed); exit 2 = hung (reproduced).

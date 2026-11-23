@@ -9,9 +9,10 @@ using ComCcw = FluentGpu.Text.DirectWrite.ComCcw;   // S_OK / IID_IUnknown / IID
 namespace FluentGpu.Pal.Windows;
 
 /// <summary>
-/// The OLE <c>IDropTarget</c> that bridges an OS file/folder drag (Explorer / the desktop) into the engine's
-/// external-drop seam, restoring DRAG-OVER HOVER feedback (so an app can light up a "Drop to Deploy"-style overlay
-/// while a file is dragged over the window) and the OS drop-effect cursor ("+Copy"/no-drop).
+/// The OLE <c>IDropTarget</c> that bridges an OS drag — files/folders (Explorer / the desktop), links and text (a
+/// browser, the Spotify app) — into the engine's external-drop seam, restoring DRAG-OVER HOVER feedback (so an app can
+/// light up a "Drop to Deploy"-style overlay while a file is dragged over the window) and the OS drop-effect cursor
+/// ("+Copy"/"+Link"/no-drop). A data object with several formats offers every kind it has (<see cref="ReadOffer"/>).
 ///
 /// <para><b>Why a HAND-ROLLED vtable (not <c>[GeneratedComInterface]</c>).</b> The prior source-generated IDropTarget
 /// crashed on drop — the suspected cause was the by-value <c>POINTL</c> parameter under the COM source generator's
@@ -19,9 +20,10 @@ namespace FluentGpu.Pal.Windows;
 /// is a real 8-byte by-value struct in <c>[UnmanagedCallersOnly(CallConvMemberFunction)]</c> signatures, honored
 /// identically on x64 and ARM64 — the same proven pattern as <c>DWriteItemizer.cs</c>'s CCWs. </para>
 ///
-/// <para><b>De-risked data handling.</b> HOVER (DragEnter/Over) does ZERO data transfer: DragEnter only
-/// <c>QueryGetData(CF_HDROP)</c> (a cheap "do you offer files" check) to decide acceptance, then reports an effect.
-/// Only DROP reads the file list (<c>GetData(CF_HDROP)</c> → HDROP → <c>DragQueryFileW</c>) — the same enumeration the
+/// <para><b>De-risked data handling.</b> HOVER transfers no file data: DragEnter only
+/// <c>QueryGetData(CF_HDROP)</c> (a cheap "do you offer files" check), plus ONE read of the small link and text formats
+/// (<c>UniformResourceLocatorW</c>, <c>text/uri-list</c>, <c>CF_UNICODETEXT</c>), which a target needs on enter to
+/// decide; DragOver reads nothing. Only DROP reads the file list (<c>GetData(CF_HDROP)</c> → HDROP → <c>DragQueryFileW</c>) — the same enumeration the
 /// previous (working) <c>WM_DROPFILES</c> path used, run exactly once. Every thunk swallows managed exceptions and
 /// returns an HRESULT — nothing crosses the COM boundary.</para>
 ///
@@ -31,7 +33,7 @@ namespace FluentGpu.Pal.Windows;
 /// </summary>
 internal static unsafe partial class Win32DropTarget
 {
-    private const ushort CF_HDROP = 15;
+    private const ushort CF_HDROP = 15, CF_UNICODETEXT = 13;
     private const uint MK_SHIFT = 0x0004, MK_CONTROL = 0x0008;
     private const uint DROPEFFECT_NONE = 0, DROPEFFECT_COPY = 1, DROPEFFECT_MOVE = 2, DROPEFFECT_LINK = 4;
     private const int S_OK = 0, S_FALSE = 1, RPC_E_CHANGED_MODE = unchecked((int)0x80010106);
@@ -48,6 +50,16 @@ internal static unsafe partial class Win32DropTarget
     [LibraryImport("shell32.dll", EntryPoint = "DragQueryFileW")] private static partial uint DragQueryFileW(nint hDrop, uint iFile, char* lpszFile, uint cch);
     [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool ScreenToClient(nint hWnd, PointL* lpPoint);
     [LibraryImport("user32.dll")] private static partial uint GetDpiForWindow(nint hWnd);
+    [LibraryImport("user32.dll", EntryPoint = "RegisterClipboardFormatW", StringMarshalling = StringMarshalling.Utf16)] private static partial uint RegisterClipboardFormatW(string lpszFormat);
+    [LibraryImport("kernel32.dll")] private static partial void* GlobalLock(nint hMem);
+    [LibraryImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool GlobalUnlock(nint hMem);
+    [LibraryImport("kernel32.dll")] private static partial nuint GlobalSize(nint hMem);
+
+    // Registered link formats (ids are per session, so registered once, lazily, on the first drag). CFSTR_INETURLW is the
+    // one-URL form every browser and the shell offer for a link; text/uri-list (RFC 2483) carries several, with # comments.
+    private static ushort _cfUrlW, _cfUriList;
+    private static ushort CfUrlW => _cfUrlW != 0 ? _cfUrlW : _cfUrlW = (ushort)RegisterClipboardFormatW("UniformResourceLocatorW");
+    private static ushort CfUriList => _cfUriList != 0 ? _cfUriList : _cfUriList = (ushort)RegisterClipboardFormatW("text/uri-list");
 
     /// <summary>OLE-init this STA thread + register a fresh CCW on <paramref name="hwnd"/>. Returns a token to pass to
     /// <see cref="Revoke"/>, or null when drag-drop is unavailable (non-STA thread, or RegisterDragDrop failed).
@@ -127,15 +139,128 @@ internal static unsafe partial class Win32DropTarget
         finally { Win32DropTargetCcw.Destroy(ccw); }
     }
 
-    // ── helpers shared by the CCW thunks ───────────────────────────────────────────────────────────────────────────
-    private static FORMATETC HdropFormat() => new()
+    [LibraryImport("shell32.dll")] private static partial int SHCreateDataObject(nint pidlFolder, uint cidl, nint apidl, nint pdtInner, Guid* riid, void** ppv);
+    [LibraryImport("kernel32.dll")] private static partial nint GlobalAlloc(uint uFlags, nuint dwBytes);
+    private static readonly Guid IID_IDataObject = new(0x0000010e, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46);
+
+    /// <summary>
+    /// The link and text formats end to end, without a real drag: builds REAL OLE data objects (<c>SHCreateDataObject</c>,
+    /// the shell's own <c>IDataObject</c>) carrying what a browser or the Spotify app offers — plain text; a link
+    /// (<c>UniformResourceLocatorW</c> + its text); a <c>text/uri-list</c> with comments and blank lines + text — reads
+    /// each through <see cref="ReadOffer"/>, then sends the link object through the CCW's DragEnter and Drop thunks with
+    /// capturing <c>InputHooks</c> (restored after) to prove the offer crosses the seam and a link drop commits through
+    /// <c>ExternalDrop</c> with the Link effect. Returns true on success.
+    /// </summary>
+    internal static bool SelfTestFormats(out string detail)
     {
-        cfFormat = CF_HDROP,
+        var sb = new System.Text.StringBuilder();
+        void* text = null, link = null, list = null, empty = null;
+        var hooks = InputHooks.Current.Default;
+        var (oldEnter, oldOver, oldLeave, oldDrop, oldDropFiles) =
+            (hooks.ExternalDragEnter, hooks.ExternalDragOver, hooks.ExternalDragLeave, hooks.ExternalDrop, hooks.ExternalDropFiles);
+        Win32DropTargetCcw* ccw = Win32DropTargetCcw.Create(0);
+        try
+        {
+            const string Spotify = "spotify:track:4uLU6hMCjMI75M1A2tKUQC";
+            const string Https = "https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3";
+            text = NewDataObject();
+            SetUtf16(text, CF_UNICODETEXT, Spotify);
+            link = NewDataObject();
+            SetUtf16(link, CfUrlW, Https + "\r\n");
+            SetUtf16(link, CF_UNICODETEXT, "Some album");
+            list = NewDataObject();
+            SetBytes(list, CfUriList, System.Text.Encoding.UTF8.GetBytes($"# dragged from a browser\r\n{Spotify}\r\n\r\n  {Https}  \r\n"));
+            SetUtf16(list, CfUrlW, Https);          // ignored: the uri-list has links
+            SetUtf16(list, CF_UNICODETEXT, Spotify + "\n" + Https);
+            empty = NewDataObject();
+
+            var t = ReadOffer(text);
+            bool textOk = t is { Files: null, Uris: null, Text.Text: Spotify };
+            sb.Append($"text={textOk}");
+            var l = ReadOffer(link);
+            bool linkOk = l is { Files: null, Uris.Uris: [Https], Text.Text: "Some album" };
+            sb.Append($" link={linkOk}");
+            var u = ReadOffer(list);
+            bool listOk = u is { Files: null, Uris.Uris: [Spotify, Https], Text: not null };
+            sb.Append($" uri-list={listOk}");
+            bool emptyOk = ReadOffer(empty).IsEmpty;
+            sb.Append($" empty={emptyOk}");
+
+            // Through the CCW: the offer reaches the seam whole, and a Link verdict reaches the OS as DROPEFFECT_LINK.
+            ExternalDragOffer seen = default;
+            bool committed = false;
+            hooks.ExternalDragEnter = (_, offer, _) => { seen = offer; return DropEffect.Link; };
+            hooks.ExternalDragOver = (_, _) => DropEffect.Link;
+            hooks.ExternalDrop = (_, _) => committed = true;
+            hooks.ExternalDropFiles = (_, _, _) => false;
+            hooks.ExternalDragLeave = null;
+            void** vt = ccw->Vtbl;
+            var enter = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, void*, uint, PointL, uint*, int>)vt[3];
+            var drop = (delegate* unmanaged[MemberFunction]<Win32DropTargetCcw*, void*, uint, PointL, uint*, int>)vt[6];
+            var pt = new PointL { x = 10, y = 10 };
+            uint eff = DROPEFFECT_COPY | DROPEFFECT_LINK;
+            enter(ccw, link, 0, pt, &eff);
+            bool enterOk = eff == DROPEFFECT_LINK && seen is { Uris.Uris: [Https], Text: not null, Files: null };
+            eff = DROPEFFECT_COPY | DROPEFFECT_LINK;
+            drop(ccw, link, 0, pt, &eff);
+            bool dropOk = committed && eff == DROPEFFECT_LINK;
+            sb.Append($" ccw.enter={enterOk} ccw.drop={dropOk}");
+
+            detail = sb.ToString();
+            return textOk && linkOk && listOk && emptyOk && enterOk && dropOk;
+        }
+        finally
+        {
+            (hooks.ExternalDragEnter, hooks.ExternalDragOver, hooks.ExternalDragLeave, hooks.ExternalDrop, hooks.ExternalDropFiles) =
+                (oldEnter, oldOver, oldLeave, oldDrop, oldDropFiles);
+            Win32DropTargetCcw.Destroy(ccw);
+            foreach (var p in new[] { (nint)text, (nint)link, (nint)list, (nint)empty })
+                if (p != 0) ((IUnknown*)p)->Release();
+        }
+    }
+
+    private static void* NewDataObject()
+    {
+        Guid iid = IID_IDataObject;
+        void* pdo = null;
+        int hr = SHCreateDataObject(0, 0, 0, 0, &iid, &pdo);
+        if (hr < 0 || pdo == null) throw new InvalidOperationException($"SHCreateDataObject failed 0x{hr:X8}");
+        return pdo;
+    }
+
+    private static void SetUtf16(void* pdo, ushort cf, string s)
+    {
+        var bytes = new byte[(s.Length + 1) * 2];   // with the terminator, as CF_UNICODETEXT requires
+        MemoryMarshal.AsBytes(s.AsSpan()).CopyTo(bytes);
+        SetBytes(pdo, cf, bytes);
+    }
+
+    private static void SetBytes(void* pdo, ushort cf, byte[] bytes)
+    {
+        nint h = GlobalAlloc(0x0002 /* GMEM_MOVEABLE */, (nuint)bytes.Length);
+        if (h == 0) throw new OutOfMemoryException();
+        void* p = GlobalLock(h);
+        bytes.AsSpan().CopyTo(new Span<byte>(p, bytes.Length));
+        GlobalUnlock(h);
+        FORMATETC fmt = HGlobalFormat(cf);
+        STGMEDIUM medium = default;
+        medium.tymed = (uint)TYMED.TYMED_HGLOBAL;
+        medium.hGlobal = (HGLOBAL)(void*)h;
+        int hr = ((IDataObject*)pdo)->SetData(&fmt, &medium, BOOL.TRUE);   // the data object owns the HGLOBAL now
+        if (hr < 0) throw new InvalidOperationException($"IDataObject.SetData(cf {cf}) failed 0x{hr:X8}");
+    }
+
+    // ── helpers shared by the CCW thunks ───────────────────────────────────────────────────────────────────────────
+    private static FORMATETC HGlobalFormat(ushort cf) => new()
+    {
+        cfFormat = cf,
         ptd = null,
         dwAspect = (uint)DVASPECT.DVASPECT_CONTENT,
         lindex = -1,
         tymed = (uint)TYMED.TYMED_HGLOBAL,
     };
+
+    private static FORMATETC HdropFormat() => HGlobalFormat(CF_HDROP);
 
     /// <summary>True iff the data object offers a file list — a cheap format probe (NO data transfer).</summary>
     internal static bool OffersFiles(void* pDataObj)
@@ -143,6 +268,93 @@ internal static unsafe partial class Win32DropTarget
         if (pDataObj == null) return false;
         FORMATETC fmt = HdropFormat();
         return ((IDataObject*)pDataObj)->QueryGetData(&fmt) == S_OK;
+    }
+
+    /// <summary>Everything a drag carries, read ONCE on DragEnter (the engine's payload contract: parsed on enter, never
+    /// per move). Files are only PROBED — offered with an empty path list, read at drop as before — while links and text
+    /// are read in full: they are small, and a target must see them in <c>OnEnter</c>/<c>CanAccept</c> to decide (a
+    /// <c>spotify:</c> link or not). Links come from <c>text/uri-list</c> when it has any, else <c>UniformResourceLocatorW</c>.</summary>
+    internal static ExternalDragOffer ReadOffer(void* pDataObj)
+    {
+        if (pDataObj == null) return default;
+        var files = OffersFiles(pDataObj) ? new FileDropData(Array.Empty<string>()) : null;
+        string[]? uris = null;
+        if (ReadHGlobal(pDataObj, CfUriList) is { } list) uris = ParseUriList(DecodeUriList(list));
+        if (uris is null or { Length: 0 } && ReadUtf16(pDataObj, CfUrlW) is { } url)
+        {
+            url = FirstLine(url);
+            uris = url.Length == 0 ? null : [url];
+        }
+        string? text = ReadUtf16(pDataObj, CF_UNICODETEXT);
+        return new ExternalDragOffer(
+            files,
+            uris is { Length: > 0 } ? new UriDropData(uris) : null,
+            string.IsNullOrEmpty(text) ? null : new TextDropData(text));
+    }
+
+    /// <summary>One HGLOBAL format's bytes (null when the source does not offer it as an HGLOBAL).</summary>
+    private static byte[]? ReadHGlobal(void* pDataObj, ushort cf)
+    {
+        if (cf == 0) return null;
+        var data = (IDataObject*)pDataObj;
+        FORMATETC fmt = HGlobalFormat(cf);
+        if (data->QueryGetData(&fmt) != S_OK) return null;
+        STGMEDIUM medium;
+        if (data->GetData(&fmt, &medium) < 0) return null;
+        try
+        {
+            nint h = (nint)(void*)medium.hGlobal;
+            if (h == 0) return null;
+            nuint size = GlobalSize(h);
+            void* p = GlobalLock(h);
+            if (p == null) return null;
+            try { return new ReadOnlySpan<byte>(p, (int)Math.Min(size, (nuint)int.MaxValue)).ToArray(); }
+            finally { GlobalUnlock(h); }
+        }
+        finally { ReleaseStgMedium(&medium); }
+    }
+
+    /// <summary>A UTF-16 HGLOBAL format up to its terminator (the HGLOBAL may be larger than the string).</summary>
+    private static string? ReadUtf16(void* pDataObj, ushort cf)
+    {
+        if (ReadHGlobal(pDataObj, cf) is not { } bytes) return null;
+        var chars = MemoryMarshal.Cast<byte, char>(bytes.AsSpan(0, bytes.Length & ~1));
+        int end = chars.IndexOf('\0');
+        return new string(end < 0 ? chars : chars[..end]);
+    }
+
+    /// <summary><c>text/uri-list</c> has no fixed encoding on Windows: RFC 2483 says ASCII/UTF-8, but some sources write
+    /// UTF-16. A zero in the second byte (the high byte of an ASCII first character) means UTF-16LE.</summary>
+    private static string DecodeUriList(byte[] bytes)
+    {
+        string s = bytes.Length >= 2 && bytes[1] == 0
+            ? new string(MemoryMarshal.Cast<byte, char>(bytes.AsSpan(0, bytes.Length & ~1)))
+            : System.Text.Encoding.UTF8.GetString(bytes);
+        int end = s.IndexOf('\0');
+        return end < 0 ? s : s[..end];
+    }
+
+    /// <summary>RFC 2483: one URI per line (CRLF, LF tolerated), lines starting with <c>#</c> are comments, blank lines
+    /// skipped, each trimmed.</summary>
+    internal static string[] ParseUriList(string list)
+    {
+        var lines = list.Split('\n');
+        var uris = new string[lines.Length];
+        int n = 0;
+        foreach (var raw in lines)
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line[0] == '#') continue;
+            uris[n++] = line;
+        }
+        if (n != uris.Length) Array.Resize(ref uris, n);
+        return uris;
+    }
+
+    private static string FirstLine(string s)
+    {
+        int nl = s.AsSpan().IndexOfAny('\r', '\n');
+        return (nl < 0 ? s : s[..nl]).Trim();
     }
 
     /// <summary>Pull the dropped absolute paths out of the data object's CF_HDROP medium (the once-per-drop read).</summary>
@@ -279,9 +491,11 @@ internal unsafe struct Win32DropTargetCcw
     {
         try
         {
-            if (!Win32DropTarget.OffersFiles(pDataObj)) { if (pdwEffect != null) *pdwEffect = 0; return ComCcw.S_OK; }
-            var fn = InputHooks.Current.Default.ExternalDragEnter;   // hover: NO data read — empty paths
-            DropEffect want = fn?.Invoke(Win32DropTarget.ToDip(self->Hwnd, pt, self->ScaleProvider), Array.Empty<string>(), Win32DropTarget.Mods(grfKeyState)) ?? DropEffect.None;
+            // Read once, here: files probed (empty paths until drop), links and text in full.
+            var offer = Win32DropTarget.ReadOffer(pDataObj);
+            if (offer.IsEmpty) { if (pdwEffect != null) *pdwEffect = 0; return ComCcw.S_OK; }
+            var fn = InputHooks.Current.Default.ExternalDragEnter;
+            DropEffect want = fn?.Invoke(Win32DropTarget.ToDip(self->Hwnd, pt, self->ScaleProvider), offer, Win32DropTarget.Mods(grfKeyState)) ?? DropEffect.None;
             if (pdwEffect != null) *pdwEffect = Win32DropTarget.MapEffect(want, *pdwEffect);
         }
         catch { if (pdwEffect != null) *pdwEffect = 0; }
@@ -314,11 +528,28 @@ internal unsafe struct Win32DropTargetCcw
     {
         try
         {
-            string[] paths = Win32DropTarget.ReadDroppedPaths(pDataObj);   // the once-per-drop file read
             var dip = Win32DropTarget.ToDip(self->Hwnd, pt, self->ScaleProvider);
             var mods = Win32DropTarget.Mods(grfKeyState);
-            bool accepted = paths.Length > 0 && (InputHooks.Current.Default.ExternalDropFiles?.Invoke(dip, paths, mods) ?? false);
-            if (pdwEffect != null) *pdwEffect = accepted ? Win32DropTarget.MapEffect(DropEffect.Copy, *pdwEffect) : 0;
+            var hooks = InputHooks.Current.Default;
+            bool accepted;
+            DropEffect effect = DropEffect.Copy;
+            string[] paths = Win32DropTarget.ReadDroppedPaths(pDataObj);   // the once-per-drop file read
+            if (paths.Length > 0)
+                accepted = hooks.ExternalDropFiles?.Invoke(dip, paths, mods) ?? false;
+            else if (Win32DropTarget.OffersFiles(pDataObj))
+            {
+                accepted = false;                                   // files offered but none readable: no drop, as before
+                hooks.ExternalDragLeave?.Invoke();                  // ...and end the session OLE will not DragLeave
+            }
+            else
+            {
+                // A link or text drop: its payloads were read on enter and live in the session; commit them. The effect
+                // is the session's own (Link over a target that took a link), read before the commit ends the session.
+                effect = hooks.ExternalDragOver?.Invoke(dip, mods) ?? DropEffect.None;
+                accepted = effect != DropEffect.None && (hooks.ExternalDrop?.Invoke(dip, mods) ?? false);
+                if (!accepted) hooks.ExternalDragLeave?.Invoke();   // OLE sends no DragLeave after Drop: end the session
+            }
+            if (pdwEffect != null) *pdwEffect = accepted ? Win32DropTarget.MapEffect(effect, *pdwEffect) : 0;
         }
         catch { if (pdwEffect != null) *pdwEffect = 0; }
         return ComCcw.S_OK;

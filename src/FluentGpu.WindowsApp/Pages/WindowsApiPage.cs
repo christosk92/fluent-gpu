@@ -1288,15 +1288,16 @@ sealed class StorageCard : Component
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// (11) File drop — the cross-cutting OS file/folder DROP ZONE. The DropZone control reveals a dashed accent ring + a
-//      "Drop it." overlay WHILE a file hovers (the hand-rolled OLE IDropTarget restores live DragEnter/Over/Leave +
-//      the "+Copy" cursor); the drop reads the paths once. DropKinds.Files / FileDropData.
+// (11) OS drop — the cross-cutting DROP ZONE for files/folders, links and text. The DropZone control reveals a dashed
+//      accent ring WHILE a compatible drag hovers (the hand-rolled OLE IDropTarget restores live DragEnter/Over/Leave +
+//      the "+Copy"/"+Link" cursor); links and text are read once on enter, file paths once at drop.
+//      DropKinds.Files / FileDropData, DropKinds.Uri / UriDropData, DropKinds.Text / TextDropData.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 sealed class FileDropCard : Component
 {
     public override Element Render()
     {
-        var files = UseSignal("Drag files or folders from Explorer onto the zone.");
+        var files = UseSignal("Drag files or folders from Explorer, or a link or text from a browser, onto the zone.");
         var status = UseSignal("Nothing dropped yet.");
         var count = UseSignal(0);
 
@@ -1311,32 +1312,56 @@ sealed class FileDropCard : Component
             Children =
             [
                 new TextEl(Icons.Download) { Size = 30f, FontFamily = Tok.Definition.Fonts.Icon, Color = Tok.TextTertiary },
-                new TextEl("Drop files / folders here") { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
+                new TextEl("Drop files, folders, links or text here") { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
                 new TextEl("") { Size = 12f, Color = Tok.TextSecondary, Text = Prop.Of(() => $"{count.Value} item(s)") },
             ],
         };
 
+        // One zone over all three OS kinds. A browser link drag offers a Uri AND its Text: the zone's own kind order
+        // (Files, Uri, Text) decides which payload it receives, and the other offers stay readable through PayloadOf.
         var zone = DropZone.Create(
-            accept: new[] { DropKinds.Files },
+            accept: new[] { DropKinds.Files, DropKinds.Uri, DropKinds.Text },
             onDrop: s =>
             {
-                if (s.Payload is FileDropData d)
+                string offered = string.Join(" + ", s.OfferedKinds.ToArray());
+                switch (s.Payload)
                 {
-                    count.Value = d.Count;
-                    files.Value = d.Count == 0 ? "(empty)" : string.Join("\n", d.Paths);
-                    status.Value = d.Count == 0 ? "Nothing dropped." : $"Dropped {d.Count} path(s)" + (d.AllFolders ? " (all folders)." : ".");
+                    case FileDropData d:
+                        count.Value = d.Count;
+                        files.Value = d.Count == 0 ? "(empty)" : string.Join("\n", d.Paths);
+                        status.Value = d.Count == 0 ? "Nothing dropped." : $"Dropped {d.Count} path(s)" + (d.AllFolders ? " (all folders)" : "") + $" — offered {offered}.";
+                        break;
+                    case UriDropData u:
+                        count.Value = u.Count;
+                        files.Value = string.Join("\n", u.Uris)
+                                      + (s.PayloadOf(DropKinds.Text) is TextDropData title ? $"\n\ntext: {title.Text}" : "");
+                        status.Value = $"Dropped {u.Count} link(s) — offered {offered}.";
+                        break;
+                    case TextDropData t:
+                        count.Value = 1;
+                        files.Value = t.Text;
+                        status.Value = $"Dropped {t.Text.Length} character(s) of text — offered {offered}.";
+                        break;
                 }
             },
             content: content);
 
-        return ExampleCard.Build("File & folder drop — styled DropZone",
+        return ExampleCard.Build("File, link & text drop — styled DropZone",
             zone,
-            description: "DropZone announces droppability by restyling the zone itself — a soft dashed accent ring + glow fade in while a compatible drag is live, and brighten when it hovers (no second labelled panel, so the content's own text never doubles). OS file drags deliver live hover: the Windows backend registers a hand-rolled OLE IDropTarget (DragEnter/Over/Leave → the engine external-drop seam) which also drives the OS \"+Copy\" cursor; the file list is read once, at drop. Lights up for in-app drags too. DropKinds.Files / FileDropData.",
+            description: "DropZone announces droppability by restyling the zone itself — a soft dashed accent ring + glow fade in while a compatible drag is live, and brighten when it hovers (no second labelled panel, so the content's own text never doubles). OS drags deliver live hover: the Windows backend registers a hand-rolled OLE IDropTarget (DragEnter/Over/Leave → the engine external-drop seam) which also drives the OS \"+Copy\" / \"+Link\" cursor. Links (UniformResourceLocatorW, text/uri-list) and text (CF_UNICODETEXT) are read once on enter, the file list once at drop. A drag carrying several formats offers every kind it has; each target takes the first of its own accepted kinds. Lights up for in-app drags too. DropKinds.Files / Uri / Text.",
             output: WinApiUi.OutputPanel(status, WinApiUi.Info, files),
             code: """
             DropZone.Create(
-                accept: new[] { DropKinds.Files },
-                onDrop: s => { if (s.Payload is FileDropData d) Handle(d.Paths); },
+                accept: new[] { DropKinds.Files, DropKinds.Uri, DropKinds.Text },   // your order picks the offer
+                onDrop: s =>
+                {
+                    switch (s.Payload)
+                    {
+                        case FileDropData d: Handle(d.Paths); break;
+                        case UriDropData u: Open(u.Uris); break;        // a browser link: Uri wins over its Text
+                        case TextDropData t: Paste(t.Text); break;
+                    }
+                },
                 content: body,
                 message: "Drop it.");
             // The Windows backend registers a hand-rolled OLE IDropTarget → live hover + the +Copy cursor; the

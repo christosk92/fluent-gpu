@@ -64,7 +64,7 @@ public sealed class DropZone : Component
             OnLeave: _ => over.Value = false,
             OnDrop: s => { over.Value = false; OnDrop?.Invoke(s); });
 
-        bool compatible = state.Active && Match(state.Kind);
+        bool compatible = state.Active && Match(state);
         bool hovering = over.Value;
         bool cue = compatible || hovering;
 
@@ -91,5 +91,11 @@ public sealed class DropZone : Component
         };
     }
 
-    private bool Match(string kind) => Array.IndexOf(Accept, kind) >= 0;
+    /// <summary>Any accepted kind the drag offers (a browser link drag offers a Uri AND its Text).</summary>
+    private bool Match(in DragState state)
+    {
+        foreach (var kind in Accept)
+            if (state.Offers(kind)) return true;
+        return false;
+    }
 }

@@ -500,6 +500,111 @@ public sealed class DragSession
     public string? Caption;
     public KeyModifiers Mods;
     public PointerKind Pointer;
+
+    // ── Offers: a drag that carries several representations at once ──────────────────────────────────────────────────
+    // An in-app DragSource has ONE kind. An OS drag can carry several clipboard formats at once (a browser link drag is
+    // a Uri AND its Text; an Outlook attachment can be Files AND Text), and each becomes one OFFER. The engine matches a
+    // target against the offers in the TARGET's AcceptKinds order and, before any of that target's delegates run
+    // (Transparent, CanAccept, RefusalCaption, the handlers), selects the matching offer into Kind/Payload — so a target
+    // reads `session.Payload` exactly as it would for a single-kind drag. Empty arrays = the single-kind shape (Kind and
+    // Payload ARE the one offer). Set once per gesture on the cold begin edge; matching never allocates.
+    private string[] _offerKinds = [];
+    private object?[] _offerPayloads = [];
+    private int _selectedOffer;
+
+    /// <summary>Every kind this drag offers, in the source's order (for an OS drag: <see cref="DropKinds.Files"/>,
+    /// <see cref="DropKinds.Uri"/>, <see cref="DropKinds.Text"/>, each only when present). A single-kind drag offers
+    /// exactly <see cref="Kind"/>. 0-alloc.</summary>
+    public ReadOnlySpan<string> OfferedKinds => _offerKinds.Length != 0 ? _offerKinds : new ReadOnlySpan<string>(ref Kind);
+
+    /// <summary>True when this drag offers <paramref name="kind"/> (whichever kind is selected right now). 0-alloc.</summary>
+    public bool Offers(string kind) => IndexOfOffer(kind) >= 0;
+
+    /// <summary>The payload of the offered <paramref name="kind"/> (null when the drag does not offer it) — lets a
+    /// target that received one kind read a sibling representation, e.g. a link target reading the link's title text.</summary>
+    public object? PayloadOf(string kind)
+    {
+        int i = IndexOfOffer(kind);
+        if (i < 0) return null;
+        return _offerKinds.Length == 0 ? Payload : _offerPayloads[i];
+    }
+
+    /// <summary>The offer arrays (empty for a single-kind drag) — the host's <c>DragState</c> snapshot shares the kinds.</summary>
+    internal string[] OfferKindsArray => _offerKinds;
+    internal int SelectedOffer => _selectedOffer;
+
+    /// <summary>Install the offers (parallel arrays, at least one) and select the first.</summary>
+    internal void SetOffers(string[] kinds, object?[] payloads)
+    {
+        _offerKinds = kinds;
+        _offerPayloads = payloads;
+        Select(0);
+    }
+
+    /// <summary>Back to the single-kind shape (every begin and the session end).</summary>
+    internal void ClearOffers()
+    {
+        _offerKinds = [];
+        _offerPayloads = [];
+        _selectedOffer = 0;
+    }
+
+    /// <summary>Replace one offer's payload (the OS file list arrives at drop, after a data-free hover).</summary>
+    internal void SetOfferPayload(int offer, object? payload)
+    {
+        if (_offerKinds.Length == 0) { Payload = payload; return; }
+        _offerPayloads[offer] = payload;
+        if (offer == _selectedOffer) Payload = payload;
+    }
+
+    internal int IndexOfOffer(string kind)
+    {
+        var kinds = _offerKinds;
+        if (kinds.Length == 0) return string.Equals(Kind, kind, StringComparison.Ordinal) ? 0 : -1;
+        for (int i = 0; i < kinds.Length; i++)
+            if (string.Equals(kinds[i], kind, StringComparison.Ordinal)) return i;
+        return -1;
+    }
+
+    /// <summary>Make <paramref name="offer"/> the one Kind/Payload expose. No-op for a single-kind drag or a negative index.</summary>
+    internal void Select(int offer)
+    {
+        if (_offerKinds.Length == 0 || offer < 0) return;
+        _selectedOffer = offer;
+        Kind = _offerKinds[offer];
+        Payload = _offerPayloads[offer];
+    }
+
+    /// <summary>The first offer <paramref name="spec"/> lists, scanning its AcceptKinds from <paramref name="fromAccept"/>
+    /// (the target's order decides between offers); -1 when it lists none. 0-alloc.</summary>
+    internal int FirstMatch(DropTargetSpec spec, int fromAccept, out int acceptPos)
+    {
+        var kinds = spec.AcceptKinds;
+        for (int a = fromAccept; a < kinds.Length; a++)
+        {
+            int o = IndexOfOffer(kinds[a]);
+            if (o >= 0) { acceptPos = a; return o; }
+        }
+        acceptPos = -1;
+        return -1;
+    }
+
+    /// <summary>Walk the offers <paramref name="spec"/> lists (from <paramref name="first"/>, the target's order) and
+    /// return the first its <see cref="DropTargetSpec.CanAccept"/> takes, left selected; -1 when it takes none, with
+    /// <paramref name="first"/> left selected (the offer a refusal caption explains). A target without CanAccept takes
+    /// <paramref name="first"/>. 0-alloc.</summary>
+    internal int AcceptingOffer(DropTargetSpec spec, int first, int firstPos)
+    {
+        int o = first, pos = firstPos;
+        while (o >= 0)
+        {
+            Select(o);
+            if (spec.CanAccept is not { } canAccept || canAccept(this)) return o;
+            o = FirstMatch(spec, pos + 1, out pos);
+        }
+        Select(first);
+        return -1;
+    }
 }
 
 /// <summary>The drop-settle window a <c>DragPreviewLayer</c> chip animates through after a
@@ -529,11 +634,25 @@ public enum DragSettlePhase : byte { None = 0, ToTarget = 1, Home = 2 }
 /// <param name="Refused">A compatible-KIND target under the pointer explicitly refused this payload
 /// (<see cref="DragSession.RefusedTarget"/>) — the one state a not-allowed cue belongs in. False over empty space, so
 /// hovering nothing stays silent rather than accusing every gap between targets of refusing.</param>
+/// <param name="OfferedKinds">Every kind a multi-format drag offers (<see cref="DragSession.OfferedKinds"/>); null for
+/// a single-kind drag, whose one kind is <paramref name="Kind"/>. Test with <see cref="Offers"/>.</param>
 public readonly record struct DragState(
     bool Active, string Kind, Point2 Position, object? Payload,
     DropEffect Effect = DropEffect.None, string? Caption = null,
     DragSettlePhase Settle = DragSettlePhase.None, RectF SettleTarget = default,
-    bool Refused = false);
+    bool Refused = false, string[]? OfferedKinds = null)
+{
+    /// <summary>True when the drag offers <paramref name="kind"/> — the "is a compatible drag live" test, which must
+    /// not read <see cref="Kind"/> alone: a browser link drag is a Uri AND Text, and <see cref="Kind"/> names only the
+    /// offer selected for the target under the pointer.</summary>
+    public bool Offers(string kind)
+    {
+        if (OfferedKinds is not { } kinds) return Active && string.Equals(Kind, kind, StringComparison.Ordinal);
+        for (int i = 0; i < kinds.Length; i++)
+            if (string.Equals(kinds[i], kind, StringComparison.Ordinal)) return true;
+        return false;
+    }
+}
 
 /// <summary>
 /// Well-known drag KIND discriminators for OS-originated (OLE) drags delivered through the external-drop seam
@@ -547,6 +666,47 @@ public static class DropKinds
     /// <summary>An OS file/folder drop (Explorer, the desktop, any OLE source offering <c>CF_HDROP</c>).
     /// <see cref="DragSession.Payload"/> is a <see cref="FileDropData"/>.</summary>
     public const string Files = "os.files";
+
+    /// <summary>OS plain text (<c>CF_UNICODETEXT</c>: a text selection, or the text form a browser or the Spotify app
+    /// puts beside a link). <see cref="DragSession.Payload"/> is a <see cref="TextDropData"/>, read once on enter.</summary>
+    public const string Text = "os.text";
+
+    /// <summary>OS links (<c>UniformResourceLocatorW</c> or <c>text/uri-list</c>: a link dragged out of a browser, a
+    /// <c>spotify:</c> uri). <see cref="DragSession.Payload"/> is a <see cref="UriDropData"/>, read once on enter. The
+    /// engine's advisory effect over an accepting target is Link (Copy for Files and Text).</summary>
+    public const string Uri = "os.uri";
+}
+
+/// <summary>
+/// What one OS drag carries, as the host's <c>IDropTarget</c> read it on DragEnter: one payload per format present,
+/// null when absent. The engine turns it into the session's offers (Files, Uri, Text — that order), so a target whose
+/// AcceptKinds lists any present kind can take the drag. <see cref="Files"/> is offered with an EMPTY path list while
+/// hovering (the file list is read once, at drop); <see cref="Uris"/> and <see cref="Text"/> are complete on enter.
+/// </summary>
+public readonly record struct ExternalDragOffer(FileDropData? Files, UriDropData? Uris, TextDropData? Text)
+{
+    /// <summary>No supported format was present.</summary>
+    public bool IsEmpty => Files is null && Uris is null && Text is null;
+}
+
+/// <summary>The payload of a <see cref="DropKinds.Text"/> session: the dragged text, exactly as the source offered it
+/// (line breaks kept). Allocated once per OS drag, on enter.</summary>
+public sealed class TextDropData
+{
+    public TextDropData(string text) => Text = text;
+    /// <summary>The dragged text (never empty: an empty text format is not offered).</summary>
+    public string Text { get; }
+}
+
+/// <summary>The payload of a <see cref="DropKinds.Uri"/> session: the dragged links in the source's order, trimmed,
+/// with <c>text/uri-list</c> <c>#</c> comment lines removed. Not validated: the receiver parses what it can use (a
+/// <c>spotify:</c> uri, an <c>open.spotify.com</c> link) and refuses the rest. Allocated once per OS drag, on enter.</summary>
+public sealed class UriDropData
+{
+    public UriDropData(string[] uris) => Uris = uris;
+    /// <summary>The dragged links (at least one).</summary>
+    public string[] Uris { get; }
+    public int Count => Uris.Length;
 }
 
 /// <summary>

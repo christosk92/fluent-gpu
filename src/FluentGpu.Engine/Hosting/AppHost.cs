@@ -6003,8 +6003,12 @@ public sealed partial class AppHost : IDisposable
         if (dd.IsActive)
         {
             var s = dd.Session;
+            // A multi-format OS drag shares its offered kinds (the session's array, set once per gesture: no copy), so a
+            // "compatible drag is live" cue asks DragState.Offers rather than the one kind selected for the target under
+            // the pointer. The settle window below is Stationary-lift only, never an OS drag, so it carries none.
+            var offered = s.OfferKindsArray;
             return new DragState(true, s.Kind, s.Position, s.Payload, s.Effect, s.Caption,
-                                 Refused: !s.RefusedTarget.IsNull);
+                                 Refused: !s.RefusedTarget.IsNull, OfferedKinds: offered.Length == 0 ? null : offered);
         }
         // The gesture is over but its chip is still settling: keep reporting Active with the LAST live snapshot (plus
         // the settle phase/target) so the preview can glide out instead of vanishing at the release frame.

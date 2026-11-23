@@ -658,11 +658,27 @@ public sealed partial class InputDispatcher
     // client px). Returned DropEffect → the OS drag cursor (None = no-drop). The seam keeps the richer Over/Leave shape
     // for backends that can supply hover feedback (a future OLE IDropTarget, or macOS); WM_DROPFILES uses Enter+Drop only.
 
-    /// <summary>OLE DragEnter: open the external session (payload = the dragged <paramref name="paths"/>), hit-test, and
-    /// report the effect the OS should show.</summary>
-    public DropEffect ExternalDragEnter(Point2 windowDip, string[] paths, KeyModifiers mods)
+    /// <summary>OLE DragEnter: open the external session over every format the drag carries (<paramref name="offer"/>:
+    /// Files, Uri, Text — that order, each only when present), hit-test, and report the effect the OS should show. A
+    /// files-only drag opens the single-kind session it always did; anything else opens a multi-offer session
+    /// (<see cref="DragDropContext.ExternalBegin(string[], object?[], Point2, KeyModifiers)"/>) whose targets each take
+    /// the first kind of their own AcceptKinds that the drag offers. An empty offer opens nothing (None).</summary>
+    public DropEffect ExternalDragEnter(Point2 windowDip, ExternalDragOffer offer, KeyModifiers mods)
     {
-        DragDrop.ExternalBegin(DropKinds.Files, new FileDropData(paths), windowDip, mods);
+        if (offer.IsEmpty) return DropEffect.None;
+        if (offer.Uris is null && offer.Text is null)
+            DragDrop.ExternalBegin(DropKinds.Files, offer.Files, windowDip, mods);
+        else
+        {
+            int n = (offer.Files is null ? 0 : 1) + (offer.Uris is null ? 0 : 1) + (offer.Text is null ? 0 : 1);
+            var kinds = new string[n];          // cold OLE edge: once per drag
+            var payloads = new object?[n];
+            int i = 0;
+            if (offer.Files is { } f) { kinds[i] = DropKinds.Files; payloads[i++] = f; }
+            if (offer.Uris is { } u) { kinds[i] = DropKinds.Uri; payloads[i++] = u; }
+            if (offer.Text is { } t) { kinds[i] = DropKinds.Text; payloads[i] = t; }
+            DragDrop.ExternalBegin(kinds, payloads, windowDip, mods);
+        }
         DragDrop.Move(HitTestAny(windowDip), windowDip, 0f, 0f, mods);
         return CurrentExternalEffect();
     }
@@ -790,8 +806,8 @@ public sealed partial class InputDispatcher
         var data = new FileDropData(paths);
         if (!DragDrop.IsActive)
             DragDrop.ExternalBegin(DropKinds.Files, data, windowDip, mods);   // robustness: drop with no prior enter
-        else
-            DragDrop.Session.Payload = data;                                  // fill the payload the hover left empty
+        else if (DragDrop.Session.IndexOfOffer(DropKinds.Files) is var files and >= 0)
+            DragDrop.Session.SetOfferPayload(files, data);                    // fill the Files offer the hover left empty
         DragDrop.Move(HitTestAny(windowDip), windowDip, 0f, 0f, mods);
         return DragDrop.TryDrop(windowDip, mods, out _);
     }
