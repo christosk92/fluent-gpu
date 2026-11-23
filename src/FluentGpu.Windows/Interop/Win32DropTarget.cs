@@ -20,12 +20,14 @@ namespace FluentGpu.Pal.Windows;
 /// is a real 8-byte by-value struct in <c>[UnmanagedCallersOnly(CallConvMemberFunction)]</c> signatures, honored
 /// identically on x64 and ARM64 — the same proven pattern as <c>DWriteItemizer.cs</c>'s CCWs. </para>
 ///
-/// <para><b>De-risked data handling.</b> HOVER transfers no file data: DragEnter only
-/// <c>QueryGetData(CF_HDROP)</c> (a cheap "do you offer files" check), plus ONE read of the small link and text formats
-/// (<c>UniformResourceLocatorW</c>, <c>text/uri-list</c>, <c>CF_UNICODETEXT</c>), which a target needs on enter to
-/// decide; DragOver reads nothing. Only DROP reads the file list (<c>GetData(CF_HDROP)</c> → HDROP → <c>DragQueryFileW</c>) — the same enumeration the
-/// previous (working) <c>WM_DROPFILES</c> path used, run exactly once. Every thunk swallows managed exceptions and
-/// returns an HRESULT — nothing crosses the COM boundary.</para>
+/// <para><b>Data handling.</b> DragEnter reads everything a target needs to decide, ONCE: the file list
+/// (<c>GetData(CF_HDROP)</c> → HDROP → <c>DragQueryFileW</c>, the same enumeration the previous (working)
+/// <c>WM_DROPFILES</c> path used) and the small link and text formats (<c>UniformResourceLocatorW</c>,
+/// <c>text/uri-list</c>, <c>CF_UNICODETEXT</c>), so a target can refuse a payload it cannot use ("can't play .wma
+/// files") or show what a drop will do ("12 songs · 2 folders") while the pointer is still hovering. DragOver reads
+/// nothing. DROP reads the file list again and fills the session with it, so a source that renders <c>CF_HDROP</c>
+/// only at drop (or failed to on enter) still delivers. Every thunk swallows managed exceptions and returns an HRESULT
+/// — nothing crosses the COM boundary.</para>
 ///
 /// <para><b>Threading.</b> OLE delivers the callbacks on the registering (UI) thread during the drag loop — the same
 /// thread the dispatcher runs on — so the forwarded <c>InputHooks.ExternalDrag*</c> calls are synchronous and
@@ -154,7 +156,7 @@ internal static unsafe partial class Win32DropTarget
     internal static bool SelfTestFormats(out string detail)
     {
         var sb = new System.Text.StringBuilder();
-        void* text = null, link = null, list = null, empty = null;
+        void* text = null, link = null, list = null, empty = null, files = null;
         var hooks = InputHooks.Current.Default;
         var (oldEnter, oldOver, oldLeave, oldDrop, oldDropFiles) =
             (hooks.ExternalDragEnter, hooks.ExternalDragOver, hooks.ExternalDragLeave, hooks.ExternalDrop, hooks.ExternalDropFiles);
@@ -173,6 +175,10 @@ internal static unsafe partial class Win32DropTarget
             SetUtf16(list, CfUrlW, Https);          // ignored: the uri-list has links
             SetUtf16(list, CF_UNICODETEXT, Spotify + "\n" + Https);
             empty = NewDataObject();
+            const string FileA = @"C:\Music\Coral Hours\Sunset Boulevard.flac", FolderB = @"D:\Downloads\Harbour Lights";
+            files = NewDataObject();
+            SetBytes(files, CF_HDROP, DropFiles(FileA, FolderB));
+            SetUtf16(files, CF_UNICODETEXT, FileA);
 
             var t = ReadOffer(text);
             bool textOk = t is { Files: null, Uris: null, Text.Text: Spotify };
@@ -185,6 +191,11 @@ internal static unsafe partial class Win32DropTarget
             sb.Append($" uri-list={listOk}");
             bool emptyOk = ReadOffer(empty).IsEmpty;
             sb.Append($" empty={emptyOk}");
+            // The file list is complete on enter (a target decides from it while hovering), and the drop's read agrees.
+            var f = ReadOffer(files);
+            bool filesOk = f is { Files.Paths: [FileA, FolderB], Uris: null, Text: not null }
+                           && ReadDroppedPaths(files) is [FileA, FolderB];
+            sb.Append($" hdrop={filesOk}");
 
             // Through the CCW: the offer reaches the seam whole, and a Link verdict reaches the OS as DROPEFFECT_LINK.
             ExternalDragOffer seen = default;
@@ -207,14 +218,14 @@ internal static unsafe partial class Win32DropTarget
             sb.Append($" ccw.enter={enterOk} ccw.drop={dropOk}");
 
             detail = sb.ToString();
-            return textOk && linkOk && listOk && emptyOk && enterOk && dropOk;
+            return textOk && linkOk && listOk && emptyOk && filesOk && enterOk && dropOk;
         }
         finally
         {
             (hooks.ExternalDragEnter, hooks.ExternalDragOver, hooks.ExternalDragLeave, hooks.ExternalDrop, hooks.ExternalDropFiles) =
                 (oldEnter, oldOver, oldLeave, oldDrop, oldDropFiles);
             Win32DropTargetCcw.Destroy(ccw);
-            foreach (var p in new[] { (nint)text, (nint)link, (nint)list, (nint)empty })
+            foreach (var p in new[] { (nint)text, (nint)link, (nint)list, (nint)empty, (nint)files })
                 if (p != 0) ((IUnknown*)p)->Release();
         }
     }
@@ -226,6 +237,24 @@ internal static unsafe partial class Win32DropTarget
         int hr = SHCreateDataObject(0, 0, 0, 0, &iid, &pdo);
         if (hr < 0 || pdo == null) throw new InvalidOperationException($"SHCreateDataObject failed 0x{hr:X8}");
         return pdo;
+    }
+
+    /// <summary>A <c>CF_HDROP</c> medium as Explorer writes it: a 20-byte <c>DROPFILES</c> header (pFiles = 20, fWide)
+    /// then each path NUL-terminated in UTF-16, the list closed by one more NUL.</summary>
+    private static byte[] DropFiles(params string[] paths)
+    {
+        int chars = 1;
+        foreach (var p in paths) chars += p.Length + 1;
+        var bytes = new byte[20 + chars * 2];
+        BitConverter.TryWriteBytes(bytes.AsSpan(0), 20);    // pFiles
+        BitConverter.TryWriteBytes(bytes.AsSpan(16), 1);    // fWide
+        int at = 20;
+        foreach (var p in paths)
+        {
+            MemoryMarshal.AsBytes(p.AsSpan()).CopyTo(bytes.AsSpan(at));
+            at += (p.Length + 1) * 2;
+        }
+        return bytes;
     }
 
     private static void SetUtf16(void* pdo, ushort cf, string s)
@@ -271,13 +300,14 @@ internal static unsafe partial class Win32DropTarget
     }
 
     /// <summary>Everything a drag carries, read ONCE on DragEnter (the engine's payload contract: parsed on enter, never
-    /// per move). Files are only PROBED — offered with an empty path list, read at drop as before — while links and text
-    /// are read in full: they are small, and a target must see them in <c>OnEnter</c>/<c>CanAccept</c> to decide (a
-    /// <c>spotify:</c> link or not). Links come from <c>text/uri-list</c> when it has any, else <c>UniformResourceLocatorW</c>.</summary>
+    /// per move). The file list, the links and the text are read in full: a target must see them in
+    /// <c>OnEnter</c>/<c>CanAccept</c> to decide (audio files or a <c>.docx</c>, a <c>spotify:</c> link or not). A source
+    /// that offers files but hands over no readable path on enter is still offered as Files, with an empty list that the
+    /// drop's own read fills. Links come from <c>text/uri-list</c> when it has any, else <c>UniformResourceLocatorW</c>.</summary>
     internal static ExternalDragOffer ReadOffer(void* pDataObj)
     {
         if (pDataObj == null) return default;
-        var files = OffersFiles(pDataObj) ? new FileDropData(Array.Empty<string>()) : null;
+        var files = OffersFiles(pDataObj) ? new FileDropData(ReadDroppedPaths(pDataObj)) : null;
         string[]? uris = null;
         if (ReadHGlobal(pDataObj, CfUriList) is { } list) uris = ParseUriList(DecodeUriList(list));
         if (uris is null or { Length: 0 } && ReadUtf16(pDataObj, CfUrlW) is { } url)
@@ -357,7 +387,7 @@ internal static unsafe partial class Win32DropTarget
         return (nl < 0 ? s : s[..nl]).Trim();
     }
 
-    /// <summary>Pull the dropped absolute paths out of the data object's CF_HDROP medium (the once-per-drop read).</summary>
+    /// <summary>Pull the dragged absolute paths out of the data object's CF_HDROP medium (read on enter and again at drop).</summary>
     internal static string[] ReadDroppedPaths(void* pDataObj)
     {
         if (pDataObj == null) return Array.Empty<string>();
@@ -491,7 +521,7 @@ internal unsafe struct Win32DropTargetCcw
     {
         try
         {
-            // Read once, here: files probed (empty paths until drop), links and text in full.
+            // Read once, here: the file list, links and text in full (the drop re-reads the file list).
             var offer = Win32DropTarget.ReadOffer(pDataObj);
             if (offer.IsEmpty) { if (pdwEffect != null) *pdwEffect = 0; return ComCcw.S_OK; }
             var fn = InputHooks.Current.Default.ExternalDragEnter;

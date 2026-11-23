@@ -634,7 +634,7 @@ internal static partial class WindowsApiSmoke
         try
         {
             bool ok = Win32DropTarget.SelfTestFormats(out string detail);
-            Check("6c.2 link/text formats (CF_UNICODETEXT, UniformResourceLocatorW, text/uri-list) read once on enter, through the CCW", ok, detail);
+            Check("6c.2 file list, link and text formats (CF_HDROP, CF_UNICODETEXT, UniformResourceLocatorW, text/uri-list) read once on enter, through the CCW", ok, detail);
         }
         catch (Exception ex) { Check("6c.2 link/text formats", false, ex.Message); }
 
