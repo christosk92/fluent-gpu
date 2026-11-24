@@ -145,7 +145,10 @@ public sealed partial class PcmAudioSession
     {
         int mixRate = _format.SampleRate;
         double rate = PlaybackRate;
-        bool advancing = _position.IsAdvancing && _starvationPhase == 0 && _state == PlaybackState.Playing;
+        // Advancing only while the audible frame really moves: playing, not starved, and the projection not held (the warm-up gate,
+        // a seek's refill at the submitted limit). Without the last test a seek published ~120 ms of "advancing" anchors whose
+        // frame stood still, and every one of them started a drift epoch.
+        bool advancing = _state == PlaybackState.Playing && _starvationPhase == 0 && !_position.IsHeldAt(now);
         long pendingContent = _pendingSilence ? 0 : Volatile.Read(ref _pendingFrames);
         long domainOffset = ConsumeSeqFrames - ContentSubmittedFrames() - pendingContent;
         double mixFrame = played + domainOffset - _clock.StreamLatencyFrames - _position.ExtraLatencySamples;

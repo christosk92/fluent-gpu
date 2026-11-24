@@ -86,6 +86,18 @@ public sealed class AudioClockPosition
         return new TimeSpan(ticks);
     }
 
+    /// <summary>True when the position does NOT move at <paramref name="nowTicks100ns"/>: the warm-up gate is closed, extrapolation
+    /// is off (<see cref="IsAdvancing"/>), or the extrapolated device frames have reached <see cref="SubmittedFrameLimit"/> (a seek's
+    /// refill, a starving ring: the projection holds at the content submitted so far). The timeline tap reports such an instant as
+    /// not advancing, so a reader does not run ahead of a held playhead.</summary>
+    public bool IsHeldAt(long nowTicks100ns)
+    {
+        if (!_valid || !IsAdvancing) return true;
+        double elapsedSec = (nowTicks100ns - _sampleTicks) / 1e7;
+        if (elapsedSec < 0) elapsedSec = 0;
+        return _sampleFrames + elapsedSec * MixRate >= SubmittedFrameLimit;
+    }
+
     /// <summary>The authoritative integer played-frame count at the last poll (the M0 "integer frame count is authoritative"
     /// invariant), latency-compensated. Non-extrapolated.</summary>
     public long PlayedFramesCompensated
