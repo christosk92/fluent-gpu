@@ -4851,45 +4851,53 @@ public sealed partial class InputDispatcher
 
         if (!result.IsNull)
         {
-            // A child's slop hit: the node's OWN box holds the point, but a small target beside it reaches for it on purpose.
-            _hitViaSlop = true;
+            // A child's slop hit: the node's OWN box holds the point, but a small target beside it reaches for it on purpose. When the node
+            // would have taken the point for real itself, the point is its own and the child's slop stands in for that real hit: it goes up
+            // as a REAL hit, so a real hit in an earlier sibling subtree, painted under this node, cannot take it. (A TextBox in a dialog:
+            // the field takes the point, its clear button's slop reaches for it, and the modal scrim under the dialog won the press, so a
+            // press in the button's slop blurred the field instead of clearing it.) A node that would not take the point passes the slop on.
+            _hitViaSlop = !inside || !TakesPointItself(node, flags, in np, local, hitW, hitH);
             return result;
         }
         if (result.IsNull)
         {
-            ref InteractionInfo ii = ref _scene.Interaction(node);
-            // CursorBit makes a node hover-resolvable in its own right (WinUI: SetCursor applies on direct hover of
-            // any hit-testable element — XAML hit-testing is background-gated, not handler-gated), so an editing
-            // surface's own padding/gaps still show its I-beam. Harmless for clicks: no handler ⇒ nothing fires.
-            // SelectableText text leaves hit-test across their whole box (drag-select anchoring).
-            // ContextBit: an OnContextRequested handler makes a node hit-testable in its own right (WinUI: an element
-            // with a ContextFlyout is a hit-test target), so a context-only row/card takes right-clicks without also
-            // needing a click/pointer handler. Left-clicks on it walk up past it exactly like any handler-less hit.
-            const int hitAnywhere = InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit
-                | InteractionInfo.DragBit | InteractionInfo.CursorBit | InteractionInfo.SelectableTextBit | InteractionInfo.GestureBit
-                | InteractionInfo.ContextBit | (int)InteractionInfo.HoldBit;
-            if ((flags & NodeFlags.Disabled) == 0 && inside && !YieldsToPassThrough(node)   // disabled nodes don't hit-test
-                && PathGeometryAdmits(node, in np, local, hitW, hitH))
-            {
-                if ((ii.HandlerMask & hitAnywhere) != 0)
-                    result = node;
-                // A SpanLinks-ONLY leaf (an inline hyperlink with no other interaction) is hit ONLY over a link RECT —
-                // the gaps around the link text fall through to the container beneath (the list row), so clicking the
-                // empty space next to an artist/album link selects the ROW (WinUI inline-Hyperlink hit shape).
-                else if ((ii.HandlerMask & InteractionInfo.SpanLinksBit) != 0 && HitLinkSpan(node, local) >= 0)
-                    result = node;
-                // A RowCells-only ListRowEl (OnCellClick, no other whole-row handler) is hit ONLY over a cell rect —
-                // the SAME SpanLinks shape, generalized from shaped-text hit rects to plain row-local cell RectFs.
-                else if ((ii.HandlerMask & InteractionInfo.RowCellsBit) != 0 && HitRowCell(node, local) >= 0)
-                    result = node;
-            }
-            else if (slopSelf && !YieldsToPassThrough(node))
+            if (inside && TakesPointItself(node, flags, in np, local, hitW, hitH))
+                result = node;
+            else if (!inside && slopSelf && !YieldsToPassThrough(node))
             {
                 _hitViaSlop = true;
                 return node;
             }
         }
         return result;
+    }
+
+    /// <summary>Whether <paramref name="node"/>, whose own box holds the point, takes it for real itself (no child took it): enabled, not
+    /// yielding to a pass-through, inside its path geometry, and a hit target in its own right.</summary>
+    private bool TakesPointItself(NodeHandle node, NodeFlags flags, in NodePaint np, Point2 local, float hitW, float hitH)
+    {
+        if ((flags & NodeFlags.Disabled) != 0 || YieldsToPassThrough(node) || !PathGeometryAdmits(node, in np, local, hitW, hitH))
+            return false;   // disabled nodes don't hit-test
+        ref InteractionInfo ii = ref _scene.Interaction(node);
+        // CursorBit makes a node hover-resolvable in its own right (WinUI: SetCursor applies on direct hover of
+        // any hit-testable element — XAML hit-testing is background-gated, not handler-gated), so an editing
+        // surface's own padding/gaps still show its I-beam. Harmless for clicks: no handler ⇒ nothing fires.
+        // SelectableText text leaves hit-test across their whole box (drag-select anchoring).
+        // ContextBit: an OnContextRequested handler makes a node hit-testable in its own right (WinUI: an element
+        // with a ContextFlyout is a hit-test target), so a context-only row/card takes right-clicks without also
+        // needing a click/pointer handler. Left-clicks on it walk up past it exactly like any handler-less hit.
+        const int hitAnywhere = InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit
+            | InteractionInfo.DragBit | InteractionInfo.CursorBit | InteractionInfo.SelectableTextBit | InteractionInfo.GestureBit
+            | InteractionInfo.ContextBit | (int)InteractionInfo.HoldBit;
+        if ((ii.HandlerMask & hitAnywhere) != 0) return true;
+        // A SpanLinks-ONLY leaf (an inline hyperlink with no other interaction) is hit ONLY over a link RECT —
+        // the gaps around the link text fall through to the container beneath (the list row), so clicking the
+        // empty space next to an artist/album link selects the ROW (WinUI inline-Hyperlink hit shape).
+        if ((ii.HandlerMask & InteractionInfo.SpanLinksBit) != 0) return HitLinkSpan(node, local) >= 0;
+        // A RowCells-only ListRowEl (OnCellClick, no other whole-row handler) is hit ONLY over a cell rect —
+        // the SAME SpanLinks shape, generalized from shaped-text hit rects to plain row-local cell RectFs.
+        if ((ii.HandlerMask & InteractionInfo.RowCellsBit) != 0) return HitRowCell(node, local) >= 0;
+        return false;
     }
 
     /// <summary>The handlers that make a box a whole-box target (the hit walk's hitAnywhere set, less the cursor and text selection): only such a
