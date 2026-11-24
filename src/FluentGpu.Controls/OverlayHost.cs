@@ -413,6 +413,10 @@ internal sealed class OverlayServiceImpl : IOverlayService
         // its ancestor. Modal dialogs and caller-owned transient overlays are independent layers.
         if (options.DismissBehavior == DismissBehavior.LightDismiss)
             CloseCompetingLightDismiss(parentId);
+        // A popup that takes the input (a menu, a flyout, a dialog) dismisses the automatic tooltip, open or pending: no input reaches
+        // its owner while the popup holds it, so it would otherwise stay over the popup (ToolTipHost.DismissForPopup).
+        if (options.DismissBehavior != DismissBehavior.None)
+            ToolTipHost.DismissForPopup();
 
         var handle = new OverlayHandle { IsOpen = true };
         var entry = new OverlayEntry
@@ -507,6 +511,23 @@ internal sealed class OverlayServiceImpl : IOverlayService
 
     /// <summary>Nested-flyout chain: the parent is the open entry whose wrapper subtree contains this entry's anchor
     /// (a MenuFlyoutSubItem anchored to an item INSIDE another popup). Closing a parent cascade-closes its children.</summary>
+    /// <summary>Does an open popup that takes the input (a menu, a flyout, a dialog) stand between the pointer and
+    /// <paramref name="node"/>: true unless none is open or the node lives inside the topmost one. A tooltip owner under a
+    /// menu neither arms nor opens its bubble (<see cref="ToolTipHost"/>); one inside the menu or the dialog does.</summary>
+    internal bool HoldsInputFrom(NodeHandle node)
+    {
+        for (int i = Entries.Count - 1; i >= 0; i--)
+        {
+            var e = Entries[i];
+            if (e.Phase == OverlayPhase.Closing || e.DismissBehavior == DismissBehavior.None) continue;
+            if (Scene is not { } scene || node.IsNull || !scene.IsLive(node) || e.WrapperNode.IsNull) return true;
+            for (var n = node; !n.IsNull; n = scene.Parent(n))
+                if (n == e.WrapperNode) return false;
+            return true;
+        }
+        return false;
+    }
+
     private int ResolveParentId(Func<NodeHandle> anchor)
     {
         if (Scene is not { } scene) return -1;

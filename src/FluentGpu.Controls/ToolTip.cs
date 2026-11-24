@@ -376,6 +376,22 @@ internal sealed class ToolTipHost : NodeAttachmentState
     /// <summary><see cref="ToolTip.CloseOpen"/>.</summary>
     internal static void CloseOpen() => s_openCloser?.Invoke();
 
+    // The owner whose show delay is counting down (phase 1), if any: the one a popup must also stop, or it opens over the popup.
+    private static ToolTipHost? s_pendingOwner;
+
+    /// <summary>A popup that takes the input (a menu, a flyout, a dialog: <see cref="OverlayServiceImpl"/> opens one) dismisses the
+    /// automatic tooltip, open or still counting down its show delay, latched until the pointer leaves its owner and comes back
+    /// (the press dismiss). The bubble describes what the pointer rested on, and a menu or a dialog over it answers a different
+    /// question: left open it sat over or beside the popup (a folder card's path behind its own context menu and the delete
+    /// dialog that menu opened), and a pending one opened on top of the popup its delay outlived. No input reaches the owner while
+    /// the popup holds it, so neither a leave nor a press would ever close it. While the popup is open an owner under it neither
+    /// arms nor opens (<see cref="UnderPopup"/>): a pointer resting on it still reports hover moves where the popup leaves it bare.</summary>
+    internal static void DismissForPopup()
+    {
+        s_pendingOwner?.Dismiss();
+        s_openOwner?.Dismiss();
+    }
+
     private readonly NodeHandle _node;          // the wrapper: the owner's anchor (the bubble's placement rect, the safe zone)
     private readonly IAttachmentHost _host;
     private ToolTipSpec _spec;
@@ -456,6 +472,8 @@ internal sealed class ToolTipHost : NodeAttachmentState
 
     private void SetPhase(int value)
     {
+        if (value == 1) s_pendingOwner = this;
+        else if (ReferenceEquals(s_pendingOwner, this)) s_pendingOwner = null;
         if (_phase is null)
         {
             if (value == 0) return;
@@ -468,6 +486,9 @@ internal sealed class ToolTipHost : NodeAttachmentState
 
     private bool Transient => !float.IsNaN(_spec.ShowDelayMs);
     private IOverlayService Svc => _host.PeekContext(_node, Overlay.Service);
+
+    // An open popup that takes the input stands over this owner (a menu, a flyout, a dialog it is not inside): see DismissForPopup.
+    private bool UnderPopup => Svc is OverlayServiceImpl s && s.HoldsInputFrom(_node);
     private InputHooks Hooks => _host.PeekContext(_node, InputHooks.Current);
 
     // ── The clock (the component's ToolTipClock child) ────────────────────────────────────────────────────────────────
@@ -530,6 +551,9 @@ internal sealed class ToolTipHost : NodeAttachmentState
     // ── The ToolTipService mechanics ──────────────────────────────────────────────────────────────────────────────────
     void OpenNow()
     {
+        // A popup that takes the input opened while the show delay ran: no bubble under it (DismissForPopup). Not latched: the next
+        // hover move after the popup closes arms it again.
+        if (_h is not { IsOpen: true } && UnderPopup) { CloseNow(); return; }
         SetPhase(2);   // bubble open → arm the auto-dismiss countdown
         if (_h is { IsOpen: true }) return;
         // One bubble at a time: whoever owns the screen loses it here, before this one is placed (see s_openOwner).
@@ -617,6 +641,7 @@ internal sealed class ToolTipHost : NodeAttachmentState
         if (_dismissedUntilLeave) return;   // dismissed: moves while still hovering must NOT re-arm (the WinUI
                                             // owner stays out of m_nestedOwners until a real leave + re-enter)
         if (PhaseNow != 0 || (_h is { IsOpen: true })) return;
+        if (UnderPopup) return;   // a menu or a dialog holds the input: no bubble under it (DismissForPopup)
         _keyboardMode = false;
         SetPhase(1);   // show-delay counting down
     }
@@ -679,7 +704,10 @@ internal sealed class ToolTipHost : NodeAttachmentState
     // no PointerPressed handler (ToolTipService_Partial.cpp:176-220; it closes via safe-zone exit, cpp:1437-1453)
     // but equally cannot re-open a dismissed owner until a real leave + re-enter (cpp:725-737). There is no
     // click-to-toggle — the wrapper adds NO OnClick, so it never becomes a tab stop or intercepts activation.
-    void OnPressed(PointerEventArgs _)
+    void OnPressed(PointerEventArgs _) => Dismiss();
+
+    // Close an open or pending bubble, latched until leave + re-enter (a press over the target, a popup taking the input).
+    void Dismiss()
     {
         if (PhaseNow == 0 && _h is not { IsOpen: true }) return;
         _dismissedUntilLeave = true;
@@ -717,6 +745,7 @@ internal sealed class ToolTipHost : NodeAttachmentState
         // Release the single-bubble latch too: a torn-down owner's closer would leave the NEXT tooltip believing something else
         // still owns the screen.
         if (ReferenceEquals(s_openOwner, this)) { s_openOwner = null; s_openCloser = null; }
+        if (ReferenceEquals(s_pendingOwner, this)) s_pendingOwner = null;
         Disarm();
         _clockFx?.Dispose();
         _clockFx = null;
