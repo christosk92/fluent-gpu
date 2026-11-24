@@ -437,8 +437,18 @@ public sealed class ContentDialog : Component
         // No edge cue on the dialog body: WinUI's ContentScrollViewer draws none. (The cue is the analytic edge feather
         // now — colour-independent — so this is a fidelity choice, not the old painted band's wrong-plate hazard.) A style that
         // wants the overflow seen feathers it (Style.ContentEdgeFade).
-        Element contentBody = Content is not null
-            ? new ScrollEl { Content = Content.Value, ContentSized = true, MaxHeight = st.MaxHeight - 200f, EdgeCues = ScrollEdgeCues.None, AutoEdgeFade = st.ContentEdgeFade }
+        //
+        // The scroll bar's 12-DIP lane takes presses over the viewport's trailing edge whenever the body overflows. WinUI keeps
+        // it off the fields because its ContentScrollViewer wraps the PADDED content grid: the bar sits in the padding at the
+        // card's edge. Do the same: the viewport reaches through the content region's trailing padding (a negative margin)
+        // and gives it back as its own padding, so the content box is the one it always was (no reflow when the body starts
+        // or stops overflowing, a body that fits is unchanged) and the lane lies in the gutter beside the fields.
+        Element ContentBody(float gutter) => Content is not null
+            ? new ScrollEl
+            {
+                Content = Content.Value, ContentSized = true, MaxHeight = st.MaxHeight - 200f, EdgeCues = ScrollEdgeCues.None, AutoEdgeFade = st.ContentEdgeFade,
+                Margin = new Edges4(0f, 0f, -gutter, 0f), Padding = new Edges4(0f, 0f, gutter, 0f),
+            }
             : new TextEl(Message) { Size = st.MessageSize, Color = st.MessageColor, Wrap = TextWrap.Wrap };
 
         Element TitleRow(Style st, Action close)
@@ -463,6 +473,7 @@ public sealed class ContentDialog : Component
             };
         }
 
+        var titleRow = TitleRow(st, RunClose);
         var contentRegion = new BoxEl
         {
             Direction = 1,
@@ -470,11 +481,14 @@ public sealed class ContentDialog : Component
             Fill = st.ContentFill,   // ContentDialogTopOverlay = LayerFillColorAltBrush
             Children =
             [
-                TitleRow(st, RunClose),
-                contentBody,
+                titleRow,
+                ContentBody(MathF.Max(0f, st.ContentPadding.Right)),
             ],
         };
-        contentRegion = Parts.Apply(PartContent, contentRegion) with { Children = contentRegion.Children };   // structure = title + content
+        // Structure = title + content; the body's scroll gutter is the trailing padding the region ends up with (a [PartContent]
+        // modifier may set its own).
+        var styledRegion = Parts.Apply(PartContent, contentRegion);
+        contentRegion = styledRegion with { Children = [titleRow, ContentBody(MathF.Max(0f, styledRegion.Padding.Right))] };
 
         var cardChildren = new List<Element>(3) { contentRegion };
         if (buttons.Count > 0 || Footer is not null)

@@ -4550,7 +4550,8 @@ public sealed partial class InputDispatcher
 
     /// <summary>The host's hit floor (DIP): a click target smaller than this on an axis takes hits that far out, centred on its box (an
     /// implicit hit slop, added to the box's own <see cref="Dsl.BoxEl.HitSlop"/>). The app sets it from its touch tier (40 at a Compact
-    /// window); 0 = none. Never moves layout or paint; a clipping ancestor cuts it; a real hit always beats a slop hit.</summary>
+    /// window); 0 = none. Never moves layout or paint. A clipping ancestor cuts it, so the part it would cut moves to the other side where
+    /// the clip has room (<see cref="FitFloorInsideClip"/>); a real hit always beats a slop hit.</summary>
     public float MinHitSize { get; set; }
 
     public NodeHandle HitTest(Point2 p)
@@ -4562,7 +4563,8 @@ public sealed partial class InputDispatcher
     }
 
     /// <summary>How far a target's hit rect reaches past its <paramref name="w"/> x <paramref name="h"/> box: its own slop plus what the host's
-    /// floor (<see cref="MinHitSize"/>) adds on an axis it falls short on, split evenly. Zero for a node that set none under a zero floor.</summary>
+    /// floor (<see cref="MinHitSize"/>) adds on an axis it falls short on, split evenly unless a clipping ancestor would cut one side
+    /// (<see cref="FitFloorInsideClip"/>). Zero for a node that set none under a zero floor.</summary>
     public Edges4 EffectiveHitSlop(NodeHandle node, float w, float h) => SlopOf(node, w, h);
 
     private Edges4 SlopOf(NodeHandle node, float w, float h)
@@ -4571,7 +4573,50 @@ public sealed partial class InputDispatcher
         float floor = MinHitSize;
         if (floor <= 0f) return own;
         float sx = w < floor ? (floor - w) * 0.5f : 0f, sy = h < floor ? (floor - h) * 0.5f : 0f;
-        return new Edges4(MathF.Max(own.Left, sx), MathF.Max(own.Top, sy), MathF.Max(own.Right, sx), MathF.Max(own.Bottom, sy));
+        if (sx <= 0f && sy <= 0f) return own;
+        float l = sx, t = sy, r = sx, b = sy;
+        FitFloorInsideClip(node, w, h, ref l, ref t, ref r, ref b);
+        return new Edges4(MathF.Max(own.Left, l), MathF.Max(own.Top, t), MathF.Max(own.Right, r), MathF.Max(own.Bottom, b));
+    }
+
+    /// <summary>The floor's slop is centred, but the nearest clipping ancestor cuts what reaches past its edge, so a target nearer a clip edge
+    /// than half its deficit fell short of the floor (a TextBox's clear button, 4 DIP inside the field's clip, took 39 x 40 at a 40 floor).
+    /// The part the clip would cut moves to the opposite side, as far as the clip has room there: the target keeps a floor-sized hit rect
+    /// inside the clip, its box, layout and paint unchanged. Only along a plain chain up to that ancestor (no transform, counter-scale or
+    /// flow shift on the way); anything else keeps the centred split.</summary>
+    private void FitFloorInsideClip(NodeHandle node, float w, float h, ref float l, ref float t, ref float r, ref float b)
+    {
+        float x = 0f, y = 0f;
+        for (var n = node; ;)
+        {
+            if (!_scene.Paint(n).LocalTransform.IsIdentity || (_scene.Flags(n) & NodeFlags.CounterScaled) != 0) return;
+            var p = _scene.Parent(n);
+            if (p.IsNull) return;
+            ref NodePaint pp = ref _scene.Paint(p);
+            if ((pp.FlowBits & NodePaint.FlowShiftsBit) != 0) return;
+            ref RectF nb = ref _scene.Bounds(n);
+            x += nb.X + pp.ChildShiftX;
+            y += nb.Y + pp.ChildShiftY;
+            if ((_scene.Flags(p) & NodeFlags.ClipsToBounds) != 0)
+            {
+                ref RectF cb = ref _scene.Bounds(p);
+                float cw = float.IsNaN(pp.PresentedW) ? cb.W : pp.PresentedW;
+                float ch = float.IsNaN(pp.PresentedH) ? cb.H : pp.PresentedH;
+                MoveCutSlop(ref l, ref r, x, cw - x - w);
+                MoveCutSlop(ref t, ref b, y, ch - y - h);
+                return;
+            }
+            n = p;
+        }
+    }
+
+    /// <summary>One axis of <see cref="FitFloorInsideClip"/>: <paramref name="a"/> and <paramref name="b"/> are its two sides' slop,
+    /// <paramref name="roomA"/> and <paramref name="roomB"/> the room the clip leaves past the box on each side.</summary>
+    private static void MoveCutSlop(ref float a, ref float b, float roomA, float roomB)
+    {
+        float cutA = a - MathF.Max(0f, roomA), cutB = b - MathF.Max(0f, roomB);
+        if (cutB > 0f && cutA < 0f) a += MathF.Min(cutB, -cutA);
+        else if (cutA > 0f && cutB < 0f) b += MathF.Min(cutA, -cutB);
     }
 
     /// <summary>Deepest visible node containing the point, regardless of click handler (used to find a scroll target).</summary>
@@ -4806,45 +4851,53 @@ public sealed partial class InputDispatcher
 
         if (!result.IsNull)
         {
-            // A child's slop hit: the node's OWN box holds the point, but a small target beside it reaches for it on purpose.
-            _hitViaSlop = true;
+            // A child's slop hit: the node's OWN box holds the point, but a small target beside it reaches for it on purpose. When the node
+            // would have taken the point for real itself, the point is its own and the child's slop stands in for that real hit: it goes up
+            // as a REAL hit, so a real hit in an earlier sibling subtree, painted under this node, cannot take it. (A TextBox in a dialog:
+            // the field takes the point, its clear button's slop reaches for it, and the modal scrim under the dialog won the press, so a
+            // press in the button's slop blurred the field instead of clearing it.) A node that would not take the point passes the slop on.
+            _hitViaSlop = !inside || !TakesPointItself(node, flags, in np, local, hitW, hitH);
             return result;
         }
         if (result.IsNull)
         {
-            ref InteractionInfo ii = ref _scene.Interaction(node);
-            // CursorBit makes a node hover-resolvable in its own right (WinUI: SetCursor applies on direct hover of
-            // any hit-testable element — XAML hit-testing is background-gated, not handler-gated), so an editing
-            // surface's own padding/gaps still show its I-beam. Harmless for clicks: no handler ⇒ nothing fires.
-            // SelectableText text leaves hit-test across their whole box (drag-select anchoring).
-            // ContextBit: an OnContextRequested handler makes a node hit-testable in its own right (WinUI: an element
-            // with a ContextFlyout is a hit-test target), so a context-only row/card takes right-clicks without also
-            // needing a click/pointer handler. Left-clicks on it walk up past it exactly like any handler-less hit.
-            const int hitAnywhere = InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit
-                | InteractionInfo.DragBit | InteractionInfo.CursorBit | InteractionInfo.SelectableTextBit | InteractionInfo.GestureBit
-                | InteractionInfo.ContextBit | (int)InteractionInfo.HoldBit;
-            if ((flags & NodeFlags.Disabled) == 0 && inside && !YieldsToPassThrough(node)   // disabled nodes don't hit-test
-                && PathGeometryAdmits(node, in np, local, hitW, hitH))
-            {
-                if ((ii.HandlerMask & hitAnywhere) != 0)
-                    result = node;
-                // A SpanLinks-ONLY leaf (an inline hyperlink with no other interaction) is hit ONLY over a link RECT —
-                // the gaps around the link text fall through to the container beneath (the list row), so clicking the
-                // empty space next to an artist/album link selects the ROW (WinUI inline-Hyperlink hit shape).
-                else if ((ii.HandlerMask & InteractionInfo.SpanLinksBit) != 0 && HitLinkSpan(node, local) >= 0)
-                    result = node;
-                // A RowCells-only ListRowEl (OnCellClick, no other whole-row handler) is hit ONLY over a cell rect —
-                // the SAME SpanLinks shape, generalized from shaped-text hit rects to plain row-local cell RectFs.
-                else if ((ii.HandlerMask & InteractionInfo.RowCellsBit) != 0 && HitRowCell(node, local) >= 0)
-                    result = node;
-            }
-            else if (slopSelf && !YieldsToPassThrough(node))
+            if (inside && TakesPointItself(node, flags, in np, local, hitW, hitH))
+                result = node;
+            else if (!inside && slopSelf && !YieldsToPassThrough(node))
             {
                 _hitViaSlop = true;
                 return node;
             }
         }
         return result;
+    }
+
+    /// <summary>Whether <paramref name="node"/>, whose own box holds the point, takes it for real itself (no child took it): enabled, not
+    /// yielding to a pass-through, inside its path geometry, and a hit target in its own right.</summary>
+    private bool TakesPointItself(NodeHandle node, NodeFlags flags, in NodePaint np, Point2 local, float hitW, float hitH)
+    {
+        if ((flags & NodeFlags.Disabled) != 0 || YieldsToPassThrough(node) || !PathGeometryAdmits(node, in np, local, hitW, hitH))
+            return false;   // disabled nodes don't hit-test
+        ref InteractionInfo ii = ref _scene.Interaction(node);
+        // CursorBit makes a node hover-resolvable in its own right (WinUI: SetCursor applies on direct hover of
+        // any hit-testable element — XAML hit-testing is background-gated, not handler-gated), so an editing
+        // surface's own padding/gaps still show its I-beam. Harmless for clicks: no handler ⇒ nothing fires.
+        // SelectableText text leaves hit-test across their whole box (drag-select anchoring).
+        // ContextBit: an OnContextRequested handler makes a node hit-testable in its own right (WinUI: an element
+        // with a ContextFlyout is a hit-test target), so a context-only row/card takes right-clicks without also
+        // needing a click/pointer handler. Left-clicks on it walk up past it exactly like any handler-less hit.
+        const int hitAnywhere = InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit
+            | InteractionInfo.DragBit | InteractionInfo.CursorBit | InteractionInfo.SelectableTextBit | InteractionInfo.GestureBit
+            | InteractionInfo.ContextBit | (int)InteractionInfo.HoldBit;
+        if ((ii.HandlerMask & hitAnywhere) != 0) return true;
+        // A SpanLinks-ONLY leaf (an inline hyperlink with no other interaction) is hit ONLY over a link RECT —
+        // the gaps around the link text fall through to the container beneath (the list row), so clicking the
+        // empty space next to an artist/album link selects the ROW (WinUI inline-Hyperlink hit shape).
+        if ((ii.HandlerMask & InteractionInfo.SpanLinksBit) != 0) return HitLinkSpan(node, local) >= 0;
+        // A RowCells-only ListRowEl (OnCellClick, no other whole-row handler) is hit ONLY over a cell rect —
+        // the SAME SpanLinks shape, generalized from shaped-text hit rects to plain row-local cell RectFs.
+        if ((ii.HandlerMask & InteractionInfo.RowCellsBit) != 0) return HitRowCell(node, local) >= 0;
+        return false;
     }
 
     /// <summary>The handlers that make a box a whole-box target (the hit walk's hitAnywhere set, less the cursor and text selection): only such a
