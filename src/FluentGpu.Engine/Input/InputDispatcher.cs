@@ -798,9 +798,10 @@ public sealed partial class InputDispatcher
         if (IsSelfOrAncestorOf(slotRoot, _focused)) SetFocus(NodeHandle.Null);   // also cancels a held Space/Enter (armed on _focused)
     }
 
-    /// <summary>OLE Drop WITH the dragged paths (the hover-capable backend reads the file list once, at drop, and passes
-    /// it here — hover stayed data-free). Fills the session payload deferred from the data-free DragEnter, then commits
-    /// (<c>OnDrop</c> sees the real <see cref="FileDropData"/>). Opens a session first if somehow none is live.</summary>
+    /// <summary>OLE Drop WITH the dragged paths (the hover-capable backend reads the file list again at drop and passes
+    /// it here). Refills the session's Files offer with the drop-time list (the enter-time list, or the empty one a
+    /// source that rendered no paths on enter left), then commits (<c>OnDrop</c> sees the real
+    /// <see cref="FileDropData"/>). Opens a session first if somehow none is live.</summary>
     public bool ExternalDropFiles(Point2 windowDip, string[] paths, KeyModifiers mods)
     {
         var data = new FileDropData(paths);

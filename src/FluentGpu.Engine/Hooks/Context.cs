@@ -528,7 +528,7 @@ public sealed class InputHooks
     // for backends that can supply hover feedback; the WM_DROPFILES backend uses Enter+Drop only.
 
     /// <summary>OS drag entered the window: window-DIP point + every format the drag carries (<see cref="ExternalDragOffer"/>:
-    /// files with an empty path list while hovering, links and text complete) + key modifiers. Returns the engine
+    /// files, links and text, all complete on enter) + key modifiers. Returns the engine
     /// <see cref="DropEffect"/> the OS should reflect as the drag cursor (<see cref="DropEffect.None"/> ⇒ no-drop).</summary>
     public Func<Point2, ExternalDragOffer, KeyModifiers, DropEffect>? ExternalDragEnter;
     /// <summary>OS drag moved within the window: window-DIP point + modifiers → the live effect (hover-capable backends only).</summary>
@@ -539,7 +539,8 @@ public sealed class InputHooks
     /// point + modifiers. Returns true if a target accepted it.</summary>
     public Func<Point2, KeyModifiers, bool>? ExternalDrop;
     /// <summary>OS drop committed WITH the dragged paths (the hover-capable backend's IDropTarget::Drop reads the file
-    /// list once, at drop, and passes it here — hover stayed data-free). Returns true if a target accepted it.</summary>
+    /// list again, at drop, and passes it here, so a source that rendered none on enter still delivers). Returns true if
+    /// a target accepted it.</summary>
     public Func<Point2, string[], KeyModifiers, bool>? ExternalDropFiles;
 
     // ── Live drag state (host-wired; consumed by UseDragState / a DragPreviewLayer to render a cursor-following custom

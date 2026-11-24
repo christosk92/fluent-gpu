@@ -680,8 +680,9 @@ public static class DropKinds
 /// <summary>
 /// What one OS drag carries, as the host's <c>IDropTarget</c> read it on DragEnter: one payload per format present,
 /// null when absent. The engine turns it into the session's offers (Files, Uri, Text — that order), so a target whose
-/// AcceptKinds lists any present kind can take the drag. <see cref="Files"/> is offered with an EMPTY path list while
-/// hovering (the file list is read once, at drop); <see cref="Uris"/> and <see cref="Text"/> are complete on enter.
+/// AcceptKinds lists any present kind can take the drag. All three are complete on enter, so a target can decide in
+/// <c>OnEnter</c>/<c>CanAccept</c>. <see cref="Files"/> carries an EMPTY path list only when the source offered files
+/// but handed over no readable path on enter; the drop re-reads the file list and fills the session either way.
 /// </summary>
 public readonly record struct ExternalDragOffer(FileDropData? Files, UriDropData? Uris, TextDropData? Text)
 {
