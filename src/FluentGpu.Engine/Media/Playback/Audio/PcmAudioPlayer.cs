@@ -28,9 +28,11 @@ public sealed class PcmAudioPlayer : IMediaBackend, IPreparableBackend
     /// <summary>Preroll <paramref name="next"/> into a ready audio voice ahead of the join (spec §8.4). Runs OFF the block
     /// path (worker pool): opens the byte-source (a <see cref="DecryptingSource"/> in front is transparent), primes the
     /// decoder (header parsed, resampler armed), and resolves <see cref="GaplessInfo"/>. Cancellation (a Seek/queue-edit
-    /// dropping the slot) completes without corrupting anything.</summary>
+    /// dropping the slot) completes without corrupting anything. A non-zero <see cref="PrepareContext.StartSourceFrame"/> (#48 E3)
+    /// seeks the decoder there BEFORE the ring prefills, through the same seek the seek-swap uses; a source that cannot seek starts
+    /// at its head instead, and the item reports the achieved start (<see cref="IPreparedItem.StartPositionFrames"/>).</summary>
     public ValueTask<IPreparedItem> PrepareAsync(MediaSource next, PrepareContext ctx, CancellationToken ct)
-        => PrepareCoreAsync(next, ctx, 0, forSeek: false, ct);
+        => PrepareCoreAsync(next, ctx, Math.Max(0, ctx.StartSourceFrame), forSeek: false, ct);
 
     /// <summary>Prepare an independently opened decoder at a requested position before filling its transferable ring.</summary>
     public ValueTask<IPreparedItem> PrepareAtAsync(MediaSource next, PrepareContext ctx, long positionFrames, CancellationToken ct)
@@ -78,7 +80,8 @@ public sealed class PcmAudioPlayer : IMediaBackend, IPreparableBackend
                 {
                     if (voice is DecoderAudioSource direct) direct.SeekFrame(positionFrames);
                     else if (voice is TrimmingSource trimmed) trimmed.SeekFrame(positionFrames);
-                    else throw new NotSupportedException("The prepared decoder cannot seek.");
+                    // A next-track start offset (#48 E3) degrades to the head: the item reports start 0 and the caller plans from it.
+                    else if (forSeek) throw new NotSupportedException("The prepared decoder cannot seek.");
                 }
                 return voice.PositionFrames;
             }, ct).ConfigureAwait(false);
@@ -458,6 +461,7 @@ public sealed partial class PcmAudioSession : IMediaSession
     // Timer tick are not mutually serialized); the consumer is lock-free. On a session with NO feed attached the command is
     // drained INLINE right after enqueue, so the single-thread pull path keeps byte-identical golden-PCM/test semantics.
     //
+    // Kind 18 CmdSetAutomation arms a voice's VoiceAutomationStage (#48 E2).
     // Kinds 10–17 (H-4 and the seek/scrub work): CmdSetEq / CmdSetVoiceGain / CmdFadeOutHold / CmdJumpWithinRing / CmdSwapVoice /
     // CmdSilenceVoice are the seek commands (D3); CmdHoldVoice / CmdReleaseVoice are the scrub commands (D4): the numbering is the one
     // fixed contract.
@@ -473,10 +477,13 @@ public sealed partial class PcmAudioSession : IMediaSession
         public float Linear;
         /// <summary>CmdSetEq: the target band set and its coefficients, designed OFF the RT thread by <see cref="EqStage.Design"/>.</summary>
         public BiquadCoeffs[]? Coeffs; public BiquadBand[]? Bands;
+        /// <summary>CmdSetAutomation (#48 E2): the automation to arm on the voice's <see cref="VoiceAutomationStage"/>, built OFF the RT
+        /// thread; null ramps the stage back to neutral and bypasses it.</summary>
+        public VoiceAutomation? Automation;
     }
     private const byte CmdReplacePrimary = 1, CmdAddVoice = 2, CmdSetEnvelope = 3, CmdRemoveVoice = 4, CmdFadeOut = 5, CmdFadeIn = 6, CmdReset = 7, CmdSeekAnchor = 8, CmdResetRate = 9,
         CmdSetEq = 10, CmdSetVoiceGain = 11, CmdJumpWithinRing = 12, CmdSwapVoice = 13, CmdHoldVoice = 14, CmdReleaseVoice = 15, CmdFadeOutHold = 16,
-        CmdSilenceVoice = 17;
+        CmdSilenceVoice = 17, CmdSetAutomation = 18;
     private readonly MixerCmd[] _mixerCmdQ = new MixerCmd[64];
     private int _mixerCmdHead, _mixerCmdTail;                 // Volatile head/tail; consumer = whichever thread runs RenderBlock
     private readonly object _mixerCmdProducerLock = new();
@@ -1210,6 +1217,14 @@ public sealed partial class PcmAudioSession : IMediaSession
     public bool SetVoiceEnvelope(long id, GainEnvelope env)
         => TryEnqueueMixerCmd(new MixerCmd { Kind = CmdSetEnvelope, Id = id, Env = env }, out _);
 
+    /// <summary>#48 E2: arm <paramref name="automation"/> (a low shelf and a sweep filter moving over a window in the mixer timeline,
+    /// built off the render thread by <see cref="VoiceAutomation.Build"/> at this session's mix rate) on the voice <paramref name="id"/>'s
+    /// <see cref="VoiceAutomationStage"/>, or ramp it back to neutral with <c>null</c>. Applied at the next block boundary; works on a
+    /// voice added in the same breath (commands apply in order). False when the command could not be admitted (the queue is full):
+    /// the caller retries or cancels, as for <see cref="SetVoiceEnvelope"/>. A voice id that is not live is ignored.</summary>
+    public bool SetVoiceAutomation(long id, VoiceAutomation? automation)
+        => TryEnqueueMixerCmd(new MixerCmd { Kind = CmdSetAutomation, Id = id, Automation = automation }, out _);
+
     /// <summary>Fade the audible mix to zero, drain its tail and stop the endpoint.</summary>
     public async ValueTask FadeOutAsync(TimeSpan duration, CancellationToken ct = default)
     {
@@ -1448,6 +1463,14 @@ public sealed partial class PcmAudioSession : IMediaSession
                     break;
                 case CmdAddVoice:       _mixer.AddVoice(in c.Voice); break;
                 case CmdSetEnvelope:    _mixer.TrySetVoiceEnvelope(c.Id, c.Env!); break;
+                case CmdSetAutomation:
+                {
+                    ref var target = ref _mixer.VoiceRef(c.Id);
+                    if (!Unsafe.IsNullRef(ref target) && target.Chain is { } stages)
+                        for (int s = 0; s < stages.Length; s++)
+                            if (stages[s] is VoiceAutomationStage automation) { automation.Arm(c.Automation); break; }
+                    break;
+                }
                 case CmdRemoveVoice:
                     foreach (var removed in _mixer.VoicesSpan)
                         if (removed.Id == c.Id)

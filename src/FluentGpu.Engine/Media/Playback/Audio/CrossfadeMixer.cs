@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace FluentGpu.Media;
 
@@ -43,31 +44,41 @@ public enum FadeKind : byte
     Out
 }
 
-/// <summary>
-/// A per-voice gain envelope (spec §8.2): a precomputed per-sample LUT applied BRANCH-FREE. <see cref="FadeKind.None"/>
-/// is a constant-1 envelope (gapless). A fade covers <c>[FadeStartFrame, FadeStartFrame+FadeFrames)</c> in the mixer
-/// (device-clock) domain — before/after the window the gain is pinned (in → 0/1, out → 1/0). No drift can accumulate
-/// because the frame index is the device-clock domain, never wall-clock.
+//// <summary>
+/// A per-voice gain envelope (spec §8.2) over a shared, immutable gain TABLE sampled at evenly spaced points across the fade
+/// window and read with linear interpolation. <see cref="FadeKind.None"/> is a constant-1 envelope (gapless). A fade covers
+/// <c>[FadeStartFrame, FadeStartFrame+FadeFrames)</c> in the mixer (device-clock) domain; before the window the gain holds the
+/// table's first value and after it the last (an In fade: 0 then 1; an Out fade: 1 then 0). No drift can accumulate because the
+/// frame index is the device-clock domain, never wall-clock.
+/// <para><b>Tables, not per-frame lookups (#48 E1).</b> The fixed crossfade curves (<see cref="Fade"/>) share ONE table per
+/// <see cref="CrossCurve"/> and direction, built once per process, so a 12 s fade no longer allocates 576,000 floats per envelope.
+/// A Mix transition hands its own table to <see cref="FromCurve"/> (sampled from Bézier segments by the app, off the render thread);
+/// the two envelopes of a join may have different lengths.</para>
 /// </summary>
 public sealed class GainEnvelope
 {
-    private readonly float[] _lut;   // gain per fade-frame offset (empty for None)
+    /// <summary>The point count of the shared <see cref="CrossCurve"/> tables (1,024 intervals). <see cref="FromCurve"/> accepts any
+    /// table of at least two points; this is the size the app is expected to sample its curves at.</summary>
+    public const int TablePoints = 1025;
+
+    private readonly float[] _table; // gain at evenly spaced positions across the window, first = window start, last = window end
     private long _fadeStartFrame;    // mutable ONLY through StampStart (the render thread, before the envelope is installed)
     /// <summary>Optional atomic commit/cancel decision shared by scheduled incoming/outgoing voices.</summary>
     public AudioTransitionGate? TransitionGate { get; private init; }
-    /// <summary>Attach a shared transition decision without recomputing its off-thread lookup table.</summary>
+    /// <summary>Attach a shared transition decision without recomputing its off-thread table.</summary>
     public GainEnvelope WithTransition(AudioTransitionGate gate)
-        => new(Kind, _fadeStartFrame, FadeFrames, _lut) { TransitionGate = gate };
+        => new(Kind, _fadeStartFrame, FadeFrames, _table) { TransitionGate = gate };
 
-    private GainEnvelope(FadeKind kind, long fadeStartFrame, int fadeFrames, float[] lut)
+    private GainEnvelope(FadeKind kind, long fadeStartFrame, int fadeFrames, float[] table)
     {
         Kind = kind;
         _fadeStartFrame = fadeStartFrame;
         FadeFrames = fadeFrames;
-        _lut = lut;
+        _table = table;
     }
 
-    /// <summary>The fade direction.</summary>
+    /// <summary>The fade direction (drives the transition gate and voice retirement: an Out envelope retires its voice when the
+    /// window ends).</summary>
     public FadeKind Kind { get; }
     /// <summary>The mixer-domain frame where the fade begins (<see cref="Unstamped"/> until the render thread stamps it).</summary>
     public long FadeStartFrame => _fadeStartFrame;
@@ -79,15 +90,14 @@ public sealed class GainEnvelope
 
     /// <summary>A fade whose start frame is decided on the RENDER thread (seek swap / jump / silence fades): the control side
     /// builds it with <see cref="Unstamped"/> and hands it to the render thread inside a mixer command, which stamps the block
-    /// start with <see cref="StampStart"/> before installing it. Allocates its lookup table — build it OFF the render thread, or
-    /// derive further shells from one built-once template with <see cref="NewUnstamped"/>.</summary>
+    /// start with <see cref="StampStart"/> before installing it. Derive further shells from one template with <see cref="NewUnstamped"/>.</summary>
     public static GainEnvelope FadeUnstamped(FadeKind kind, int fadeFrames, CrossCurve curve)
         => Fade(kind, Unstamped, fadeFrames, curve);
 
-    /// <summary>A new unstamped shell that SHARES this envelope's lookup table (control side; one small object, no table copy):
+    /// <summary>A new unstamped shell that SHARES this envelope's table (control side; one small object, no table copy):
     /// every per-command envelope derives from a template built once, so a seek storm never rebuilds a table. A constant
     /// envelope has no start and is returned as is.</summary>
-    public GainEnvelope NewUnstamped() => Kind == FadeKind.None ? this : new GainEnvelope(Kind, Unstamped, FadeFrames, _lut);
+    public GainEnvelope NewUnstamped() => Kind == FadeKind.None ? this : new GainEnvelope(Kind, Unstamped, FadeFrames, _table);
 
     /// <summary>RENDER thread only, exactly once, BEFORE the envelope is installed on a voice: fix the start frame to the first
     /// frame of the block the command lands in, so the fade is block-exact however long the command sat in the queue. Alloc-free.
@@ -98,40 +108,70 @@ public sealed class GainEnvelope
         return this;
     }
 
-    /// <summary>The fade's lookup table (the shared immutable gain per fade-frame offset) — for tests that pin the curve.</summary>
-    internal ReadOnlySpan<float> Lut => _lut;
-
     /// <summary>The constant-unity (gapless) envelope.</summary>
     public static GainEnvelope Constant { get; } = new(FadeKind.None, 0, 0, Array.Empty<float>());
 
+    // The shared CrossCurve tables: [EqualPower In, EqualPower Out, Linear In, Linear Out]. Built once, lazily, never mutated.
+    private static readonly float[]?[] s_curveTables = new float[]?[4];
+
+    private static float[] CurveTable(FadeKind kind, CrossCurve curve)
+    {
+        int slot = (curve == CrossCurve.Linear ? 2 : 0) + (kind == FadeKind.Out ? 1 : 0);
+        if (Volatile.Read(ref s_curveTables[slot]) is { } built) return built;
+        const int last = TablePoints - 1;
+        var table = new float[TablePoints];
+        for (int i = 0; i < TablePoints; i++)
+        {
+            float p = (float)i / last;
+            table[i] = kind == FadeKind.In ? CrossfadeCurves.In(curve, p) : CrossfadeCurves.Out(curve, p);
+        }
+        // The value held after the window is exact (an equal-power Out would end at cos(pi/2) = -4e-8 in float otherwise).
+        table[last] = kind == FadeKind.In ? 1f : 0f;
+        return Interlocked.CompareExchange(ref s_curveTables[slot], table, null) ?? table;
+    }
+
     /// <summary>Build a fade-in/out envelope over <paramref name="fadeFrames"/> frames starting at
-    /// <paramref name="fadeStartFrame"/> (mixer domain) using <paramref name="curve"/>. Precomputes the LUT off the RT path.</summary>
+    /// <paramref name="fadeStartFrame"/> (mixer domain) using <paramref name="curve"/>. Shares the curve's process-wide table:
+    /// allocates only the envelope object.</summary>
     public static GainEnvelope Fade(FadeKind kind, long fadeStartFrame, int fadeFrames, CrossCurve curve)
     {
         if (kind == FadeKind.None || fadeFrames <= 0) return Constant;
-        var lut = new float[fadeFrames];
-        for (int i = 0; i < fadeFrames; i++)
-        {
-            float p = (float)i / fadeFrames;
-            lut[i] = kind == FadeKind.In ? CrossfadeCurves.In(curve, p) : CrossfadeCurves.Out(curve, p);
-        }
-        return new GainEnvelope(kind, fadeStartFrame, fadeFrames, lut);
+        return new GainEnvelope(kind, fadeStartFrame, fadeFrames, CurveTable(kind, curve));
     }
 
-    /// <summary>The envelope gain at mixer-domain frame <paramref name="mixerFrame"/> — branch-free LUT lookup.</summary>
+    /// <summary>A curve envelope (#48 E1): the gain across <c>[startFrame, startFrame+frames)</c> is <paramref name="table"/>
+    /// (at least two points, evenly spaced over the window, normally <see cref="TablePoints"/>) read with linear interpolation;
+    /// before the window it holds <c>table[0]</c>, after it <c>table[^1]</c>. <paramref name="kind"/> keeps the transition-gate and
+    /// retirement semantics of <see cref="Fade"/> (In = the incoming voice, Out = the outgoing voice, retired when the window ends).
+    /// The table is taken as is, not copied: build it off the render thread and never mutate it afterwards.</summary>
+    public static GainEnvelope FromCurve(FadeKind kind, long startFrame, int frames, float[] table)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        if (table.Length < 2) throw new ArgumentException("A curve table needs at least two points.", nameof(table));
+        if (kind == FadeKind.None) throw new ArgumentException("A curve envelope fades In or Out.", nameof(kind));
+        return new GainEnvelope(kind, startFrame, Math.Max(1, frames), table);
+    }
+
+    /// <summary>The envelope gain at mixer-domain frame <paramref name="mixerFrame"/>: the table read with linear interpolation.
+    /// Alloc-free.</summary>
     public float GainAt(long mixerFrame)
     {
         if (TransitionGate is { } gate && mixerFrame >= gate.StartFrame && !gate.TryCommit())
             return Kind == FadeKind.Out ? 1f : 0f;
         if (Kind == FadeKind.None) return 1f;
+        var table = _table;
         long offset = mixerFrame - FadeStartFrame;
-        if (offset < 0) return Kind == FadeKind.In ? 0f : 1f;
-        if (offset >= FadeFrames) return Kind == FadeKind.In ? 1f : 0f;
-        return _lut[offset];
+        if (offset <= 0) return table[0];
+        if (offset >= FadeFrames) return table[^1];
+        double x = (double)offset * (table.Length - 1) / FadeFrames;
+        int i = (int)x;
+        float t = (float)(x - i);
+        float a = table[i];
+        return a + (table[i + 1] - a) * t;
     }
 }
 
-/// <summary>
+// <summary>
 /// One mixer voice (spec §8.2): a leaf <see cref="IAudioSource"/> with its OWN pre-mix DSP chain (EQ + gain — a fading-out
 /// track keeps its own EQ), its ReplayGain scalar baked PER-SOURCE before the mix (critical when crossfading two tracks
 /// at different gains; §7.7), a start frame in the mixer timeline, and a gain envelope for the crossfade. A struct — no

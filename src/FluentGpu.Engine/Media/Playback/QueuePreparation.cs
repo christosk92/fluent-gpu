@@ -14,8 +14,10 @@ namespace FluentGpu.Media;
 
 /// <summary>The context a backend needs to preroll the next item into the ACTIVE session's fixed mix format / normalization
 /// (spec §8.4). Passed to <see cref="IPreparableBackend.PrepareAsync"/> so the prepared audio voice arrives already
-/// resampled + ReplayGain-resolved and can butt-join / crossfade sample-accurately.</summary>
-public readonly record struct PrepareContext(MixFormat Format, NormMode Norm, float ReferenceLufs, int MixRate)
+/// resampled + ReplayGain-resolved and can butt-join / crossfade sample-accurately. <paramref name="StartSourceFrame"/> (#48 E3) is
+/// where the prepared voice starts, in the item's own trimmed content frames at the mix rate (0 = its head, the default): a Mix
+/// transition enters the next track mid-file. The achieved start is reported on <see cref="IPreparedItem.StartPositionFrames"/>.</summary>
+public readonly record struct PrepareContext(MixFormat Format, NormMode Norm, float ReferenceLufs, int MixRate, long StartSourceFrame = 0)
 {
     /// <summary>A context for <paramref name="format"/> under <paramref name="norm"/>/<paramref name="referenceLufs"/>.</summary>
     public static PrepareContext For(MixFormat format, NormMode norm, float referenceLufs)
@@ -66,6 +68,9 @@ public interface IPreparedItem : IAsyncDisposable
     long TotalFrames { get; }
     /// <summary>The prepared item's duration.</summary>
     TimeSpan Duration { get; }
+    /// <summary>Where the prepared voice actually starts, in the item's trimmed content frames at <see cref="MixRate"/> (#48 E3): the
+    /// achieved <see cref="PrepareContext.StartSourceFrame"/>, 0 for a head start or a backend that cannot start past the head.</summary>
+    long StartPositionFrames => 0;
     /// <summary>An opaque backend session/handle for a cross-backend hard-cut hand-off (e.g. the spun-up MF session), or null.</summary>
     object? BackendHandle { get; }
     /// <summary>The mixer sample rate <see cref="AudioVoice"/> was resampled for at prepare time (0 when there is no audio
@@ -95,7 +100,7 @@ public sealed class AudioPreparedItem : IPreparedItem
         ReadinessFrames = readinessFrames;
     }
 
-    /// <summary>The achieved position after decoder seek, in the trimmed mix domain.</summary>
+    /// <inheritdoc/>
     public long StartPositionFrames { get; }
     /// <summary>Required prepared PCM depth; zero uses the ring's normal target.</summary>
     public int ReadinessFrames { get; }
