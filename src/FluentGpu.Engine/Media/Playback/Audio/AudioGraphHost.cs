@@ -52,7 +52,7 @@ public sealed class CompiledAudioGraph
     }
 
     /// <summary>Build a fresh per-voice DSP chain from <see cref="PerVoiceChain"/> (own state per voice). Control-thread
-    /// / prepare only. The chain is ALWAYS <c>[GainStage, EqStage, …any further specs]</c> (H-4): the gain stage is the voice's
+    /// / prepare only. The chain is ALWAYS <c>[GainStage, EqStage, …any further specs, VoiceAutomationStage]</c> (H-4, #48 E2): the gain stage is the voice's
     /// gain SLOT (EQ preamp × normalization delta, written through mixer commands) and the EQ stage exists even when the spec
     /// carries no bands — an identity cascade — so enabling the EQ later ramps in on a voice that is already playing (E-6).
     /// A <see cref="GainSpec"/> / <see cref="EqSpec"/> in the spec seeds the slot / the cascade; the first of each wins.</summary>
@@ -70,10 +70,12 @@ public sealed class CompiledAudioGraph
                 else rest.Add(st);
             }
         // An identity EQ stage is not Bypassed: it passes through while it has no bands and AdoptPending ramps it in later.
-        var stages = new IDspStage[2 + rest.Count];
+        // #48 E2: every voice chain ENDS with its automation stage (bypassed until PcmAudioSession.SetVoiceAutomation arms it).
+        var stages = new IDspStage[3 + rest.Count];
         stages[0] = gain ?? new GainStage(1f);
         stages[1] = eq ?? new EqStage(_channels);
         for (int i = 0; i < rest.Count; i++) stages[2 + i] = rest[i];
+        stages[^1] = new VoiceAutomationStage(_channels);
         return stages;
     }
 }
