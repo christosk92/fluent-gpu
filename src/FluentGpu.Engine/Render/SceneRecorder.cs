@@ -697,10 +697,14 @@ internal sealed partial class SceneRecordingContext
         if (scene.OrphanCount != 0) disabledReasons |= SpanReuseDisabledReason.Orphans;
         if (!reuseBlockRoots.IsEmpty) disabledReasons |= SpanReuseDisabledReason.Detached;
         // Only these force the WHOLE-canvas reuse off; the scoped reasons above are handled per-chain by BlockSpecials.
+        // DragSpotlight is reported, never a kill: the spotlight no longer touches the main pass (the scrim is its own band in
+        // the root slice's tail, which `rootTail` re-walks every pass), so a stored span is as valid under it as without it.
+        // As a kill it re-recorded the whole window on every frame of an OS drag over the drop panel (a 0.8 ms record became
+        // 6-7 ms, Debug), a leftover of the per-node opacity dim the scrim band replaced.
         const SpanReuseDisabledReason GlobalReuseKill =
             SpanReuseDisabledReason.FirstRecord | SpanReuseDisabledReason.SceneChanged | SpanReuseDisabledReason.Layout |
             SpanReuseDisabledReason.Resize | SpanReuseDisabledReason.ModalPaint | SpanReuseDisabledReason.DragGhost |
-            SpanReuseDisabledReason.ImageContent | SpanReuseDisabledReason.DragSpotlight | SpanReuseDisabledReason.PathSlab;
+            SpanReuseDisabledReason.ImageContent | SpanReuseDisabledReason.PathSlab;
         bool spanReuseOff = spans is null || (disabledReasons & GlobalReuseKill) != 0;
         // The span STORE stays alive under EVERY reason, global ones included (blocked nodes self-gate via IsBlocked, so
         // the off-screen cull survives for the unblocked rest of the tree). A pass that stored nothing would leave every
