@@ -4550,7 +4550,8 @@ public sealed partial class InputDispatcher
 
     /// <summary>The host's hit floor (DIP): a click target smaller than this on an axis takes hits that far out, centred on its box (an
     /// implicit hit slop, added to the box's own <see cref="Dsl.BoxEl.HitSlop"/>). The app sets it from its touch tier (40 at a Compact
-    /// window); 0 = none. Never moves layout or paint; a clipping ancestor cuts it; a real hit always beats a slop hit.</summary>
+    /// window); 0 = none. Never moves layout or paint. A clipping ancestor cuts it, so the part it would cut moves to the other side where
+    /// the clip has room (<see cref="FitFloorInsideClip"/>); a real hit always beats a slop hit.</summary>
     public float MinHitSize { get; set; }
 
     public NodeHandle HitTest(Point2 p)
@@ -4562,7 +4563,8 @@ public sealed partial class InputDispatcher
     }
 
     /// <summary>How far a target's hit rect reaches past its <paramref name="w"/> x <paramref name="h"/> box: its own slop plus what the host's
-    /// floor (<see cref="MinHitSize"/>) adds on an axis it falls short on, split evenly. Zero for a node that set none under a zero floor.</summary>
+    /// floor (<see cref="MinHitSize"/>) adds on an axis it falls short on, split evenly unless a clipping ancestor would cut one side
+    /// (<see cref="FitFloorInsideClip"/>). Zero for a node that set none under a zero floor.</summary>
     public Edges4 EffectiveHitSlop(NodeHandle node, float w, float h) => SlopOf(node, w, h);
 
     private Edges4 SlopOf(NodeHandle node, float w, float h)
@@ -4571,7 +4573,50 @@ public sealed partial class InputDispatcher
         float floor = MinHitSize;
         if (floor <= 0f) return own;
         float sx = w < floor ? (floor - w) * 0.5f : 0f, sy = h < floor ? (floor - h) * 0.5f : 0f;
-        return new Edges4(MathF.Max(own.Left, sx), MathF.Max(own.Top, sy), MathF.Max(own.Right, sx), MathF.Max(own.Bottom, sy));
+        if (sx <= 0f && sy <= 0f) return own;
+        float l = sx, t = sy, r = sx, b = sy;
+        FitFloorInsideClip(node, w, h, ref l, ref t, ref r, ref b);
+        return new Edges4(MathF.Max(own.Left, l), MathF.Max(own.Top, t), MathF.Max(own.Right, r), MathF.Max(own.Bottom, b));
+    }
+
+    /// <summary>The floor's slop is centred, but the nearest clipping ancestor cuts what reaches past its edge, so a target nearer a clip edge
+    /// than half its deficit fell short of the floor (a TextBox's clear button, 4 DIP inside the field's clip, took 39 x 40 at a 40 floor).
+    /// The part the clip would cut moves to the opposite side, as far as the clip has room there: the target keeps a floor-sized hit rect
+    /// inside the clip, its box, layout and paint unchanged. Only along a plain chain up to that ancestor (no transform, counter-scale or
+    /// flow shift on the way); anything else keeps the centred split.</summary>
+    private void FitFloorInsideClip(NodeHandle node, float w, float h, ref float l, ref float t, ref float r, ref float b)
+    {
+        float x = 0f, y = 0f;
+        for (var n = node; ;)
+        {
+            if (!_scene.Paint(n).LocalTransform.IsIdentity || (_scene.Flags(n) & NodeFlags.CounterScaled) != 0) return;
+            var p = _scene.Parent(n);
+            if (p.IsNull) return;
+            ref NodePaint pp = ref _scene.Paint(p);
+            if ((pp.FlowBits & NodePaint.FlowShiftsBit) != 0) return;
+            ref RectF nb = ref _scene.Bounds(n);
+            x += nb.X + pp.ChildShiftX;
+            y += nb.Y + pp.ChildShiftY;
+            if ((_scene.Flags(p) & NodeFlags.ClipsToBounds) != 0)
+            {
+                ref RectF cb = ref _scene.Bounds(p);
+                float cw = float.IsNaN(pp.PresentedW) ? cb.W : pp.PresentedW;
+                float ch = float.IsNaN(pp.PresentedH) ? cb.H : pp.PresentedH;
+                MoveCutSlop(ref l, ref r, x, cw - x - w);
+                MoveCutSlop(ref t, ref b, y, ch - y - h);
+                return;
+            }
+            n = p;
+        }
+    }
+
+    /// <summary>One axis of <see cref="FitFloorInsideClip"/>: <paramref name="a"/> and <paramref name="b"/> are its two sides' slop,
+    /// <paramref name="roomA"/> and <paramref name="roomB"/> the room the clip leaves past the box on each side.</summary>
+    private static void MoveCutSlop(ref float a, ref float b, float roomA, float roomB)
+    {
+        float cutA = a - MathF.Max(0f, roomA), cutB = b - MathF.Max(0f, roomB);
+        if (cutB > 0f && cutA < 0f) a += MathF.Min(cutB, -cutA);
+        else if (cutA > 0f && cutB < 0f) b += MathF.Min(cutA, -cutB);
     }
 
     /// <summary>Deepest visible node containing the point, regardless of click handler (used to find a scroll target).</summary>
