@@ -67,7 +67,7 @@ public sealed class EditableText : Component
     /// OnRealized (chained). Padding IS stylable here — the public path the internal LanePadding composer seam maps to.</summary>
     public const string PartLane = "Lane";
     /// <summary>The visible text run (a TextEl — use <c>Parts.Set&lt;TextEl&gt;(PartText, …)</c>). Owned: TextBind/
-    /// ColorBind (the document/placeholder display), Wrap + Width (the AcceptsReturn wrap mechanics).</summary>
+    /// ColorBind (the document/placeholder display), Wrap + Width (the wrap mechanics: AcceptsReturn or TextWrapping).</summary>
     public const string PartText = "Text";
     /// <summary>The ✕ clear button (WinUI DeleteButton), mounted while focused ∧ non-empty. Owned: OnClick (the
     /// clear-keep-focus mechanics), TabStop (false — pointer focus must resolve to the field), Role.</summary>
@@ -211,6 +211,11 @@ public sealed class EditableText : Component
     public bool IsReadOnly;
     /// <summary>Multi-line: Enter inserts '\r' (Ctrl+Enter commits), Up/Down/Page navigate lines, text wraps.</summary>
     public bool AcceptsReturn;
+    /// <summary>The text wraps inside the field (WinUI <c>TextWrapping = Wrap</c>) while Enter still commits: an inline rename of a title that
+    /// wraps (EditableLabel). <see cref="AcceptsReturn"/> wraps too.</summary>
+    public bool TextWrapping;
+    /// <summary>The field lays its text out in lines (it wraps): <see cref="AcceptsReturn"/> or <see cref="TextWrapping"/>.</summary>
+    private bool Wraps => AcceptsReturn || TextWrapping;
     /// <summary>On focus gain, place the caret at the document end (inline rename fields — shows the tail of long text).</summary>
     public bool PlaceCaretAtEndOnFocus;
     /// <summary>Show the WinUI TextBox DeleteButton (✕, glyph E894) while focused ∧ non-empty (single-line, no Mask,
@@ -313,7 +318,7 @@ public sealed class EditableText : Component
     private Signal<int>? _affixEpoch;        // render epoch: SetLeft/RightAffix + SetEnabled re-render the field on a live instance
     private Signal<bool>? _empty;            // doc-empty flag; flips re-render (delete-button mount/unmount) only
     private FluentGpu.Signals.FloatSignal? _scroll;   // horizontal caret-follow; TransformBind shifts the text wrapper by -value
-    private FluentGpu.Signals.FloatSignal? _scrollY;  // vertical caret-follow (AcceptsReturn only)
+    private FluentGpu.Signals.FloatSignal? _scrollY;  // vertical caret-follow (a wrapping field only)
     private Action<bool> _setFocused = static _ => { };
     private bool _focusedNow;
     private string? _snapshot;               // text at focus-gain (the Escape revert target)
@@ -383,8 +388,10 @@ public sealed class EditableText : Component
             // and a bound channel ignores its static. The pre-unification static here was a hedge against the old
             // re-render clobber, fixed at the reconciler.
             DisabledColor = DisabledForeground,
-            Wrap = AcceptsReturn ? TextWrap.Wrap : TextWrap.NoWrap,
-            Width = AcceptsReturn ? MathF.Max(8f, width - 16f) : float.NaN,   // wrap width = content box (padding 10+6)
+            Wrap = Wraps ? TextWrap.Wrap : TextWrap.NoWrap,
+            // A wrapping field's text takes the lane's content box from layout (the scroller stretches it): the lane's own padding, whatever a
+            // composer or a part made it, and the laid width when the field fills its parent (Width NaN). No fixed width at all.
+            Width = float.NaN,
             Text = Prop.Of(BindDisplay),
             Color = Prop.Of(BindColor),
         };
@@ -392,22 +399,25 @@ public sealed class EditableText : Component
         // math reads the node's committed TextStyle, so a modifier-changed face flows into the geometry correctly).
         textEl = Parts.Apply(PartText, textEl) with
         {
-            Wrap = AcceptsReturn ? TextWrap.Wrap : TextWrap.NoWrap,
-            Width = AcceptsReturn ? MathF.Max(8f, width - 16f) : float.NaN,
+            Wrap = Wraps ? TextWrap.Wrap : TextWrap.NoWrap,
+            Width = float.NaN,
             Text = Prop.Of(BindDisplay),
             Color = Prop.Of(BindColor),
         };
 
         // lane (padded, clipping viewport) > scroller (caret-follow transform) > text leaf.
-        var laneAlign = AcceptsReturn ? FlexAlign.Start : FlexAlign.Center;
+        var laneAlign = Wraps ? FlexAlign.Start : FlexAlign.Center;
         Action<NodeHandle> laneCapture = h => _laneNode = h;
         Action<RectF> laneBounds = _onLaneBounds ??= OnLaneBounds;
         Element[] laneKids =
         [
             new BoxEl
             {
-                Direction = 0, AlignItems = laneAlign,
-                Transform = Prop.Of(() => Affine2D.Translation(-scroll.Value, AcceptsReturn ? -scrollY.Value : 0f)),
+                // Single line: a row the text sets the width of (it scrolls past the lane). Wrapping: a column that fills the lane, so the
+                // text wraps at the lane's content width.
+                Direction = (byte)(Wraps ? 1 : 0), AlignItems = Wraps ? FlexAlign.Stretch : laneAlign,
+                Grow = Wraps ? 1f : 0f, Shrink = Wraps ? 1f : 0f, MinWidth = Wraps ? 0f : float.NaN,
+                Transform = Prop.Of(() => Affine2D.Translation(-scroll.Value, Wraps ? -scrollY.Value : 0f)),
                 OnRealized = h => _scrollerNode = h,
                 Children = [textEl],
             },
@@ -447,7 +457,7 @@ public sealed class EditableText : Component
         {
             rowChildren.Add(RightAffix.Value);
         }
-        else if (ShowDeleteButton && !AcceptsReturn && !Mask && IsEnabled && !IsReadOnly && focused && !emptySig.Value)
+        else if (ShowDeleteButton && !Wraps && !Mask && IsEnabled && !IsReadOnly && focused && !emptySig.Value)
         {
             rowChildren.Add(DeleteButton());
         }
@@ -813,7 +823,7 @@ public sealed class EditableText : Component
     // SyncVisual re-centres on it the next time it moves.
     private void HandleWheel(WheelEventArgs e)
     {
-        if (AcceptsReturn)
+        if (Wraps)
         {
             if (_scrollY is null) return;
             if (!TryVScrollExtent(out float maxScrollY)) return;
@@ -845,7 +855,7 @@ public sealed class EditableText : Component
     {
         float prev = _laneW;
         _laneW = r.W;
-        if (AcceptsReturn || float.IsNaN(prev) || MathF.Abs(r.W - prev) < 0.5f) return;
+        if (Wraps || float.IsNaN(prev) || MathF.Abs(r.W - prev) < 0.5f) return;
         if (_focusedNow) { SyncVisual(); return; }
         if (_scroll is not { } s) return;
         TryHScrollExtent(out float maxScrollX);
@@ -864,7 +874,7 @@ public sealed class EditableText : Component
         maxScroll = 0f;
         var scene = Context.Scene;
         var tn = TextNode();
-        if (AcceptsReturn || scene is null || _hooks?.Fonts is not { } fonts || tn.IsNull || !scene.IsLive(tn)
+        if (Wraps || scene is null || _hooks?.Fonts is not { } fonts || tn.IsNull || !scene.IsLive(tn)
             || _laneNode.IsNull || !scene.IsLive(_laneNode)) return false;
         string disp = DisplayText();
         var style = scene.Layout(tn).TextStyle;
@@ -884,7 +894,7 @@ public sealed class EditableText : Component
         maxScroll = 0f;
         var scene = Context.Scene;
         var tn = TextNode();
-        if (!AcceptsReturn || scene is null || _hooks?.Fonts is not { } fonts || tn.IsNull || !scene.IsLive(tn)
+        if (!Wraps || scene is null || _hooks?.Fonts is not { } fonts || tn.IsNull || !scene.IsLive(tn)
             || _laneNode.IsNull || !scene.IsLive(_laneNode)) return false;
         string disp = DisplayText();
         var style = scene.Layout(tn).TextStyle;
@@ -1154,7 +1164,7 @@ public sealed class EditableText : Component
     /// <summary>The seam wrap width: the laid width for a multi-line editor — or a TRIMMING style (the renderer ellipsizes
     /// at Bounds.W, so an untrimmed +Inf query line would mis-place an aligned caret/selection) — else unbounded.</summary>
     private float QueryMaxWidth(SceneStore scene, NodeHandle tn)
-        => AcceptsReturn || scene.Layout(tn).TextStyle.Trim != TextTrim.None
+        => Wraps || scene.Layout(tn).TextStyle.Trim != TextTrim.None
             ? MathF.Max(1f, scene.Bounds(tn).W) : float.PositiveInfinity;
 
     /// <summary>The seam align width: the text node's laid width — the same box the recorder draws the run in (glyph op
@@ -1179,7 +1189,7 @@ public sealed class EditableText : Component
         // Caret-follow (single-line): keep the caret inside [pad, viewport - pad] of the padded lane.
         float scrollX = _scroll?.Peek() ?? 0f;
         float scrollY = _scrollY?.Peek() ?? 0f;
-        if (!AcceptsReturn && !_laneNode.IsNull && scene.IsLive(_laneNode))
+        if (!Wraps && !_laneNode.IsNull && scene.IsLive(_laneNode))
         {
             ref LayoutInput ll = ref scene.Layout(_laneNode);
             float vw = scene.Bounds(_laneNode).W - ll.Padding.Left - ll.Padding.Right;
@@ -1195,7 +1205,7 @@ public sealed class EditableText : Component
             else scrollX = 0f;
             scrollY = 0f;
         }
-        else if (AcceptsReturn && !_laneNode.IsNull && scene.IsLive(_laneNode))
+        else if (Wraps && !_laneNode.IsNull && scene.IsLive(_laneNode))
         {
             scrollX = 0f;
             ref LayoutInput ll = ref scene.Layout(_laneNode);
@@ -1228,7 +1238,7 @@ public sealed class EditableText : Component
         // Focused/CaretVisible are CaretBlinker-owned — never touched here.
 
         // Selection highlight rects (display space == raw text-local).
-        Span<RectF> sel = stackalloc RectF[AcceptsReturn ? 32 : 8];
+        Span<RectF> sel = stackalloc RectF[Wraps ? 32 : 8];
         int nSel = 0;
         if (selActive)
         {
