@@ -74,7 +74,7 @@ public sealed class AuxAudioOutput : IDisposable
         _blockFrames = Math.Max(32, blockFrames);
     }
 
-    /// <summary>Building (before the first open), Running, Retrying (on the ladder after a failed open or a loss), Faulted (the ladder
+    /// <summary>Building (not open: before the first open, and after a <see cref="Stop"/>), Running, Retrying (on the ladder after a failed open or a loss), Faulted (the ladder
     /// ran out; still retrying slowly). Written from the aux thread.</summary>
     public IReadSignal<AudioDeviceState> State => _state;
 
@@ -158,6 +158,7 @@ public sealed class AuxAudioOutput : IDisposable
             _state.Value = AudioDeviceState.Retrying;
             _wake.WaitOne(AudioDeviceRecoveryPolicy.RetryLadderMs[0]);
         }
+        _state.Value = AudioDeviceState.Building;   // stopped: not open (whatever state the stop found)
     }
 
     /// <summary>Feed one open endpoint until <see cref="Stop"/> (false) or a device loss (true). Allocation-free.</summary>
@@ -181,19 +182,38 @@ public sealed class AuxAudioOutput : IDisposable
                 if (writable < 0) return true;
                 while (writable >= _blockFrames && _run)
                 {
-                    if (!RenderBlock(sink, clock, buffer, rate, channels, ref written, ref blockIndex, rampOut: false)) return true;
-                    writable -= _blockFrames;
-                    if (!started)
+                    // Until the device clock reports a played reading (q > 0) a block's audible instant is a guess (measured: the first
+                    // block landed 11 ms off), so the device is primed and fed silence until then; the generator only ever sees blocks
+                    // whose instant the clock vouches for.
+                    if (!started || !ClockReports(clock))
                     {
-                        sink.Start();
-                        started = true;
-                        _state.Value = AudioDeviceState.Running;
+                        if (!WriteSilence(sink, buffer, channels, ref written)) return true;
+                        if (!started)
+                        {
+                            sink.Start();
+                            started = true;
+                            _state.Value = AudioDeviceState.Running;
+                        }
                     }
+                    else if (!RenderBlock(sink, clock, buffer, rate, channels, ref written, ref blockIndex, rampOut: false)) return true;
+                    writable -= _blockFrames;
                 }
                 sink.WaitForWritable(_wake, 20);
             }
         }
         catch (AudioDeviceLostException) { return true; }
+    }
+
+    private static bool ClockReports(IAudioClockSource clock) => clock.TryGetPlayed(out long played, out long qpc) && qpc > 0 && played > 0;
+
+    private bool WriteSilence(IBufferedAudioSink sink, float[] buffer, int channels, ref long written)
+    {
+        Span<float> span = buffer.AsSpan(0, _blockFrames * channels);
+        span.Clear();
+        int accepted = sink.Write(span, _blockFrames);
+        if (accepted <= 0 && sink.WritableFrames < 0) return false;
+        written += accepted;
+        return true;
     }
 
     private bool RenderBlock(IBufferedAudioSink sink, IAudioClockSource clock, float[] buffer, int rate, int channels,
