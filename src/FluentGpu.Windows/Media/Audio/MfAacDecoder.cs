@@ -202,6 +202,16 @@ public sealed unsafe class MfAacDecoder : IDisposable
         return n;
     }
 
+    /// <summary>The end of the input: ask the transform for what it still holds. The Windows AAC MFT runs one frame behind (the
+    /// first frame pushed yields nothing, each later push yields the previous frame), so without a drain the LAST frame's audio
+    /// never comes out and every AAC track ends up to one frame (~23 ms) short. Read the rest with <see cref="ReadSamples"/>
+    /// until it answers 0; a <see cref="Flush"/> (a seek) or a new <see cref="TryPushFrame"/> starts again from there.</summary>
+    public void Drain()
+    {
+        if (_disposed || _transform == null) return;
+        _transform->ProcessMessage(MFT_MESSAGE_TYPE.MFT_MESSAGE_COMMAND_DRAIN, (nuint)0);
+    }
+
     /// <summary>Drop everything the transform is holding (after a splice / before a reconnect resync).</summary>
     public void Flush()
     {
