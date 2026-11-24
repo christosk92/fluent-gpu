@@ -369,6 +369,16 @@ public interface IAudioClockSource
     int MixRate { get; }
 }
 
+/// <summary>An <see cref="IAudioClockSource"/> whose <see cref="IAudioClockSource.TryGetPlayed"/> timestamps run on a clock other than
+/// the machine's QPC (a synthetic clock, a frame-paced headless device). A session over such a clock projects its position and
+/// anchors its playback timeline in that clock's domain (<see cref="PcmAudioSession.TimelineNowQpc100ns"/>), so a reader
+/// extrapolating an anchor must take "now" from the same place.</summary>
+public interface IAudioTimebase
+{
+    /// <summary>Now, in the 100-ns domain of the clock's played-frame timestamps.</summary>
+    long NowTicks100ns { get; }
+}
+
 /// <summary>The device state a <see cref="IDeviceWatcher"/> / <see cref="AudioDeviceController"/> reports (spec §7.9).
 /// <c>Retrying</c>: the last rebuild attempt found no usable endpoint (not yet <c>Initialize</c>-able mid jack-switch,
 /// or the feed could not be parked) and a ladder retry (250 ms / 1 s / 3 s) is scheduled while the previous sink keeps

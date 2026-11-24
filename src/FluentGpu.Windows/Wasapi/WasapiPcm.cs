@@ -95,6 +95,16 @@ public static class WasapiPcm
             });
     }
 
+    /// <summary>A second, independent output on the render endpoint <paramref name="endpointId"/> (#154 G2b): its own WASAPI shared-mode
+    /// client at that device's own mix format, its own thread (MMCSS "Audio", below the music's feed), filled by
+    /// <paramref name="generator"/>. Never falls back to another endpoint: a chosen output that is gone retries on the ladder. Call
+    /// <see cref="AuxAudioOutput.Start"/> to run it.</summary>
+    public static AuxAudioOutput CreateAuxOutput(string endpointId, IAuxAudioGenerator generator)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(endpointId);
+        return new AuxAudioOutput(() => new WasapiAudioDevice(new MixFormat(48000, 2), endpointId), generator, new MmcssProAudio());
+    }
+
     /// <summary>Create the follow-default device watcher (spec §7.9).</summary>
     public static MmDeviceWatcher CreateDeviceWatcher() => new();
 }
