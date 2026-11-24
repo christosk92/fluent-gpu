@@ -308,7 +308,7 @@ public sealed partial class AppHost
     private void InstallNext(TxRun run)
     {
         var r = run.Request;
-        run.NextMaterial = r.Next.Materials.For(r.Kind) ?? WindowMaterial;
+        run.NextMaterial = r.Next.Materials.For(r.Kind) ?? ApplicationMaterial;   // no opinion: the application's own, not the last theme's
         run.DwmPending = run.NextMaterial != run.PrevMaterial || r.Kind != run.PrevKind;
         _txOwnsDwm = true;
         Tok.Use(r.Next, r.Kind);

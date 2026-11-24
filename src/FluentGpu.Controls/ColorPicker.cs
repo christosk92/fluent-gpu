@@ -253,9 +253,10 @@ public sealed class ColorPicker : Component
         }
         int ParseInt(string s) => int.TryParse(s, out int n) ? n : 0;
 
+        // The swatch and the four fields are ~364 DIP: in a narrower host (a Compact dialog) they wrap onto a second line instead of overflowing it.
         var channels = new BoxEl
         {
-            Direction = 0, Gap = 10f, AlignItems = FlexAlign.End,
+            Direction = 0, Gap = 10f, AlignItems = FlexAlign.End, Wrap = true, MinWidth = 0f,
             Children =
             [
                 swatch,

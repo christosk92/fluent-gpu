@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Pal;
 
 namespace FluentGpu.Hosting;
 
@@ -72,8 +73,20 @@ public sealed partial class AppHost
         _revealArmQpc = Stopwatch.GetTimestamp();
         _revealDeadlineQpc = DetachedRevealGate.DeadlineQpc(_revealArmQpc, o.TimeoutMs);
         _swapchain.ArmRevealExemption();
+        AdoptDefinitionMaterial();   // the installed theme's material for its kind, before the first frame clears to its ground
         ArmRevealFit();             // a size-to-content window: measure, resize, present at that size, then show
         RequestFullRepaintOnce();   // ask for the frame the reveal waits for
+    }
+
+    /// <summary>The window starts on the application's own material (<see cref="ApplicationMaterial"/>); the installed definition may ask for
+    /// another for the current kind (<c>ThemeDefinition.Materials</c>: an opaque theme, a palette's opaque mode). Until now only a theme
+    /// transaction honoured that, so a window launched straight into such a theme drew on the application's material. Arming the reveal adopts
+    /// it while the window is still hidden: the ground the first frame clears to follows it here, and the reveal's DWM write (which reads
+    /// <see cref="WindowMaterial"/>) lands it before <c>Show</c>. A definition with no opinion keeps the application's material.</summary>
+    private void AdoptDefinitionMaterial()
+    {
+        WindowMaterial wanted = Tok.Definition.Materials.For(Tok.Theme) ?? ApplicationMaterial;
+        if (wanted != WindowMaterial) ApplyMaterialGround(wanted);
     }
 
     /// <summary>Main window, UI thread: drop a pending reveal without showing the window (the app hid it while the reveal was

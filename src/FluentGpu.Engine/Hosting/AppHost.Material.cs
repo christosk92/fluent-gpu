@@ -26,9 +26,15 @@ public sealed partial class AppHost
     /// Headless leaves it null (a test installs a recorder).</summary>
     public Action<WindowMaterial, bool>? WindowMaterialSink { get; set; }
 
+    /// <summary>The application's OWN material: what it was created with (<see cref="SeedWindowMaterial"/>) or last chose
+    /// (<see cref="SetWindowMaterial"/>). A theme definition whose <c>MaterialPolicy</c> has no opinion for a kind resolves to THIS, not to
+    /// <see cref="WindowMaterial"/>: after a definition that asked for another material (an opaque <see cref="WindowMaterial.None"/>), a
+    /// definition with no opinion hands the window back to the application's choice instead of keeping the last theme's.</summary>
+    public WindowMaterial ApplicationMaterial { get; private set; } = WindowMaterial.Mica;
+
     /// <summary>Record the material the window was created with (the startup DWM write already happened, before the window was
-    /// shown), without touching the ground or the sink.</summary>
-    public void SeedWindowMaterial(WindowMaterial material) => WindowMaterial = material;
+    /// shown), without touching the ground or the sink. It is the application's own material too.</summary>
+    public void SeedWindowMaterial(WindowMaterial material) => WindowMaterial = ApplicationMaterial = material;
 
     /// <summary>
     /// Main window (EP9): change the window material at runtime. The ground follows the material in the same publication - a
@@ -40,6 +46,7 @@ public sealed partial class AppHost
     public void SetWindowMaterial(WindowMaterial material, bool dark, bool ordered = true)
     {
         if (_isDetachedChild) throw new InvalidOperationException("SetWindowMaterial is for the main window.");
+        ApplicationMaterial = material;
         ApplyMaterialGround(material);
         var sink = WindowMaterialSink;
         if (sink is not null)
