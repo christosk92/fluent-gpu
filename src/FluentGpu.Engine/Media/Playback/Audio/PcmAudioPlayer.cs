@@ -1313,7 +1313,7 @@ public sealed partial class PcmAudioSession : IMediaSession
             Publish(_playRequested ? PlaybackState.Ready : PlaybackState.Paused);
             return installedPosition;
         }
-        finally { _replacementGate.Release(); }
+        finally { ReleaseReplacementGate(); }
     }
 
     // ── F7: signalled completions (V-PE9) ───────────────────────────────────────────────────────────────────────────────
@@ -2183,7 +2183,7 @@ public sealed partial class PcmAudioSession : IMediaSession
         if (_disposed || _feed is null) return false;
         await _replacementGate.WaitAsync(ct).ConfigureAwait(false);
         try { return await JumpWithinRingLockedAsync(targetFrame, ct).ConfigureAwait(false); }
-        finally { _replacementGate.Release(); }
+        finally { ReleaseReplacementGate(); }
     }
 
     // Seek B with the replacement gate held (the gate also keeps PublishPosition from sampling between the jump and the rebase).
@@ -2259,7 +2259,7 @@ public sealed partial class PcmAudioSession : IMediaSession
             Volatile.Write(ref _swapLanded, 1);
             return achieved;
         }
-        finally { _replacementGate.Release(); }
+        finally { ReleaseReplacementGate(); }
     }
 
     /// <summary>The seek stale-fade (V-PE14): the pump's prepare has produced no block in time, so the OLD voice — still playing a position
@@ -2279,7 +2279,7 @@ public sealed partial class PcmAudioSession : IMediaSession
                 .ConfigureAwait(false);
             await WaitAppliedAsync(seq, ct).ConfigureAwait(false);
         }
-        finally { _replacementGate.Release(); }
+        finally { ReleaseReplacementGate(); }
     }
 
     // ── scrub (D4): hold the main voice, play grains from a grain voice, give the main voice back ──────────────────────────
@@ -2339,7 +2339,7 @@ public sealed partial class PcmAudioSession : IMediaSession
                 throw new InvalidOperationException("The active voice cannot be held for a scrub.");
             }
         }
-        finally { _replacementGate.Release(); }
+        finally { ReleaseReplacementGate(); }
     }
 
     // A grain voice that never reached (or has left) the mixer: hand its ring to the worker for off-RT disposal, or dispose it inline on the
@@ -2375,7 +2375,7 @@ public sealed partial class PcmAudioSession : IMediaSession
             _sink?.Position(TimeSpan.FromSeconds((double)position / _format.SampleRate));
         }
         catch (ObjectDisposedException) when (_disposed) { }
-        finally { _replacementGate.Release(); }
+        finally { ReleaseReplacementGate(); }
     }
 
     /// <summary>Scrub commit, first half: the grain voice fades out over 20 ms and retires itself; the MAIN voice stays held — parked at gain 0,
@@ -2401,7 +2401,7 @@ public sealed partial class PcmAudioSession : IMediaSession
             await WaitAppliedAsync(seq, CancellationToken.None).ConfigureAwait(false);
         }
         catch (ObjectDisposedException) when (_disposed) { }
-        finally { _replacementGate.Release(); }
+        finally { ReleaseReplacementGate(); }
     }
 
     /// <summary>Seek fallback (no decoder lease free, or the swap failed): the single-decoder "seek marker". While the listener hears the
@@ -2417,7 +2417,7 @@ public sealed partial class PcmAudioSession : IMediaSession
         Volatile.Write(ref _swapLanded, 0);
         await _replacementGate.WaitAsync(ct).ConfigureAwait(false);
         try { return await SeekInPlaceLockedAsync(targetFrame, revision, ct).ConfigureAwait(false); }
-        finally { _replacementGate.Release(); }
+        finally { ReleaseReplacementGate(); }
     }
 
     // The in-place seek with the replacement gate held.
@@ -2550,7 +2550,7 @@ public sealed partial class PcmAudioSession : IMediaSession
             if (await JumpWithinRingLockedAsync(frame, CancellationToken.None).ConfigureAwait(false)) { _seekRebufferActive = false; return; }   // no rebuffer: the ring was not touched
             await SeekInPlaceLockedAsync(frame, revision, CancellationToken.None).ConfigureAwait(false);
         }
-        finally { _replacementGate.Release(); }
+        finally { ReleaseReplacementGate(); }
     }
 
     // The single-thread pull path (no RT feed): control IS the render thread, so the seek is the classic fade → reset → anchor → decoder seek.
@@ -2603,7 +2603,7 @@ public sealed partial class PcmAudioSession : IMediaSession
             }
             else Publish(PlaybackState.Paused);
         }
-        finally { _replacementGate.Release(); }
+        finally { ReleaseReplacementGate(); }
     }
 
     // Wait (signalled, never polled) until the seeked ring holds the startup cushion, its producer is done, a newer seek superseded
@@ -3238,7 +3238,23 @@ public sealed partial class PcmAudioSession : IMediaSession
         _spectrumNextStart = startFrame + frames;
     }
 
+    /// <summary>End a replacement/seek transaction and publish the position it produced at once: while paused the control tick
+    /// does not publish (the device is stopped), so without this a seek or a voice swap on a paused session would leave the
+    /// published position, and the timeline tap's anchor, on the old line until the next resume.</summary>
+    private void ReleaseReplacementGate()
+    {
+        _replacementGate.Release();
+        if (!_disposed && _sink is { } sink) PublishPosition(sink);
+    }
+
     private void PublishPosition(MediaSignalSink sink)
+    {
+        // The control tick, the pause path and the end of a replacement transaction all publish: one at a time, so the clock
+        // sample, the position and the timeline anchor always come from the same poll, in order.
+        lock (_timelineGate) PublishPositionLocked(sink);
+    }
+
+    private void PublishPositionLocked(MediaSignalSink sink)
     {
         // S-6: while a replacement/seek transaction holds the gate it is rewriting the position domain (Reset / Rebase / the
         // content cursor); a sample taken mid-way would publish a position from the OLD domain against the NEW origin.
@@ -3248,13 +3264,18 @@ public sealed partial class PcmAudioSession : IMediaSession
         _position.SubmittedFrameLimit = ContentSubmittedFrames();
         _position.IsAdvancing = _started && Volatile.Read(ref _transportPhase) != 3;
         _position.Sample(_presentationClock);
-        if (_presentationClock.TryGetPlayed(out long played, out _))
+        bool playedValid = _presentationClock.TryGetPlayed(out long played, out long playedQpc);
+        if (playedValid)
             Interlocked.Exchange(ref _playedFrames, Math.Clamp(played, 0, SubmittedFrames));
-        double clockFrame = _position.Project(NowTicks100ns()).TotalSeconds * _format.SampleRate;
+        long now = NowTicks100ns();
+        double clockFrame = _position.Project(now).TotalSeconds * _format.SampleRate;
         var rateSource = Volatile.Read(ref _activeRateSource);
+        double sourceFrame = ContentFrameAt(clockFrame);
         double contentFrame = rateSource is null ? clockFrame
-            : _clockAnchorPosition + _activeMixerStart + ContentFrameAt(clockFrame) - rateSource.InitialSourceFrame;
+            : _clockAnchorPosition + _activeMixerStart + sourceFrame - rateSource.InitialSourceFrame;
         sink.Position(TimeSpan.FromSeconds(Math.Max(0, contentFrame) / _format.SampleRate));
+        // #154 G2a: the same sample, anchored to its instant, for anything that must follow the playhead off the UI thread.
+        PublishTimeline(now, Math.Max(0, contentFrame), sourceFrame, Math.Clamp(played, 0, SubmittedFrames), playedQpc, playedValid);
     }
 
     private long NowTicks100ns()
