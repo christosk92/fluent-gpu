@@ -2095,6 +2095,7 @@ public sealed partial class PcmAudioSession : IMediaSession
         _position.Reset();
         sink.PlayRequested(_playRequested);
         Publish(PlaybackState.Opening);
+        lock (_timelineGate) PublishPositionLocked(null);   // the tap reads the held start before the device runs (#154 G2a)
         if (_driveWithOwnThread) StartFeeder();
     }
 
@@ -3254,7 +3255,9 @@ public sealed partial class PcmAudioSession : IMediaSession
         lock (_timelineGate) PublishPositionLocked(sink);
     }
 
-    private void PublishPositionLocked(MediaSignalSink sink)
+    /// <summary>Sample the clock and publish the position (when <paramref name="sink"/> is set) and the timeline anchor. A null
+    /// sink publishes the anchor alone: <see cref="ConnectSignals"/> seeds the tap with the held start before the device runs.</summary>
+    private void PublishPositionLocked(MediaSignalSink? sink)
     {
         // S-6: while a replacement/seek transaction holds the gate it is rewriting the position domain (Reset / Rebase / the
         // content cursor); a sample taken mid-way would publish a position from the OLD domain against the NEW origin.
@@ -3273,13 +3276,13 @@ public sealed partial class PcmAudioSession : IMediaSession
         double sourceFrame = ContentFrameAt(clockFrame);
         double contentFrame = rateSource is null ? clockFrame
             : _clockAnchorPosition + _activeMixerStart + sourceFrame - rateSource.InitialSourceFrame;
-        sink.Position(TimeSpan.FromSeconds(Math.Max(0, contentFrame) / _format.SampleRate));
+        sink?.Position(TimeSpan.FromSeconds(Math.Max(0, contentFrame) / _format.SampleRate));
         // #154 G2a: the same sample, anchored to its instant, for anything that must follow the playhead off the UI thread.
         PublishTimeline(now, Math.Max(0, contentFrame), sourceFrame, Math.Clamp(played, 0, SubmittedFrames), playedQpc, playedValid);
     }
 
     private long NowTicks100ns()
-        => _clock is SyntheticAudioClock sc ? sc.NowTicks100ns : (long)(Stopwatch.GetTimestamp() * s_qpcTo100ns);
+        => _clock is IAudioTimebase timebase ? timebase.NowTicks100ns : (long)(Stopwatch.GetTimestamp() * s_qpcTo100ns);
 
     private void PublishMetadata(MediaSignalSink sink)
     {

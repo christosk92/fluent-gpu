@@ -11,7 +11,8 @@ namespace FluentGpu.Media;
 /// re-sampled); a new epoch is a discontinuity (a seek, an active-voice change, a rate change, a start or stop, a device
 /// rebuild, or the playhead leaving the line by more than 2 ms).</summary>
 /// <param name="Qpc100ns">The instant the anchor is true for: a QPC reading in 100-ns units (<see cref="NowQpc100ns"/>), the same
-/// domain as <see cref="IAudioClockSource.TryGetPlayed"/>'s timestamp.</param>
+/// domain as <see cref="IAudioClockSource.TryGetPlayed"/>'s timestamp (a session over an <see cref="IAudioTimebase"/> clock stamps
+/// in that clock's domain instead: read now from <see cref="PcmAudioSession.TimelineNowQpc100ns"/>).</param>
 /// <param name="ContentFrame">The session position the engine publishes as <c>Position</c>, AUDIBLE (stream and DSP latency
 /// subtracted): continuous across the session's voices, so an identity that started mid-session subtracts its start.</param>
 /// <param name="SourceFrame">The audible frame INSIDE the active voice's own source (its start position included, so a voice
@@ -53,42 +54,54 @@ public readonly record struct AudioTimelineAnchor(
 /// an in-ring jump, a clock step).</summary>
 public readonly record struct AudioTimelineStats(long Publishes, long Epochs, long DriftEpochs, double LastDriftMs);
 
-/// <summary>The <see cref="AudioLevelMailbox"/> discipline widened to the anchor: one writer at a time (the publisher holds the
-/// session's timeline gate), an odd/even version counter, <see cref="Volatile"/> payload writes and a full fence before the
-/// validating re-read. Readers never wait and never allocate; a read that races a write fails and the caller re-reads.</summary>
-internal struct AudioTimelineMailbox
+/// <summary>The anchor's hand-off: a ring of four slots, each a seqlock (odd version while written, even when whole), and a
+/// sequence naming the newest whole slot. One writer at a time (the publisher holds the session's timeline gate); readers never
+/// wait, never allocate and never take a lock. A reader fails only when the writer laps it, four publishes (about 60 ms at the
+/// control tick's rate) inside one read: a single-slot seqlock failed a reader whenever the writer was merely preempted mid-write,
+/// and a generator chasing the tap would read that as "stopped". The array is allocated once per session.</summary>
+internal sealed class AudioTimelineMailbox
 {
-    private long _version;
-    private long _qpc, _content, _source, _mix, _rate, _voice, _epoch;
-    private int _mixRate, _advancing;
+    private struct Slot
+    {
+        public long Version, Qpc, Content, Source, Mix, Rate, Voice, Epoch;
+        public int MixRate, Advancing;
+    }
+
+    private readonly Slot[] _slots = new Slot[4];
+    private long _sequence;   // the newest whole slot's sequence; 0 = nothing published yet
 
     internal void Publish(in AudioTimelineAnchor a)
     {
-        Interlocked.Increment(ref _version);
-        Volatile.Write(ref _qpc, a.Qpc100ns);
-        Volatile.Write(ref _content, BitConverter.DoubleToInt64Bits(a.ContentFrame));
-        Volatile.Write(ref _source, BitConverter.DoubleToInt64Bits(a.SourceFrame));
-        Volatile.Write(ref _mix, BitConverter.DoubleToInt64Bits(a.MixFrame));
-        Volatile.Write(ref _rate, BitConverter.DoubleToInt64Bits(a.Rate));
-        Volatile.Write(ref _voice, a.VoiceId);
-        Volatile.Write(ref _epoch, a.Epoch);
-        Volatile.Write(ref _mixRate, a.MixRate);
-        Volatile.Write(ref _advancing, a.Advancing ? 1 : 0);
-        Interlocked.Increment(ref _version);
+        long sequence = _sequence + 1;
+        ref Slot slot = ref _slots[sequence & 3];
+        Interlocked.Exchange(ref slot.Version, sequence * 2 + 1);   // full fence: the payload writes stay after the odd mark
+        slot.Qpc = a.Qpc100ns;
+        slot.Content = BitConverter.DoubleToInt64Bits(a.ContentFrame);
+        slot.Source = BitConverter.DoubleToInt64Bits(a.SourceFrame);
+        slot.Mix = BitConverter.DoubleToInt64Bits(a.MixFrame);
+        slot.Rate = BitConverter.DoubleToInt64Bits(a.Rate);
+        slot.Voice = a.VoiceId;
+        slot.Epoch = a.Epoch;
+        slot.MixRate = a.MixRate;
+        slot.Advancing = a.Advancing ? 1 : 0;
+        Volatile.Write(ref slot.Version, sequence * 2 + 2);          // release: the payload is visible before the even mark
+        Volatile.Write(ref _sequence, sequence);
     }
 
     internal bool TryRead(out AudioTimelineAnchor anchor)
     {
-        for (int attempt = 0; attempt < 4; attempt++)
+        for (int attempt = 0; attempt < 8; attempt++)
         {
-            long version = Volatile.Read(ref _version);
-            long qpc = Volatile.Read(ref _qpc), content = Volatile.Read(ref _content), source = Volatile.Read(ref _source);
-            long mix = Volatile.Read(ref _mix), rate = Volatile.Read(ref _rate), voice = Volatile.Read(ref _voice), epoch = Volatile.Read(ref _epoch);
-            int mixRate = Volatile.Read(ref _mixRate), advancing = Volatile.Read(ref _advancing);
+            long sequence = Volatile.Read(ref _sequence);
+            if (sequence == 0) break;
+            ref Slot slot = ref _slots[sequence & 3];
+            long version = Volatile.Read(ref slot.Version);
+            if (version != sequence * 2 + 2) continue;               // lapped: a newer publish is rewriting this slot
+            long qpc = slot.Qpc, content = slot.Content, source = slot.Source, mix = slot.Mix, rate = slot.Rate, voice = slot.Voice, epoch = slot.Epoch;
+            int mixRate = slot.MixRate, advancing = slot.Advancing;
             // Full fence keeps the payload reads before the validation read, including on ARM64.
             Thread.MemoryBarrier();
-            if (version == 0) break;
-            if ((version & 1) != 0 || version != Volatile.Read(ref _version)) continue;
+            if (Volatile.Read(ref slot.Version) != version) continue;
             anchor = new AudioTimelineAnchor(qpc, BitConverter.Int64BitsToDouble(content), BitConverter.Int64BitsToDouble(source),
                 BitConverter.Int64BitsToDouble(mix), mixRate, BitConverter.Int64BitsToDouble(rate), advancing != 0, voice, epoch);
             return true;
@@ -101,7 +114,7 @@ internal struct AudioTimelineMailbox
 public sealed partial class PcmAudioSession
 {
     // ── the playback timeline tap (#154 G2a): what is audible, anchored to the device clock ─────────────────────────────
-    private AudioTimelineMailbox _timeline;
+    private readonly AudioTimelineMailbox _timeline = new();
     private readonly object _timelineGate = new();   // publishers only (the control tick and the pause path); readers never take it
     private long _timelineEpoch, _timelineRenderEpoch = -1, _timelineSeekRevision = -1;
     private long _timelinePublishes, _timelineDriftEpochs;
@@ -111,8 +124,14 @@ public sealed partial class PcmAudioSession
     private const double TimelineDriftToleranceSeconds = 0.002;
 
     /// <summary>The playback timeline tap: the active voice's audible position anchored to a QPC instant. Any thread, wait-free,
-    /// allocation-free. False until the session published its first anchor (it starts publishing once the device runs).</summary>
+    /// allocation-free. A session publishes a held anchor when its signals are connected, then on every control tick while its
+    /// device runs, on pause, and at the end of every replacement or seek transaction. False only before the first.</summary>
     public bool TryReadTimeline(out AudioTimelineAnchor anchor) => _timeline.TryRead(out anchor);
+
+    /// <summary>Now, in the domain this session's anchors are stamped in: the machine's QPC (<see cref="AudioTimelineAnchor.NowQpc100ns"/>)
+    /// unless the endpoint's clock is an <see cref="IAudioTimebase"/> (a synthetic or frame-paced clock). Read "now" here to
+    /// extrapolate this session's anchors. Any thread.</summary>
+    public long TimelineNowQpc100ns => NowTicks100ns();
 
     /// <summary>The timeline publisher's counters (diagnostics).</summary>
     public AudioTimelineStats TimelineStats => new(Interlocked.Read(ref _timelinePublishes), Interlocked.Read(ref _timelineEpoch),

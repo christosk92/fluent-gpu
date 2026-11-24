@@ -104,7 +104,7 @@ public sealed class AudioClockPosition
 /// 0 for the first <see cref="_warmupFrames"/>) so the <see cref="AudioClockPosition"/> <c>IsValid</c> gate is exercised.
 /// QPC is a 100-ns virtual clock advanced in lock-step with rendered frames. No wall clock, no timers.
 /// </summary>
-public sealed class SyntheticAudioClock : IAudioClockSource
+public sealed class SyntheticAudioClock : IAudioClockSource, IAudioTimebase
 {
     private readonly long _latencyFrames;
     private readonly long _warmupFrames;
