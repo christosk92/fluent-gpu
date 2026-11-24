@@ -123,6 +123,9 @@ public sealed partial class PcmAudioSession
     /// <summary>How far the playhead may leave the extrapolated line before the publisher calls it a discontinuity.</summary>
     private const double TimelineDriftToleranceSeconds = 0.002;
 
+    /// <summary>How far ahead the publisher looks to see whether the source frame moves (the hold test).</summary>
+    private const double TimelineProbeSeconds = 0.002;
+
     /// <summary>The playback timeline tap: the active voice's audible position anchored to a QPC instant. Any thread, wait-free,
     /// allocation-free. A session publishes a held anchor when its signals are connected, then on every control tick while its
     /// device runs, on pause, and at the end of every replacement or seek transaction. False only before the first.</summary>
@@ -141,14 +144,18 @@ public sealed partial class PcmAudioSession
     /// <paramref name="playedQpc"/> are the content clock's latest poll; the mixer frame is derived from it (the mixer's
     /// <c>ConsumeSeq</c> minus what is still queued between the mixer and the ear), never from the position domain a seek
     /// re-bases. Control thread (or the pause path); never the RT thread. Allocation-free.</summary>
-    private void PublishTimeline(long now, double contentFrame, double sourceFrame, long played, long playedQpc, bool playedValid)
+    private void PublishTimeline(long now, double clockFrame, double contentFrame, double sourceFrame, long played, long playedQpc, bool playedValid)
     {
         int mixRate = _format.SampleRate;
         double rate = PlaybackRate;
-        // Advancing only while the audible frame really moves: playing, not starved, and the projection not held (the warm-up gate,
-        // a seek's refill at the submitted limit). Without the last test a seek published ~120 ms of "advancing" anchors whose
-        // frame stood still, and every one of them started a drift epoch.
-        bool advancing = _state == PlaybackState.Playing && _starvationPhase == 0 && !_position.IsHeldAt(now);
+        // Advancing only while the audible frame really moves: playing, not starved, the projection not held (the warm-up gate, a
+        // refill at the submitted limit) and the active voice's source frame moving over the next 2 ms of the clock. The last test
+        // is the seek: until the new position's first frame reaches the ear (the device still plays out the hold), the source
+        // mapping holds at the target. Measured against a loopback capture, a seek used to publish ~120 ms of "advancing" anchors
+        // whose frame stood still, and every one of them started a drift epoch.
+        double probeFrames = TimelineProbeSeconds * mixRate;
+        bool advancing = _state == PlaybackState.Playing && _starvationPhase == 0 && !_position.IsHeldAt(now)
+                         && ContentFrameAt(clockFrame + probeFrames) - sourceFrame > probeFrames * rate * 0.5;
         long pendingContent = _pendingSilence ? 0 : Volatile.Read(ref _pendingFrames);
         long domainOffset = ConsumeSeqFrames - ContentSubmittedFrames() - pendingContent;
         double mixFrame = played + domainOffset - _clock.StreamLatencyFrames - _position.ExtraLatencySamples;

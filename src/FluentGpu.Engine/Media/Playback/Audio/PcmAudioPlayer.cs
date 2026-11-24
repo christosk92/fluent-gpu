@@ -3278,7 +3278,7 @@ public sealed partial class PcmAudioSession : IMediaSession
             : _clockAnchorPosition + _activeMixerStart + sourceFrame - rateSource.InitialSourceFrame;
         sink?.Position(TimeSpan.FromSeconds(Math.Max(0, contentFrame) / _format.SampleRate));
         // #154 G2a: the same sample, anchored to its instant, for anything that must follow the playhead off the UI thread.
-        PublishTimeline(now, Math.Max(0, contentFrame), sourceFrame, Math.Clamp(played, 0, SubmittedFrames), playedQpc, playedValid);
+        PublishTimeline(now, clockFrame, Math.Max(0, contentFrame), sourceFrame, Math.Clamp(played, 0, SubmittedFrames), playedQpc, playedValid);
     }
 
     private long NowTicks100ns()
