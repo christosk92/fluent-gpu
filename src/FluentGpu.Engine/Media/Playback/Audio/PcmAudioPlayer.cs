@@ -554,6 +554,11 @@ public sealed partial class PcmAudioSession : IMediaSession
         }
     }
     private int _pendingFrames, _pendingOffset;
+    // RENDER thread (the single-thread pull path: its one thread). The mixer frame up to which the master chain must still run after
+    // the last voice left: the end of the last block rendered with a voice + the chain's latency (the terminal limiter's ~2 ms
+    // lookahead delay line). Until ConsumeSeq reaches it the mixer is not drained: voiceless blocks of silence push the content still
+    // inside the delay line out to the device, so the end of the last track is played, not cut. long.MinValue = nothing in flight.
+    private long _masterTailEnd = long.MinValue;
     private TransportRamp _transport = new(1f);
     private int _transportPhase; // output-owned: 0 running, 1 fading, 2 draining, 3 held, 4 held-running at gain 0 (the seek hold: renders silence, never stops the device)
     private bool _holdNoStop;    // RT-owned: the fade in flight is a seek hold — its completion is phase 4, not the stop-and-drain of phase 2
@@ -1627,6 +1632,7 @@ public sealed partial class PcmAudioSession : IMediaSession
                     _graph.Live.TerminalLimiter.Reset();   // its ~2 ms lookahead delay line holds pre-reset audio: it must not replay after the reset
                     _mixer.ConsumeSeq = 0;
                     _fadeInFloorFrame = long.MinValue;      // a floor in the old frame domain means nothing now
+                    _masterTailEnd = long.MinValue;        // the cleared delay line has no tail to flush (and the frame domain restarted)
                     Interlocked.Increment(ref _renderEpoch);
                     break;
             }
@@ -2869,7 +2875,7 @@ public sealed partial class PcmAudioSession : IMediaSession
                 // stuck waiting for a render that will never come. Single-thread path: read the mixer directly. Either
                 // way, never declare Ended while a voice-add command is still queued (spec §12) or the sink still
                 // holds unplayed filler.
-                bool mixerDrained = _feed is not null ? _mixer.DrainedPublished : _mixer.IsDrained(_mixer.ConsumeSeq);
+                bool mixerDrained = _feed is not null ? _mixer.DrainedPublished : _mixer.IsDrained(_mixer.ConsumeSeq) && MasterTailFlushed;
                 var drainSink = _out as IBufferedAudioSink;
                 var endVerdict = DrainVerdict.Decide(mixerDrained, MixerCmdsPending, _pendingFrames,
                     drainSink?.WritableFrames ?? 0, drainSink?.CapacityFrames ?? 0, drainSink is not null);
@@ -2924,7 +2930,7 @@ public sealed partial class PcmAudioSession : IMediaSession
         {
             var drainProbe = _out as IBufferedAudioSink;
             var verdict = DrainVerdict.Decide(
-                mixerDrained: _mixer.VoiceCount == 0,
+                mixerDrained: _mixer.VoiceCount == 0 && MasterTailFlushed,
                 cmdsPending: MixerCmdsPending,
                 pendingFrames: _pendingFrames,
                 writableFrames: drainProbe?.WritableFrames ?? 0,
@@ -2932,12 +2938,15 @@ public sealed partial class PcmAudioSession : IMediaSession
                 bufferedSink: drainProbe is not null);
             if (!verdict.RenderAllowed)
             {
-                _mixer.PublishDrained(_mixer.ConsumeSeq);
+                PublishMixerDrained();
                 return 0;
             }
         }
 
         frames = Math.Clamp(frames, 1, _maxBlock);
+        // The master tail after the last voice left: render no more silence than the chain still holds, so the end of content leaves
+        // the delay line and Ended follows it by at most the chain's latency.
+        if (_mixer.VoiceCount == 0 && !MasterTailFlushed) frames = (int)Math.Min(frames, _masterTailEnd - _mixer.ConsumeSeq);
         if (_out is IBufferedAudioSink buffered)
         {
             int writable = buffered.WritableFrames;
@@ -2983,6 +2992,9 @@ public sealed partial class PcmAudioSession : IMediaSession
         var buf = _mixBuf.AsSpan(0, frames * _format.Channels);
         var ctx = new BlockCtx(_mixer.ConsumeSeq, _format.SampleRate, _format.Channels, _plane);
         var graph = _graph.Live;
+        // A block that mixes a voice leaves its last frames inside the master chain's delay line: they are out only once the chain has
+        // run TotalLatencySamples further (over silence, when this was the last voice: see the drain short-circuit above).
+        if (_mixer.VoiceCount != 0) _masterTailEnd = _mixer.ConsumeSeq + frames + graph.TotalLatencySamples;
         if (_firstContentQpc == 0)
         {
             // Switch diagnostics, once per session (FirstContentFrame): where the first content block starts in the active voice
@@ -2999,7 +3011,7 @@ public sealed partial class PcmAudioSession : IMediaSession
             foreach (var retired in _mixer.RetiredSourcesThisBlock)
                 if (SourceRing(retired) is { } ring) _feed.EnqueueRetire(ring);
         }
-        _mixer.PublishDrained(_mixer.ConsumeSeq);
+        PublishMixerDrained();
         // D7: the master EQ and the TERMINAL LIMITER run BEFORE the master volume, so tone and limiting do not change with the
         // slider; everything after the limiter can only attenuate (_masterGain ≤ 1 — SetVolume/TrySetVoice clamp; the balance pan
         // is cos(·) ≤ 1; the transport ramp is in [0,1]).
@@ -3030,6 +3042,14 @@ public sealed partial class PcmAudioSession : IMediaSession
         }
         return SubmitPending();
     }
+
+    /// <summary>RENDER thread: true once the master chain has run past <see cref="_masterTailEnd"/> — everything a voice put into it
+    /// (the terminal limiter's lookahead delay line) has been rendered out.</summary>
+    private bool MasterTailFlushed => _mixer.ConsumeSeq >= _masterTailEnd;
+
+    /// <summary>RENDER thread: publish "drained" for the control thread's Ended check — every voice finished AND the master chain's
+    /// tail flushed, so Ended never fires while the last frames of content are still inside the limiter's delay line.</summary>
+    private void PublishMixerDrained() => _mixer.PublishDrained(_mixer.ConsumeSeq, MasterTailFlushed);
 
     // F2: submit one block of SILENCE for a dry ring. RT, alloc-free; the tripwire window covers the clear, the severity accrual and
     // the level tap. The spectrum tap is deliberately NOT fed: the content clock does not advance during silence, so the flagship's
@@ -3071,7 +3091,7 @@ public sealed partial class PcmAudioSession : IMediaSession
         _pendingFrames = frames;
         _pendingOffset = 0;
         _pendingSilence = true;
-        _mixer.PublishDrained(_mixer.ConsumeSeq);
+        PublishMixerDrained();
         RecordSilenceSpan(_submittedFrames, frames);
         return SubmitPending();
     }
