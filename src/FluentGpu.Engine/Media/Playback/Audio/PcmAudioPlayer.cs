@@ -461,7 +461,7 @@ public sealed partial class PcmAudioSession : IMediaSession
     // Timer tick are not mutually serialized); the consumer is lock-free. On a session with NO feed attached the command is
     // drained INLINE right after enqueue, so the single-thread pull path keeps byte-identical golden-PCM/test semantics.
     //
-    // Kind 18 CmdSetAutomation arms a voice's VoiceAutomationStage (#48 E2).
+    // Kind 18 CmdSetAutomation arms a voice's VoiceAutomationStage (#48 E2); kind 19 CmdSetRatePlan a voice's own rate (E4).
     // Kinds 10–17 (H-4 and the seek/scrub work): CmdSetEq / CmdSetVoiceGain / CmdFadeOutHold / CmdJumpWithinRing / CmdSwapVoice /
     // CmdSilenceVoice are the seek commands (D3); CmdHoldVoice / CmdReleaseVoice are the scrub commands (D4): the numbering is the one
     // fixed contract.
@@ -480,10 +480,12 @@ public sealed partial class PcmAudioSession : IMediaSession
         /// <summary>CmdSetAutomation (#48 E2): the automation to arm on the voice's <see cref="VoiceAutomationStage"/>, built OFF the RT
         /// thread; null ramps the stage back to neutral and bypasses it.</summary>
         public VoiceAutomation? Automation;
+        /// <summary>CmdSetRatePlan (#48 E4): the voice's own rate plan, built off the RT thread; null = back to factor 1.</summary>
+        public VoiceRatePlan? RatePlan;
     }
     private const byte CmdReplacePrimary = 1, CmdAddVoice = 2, CmdSetEnvelope = 3, CmdRemoveVoice = 4, CmdFadeOut = 5, CmdFadeIn = 6, CmdReset = 7, CmdSeekAnchor = 8, CmdResetRate = 9,
         CmdSetEq = 10, CmdSetVoiceGain = 11, CmdJumpWithinRing = 12, CmdSwapVoice = 13, CmdHoldVoice = 14, CmdReleaseVoice = 15, CmdFadeOutHold = 16,
-        CmdSilenceVoice = 17, CmdSetAutomation = 18;
+        CmdSilenceVoice = 17, CmdSetAutomation = 18, CmdSetRatePlan = 19;
     private readonly MixerCmd[] _mixerCmdQ = new MixerCmd[64];
     private int _mixerCmdHead, _mixerCmdTail;                 // Volatile head/tail; consumer = whichever thread runs RenderBlock
     private readonly object _mixerCmdProducerLock = new();
@@ -847,16 +849,28 @@ public sealed partial class PcmAudioSession : IMediaSession
     private readonly System.Collections.Generic.Dictionary<long, WsolaAudioSource> _rateSources = new();
     private long _clockAnchorPosition;
 
-    /// <summary>Desired pitch-preserving rate (0.5 through 3); retained while paused.</summary>
+    /// <summary>The SESSION's desired pitch-preserving rate (0.5 through 3; the podcast speed); retained while paused. A voice with its
+    /// own rate (#48 E4, <see cref="SetVoiceRatePlan"/>) plays at this × its factor.</summary>
     public double PlaybackRate => Volatile.Read(ref _rate);
 
     /// <summary>The audible position within the active source, in content frames, after endpoint/DSP latency.
     /// Queue timing and progress at non-unity rates must use this instead of output-frame counters.</summary>
     public long ContentPositionFrames => (long)Math.Round(ContentFrameAt(_position.Project(NowTicks100ns()).TotalSeconds * _format.SampleRate));
 
-    /// <summary>Wall-clock output frames remaining at the desired rate; -1 when the source length is unknown.</summary>
-    public long RemainingOutputFrames => VoiceTotalFrames > 0
-        ? (long)Math.Ceiling(Math.Max(0, VoiceTotalFrames - ContentPositionFrames) / PlaybackRate) : -1;
+    /// <summary>Wall-clock output frames remaining at the desired rate; -1 when the source length is unknown. An active voice with its own
+    /// rate (#48 E4) is followed along its plan (each glide step), not at one rate.</summary>
+    public long RemainingOutputFrames
+    {
+        get
+        {
+            if (VoiceTotalFrames <= 0) return -1;
+            double left = Math.Max(0, VoiceTotalFrames - ContentPositionFrames);
+            var source = Volatile.Read(ref _activeRateSource);
+            return source is { HasRatePlan: true }
+                ? (long)Math.Ceiling(source.OutputFramesFor(left, PlaybackRate))
+                : (long)Math.Ceiling(left / PlaybackRate);
+        }
+    }
 
     private double ContentFrameAt(double clockFrame)
     {
@@ -1111,6 +1125,7 @@ public sealed partial class PcmAudioSession : IMediaSession
                 _format.SampleRate, _format.Channels) { Rate = PlaybackRate };
             _rateSources.Clear();
             _rateSources[PrimaryVoiceId] = mixSrc;
+            _ratePlans.Clear();   // a fresh primary plays at the session rate (#48 E4)
             Volatile.Write(ref _activeRateSource, mixSrc);
             EnqueueMixerCmd(new MixerCmd
             {
@@ -1168,7 +1183,11 @@ public sealed partial class PcmAudioSession : IMediaSession
         if (previousVoice != voiceId)
         {
             _rateSources.Remove(previousVoice);
-            lock (_mixerCmdProducerLock) _voiceGain.Remove(previousVoice);   // the outgoing voice's slot is no longer addressed
+            lock (_mixerCmdProducerLock)
+            {
+                _voiceGain.Remove(previousVoice);   // the outgoing voice's slot is no longer addressed
+                _ratePlans.Remove(previousVoice);
+            }
         }
         _activeMixerStart = _voiceStarts.TryGetValue(voiceId, out long start) ? start : 0;
         if (_rateSources.TryGetValue(voiceId, out var rateSource)) Volatile.Write(ref _activeRateSource, rateSource);
@@ -1193,7 +1212,14 @@ public sealed partial class PcmAudioSession : IMediaSession
 
     /// <summary>Try to install a voice without exceeding command capacity or three live ring voices.</summary>
     public bool TryAddCrossfadeVoice(IAudioSource voice, GainEnvelope env, long startFrame, float replayGain, IDspStage[]? chain, long id)
+        => TryAddCrossfadeVoice(voice, env, startFrame, replayGain, chain, id, rate: null);
+
+    /// <summary>#48 E4: <see cref="TryAddCrossfadeVoice(IAudioSource, GainEnvelope, long, float, IDspStage[], long)"/> with the voice's own
+    /// rate <paramref name="rate"/> from its first frame (a beatmatched B starts stretched; no block plays at the wrong rate). The
+    /// plan's frames are mixer frames; a glide in it keeps running after the voice becomes the active one (<see cref="SetActiveVoice"/>).</summary>
+    public bool TryAddCrossfadeVoice(IAudioSource voice, GainEnvelope env, long startFrame, float replayGain, IDspStage[]? chain, long id, VoiceRatePlan? rate)
     {
+        if (rate is not null) WsolaAudioSource.EnsureResampleKernel();
         lock (_mixerCmdProducerLock)
         {
             if (_disposed || !HasMixerCapacity(priority: false))
@@ -1201,8 +1227,9 @@ public sealed partial class PcmAudioSession : IMediaSession
             if (_feed is not null && _feed.RingCount >= 3) return false;
 
             var src = new WsolaAudioSource(_feed is not null ? _feed.WrapAdditional(voice, id) : voice,
-                _format.SampleRate, _format.Channels) { Rate = PlaybackRate };
+                _format.SampleRate, _format.Channels, rate) { Rate = PlaybackRate };
             _rateSources[id] = src;
+            if (rate is not null) _ratePlans[id] = rate; else _ratePlans.Remove(id);
             _voiceStarts[id] = startFrame;
             _voiceGain[id] = new VoiceGainTrack { Preamp = FindGain(chain)?.CurrentGain ?? 1f, BakedRg = replayGain > 0f ? replayGain : 1f, Loudness = voice.Loudness };
             EnqueueMixerCmd(new MixerCmd
@@ -1270,7 +1297,11 @@ public sealed partial class PcmAudioSession : IMediaSession
     {
         long sequence = await PostMixerCommandAsync(new MixerCmd { Kind = CmdRemoveVoice, Id = id }, ct).ConfigureAwait(false);
         await WaitAppliedAsync(sequence, ct).ConfigureAwait(false);
-        lock (_mixerCmdProducerLock) _voiceGain.Remove(id);
+        lock (_mixerCmdProducerLock)
+        {
+            _voiceGain.Remove(id);
+            _ratePlans.Remove(id);
+        }
     }
 
     /// <summary>Install prepared PCM into the existing stopped endpoint and rebase its timeline.</summary>
@@ -1479,6 +1510,12 @@ public sealed partial class PcmAudioSession : IMediaSession
                     if (!Unsafe.IsNullRef(ref target) && target.Chain is { } stages)
                         for (int s = 0; s < stages.Length; s++)
                             if (stages[s] is VoiceAutomationStage automation) { automation.Arm(c.Automation); break; }
+                    break;
+                }
+                case CmdSetRatePlan:
+                {
+                    ref var target = ref _mixer.VoiceRef(c.Id);
+                    if (!Unsafe.IsNullRef(ref target) && target.Src is WsolaAudioSource rated) rated.ArmRatePlan(c.RatePlan);
                     break;
                 }
                 case CmdRemoveVoice:
@@ -1702,7 +1739,7 @@ public sealed partial class PcmAudioSession : IMediaSession
         if (audible)
         {
             int hop = _format.SampleRate / 50, search = _format.SampleRate / 100;
-            slack = stretched is null ? fade : stretched.Rate == 1.0 ? fade + 2 * hop : fade * 3 + hop * 8 + search * 2;
+            slack = stretched is null ? fade : stretched.UnityAhead ? fade + 2 * hop : fade * 3 + hop * 8 + search * 2;
         }
         long delta = target - ring.PositionFrames;
         long lowest = audible ? slack - ring.KeptBehindFrames : -(long)ring.KeptBehindFrames;
@@ -1814,7 +1851,7 @@ public sealed partial class PcmAudioSession : IMediaSession
         {
             if (!held) { Volatile.Write(ref _scrubVerdict, 2); return; }
             long position = main.Src.PositionFrames;
-            if (main.Src is WsolaAudioSource stretched && stretched.Rate != 1.0 && SourceRing(main.Src) is { } ring)
+            if (main.Src is WsolaAudioSource stretched && !stretched.UnityAhead && SourceRing(main.Src) is { } ring)
             {
                 // A stretched voice's content cursor trails its ring's read cursor by the lookahead it pulled; resume from the ring's, so the
                 // label and the audio agree (the lookahead the hold left behind is skipped, under the fade-in).
@@ -2275,7 +2312,10 @@ public sealed partial class PcmAudioSession : IMediaSession
             long oldId = ActiveVoiceIdValue;
             long id = NextEngineVoiceId();
             IAudioSource inner = _feed is not null ? _feed.WrapAdditional(ring, id) : ring;   // publishes the ring to the feed (its producer is already running)
-            var src = new WsolaAudioSource(inner, _format.SampleRate, _format.Channels) { Rate = PlaybackRate };
+            // #48 E4: a seek inside a stretched (or gliding) track keeps its rate: the plan is in mixer frames, which a swap does not re-base.
+            VoiceRatePlan? carried;
+            lock (_mixerCmdProducerLock) carried = _ratePlans.TryGetValue(oldId, out var plan) ? plan : null;
+            var src = new WsolaAudioSource(inner, _format.SampleRate, _format.Channels, carried) { Rate = PlaybackRate };
             var chain = BuildVoiceChain();
             float scalar = ReplayGainScalarFor(audio.Loudness);
             var cmd = new MixerCmd
@@ -2295,7 +2335,10 @@ public sealed partial class PcmAudioSession : IMediaSession
             audio.TransferOwnership();
 
             lock (_mixerCmdProducerLock)
+            {
                 _voiceGain[id] = new VoiceGainTrack { Preamp = FindGain(chain)?.CurrentGain ?? 1f, BakedRg = scalar > 0f ? scalar : 1f, Loudness = audio.Loudness };
+                if (carried is not null) _ratePlans[id] = carried;
+            }
             _rateSources[id] = src;
             _voiceStarts[id] = Volatile.Read(ref _swapAtFrame);
             SetActiveVoice(id, ring, prepared.Duration, prepared.TotalFrames);
@@ -2954,8 +2997,11 @@ public sealed partial class PcmAudioSession : IMediaSession
             frames = Math.Min(frames, writable);
             if (frames == 0) return 0;
         }
+        // The session rate, and (#48 E4) the mixer frame each voice's next output frame is heard at: a voice's own rate plan steps on it.
+        long blockStart = _mixer.ConsumeSeq;
+        double sessionRate = PlaybackRate;
         foreach (var voice in _mixer.VoicesSpan)
-            if (voice.Src is WsolaAudioSource stretched) stretched.Rate = PlaybackRate;
+            if (voice.Src is WsolaAudioSource stretched) stretched.BeginBlock(sessionRate, Math.Max(blockStart, voice.StartFrame));
         // F2: an empty active ring is NOT a reason to stop the device. The block is SILENCE (inside the tripwire), the content
         // timeline holds (the mixer is not rendered: ConsumeSeq, envelopes, the transport ramp and the spectrum tap stay put) and
         // the silence is recorded in the ledger so the content clock can subtract it. One xrun per incident (the ring's own latch);

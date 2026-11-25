@@ -126,8 +126,9 @@ public sealed class PolyphaseResampler
     /// Row p holds <c>h[k] = sinc_c(k − D + p/denom) · kaiser(k − D + p/denom)</c>, D = (Taps−1)/2 — the CAUSAL kernel for an output at
     /// fractional offset p/denom past input frame i, applied to <c>x[i − k]</c> (V-PE2: argument <c>k − D + frac</c>, not
     /// <c>k − D − frac</c>; the mirrored kernel resamples a ramp with the wrong sub-frame timing). Unity DC gain per row.
+    /// Also the kernel <see cref="WsolaAudioSource"/> interpolates a voice's own near-unity rate with (#48 E4).
     /// </summary>
-    private static float[] BuildTaps(int rows, int denom, double cutoff)
+    internal static float[] BuildTaps(int rows, int denom, double cutoff)
     {
         const double beta = 9.0;
         double d = (Taps - 1) / 2.0, i0b = BesselI0(beta);
