@@ -813,6 +813,11 @@ public sealed partial class PcmAudioSession : IMediaSession
     // Fix 2: true while a control-requested seek/flush is expected to empty the ring (suppress xrun accounting for it).
     // RT-readable (a single volatile bool read — see SuppressXrunAccounting); only the control thread writes it.
     private volatile bool _seekRebufferActive;
+    // RT only. A seek that flushed the ring (CmdResetRate) clears the master chain's lookahead (the terminal limiter's ~2 ms delay
+    // line, which still holds the OLD position's audio) and sets this to the mixer frame at which the first post-seek frame leaves
+    // that chain: ConsumeSeq at the flush + TotalLatencySamples. A fade-in never starts before it, so the ramp rises on the NEW
+    // audio, never on the cleared delay. long.MinValue = no floor.
+    private long _fadeInFloorFrame = long.MinValue;
     private long _seekRebufferDeadlineMs;   // control-thread only — bounds fix 2 so a stuck ring can't suppress xruns forever
     private const long RingRefillTimeoutMs = 1500;   // shared safety net for fixes 1 and 2 — "never hang" / "never suppress forever"
     // Fix 3: captured off RegisterDisposable (spec §7.9 on-box wiring registers the controller there) so a sustained
@@ -1492,7 +1497,7 @@ public sealed partial class PcmAudioSession : IMediaSession
                     break;
                 case CmdFadeIn:
                     if (!_started && _submittedFrames == 0) _transport = new TransportRamp(0f);
-                    _transport.Retarget(1f, _mixer.ConsumeSeq, c.Frames);
+                    _transport.Retarget(1f, FadeInStartFrame(), c.Frames);
                     _holdNoStop = false;   // from phase 4 (the seek hold) too: gain ramps 0 → 1 and the transport runs again
                     SetPhase(0);
                     if (!_started && _playRequested) Volatile.Write(ref _startRequested, 1);
@@ -1592,6 +1597,14 @@ public sealed partial class PcmAudioSession : IMediaSession
                 case CmdResetRate:
                     foreach (var live in _mixer.VoicesSpan)
                         if (live.Id == c.Id && live.Src is WsolaAudioSource stretched) stretched.Reset(c.Position);
+                    {
+                        // Posted only after a seek flushed the ring, with the transport silent (an in-place seek's hold, a paused or
+                        // unstarted session, the direct path after its CmdReset). The limiter's lookahead still holds the pre-seek
+                        // audio that was rendered into the hold: drop it (as CmdReset does), and keep the next fade-in off the delay.
+                        var g = _graph.Live;
+                        g.TerminalLimiter.Reset();
+                        _fadeInFloorFrame = _mixer.ConsumeSeq + g.TotalLatencySamples;
+                    }
                     break;
                 case CmdReset:
                     // Device-lost only: a Stop/Reset on an invalidated endpoint is a sink failure (→ rebuild), never a
@@ -1613,6 +1626,7 @@ public sealed partial class PcmAudioSession : IMediaSession
                     _holdNoStop = false;
                     _graph.Live.TerminalLimiter.Reset();   // its ~2 ms lookahead delay line holds pre-reset audio: it must not replay after the reset
                     _mixer.ConsumeSeq = 0;
+                    _fadeInFloorFrame = long.MinValue;      // a floor in the old frame domain means nothing now
                     Interlocked.Increment(ref _renderEpoch);
                     break;
             }
@@ -1625,6 +1639,11 @@ public sealed partial class PcmAudioSession : IMediaSession
     }
 
     // ── seek arms (RT; alloc-free: voice slots by reference, preallocated tail buffers, stamped envelopes) ────────────────────
+
+    /// <summary>RT: the mixer frame a fade-in starts at. Now, or — after a seek flushed the ring (CmdResetRate) — no earlier than the frame
+    /// at which the first post-seek audio leaves the master chain (<see cref="_fadeInFloorFrame"/>), so the ramp rises on the new audio
+    /// rather than on the limiter's cleared lookahead. The transport ramp holds its start gain until then.</summary>
+    private long FadeInStartFrame() => Math.Max(_mixer.ConsumeSeq, _fadeInFloorFrame);
 
     /// <summary>RT: does the listener hear the active voice's audio right now? True while the device runs, nothing is starved and the
     /// transport is at (or fading from) full level. False while paused / draining / starting / starved / held at silence — then a seek
@@ -2952,7 +2971,7 @@ public sealed partial class PcmAudioSession : IMediaSession
             if (!_seekRebufferActive) _resumeFrames = Math.Min(_resumeFrames * 2, _feed?.TargetAheadFrames ?? _resumeFrames);
             Volatile.Write(ref _lastIncidentTick, TickClockMs());
             _transport.Retarget(0f, _mixer.ConsumeSeq, 1);                                  // snap to silence …
-            _transport.Retarget(1f, _mixer.ConsumeSeq, Math.Max(1, _format.SampleRate / 200));   // … and fade in over 5 ms
+            _transport.Retarget(1f, FadeInStartFrame(), Math.Max(1, _format.SampleRate / 200));   // … and fade in over 5 ms
             // Silence → content: wake the waiters that poll the transport on this event (SeekInPlace's "resumed" wait, among them) the
             // moment the edge happens, not on their next 20 ms recheck. One kernel Set outside the tripwire window — the same carve-out
             // SetPhase and the applied-wake use; no allocation.
