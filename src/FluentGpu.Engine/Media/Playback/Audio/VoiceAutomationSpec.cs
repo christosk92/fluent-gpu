@@ -26,6 +26,8 @@ public sealed record VoiceAutomationSpec(int SampleRate, long StartFrame, int Fr
     public ReadOnlyMemory<SweepPoint> Sweep { get; init; }
     /// <summary>E5: a 3-band EQ (low / mid / high gains over a crossover split) whose gains move (null = none).</summary>
     public EqLaneSpec? Eq { get; init; }
+    /// <summary>E6: a noise generator mixed into the voice, its level and colour moving (null = none).</summary>
+    public NoiseLaneSpec? Noise { get; init; }
 }
 
 /// <summary>E2's low shelf lane: a shelf at <paramref name="Hz"/> (slope Q <see cref="VoiceAutomation.ShelfQ"/>) with its gain in dB
@@ -68,4 +70,29 @@ public sealed record EqLaneSpec(ReadOnlyMemory<float> LowDb, ReadOnlyMemory<floa
     /// from 1.25 octaves past the crossover) or 24 (4th-order: about half the cost, gentler band edges, a residue of −42 dB 1.7 octaves
     /// out).</summary>
     public int Slope { get; init; } = 48;
+}
+
+/// <summary>
+/// E6: white noise mixed into the voice. It is added after the voice's filter lanes (so the voice's EQ and sweep never filter it)
+/// and before the voice's gain envelope and effects (so the envelope fades it with the voice and an echo or reverb carries it).
+/// <see cref="Colour"/> sweeps a filter over the noise (a 12 dB/oct low-pass or high-pass, or off = white), stepped and
+/// cross-ramped like the voice's sweep lane; the level is read per sample with linear interpolation. The generator is a
+/// deterministic xorshift per channel, seeded from <see cref="Seed"/> (the channels are decorrelated; the same spec makes the same
+/// noise), and allocates nothing while it runs.
+/// </summary>
+/// <param name="LevelDb">The noise level per table point, in dBFS RMS of the white noise before the colour filter (so a narrow
+/// colour sounds quieter than white at the same level). <see cref="OffDb"/> or below (−∞ included) is silence; above 0 dB is
+/// clamped. All points silent is no noise at all.</param>
+public sealed record NoiseLaneSpec(ReadOnlyMemory<float> LevelDb)
+{
+    /// <summary>A level at or below this (dB), or −∞, is silence.</summary>
+    public const float OffDb = -120f;
+    /// <summary>The seed a spec carries unless it sets one.</summary>
+    public const uint DefaultSeed = 0x2545F491u;
+
+    /// <summary>The colour filter per table point (empty = white noise throughout). A point's <see cref="SweepPoint.Mode"/>
+    /// <see cref="SweepPoint.Bypass"/> is white.</summary>
+    public ReadOnlyMemory<SweepPoint> Colour { get; init; }
+    /// <summary>The generator's seed (each channel derives its own from it).</summary>
+    public uint Seed { get; init; } = DefaultSeed;
 }
