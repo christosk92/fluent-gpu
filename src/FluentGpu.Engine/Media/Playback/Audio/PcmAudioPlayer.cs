@@ -461,7 +461,8 @@ public sealed partial class PcmAudioSession : IMediaSession
     // Timer tick are not mutually serialized); the consumer is lock-free. On a session with NO feed attached the command is
     // drained INLINE right after enqueue, so the single-thread pull path keeps byte-identical golden-PCM/test semantics.
     //
-    // Kind 18 CmdSetAutomation arms a voice's VoiceAutomationStage (#48 E2); kind 19 CmdSetRatePlan a voice's own rate (E4).
+    // Kind 18 CmdSetAutomation arms a voice's VoiceAutomationStage (#48 E2); kind 19 CmdSetRatePlan a voice's own rate (E4); kind 20
+    // CmdSetLoop a voice's beat loop (E8).
     // Kinds 10–17 (H-4 and the seek/scrub work): CmdSetEq / CmdSetVoiceGain / CmdFadeOutHold / CmdJumpWithinRing / CmdSwapVoice /
     // CmdSilenceVoice are the seek commands (D3); CmdHoldVoice / CmdReleaseVoice are the scrub commands (D4): the numbering is the one
     // fixed contract.
@@ -482,10 +483,12 @@ public sealed partial class PcmAudioSession : IMediaSession
         public VoiceAutomation? Automation;
         /// <summary>CmdSetRatePlan (#48 E4): the voice's own rate plan, built off the RT thread; null = back to factor 1.</summary>
         public VoiceRatePlan? RatePlan;
+        /// <summary>CmdSetLoop (#48 E8): the prepared loop arm (schedule, capture buffer, source shell), built off the RT thread.</summary>
+        public BeatLoopArm? LoopArm;
     }
     private const byte CmdReplacePrimary = 1, CmdAddVoice = 2, CmdSetEnvelope = 3, CmdRemoveVoice = 4, CmdFadeOut = 5, CmdFadeIn = 6, CmdReset = 7, CmdSeekAnchor = 8, CmdResetRate = 9,
         CmdSetEq = 10, CmdSetVoiceGain = 11, CmdJumpWithinRing = 12, CmdSwapVoice = 13, CmdHoldVoice = 14, CmdReleaseVoice = 15, CmdFadeOutHold = 16,
-        CmdSilenceVoice = 17, CmdSetAutomation = 18, CmdSetRatePlan = 19;
+        CmdSilenceVoice = 17, CmdSetAutomation = 18, CmdSetRatePlan = 19, CmdSetLoop = 20;
     private readonly MixerCmd[] _mixerCmdQ = new MixerCmd[64];
     private int _mixerCmdHead, _mixerCmdTail;                 // Volatile head/tail; consumer = whichever thread runs RenderBlock
     private readonly object _mixerCmdProducerLock = new();
@@ -1516,6 +1519,12 @@ public sealed partial class PcmAudioSession : IMediaSession
                 {
                     ref var target = ref _mixer.VoiceRef(c.Id);
                     if (!Unsafe.IsNullRef(ref target) && target.Src is WsolaAudioSource rated) rated.ArmRatePlan(c.RatePlan);
+                    break;
+                }
+                case CmdSetLoop:
+                {
+                    ref var target = ref _mixer.VoiceRef(c.Id);
+                    if (!Unsafe.IsNullRef(ref target) && target.Src is WsolaAudioSource looped && c.LoopArm is { } arm) looped.ArmLoop(arm);
                     break;
                 }
                 case CmdRemoveVoice:

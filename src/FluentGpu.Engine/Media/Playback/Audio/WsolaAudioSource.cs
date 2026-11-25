@@ -19,6 +19,8 @@ namespace FluentGpu.Media;
 /// names what is heard); unity returns to the byte-exact pass-through once the lookahead has drained. A planned voice's stretch
 /// also breaks near-ties of its waveform match toward the content clock (<see cref="NearTieScore"/>), which keeps a beatmatched
 /// voice's audio, and that offset, close to its plan. Without a plan nothing of this runs: the voice behaves exactly as before E4.</para>
+/// <para><b>A loop (#48 E8).</b> A <see cref="BeatLoopSource"/> armed on the voice sits between the inner source and this stage
+/// (source domain, before the rate), so a loop follows the voice's rate.</para>
 /// </summary>
 public sealed class WsolaAudioSource : IAudioSource, IDisposable
 {
@@ -36,6 +38,8 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
     private static readonly VoiceRatePlan s_unity = VoiceRatePlan.Constant(1.0);
 
     private readonly IAudioSource _inner;
+    private IAudioSource _reader;                   // _inner, or the voice's BeatLoopSource over it (E8)
+    private BeatLoopSource? _loop;
     private readonly int _channels, _hop, _search;
     private readonly float[] _input, _tail, _output;
     private readonly double[] _scores;              // E4: the coarse match scores of one search (a planned voice's near-tie break)
@@ -70,6 +74,7 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
         ArgumentNullException.ThrowIfNull(inner);
         if (sampleRate <= 0 || channels <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRate));
         _inner = inner;
+        _reader = inner;
         _channels = channels;
         _hop = Math.Max(1, sampleRate / 50);
         _search = Math.Max(1, sampleRate / 100);
@@ -96,12 +101,14 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
     public IAudioSource Inner => _inner;
     /// <summary>Underlying producer ring, when present.</summary>
     public RingAudioSource? Ring => _inner as RingAudioSource;
+    /// <summary>#48 E8: the loop armed on this voice, once one has been (it stays, inert, after its schedule ends).</summary>
+    public BeatLoopSource? Loop => Volatile.Read(ref _loop);
     /// <summary>Source position corresponding to output frame zero after the last reset.</summary>
     public long InitialSourceFrame { get; private set; }
     /// <inheritdoc/>
     public long PositionFrames => (long)_contentFrame;
     /// <inheritdoc/>
-    public bool Exhausted => _ready == 0 && _inner.Exhausted && _contentFrame >= _inputStart + _inputFrames;
+    public bool Exhausted => _ready == 0 && _reader.Exhausted && _contentFrame >= _inputStart + _inputFrames;
     /// <inheritdoc/>
     public GaplessInfo Gapless => _inner.Gapless;
     /// <inheritdoc/>
@@ -132,6 +139,7 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
         _synced = false;
         _nextChange = _plan is null ? long.MaxValue : 0;
         PublishAnchor(0, valid: false);
+        _loop?.Discontinuity(_inputStart);
     }
 
     /// <summary>RENDER thread, once per block before the voice is read (#48 E4): the session's rate, and the mixer frame the voice's
@@ -158,6 +166,20 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
             : plan;
         Volatile.Write(ref _plan, next);
         _nextChange = next is null ? long.MaxValue : 0;
+    }
+
+    /// <summary>RENDER thread (#48 E8): arm (or replace, or with a null schedule end) the voice's loop. The first arm inserts the
+    /// prepared <see cref="BeatLoopSource"/> between the inner source and this stage at the inner's current read position.</summary>
+    internal void ArmLoop(BeatLoopArm arm)
+    {
+        if (_loop is null)
+        {
+            if (arm.Schedule is null) return;
+            arm.Shell.Bind();
+            Volatile.Write(ref _loop, arm.Shell);
+            _reader = arm.Shell;
+        }
+        _loop!.Arm(arm.Schedule, arm.Capture);
     }
 
     /// <summary>The most OUTPUT frames a ring holding <paramref name="ringTargetFrames"/> input frames can ever let this voice
@@ -197,7 +219,7 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
         int wanted = dst.Length / channels, written = 0;
         if (TryEnterPassThrough(out int cap))
         {
-            int got = cap >= wanted ? _inner.Read(dst, channels) : _inner.Read(dst[..(cap * channels)], channels);
+            int got = cap >= wanted ? _reader.Read(dst, channels) : _reader.Read(dst[..(cap * channels)], channels);
             if (got > 0)
             {
                 RecordMapping(_outputFrames, _contentFrame, 1);
@@ -214,7 +236,7 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
             _output.AsSpan(_offset * channels, take * channels).CopyTo(dst[(written * channels)..]);
             RecordMapping(_outputFrames, _contentFrame, _hopRate);
             _contentFrame += take * _hopRate;
-            if (_inner.Exhausted) _contentFrame = Math.Min(_contentFrame, _inputStart + _inputFrames);
+            if (_reader.Exhausted) _contentFrame = Math.Min(_contentFrame, _inputStart + _inputFrames);
             _outputFrames += take;
             _offset += take;
             _ready -= take;
@@ -283,7 +305,7 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
         long wantedEnd = ideal + (unity ? _hop + (leavingResample ? Taps : 0) : _hop * 2 + _search);
         FillUntil(wantedEnd);
         long end = _inputStart + _inputFrames;
-        if (!_inner.Exhausted && end < wantedEnd)
+        if (!_reader.Exhausted && end < wantedEnd)
         {
             // Unity needs no lookahead: short reads can be returned immediately.
             if (!unity || end <= ideal) return false;
@@ -296,7 +318,7 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
             _hasTail = true;
         }
         _hopRate = rate;
-        int count = _inner.Exhausted
+        int count = _reader.Exhausted
             ? Math.Min(_hop, (int)Math.Ceiling((end - _contentFrame) / rate)) : _hop;
         bool capped = cap < count;   // E4: a plan step falls inside this hop: the hop ends on it
         if (capped) count = cap;
@@ -504,12 +526,12 @@ public sealed class WsolaAudioSource : IAudioSource, IDisposable
 
     private void FillUntil(long end)
     {
-        while (_inputStart + _inputFrames < end && !_inner.Exhausted)
+        while (_inputStart + _inputFrames < end && !_reader.Exhausted)
         {
             int room = _input.Length / _channels - _inputFrames;
             int take = (int)Math.Min(room, end - _inputStart - _inputFrames);
             if (take <= 0) break;
-            int got = _inner.Read(_input.AsSpan(_inputFrames * _channels, take * _channels), _channels);
+            int got = _reader.Read(_input.AsSpan(_inputFrames * _channels, take * _channels), _channels);
             if (got <= 0) break;
             _inputFrames += got;
         }
