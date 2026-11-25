@@ -316,15 +316,21 @@ public sealed class DragDropContext
         var target = _over;
         var spec = _overSpec;
         bool dropped = !target.IsNull && _scene.IsLive(target) && spec is not null;
-        if (dropped)
+        // The session ends whatever the target does: an OnDrop that throws still closes it. It used to skip End(), so the
+        // session stayed active with the drag chip floating where the drop happened (an OS drop's COM thunk swallows the
+        // exception, so nothing else ever ended it). The exception still reaches the caller.
+        try
         {
-            _session.OverTarget = target;
-            _session.Select(_overOffer);
-            if (_session.Effect == DropEffect.None) _session.Effect = DefaultEffect();
-            spec!.OnDrop?.Invoke(_session);
-            settleGlide = spec.SettleOnDrop;
+            if (dropped)
+            {
+                _session.OverTarget = target;
+                _session.Select(_overOffer);
+                if (_session.Effect == DropEffect.None) _session.Effect = DefaultEffect();
+                spec!.OnDrop?.Invoke(_session);
+                settleGlide = spec.SettleOnDrop;
+            }
         }
-        End();
+        finally { End(); }
         return dropped;
     }
 

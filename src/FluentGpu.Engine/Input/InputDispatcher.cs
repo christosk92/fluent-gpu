@@ -683,11 +683,17 @@ public sealed partial class InputDispatcher
         return CurrentExternalEffect();
     }
 
-    /// <summary>OLE DragOver: re-hit-test under the new point and report the live effect.</summary>
+    /// <summary>OLE DragOver: re-hit-test under the new point, wake the frame that publishes it, and report the live effect.
+    /// An OS drag's moves reach the window as these COM calls, never as pointer input, so nothing else wakes the host for
+    /// them: without the wake the idle gate skipped every frame on a still scene and the drag chip (which follows the
+    /// session position through the host's DragPosX/Y binds) stepped only when something unrelated woke a frame (~10 fps
+    /// over the drop panel). OLE also calls DragOver on a timer with the pointer at rest: an unmoved point wakes nothing.</summary>
     public DropEffect ExternalDragOver(Point2 windowDip, KeyModifiers mods)
     {
         if (!DragDrop.IsActive) return DropEffect.None;
+        bool moved = DragDrop.Session.Position != windowDip;
         DragDrop.Move(HitTestAny(windowDip), windowDip, 0f, 0f, mods);
+        if (moved) RequestRerender();
         return CurrentExternalEffect();
     }
 
