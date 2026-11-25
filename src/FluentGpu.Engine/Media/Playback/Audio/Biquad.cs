@@ -13,6 +13,22 @@ public readonly record struct BiquadCoeffs(double B0, double B1, double B2, doub
     /// <summary>The identity (pass-through) filter.</summary>
     public static BiquadCoeffs Identity => new(1.0, 0.0, 0.0, 0.0, 0.0);
 
+    /// <summary>The largest shelf or peak gain <see cref="Design"/> honours, either way (dB); beyond it the gain is clamped.</summary>
+    public const float MaxGainDb = 60f;
+
+    /// <summary>A second-order all-pass at <paramref name="freqHz"/> with <paramref name="q"/> (RBJ cookbook): unity magnitude,
+    /// the phase of a Linkwitz-Riley crossover's sum at that frequency when <paramref name="q"/> is 1/√2. Alloc-free.</summary>
+    public static BiquadCoeffs AllPass(float freqHz, float q, int sampleRate)
+    {
+        if (sampleRate <= 0) return Identity;
+        double f0 = Math.Clamp(freqHz, 1f, sampleRate * 0.5f - 1f);
+        double w0 = 2.0 * Math.PI * f0 / sampleRate;
+        double cw = Math.Cos(w0);
+        double alpha = Math.Sin(w0) / (2.0 * (q <= 0f ? 0.0001 : q));
+        double inv = 1.0 / (1 + alpha);
+        return new BiquadCoeffs((1 - alpha) * inv, -2 * cw * inv, (1 + alpha) * inv, -2 * cw * inv, (1 - alpha) * inv);
+    }
+
     /// <summary>Compute normalized RBJ coefficients (Audio EQ Cookbook, Robert Bristow-Johnson) for
     /// <paramref name="band"/> at sample rate <paramref name="sampleRate"/>. Deterministic and alloc-free.</summary>
     public static BiquadCoeffs Design(in BiquadBand band, int sampleRate)
@@ -25,12 +41,19 @@ public readonly record struct BiquadCoeffs(double B0, double B1, double B2, doub
         double sw = Math.Sin(w0);
         double alpha = sw / (2.0 * q);
         double a0, a1, a2, b0, b1, b2;
+        // #48 E5: the shelf and peak designs are stable for every FINITE gain in double (pole radius < 1, checked from 30 Hz to
+        // 16 kHz out to ±200 dB), but an infinite one is not a filter: −∞ dB (a curve's "kill") makes A = 0, so the peaking design
+        // divides by zero (NaN coefficients poison the state for good) and a shelf's numerator vanishes, muting every frequency, not
+        // its band. Clamped to ±60 dB, NaN to 0 dB. Past about −40 dB a shelf or peak stops cutting a band anyway: its transition
+        // spreads over some ten octaves (a −60 dB low shelf at 200 Hz is −18 dB at 400 Hz and −4 dB at 1 kHz; a −60 dB peak at
+        // 1 kHz is −20 dB at 200 Hz and 4 kHz). A band kill is a crossover split's job: VoiceAutomation's 3-band EQ (EqLaneSpec).
+        float gainDb = float.IsNaN(band.GainDb) ? 0f : Math.Clamp(band.GainDb, -MaxGainDb, MaxGainDb);
 
         switch (band.Type)
         {
             case BiquadType.Peaking:
             {
-                double a = Math.Pow(10.0, band.GainDb / 40.0);
+                double a = Math.Pow(10.0, gainDb / 40.0);
                 b0 = 1 + alpha * a;
                 b1 = -2 * cw;
                 b2 = 1 - alpha * a;
@@ -41,7 +64,7 @@ public readonly record struct BiquadCoeffs(double B0, double B1, double B2, doub
             }
             case BiquadType.LowShelf:
             {
-                double a = Math.Pow(10.0, band.GainDb / 40.0);
+                double a = Math.Pow(10.0, gainDb / 40.0);
                 double sqrtA = Math.Sqrt(a);
                 double twoSqrtAalpha = 2.0 * sqrtA * alpha;
                 b0 = a * ((a + 1) - (a - 1) * cw + twoSqrtAalpha);
@@ -54,7 +77,7 @@ public readonly record struct BiquadCoeffs(double B0, double B1, double B2, doub
             }
             case BiquadType.HighShelf:
             {
-                double a = Math.Pow(10.0, band.GainDb / 40.0);
+                double a = Math.Pow(10.0, gainDb / 40.0);
                 double sqrtA = Math.Sqrt(a);
                 double twoSqrtAalpha = 2.0 * sqrtA * alpha;
                 b0 = a * ((a + 1) + (a - 1) * cw + twoSqrtAalpha);
