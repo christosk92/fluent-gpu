@@ -1527,6 +1527,26 @@ public sealed class ItemsView : Component, IPropsHost
             return best;
         }
 
+        // Whether a custom layout places items across its scroll axis (a lined flow, a span or shelf grid) rather than in one
+        // line (a measured, grouped or extents list): any item near `from` whose cross-axis centre differs. Cold key path,
+        // the same bounded ±GeometricScan window NavigateGeometric walks; before the first layout it is a line.
+        bool CustomIsTwoD(int from)
+        {
+            float cross = CrossExtent();
+            if (cross <= 0f || layout is null || count < 2) return false;
+            int at = Math.Clamp(from, 0, count - 1);
+            var r = layout.ItemRect(at, cross);
+            float c = spec.Horizontal ? r.Y + r.H * 0.5f : r.X + r.W * 0.5f;
+            int lo = Math.Max(0, at - GeometricScan), hi = Math.Min(count, at + GeometricScan + 1);
+            for (int i = lo; i < hi; i++)
+            {
+                var o = layout.ItemRect(i, cross);
+                float oc = spec.Horizontal ? o.Y + o.H * 0.5f : o.X + o.W * 0.5f;
+                if (MathF.Abs(oc - c) > 0.5f) return true;
+            }
+            return false;
+        }
+
         void OnRootKey(KeyEventArgs e)
         {
             // An Alt chord is never list navigation (Win32 lists see it as WM_SYSKEYDOWN): Alt+Left/Right falls
@@ -1601,11 +1621,18 @@ public sealed class ItemsView : Component, IPropsHost
                 {
                     int dx = e.KeyCode == Keys.Left ? -1 : e.KeyCode == Keys.Right ? 1 : 0;
                     int dy = e.KeyCode == Keys.Up ? -1 : e.KeyCode == Keys.Down ? 1 : 0;
+                    // Only an arrow that acts in this layout is the list's (WinUI ItemsView/ListView): a cross-axis arrow
+                    // stays unhandled, Ctrl/Shift chords included, so it bubbles to an outer scroller and the app's
+                    // accelerators (Ctrl+Left/Right on a focused track row). A stack never moves across its axis; a grid or
+                    // wrap always can; a custom layout can when its geometry is 2-D (a lined flow, a shelf grid of rows).
+                    bool crossAxis = spec.Horizontal ? dy != 0 : dx != 0;
+                    if (crossAxis && (spec.Kind is RepeatKind.Stack or RepeatKind.Inline
+                                      || (spec.Kind == RepeatKind.Custom && !CustomIsTwoD(from)))) return;
                     int next = NavigateIndex(from, dx, dy);
                     if (next >= 0 && next != from) MoveCurrent(next, ctrl, shift);
-                    else if (dy != 0 && !(spec.Kind == RepeatKind.Stack && spec.Horizontal))
+                    else if (dy != 0)
                         OnEdgeNavigate?.Invoke(dy);   // ran off an end: a head above may take focus back
-                    e.Handled = true;   // nav keys never fall through to an outer scroller (cpp:806-807)
+                    e.Handled = true;   // a nav key the list acts on never falls through to an outer scroller (cpp:806-807)
                     return;
                 }
                 case Keys.PageUp or Keys.PageDown:
