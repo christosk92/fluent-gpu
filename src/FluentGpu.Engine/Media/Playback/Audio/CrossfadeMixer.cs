@@ -504,6 +504,8 @@ public sealed class CrossfadeMixer
     /// path (spec §12; the control thread never touches <see cref="_voices"/>).</summary>
     public bool DrainedPublished => _drainedPublished;
 
-    /// <summary>RENDER thread: publish the drained state at block end (read off the RT thread by the state machine).</summary>
-    public void PublishDrained(long mixerFrame) => _drainedPublished = IsDrained(mixerFrame);
+    /// <summary>RENDER thread: publish the drained state at block end (read off the RT thread by the state machine).
+    /// <paramref name="masterFlushed"/> false holds it at "not drained" while the master chain downstream of the mixer still holds
+    /// the last voice's final frames (the terminal limiter's lookahead): the session renders silence through it first.</summary>
+    public void PublishDrained(long mixerFrame, bool masterFlushed = true) => _drainedPublished = masterFlushed && IsDrained(mixerFrame);
 }
