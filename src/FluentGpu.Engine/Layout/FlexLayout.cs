@@ -2535,7 +2535,8 @@ public sealed partial class FlexLayout
     // (pill/chip rows, FlexGrow 0) yields growUnit 0 and is placed at base size byte-for-byte as before. Allocation-free:
     // two linked-list walks per line, no per-line buffer.
     // Within each line, items are then placed exactly like the single-line path: the line's leftover main goes through
-    // Distribute(li.Justify) (zero when a grow child took it), and each item's cross placement follows AlignSelf ?? AlignItems
+    // Distribute(li.Justify) (zero when a grow child took it; a grow child stops at its max, as on the single line, and the rest is
+    // justified), and each item's cross placement follows AlignSelf ?? AlignItems
     // against the LINE's cross size (its tallest item + margins): Stretch fills it unless the item has an explicit cross
     // size, Center/End offset it. Line breaking and the measured height are untouched (alignment only moves items inside a
     // line whose cross size is already fixed), so measure and arrange still agree on every line. No AlignContent: a line is
@@ -2579,7 +2580,24 @@ public sealed partial class FlexLayout
             // what is left (nothing when a grow child took it) and align each item on the line's cross size, like Arrange.
             float freeMain = MathF.Max(0f, availMain - usedMain);
             float growUnit = totalGrow > 0f ? freeMain / totalGrow : 0f;
-            (float lead, float between) = Distribute(li.Justify, totalGrow > 0f ? 0f : freeMain, count);
+            // A grow child stops at its MaxWidth/MaxHeight, as the single-line Arrange clamps it, and what it leaves is justified like
+            // any leftover: a capped tile that wrapped onto a line of its own keeps its cap instead of stretching across the line.
+            float leftover = freeMain;
+            if (totalGrow > 0f)
+            {
+                float grown = 0f;
+                var gc = lineStart;
+                for (int i = 0; i < count; i++, gc = NextVisibleSibling(gc))
+                {
+                    ref LayoutInput gli = ref _scene.Layout(gc);
+                    if (gli.FlexGrow <= 0f) continue;
+                    var gs = Measure(gc, childAvailW);   // a memo hit after pass 1
+                    float b = row ? gs.Width : gs.Height;
+                    grown += ClampMain(in gli, row, b + gli.FlexGrow * growUnit) - b;
+                }
+                leftover = freeMain - grown > 0.01f ? freeMain - grown : 0f;
+            }
+            (float lead, float between) = Distribute(li.Justify, leftover, count);
             float cursor = padMainStart + lead;
             var cc = lineStart;
             for (int i = 0; i < count; i++, cc = NextVisibleSibling(cc))
@@ -2587,7 +2605,7 @@ public sealed partial class FlexLayout
                 var cs = Measure(cc, childAvailW);   // a memo hit after pass 1 — the same base size that decided this line
                 ref LayoutInput cli = ref _scene.Layout(cc);
                 float baseMain = row ? cs.Width : cs.Height, baseCross = row ? cs.Height : cs.Width;
-                float mainSize = baseMain + cli.FlexGrow * growUnit;
+                float mainSize = cli.FlexGrow > 0f ? ClampMain(in cli, row, baseMain + cli.FlexGrow * growUnit) : baseMain;
                 if (i > 0) cursor += li.Gap + between;
 
                 FlexAlign align = cli.AlignSelf == FlexAlign.Auto ? li.AlignItems : cli.AlignSelf;
