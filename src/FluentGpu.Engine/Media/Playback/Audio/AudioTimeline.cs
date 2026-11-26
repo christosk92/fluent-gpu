@@ -21,7 +21,8 @@ namespace FluentGpu.Media;
 /// envelopes and transitions live. Advances at <see cref="MixRate"/> whatever the voice's rate is, and is never re-based by a
 /// seek.</param>
 /// <param name="MixRate">Frames per second of all three frame fields.</param>
-/// <param name="Rate">Source frames per output frame of the active voice (the session's one rate, <see cref="PcmAudioSession.PlaybackRate"/>).</param>
+/// <param name="Rate">Source frames per output frame of the active voice at the anchor's instant: the session's rate
+/// (<see cref="PcmAudioSession.PlaybackRate"/>), × the voice's own factor when it has a rate plan (#48 E4; a glide step starts a new epoch).</param>
 /// <param name="Advancing">False while paused, held, starved or buffering: the frames hold.</param>
 /// <param name="VoiceId">The active voice (<see cref="PcmAudioSession.ActiveVoiceIdValue"/>).</param>
 /// <param name="Epoch">Bumps on every discontinuity; never 0 once published.</param>
@@ -147,7 +148,7 @@ public sealed partial class PcmAudioSession
     private void PublishTimeline(long now, double clockFrame, double contentFrame, double sourceFrame, long played, long playedQpc, bool playedValid)
     {
         int mixRate = _format.SampleRate;
-        double rate = PlaybackRate;
+        double rate = ActiveRateAt(clockFrame);   // #48 E4: the active voice's own rate at the audible frame (the session rate without a plan)
         // Advancing only while the audible frame really moves: playing, not starved, the projection not held (the warm-up gate, a
         // refill at the submitted limit) and the active voice's source frame moving over the next 2 ms of the clock. The last test
         // is the seek: until the new position's first frame reaches the ear (the device still plays out the hold), the source
