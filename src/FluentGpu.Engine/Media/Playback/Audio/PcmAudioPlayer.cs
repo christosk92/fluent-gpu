@@ -1257,13 +1257,20 @@ public sealed partial class PcmAudioSession : IMediaSession
     public bool SetVoiceEnvelope(long id, GainEnvelope env)
         => TryEnqueueMixerCmd(new MixerCmd { Kind = CmdSetEnvelope, Id = id, Env = env }, out _);
 
-    /// <summary>#48 E2: arm <paramref name="automation"/> (a low shelf and a sweep filter moving over a window in the mixer timeline,
-    /// built off the render thread by <see cref="VoiceAutomation.Build"/> at this session's mix rate) on the voice <paramref name="id"/>'s
-    /// <see cref="VoiceAutomationStage"/>, or ramp it back to neutral with <c>null</c>. Applied at the next block boundary; works on a
-    /// voice added in the same breath (commands apply in order). False when the command could not be admitted (the queue is full):
-    /// the caller retries or cancels, as for <see cref="SetVoiceEnvelope"/>. A voice id that is not live is ignored.</summary>
+    /// <summary>#48 E2, E5-E7: arm <paramref name="automation"/> (filter, EQ, noise and effect lanes moving over a window in the mixer
+    /// timeline, built off the render thread by <see cref="VoiceAutomation.Build(VoiceAutomationSpec)"/> at this session's mix rate) on
+    /// the voice <paramref name="id"/>'s <see cref="VoiceAutomationStage"/>, or ramp it back to neutral with <c>null</c> (effects close
+    /// their sends and ring out). Applied at the next block boundary; works on a voice added in the same breath (commands apply in
+    /// order). False when the command could not be admitted (the queue is full): the caller retries or cancels, as for
+    /// <see cref="SetVoiceEnvelope"/>. A voice id that is not live is ignored.</summary>
+    /// <exception cref="InvalidOperationException">The automation has effects (<see cref="VoiceAutomation.HasEffects"/>) and was
+    /// already handed to another voice: its delay lines are one voice's state; build one automation per voice.</exception>
     public bool SetVoiceAutomation(long id, VoiceAutomation? automation)
-        => TryEnqueueMixerCmd(new MixerCmd { Kind = CmdSetAutomation, Id = id, Automation = automation }, out _);
+    {
+        if (automation is { HasEffects: true } && !automation.TryClaim(id))
+            throw new InvalidOperationException("This automation's effects were armed on another voice: build one VoiceAutomation per voice.");
+        return TryEnqueueMixerCmd(new MixerCmd { Kind = CmdSetAutomation, Id = id, Automation = automation }, out _);
+    }
 
     /// <summary>Fade the audible mix to zero, drain its tail and stop the endpoint.</summary>
     public async ValueTask FadeOutAsync(TimeSpan duration, CancellationToken ct = default)

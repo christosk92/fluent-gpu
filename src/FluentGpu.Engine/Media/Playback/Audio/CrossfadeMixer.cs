@@ -206,16 +206,18 @@ public struct MixVoice
     /// <summary>Pull this voice's active frames for the block, apply its DSP + ReplayGain + envelope, and ADD into
     /// <paramref name="dst"/>. <paramref name="scratch"/> is the shared per-voice work buffer (mixer-owned, reused —
     /// zero-alloc). Returns true if the voice produced any samples this block. Mutates <see cref="Blend"/>: call it on the
-    /// voice's slot, never on a copy.</summary>
+    /// voice's slot, never on a copy. A voice whose automation runs effects (#48 E7) takes <see cref="MixWithEffects"/>.</summary>
     public bool MixInto(Span<float> dst, int frames, in BlockCtx ctx, Span<float> scratch)
     {
         int ch = ctx.Channels;
         long blockStart = ctx.StartFrame;
+        var effects = Effects;
 
-        if (Held && blockStart >= HoldAtFrame) return false;   // parked: the fade-out that preceded the hold has completed
+        if (Held && blockStart >= HoldAtFrame) { effects?.SilenceTails(); return false; }   // parked: the fade-out that preceded the hold has completed
         int firstActive = (int)Math.Max(0L, StartFrame - blockStart);
         if (firstActive >= frames) return false;   // this voice hasn't started yet in this block
         if (Env.TransitionGate is { } gate && Env.Kind != FadeKind.Out && !gate.TryCommit()) return false;
+        if (effects is not null) return MixWithEffects(dst, frames, firstActive, in ctx, scratch, effects);
 
         int want = frames - firstActive;
         var work = scratch[..(want * ch)];
@@ -253,13 +255,83 @@ public struct MixVoice
         return true;
     }
 
-    /// <summary>True when the source is exhausted AND the envelope has faded out — the voice can be retired. A HELD voice is never
-    /// finished: its fade-out completing is the hold taking effect, not the voice ending (its ring and byte source stay alive).</summary>
-    public readonly bool IsFinished(long mixerFrameAtBlockEnd)
+    /// <summary>#48 E7: the chain's automation stage when it runs effects after the envelope (armed, or a tail still ringing);
+    /// null otherwise — then the voice mixes exactly as it always has.</summary>
+    private readonly VoiceAutomationStage? Effects
+        => Chain is { Length: > 0 } chain && chain[^1] is VoiceAutomationStage { HasPost: true } stage ? stage : null;
+
+    /// <summary>
+    /// #48 E7: <see cref="MixInto"/> for a voice with effects. The dry part is read, run through the chain and scaled by the envelope
+    /// and ReplayGain as usual; the effects then run on that ENVELOPED signal (fed through their sends), so their tails outlive the
+    /// envelope: when the dry part is over (<see cref="DryFinished"/>: the source is exhausted, or an Out envelope's window has
+    /// ended) nothing more is read from the source and the effects play on over silence until they have rung out. A HELD voice runs
+    /// its effects before the envelope instead, so the hold's fade-out fades the tails with it (and parking it silences them).
+    /// Alloc-free.
+    /// </summary>
+    private bool MixWithEffects(Span<float> dst, int frames, int firstActive, in BlockCtx ctx, Span<float> scratch, VoiceAutomationStage effects)
+    {
+        int ch = ctx.Channels;
+        long first = ctx.StartFrame + firstActive;
+        int want = frames - firstActive;
+        var work = scratch[..(want * ch)];
+        int got = 0;
+        if (!DryFinished(ctx.StartFrame))
+        {
+            while (got < want)
+            {
+                int count = Src.Read(work[(got * ch)..], ch);
+                if (count <= 0) break;
+                got += count;
+                if (Src.Exhausted) break;
+            }
+            if (got > 0)
+            {
+                if (Blend.Remaining > 0) Blend.Apply(work[..(got * ch)], got);
+                if (Chain is { Length: > 0 } chain)
+                {
+                    var subCtx = new BlockCtx(first, ctx.MixRate, ch, ctx.Params);
+                    var stageSpan = work[..(got * ch)];
+                    for (int s = 0; s < chain.Length; s++) chain[s].Process(stageSpan, stageSpan, got, subCtx);
+                }
+            }
+        }
+        if (got <= 0 && !effects.TailRinging) return false;
+        work[(got * ch)..].Clear();   // no dry audio past the source's end: the tails play on over silence
+        float rg = ReplayGainScalar <= 0f ? 1f : ReplayGainScalar;
+        if (!Held) ApplyEnvelope(work, got, ch, first, rg);
+        effects.ProcessPost(work, want, ch, first);
+        if (Held) ApplyEnvelope(work, want, ch, first, rg);
+        var into = dst[(firstActive * ch)..];
+        for (int i = 0; i < work.Length; i++) into[i] += work[i];
+        return true;
+    }
+
+    private readonly void ApplyEnvelope(Span<float> work, int frames, int ch, long first, float rg)
+    {
+        for (int f = 0; f < frames; f++)
+        {
+            float g = Env.GainAt(first + f) * rg;
+            int b = f * ch;
+            for (int c = 0; c < ch; c++) work[b + c] *= g;
+        }
+    }
+
+    /// <summary>True when the voice's OWN audio is over: the source is exhausted and the envelope has faded out, or an Out
+    /// envelope's window has ended, or its transition was cancelled before it sounded. Nothing more is read from its source. A
+    /// HELD voice is never finished: its fade-out completing is the hold taking effect, not the voice ending (its ring and byte
+    /// source stay alive). Without effects this is <see cref="IsFinished"/>.</summary>
+    public readonly bool DryFinished(long mixerFrame)
         => !Held && (Env.TransitionGate is { IsCancelled: true } && Env.Kind != FadeKind.Out
-            || Src.Exhausted && (Env.Kind != FadeKind.Out || mixerFrameAtBlockEnd >= Env.FadeStartFrame + Env.FadeFrames)
+            || Src.Exhausted && (Env.Kind != FadeKind.Out || mixerFrame >= Env.FadeStartFrame + Env.FadeFrames)
             || Env.Kind == FadeKind.Out && Env.TransitionGate is not { IsCancelled: true }
-                && mixerFrameAtBlockEnd >= Env.FadeStartFrame + Env.FadeFrames);
+                && mixerFrame >= Env.FadeStartFrame + Env.FadeFrames);
+
+    /// <summary>True when the voice can be retired: its own audio is over (<see cref="DryFinished"/>) and no effect tail is still
+    /// ringing (#48 E7; a voice cancelled before it sounded is cut, tails included).</summary>
+    public readonly bool IsFinished(long mixerFrameAtBlockEnd)
+        => DryFinished(mixerFrameAtBlockEnd)
+            && (Env.TransitionGate is { IsCancelled: true } && Env.Kind != FadeKind.Out
+                || Chain is not { Length: > 0 } chain || chain[^1] is not VoiceAutomationStage { TailRinging: true });
 }
 
 /// <summary>
@@ -360,7 +432,8 @@ public sealed class CrossfadeMixer
             // Only an unfinished producer can make the content timeline wait for unavailable PCM.
             var stretched = voice.Src as WsolaAudioSource;
             var ring = stretched?.Ring ?? voice.Src as RingAudioSource;
-            if (ring is null || ring.ProducerDone || voice.IsFinished(ConsumeSeq)) continue;
+            // DryFinished, not IsFinished: a voice whose effects ring out after its own audio reads nothing more (#48 E7).
+            if (ring is null || ring.ProducerDone || voice.DryFinished(ConsumeSeq)) continue;
             long offset = Math.Max(0, voice.StartFrame - ConsumeSeq);
             if (offset >= readable) continue;
             int available = stretched?.ReadableFrames(requested) ?? ring.BufferedFrames;
@@ -381,6 +454,7 @@ public sealed class CrossfadeMixer
         {
             if (voice.StartFrame > ConsumeSeq || voice.Env.TransitionGate is { IsCancelled: true } && voice.Env.Kind != FadeKind.Out) continue;
             if (voice.Held && ConsumeSeq >= voice.HoldAtFrame) continue;   // parked: not audible, so it needs no cushion
+            if (voice.DryFinished(ConsumeSeq)) continue;   // only an effect tail left (#48 E7): its source is not read again
             var stretched = voice.Src as WsolaAudioSource;
             var ring = stretched?.Ring ?? voice.Src as RingAudioSource;
             if (ring is null) continue;

@@ -1,14 +1,19 @@
 using System;
+using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace FluentGpu.Media;
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-// Per-voice automation (#48 E2): a low shelf whose gain moves and one sweep filter (low-pass, high-pass or off) whose frequency
-// and Q move, over a window in the mixer timeline. The control side turns curve tables into at most MaxSteps coefficient steps
-// per lane (VoiceAutomation.Build, OFF the render thread); the render thread only steps through them by frame and cross-ramps
-// each step the way EqStage cross-ramps a band change. Every voice chain ends with a VoiceAutomationStage that is Bypassed
-// (a value) until PcmAudioSession.SetVoiceAutomation arms it. The engine takes Hz, dB and Q; what a curve value means in those
-// units is the caller's mapping.
+// Per-voice automation (#48 E2, E5-E7): a low shelf whose gain moves, one sweep filter (low-pass, high-pass or off) whose
+// frequency and Q move, a 3-band EQ (a crossover split with a gain lane per band), a noise generator (a level lane and a colour
+// filter lane), and echo / delay / reverb with dry/wet lanes (after the voice's gain envelope, VoiceEffects.cs), over a window in
+// the mixer timeline. The control side
+// turns curve tables into at most MaxSteps coefficient steps per filter lane, and into interpolated scalar lanes for the EQ gains
+// and the noise level (VoiceAutomation.Build, OFF the render thread); the render thread only steps through them by frame and cross-ramps each step the
+// way EqStage cross-ramps a band change. Every voice chain ends with a VoiceAutomationStage that is Bypassed (a value) until
+// PcmAudioSession.SetVoiceAutomation arms it. The engine takes Hz, dB and Q; what a curve value means in those units is the
+// caller's mapping.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// <summary>One point of a sweep-filter lane: <see cref="Mode"/> 0 = off (bypass), 1 = low-pass, 2 = high-pass, at
@@ -24,9 +29,11 @@ public readonly record struct SweepPoint(byte Mode, float FreqHz, float Q)
 }
 
 /// <summary>
-/// An immutable automation for one voice (#48 E2), built OFF the render thread by <see cref="Build"/>: two lanes (low shelf,
-/// sweep filter) of precomputed coefficient steps placed in the mixer timeline. Before <see cref="StartFrame"/> a lane holds its
-/// first value, after the window its last. Hand it to <see cref="PcmAudioSession.SetVoiceAutomation"/>.
+/// An automation for one voice (#48 E2, E5-E7), built OFF the render thread by <see cref="Build(VoiceAutomationSpec)"/>: lanes (low
+/// shelf, 3-band EQ, sweep filter, noise, echo, delay, reverb) placed in the mixer timeline. Before <see cref="StartFrame"/> a lane
+/// holds its first value, after the window its last. Hand it to <see cref="PcmAudioSession.SetVoiceAutomation"/>. The lanes are
+/// immutable; the effects' delay lines (<see cref="HasEffects"/>) are state, so an automation with effects arms ONE voice (arming
+/// it on a second throws): build one per voice.
 /// </summary>
 public sealed class VoiceAutomation
 {
@@ -48,17 +55,49 @@ public sealed class VoiceAutomation
     public int ShelfSteps => Shelf.Count;
     /// <summary>The sweep filter's coefficient steps (0 = the lane is off).</summary>
     public int SweepSteps => Sweep.Count;
+    /// <summary>The 3-band EQ lane is on (E5).</summary>
+    public bool HasEq => Eq is not null;
+    /// <summary>The noise lane is on (E6).</summary>
+    public bool HasNoise => Noise is not null;
+    /// <summary>The noise colour filter's coefficient steps (0 = white or no noise).</summary>
+    public int NoiseColourSteps => Noise?.Colour.Count ?? 0;
+    /// <summary>An echo, delay or reverb lane is on (E7): the voice rings out after its envelope ends.</summary>
+    public bool HasEffects => Echo is not null || Delay is not null || Reverb is not null;
+    /// <summary>The bytes the effects' delay lines hold (allocated by Build, freed with the voice).</summary>
+    public long EffectBytes => (Echo?.Bytes ?? 0) + (Delay?.Bytes ?? 0) + (Reverb?.Bytes ?? 0);
+    /// <summary>The echo's delay in frames as built (after clamping; 0 = no echo).</summary>
+    public int EchoDelayFrames => Echo?.DelayFrames ?? 0;
 
     internal readonly Lane Shelf;
     internal readonly Lane Sweep;
+    internal readonly EqLane? Eq;
+    internal readonly NoiseLane? Noise;
+    internal readonly DelayEffect? Echo;
+    internal readonly DelayEffect? Delay;
+    internal readonly ReverbEffect? Reverb;
+    private long _claim;                         // the voice the effects were handed to (0 = none yet)
 
-    private VoiceAutomation(int sampleRate, long startFrame, int frames, Lane shelf, Lane sweep)
+    private VoiceAutomation(int sampleRate, long startFrame, int frames, Lane shelf, Lane sweep, EqLane? eq, NoiseLane? noise,
+        DelayEffect? echo = null, DelayEffect? delay = null, ReverbEffect? reverb = null)
     {
         SampleRate = sampleRate;
         StartFrame = startFrame;
         Frames = frames;
         Shelf = shelf;
         Sweep = sweep;
+        Eq = eq;
+        Noise = noise;
+        Echo = echo;
+        Delay = delay;
+        Reverb = reverb;
+    }
+
+    /// <summary>Control thread: hand the effects to voice <paramref name="voiceId"/>. False when another voice has them.</summary>
+    internal bool TryClaim(long voiceId)
+    {
+        long key = voiceId == 0 ? long.MinValue : voiceId;
+        long held = Interlocked.CompareExchange(ref _claim, key, 0);
+        return held == 0 || held == key;
     }
 
     /// <summary>One lane's steps, parallel arrays of <see cref="Count"/> entries in frame order.</summary>
@@ -87,12 +126,45 @@ public sealed class VoiceAutomation
         }
     }
 
+    /// <summary>E5: the 3-band EQ's crossover sections and its three linear gain lanes. A Linkwitz-Riley side is a Butterworth
+    /// filter applied twice: LR4 = two 2nd-order sections (Q 1/√2), LR8 = four (Q 0.541, 1.307, twice). The all-pass that phase-matches
+    /// the low band is that Butterworth's all-pass at the upper crossover (one or two sections).</summary>
+    internal sealed class EqLane
+    {
+        public readonly BiquadCoeffs[] Lp1, Hp1, Lp2, Hp2, Ap2;
+        /// <summary>Biquad states one channel of the split needs.</summary>
+        public readonly int Sections;
+        public readonly ScalarLane Low, Mid, High;
+        public EqLane(BiquadCoeffs[] lp1, BiquadCoeffs[] hp1, BiquadCoeffs[] lp2, BiquadCoeffs[] hp2, BiquadCoeffs[] ap2,
+            ScalarLane low, ScalarLane mid, ScalarLane high)
+        {
+            Lp1 = lp1; Hp1 = hp1; Lp2 = lp2; Hp2 = hp2; Ap2 = ap2; Low = low; Mid = mid; High = high;
+            Sections = lp1.Length + hp1.Length + lp2.Length + hp2.Length + ap2.Length;
+        }
+        /// <summary>Both lanes split at the same crossovers, so one's filter state is valid for the other.</summary>
+        public bool SameSplit(EqLane other)
+            => Lp1.AsSpan().SequenceEqual(other.Lp1) && Hp1.AsSpan().SequenceEqual(other.Hp1)
+            && Lp2.AsSpan().SequenceEqual(other.Lp2) && Hp2.AsSpan().SequenceEqual(other.Hp2);
+    }
+
+    /// <summary>E6: the noise generator's level (linear, scaled so the white noise's RMS is the level), its colour filter steps
+    /// and its seed.</summary>
+    internal sealed class NoiseLane
+    {
+        public readonly ScalarLane Level;
+        public readonly Lane Colour;
+        public readonly uint Seed;
+        public NoiseLane(ScalarLane level, Lane colour, uint seed) { Level = level; Colour = colour; Seed = seed; }
+    }
+
     /// <summary>
     /// Build an automation for a window of <paramref name="frames"/> frames starting at mixer frame <paramref name="startFrame"/>.
     /// <paramref name="lowShelfDb"/> is the shelf gain in dB at evenly spaced points across the window (first = the window start,
     /// last = its end; empty = no shelf); <paramref name="sweep"/> likewise for the sweep filter (empty = no sweep filter). Up to
     /// <see cref="MaxSteps"/> steps per lane are placed where the value changes fastest (equal steps of change, so a bass swap
     /// over 1/32 of the window gets most of them) and every mode change gets its own step. Allocates: call it off the render thread.
+    /// The E2 form of <see cref="Build(VoiceAutomationSpec)"/> (a spec with <see cref="VoiceAutomationSpec.LowShelf"/> and
+    /// <see cref="VoiceAutomationSpec.Sweep"/> only).
     /// </summary>
     public static VoiceAutomation Build(int sampleRate, long startFrame, int frames, float lowShelfHz,
         ReadOnlySpan<float> lowShelfDb, ReadOnlySpan<SweepPoint> sweep)
@@ -101,7 +173,34 @@ public sealed class VoiceAutomation
         frames = Math.Max(1, frames);
         var shelf = BuildShelf(sampleRate, startFrame, frames, lowShelfHz, lowShelfDb);
         var sw = BuildSweep(sampleRate, startFrame, frames, sweep);
-        return new VoiceAutomation(sampleRate, startFrame, frames, shelf, sw);
+        return new VoiceAutomation(sampleRate, startFrame, frames, shelf, sw, null, null);
+    }
+
+    /// <summary>
+    /// Compile <paramref name="spec"/> (#48 E5-E7): each lane the spec sets, placed over its window. Filter lanes (the low shelf, the
+    /// sweep, the noise colour) get up to <see cref="MaxSteps"/> coefficient steps placed where their value changes fastest, as the
+    /// E2 form does; scalar lanes (EQ gains, the noise level, dry/wet) keep their table and are read per sample with linear
+    /// interpolation. A lane that never leaves neutral (0 dB everywhere, the sweep off, silent noise, a wet of 0) is dropped.
+    /// Allocates (tables, coefficients, the effects' delay lines): call it off the render thread.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The sample rate is not positive, or the EQ's crossovers are not
+    /// <c>0 &lt; LowMidHz &lt; MidHighHz &lt; SampleRate / 2</c>.</exception>
+    public static VoiceAutomation Build(VoiceAutomationSpec spec)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        int rate = spec.SampleRate;
+        if (rate <= 0) throw new ArgumentOutOfRangeException(nameof(spec), "SampleRate must be positive.");
+        int frames = Math.Max(1, spec.Frames);
+        long start = spec.StartFrame;
+        var shelf = spec.LowShelf is { } ls ? BuildShelf(rate, start, frames, ls.Hz, ls.GainDb.Span) : Lane.Empty;
+        var sweep = BuildSweep(rate, start, frames, spec.Sweep.Span);
+        var eq = spec.Eq is { } e ? BuildEq(rate, start, frames, e) : null;
+        var noise = spec.Noise is { } n ? BuildNoise(rate, start, frames, n) : null;
+        int channels = Math.Max(1, spec.Channels);
+        var echo = spec.Echo is { } ec ? DelayEffect.Build(ec, rate, channels, start, frames) : null;
+        var delay = spec.Delay is { } dl ? DelayEffect.Build(dl, rate, channels, start, frames) : null;
+        var reverb = spec.Reverb is { } rv ? ReverbEffect.Build(rv, rate, start, frames) : null;
+        return new VoiceAutomation(rate, start, frames, shelf, sweep, eq, noise, echo, delay, reverb);
     }
 
     private static long FrameOf(long startFrame, int frames, int index, int points)
@@ -146,7 +245,7 @@ public sealed class VoiceAutomation
         return f + q;
     }
 
-    private static Lane BuildSweep(int sampleRate, long startFrame, int frames, ReadOnlySpan<SweepPoint> points)
+    internal static Lane BuildSweep(int sampleRate, long startFrame, int frames, ReadOnlySpan<SweepPoint> points)
     {
         if (points.IsEmpty) return Lane.Empty;
         double total = 0;
@@ -188,22 +287,172 @@ public sealed class VoiceAutomation
                 break;
         }
     }
+
+    // ── E5: the 3-band EQ ────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The most biquad states one channel of the 3-band split needs (LR8: 4 × 4 crossover sections + 2 all-pass).</summary>
+    internal const int MaxEqSections = 18;
+    private static readonly float[] Lr4Q = [0.70710678f];               // the 2nd-order Butterworth
+    private static readonly float[] Lr8Q = [0.54119610f, 1.30656296f];  // the 4th-order Butterworth's two sections
+
+    private static EqLane? BuildEq(int rate, long start, int frames, EqLaneSpec spec)
+    {
+        float f1 = spec.LowMidHz, f2 = spec.MidHighHz;
+        if (!(f1 > 0f) || !(f2 > f1) || !(f2 < rate * 0.5f))
+            throw new ArgumentOutOfRangeException(nameof(spec), $"EQ crossovers must satisfy 0 < LowMidHz ({f1}) < MidHighHz ({f2}) < SampleRate / 2.");
+        if (spec.Slope is not (24 or 48)) throw new ArgumentOutOfRangeException(nameof(spec), $"EQ slope must be 24 or 48 dB/oct, not {spec.Slope}.");
+        var low = GainLane(spec.LowDb.Span, start, frames);
+        var mid = GainLane(spec.MidDb.Span, start, frames);
+        var high = GainLane(spec.HighDb.Span, start, frames);
+        if (low.IsConstant(1f) && mid.IsConstant(1f) && high.IsConstant(1f)) return null;   // flat at 0 dB: the lane is off
+        var qs = spec.Slope == 48 ? Lr8Q : Lr4Q;
+        return new EqLane(Side(BiquadType.LowPass, f1, qs, rate), Side(BiquadType.HighPass, f1, qs, rate),
+            Side(BiquadType.LowPass, f2, qs, rate), Side(BiquadType.HighPass, f2, qs, rate), AllPasses(f2, qs, rate), low, mid, high);
+    }
+
+    /// <summary>One Linkwitz-Riley side: the Butterworth sections, twice.</summary>
+    private static BiquadCoeffs[] Side(BiquadType type, float hz, float[] qs, int rate)
+    {
+        var s = new BiquadCoeffs[2 * qs.Length];
+        for (int i = 0; i < s.Length; i++) s[i] = BiquadCoeffs.Design(new BiquadBand(type, hz, qs[i % qs.Length], 0f), rate);
+        return s;
+    }
+
+    private static BiquadCoeffs[] AllPasses(float hz, float[] qs, int rate)
+    {
+        var s = new BiquadCoeffs[qs.Length];
+        for (int i = 0; i < s.Length; i++) s[i] = BiquadCoeffs.AllPass(hz, qs[i], rate);
+        return s;
+    }
+
+    private static ScalarLane GainLane(ReadOnlySpan<float> db, long start, int frames)
+    {
+        if (db.IsEmpty) return new ScalarLane([1f], start, frames);
+        var v = new float[db.Length];
+        for (int i = 0; i < v.Length; i++) v[i] = EqGain(db[i]);
+        return new ScalarLane(v, start, frames);
+    }
+
+    // ── E6: noise ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static NoiseLane? BuildNoise(int rate, long start, int frames, NoiseLaneSpec spec)
+    {
+        var db = spec.LevelDb.Span;
+        if (db.IsEmpty) return null;
+        var v = new float[db.Length];
+        // The generator is uniform in [-1, 1) (RMS 1/sqrt 3): the level carries the sqrt 3 so the white noise's RMS is the level.
+        const float uniformToRms = 1.7320508f;
+        for (int i = 0; i < v.Length; i++)
+            v[i] = float.IsNaN(db[i]) || db[i] <= NoiseLaneSpec.OffDb ? 0f : uniformToRms * MathF.Pow(10f, MathF.Min(db[i], 0f) / 20f);
+        var level = new ScalarLane(v, start, frames);
+        if (level.IsConstant(0f)) return null;   // silent throughout: no noise
+        return new NoiseLane(level, BuildSweep(rate, start, frames, spec.Colour.Span), spec.Seed);
+    }
+
+    /// <summary>An EQ band's dB to its linear gain: <see cref="EqLaneSpec.KillDb"/> or below (−∞ included) is 0, above
+    /// <see cref="EqLaneSpec.MaxDb"/> is clamped, NaN is 0 dB.</summary>
+    internal static float EqGain(float db)
+        => float.IsNaN(db) ? 1f : db <= EqLaneSpec.KillDb ? 0f : MathF.Pow(10f, MathF.Min(db, EqLaneSpec.MaxDb) / 20f);
 }
 
 /// <summary>
-/// The last stage of every voice chain (#48 E2): runs a <see cref="VoiceAutomation"/>'s two lanes (low shelf, then the sweep
-/// filter) in place. <see cref="IDspStage.Bypassed"/> until armed — a bypass is a value, so an unarmed voice costs one branch per
-/// block. Armed from bypass, the automation's first values apply at once (arm it before the voice sounds, or with a window whose
-/// first values are neutral, as a mix-out's are); re-armed while running, or disarmed (<c>null</c>), the stage cross-ramps from
-/// what is audible over <see cref="VoiceAutomation.DeclickFrames"/> and, once neutral, bypasses again. Render thread only;
-/// alloc-free.
+/// A scalar automation lane (#48 E5-E7): a value per table point, evenly spaced across a window of the mixer timeline, read with
+/// linear interpolation; the first value holds before the window, the last after it. Immutable once built; reads are alloc-free.
+/// </summary>
+internal sealed class ScalarLane
+{
+    private readonly float[] _v;
+    private readonly long _start;
+    private readonly int _frames;
+    private readonly double _perFrame;   // table points per frame
+
+    public ScalarLane(float[] values, long start, int frames)
+    {
+        _v = values;
+        _start = start;
+        _frames = Math.Max(1, frames);
+        _perFrame = values.Length > 1 ? (values.Length - 1) / (double)_frames : 0.0;
+    }
+
+    /// <summary>Every point equals <paramref name="value"/>.</summary>
+    public bool IsConstant(float value)
+    {
+        foreach (float x in _v) if (x != value) return false;
+        return true;
+    }
+
+    /// <summary>The value at mixer frame <paramref name="frame"/>.</summary>
+    public float At(long frame)
+    {
+        long off = frame - _start;
+        if (_v.Length == 1 || off <= 0) return _v[0];
+        if (off >= _frames) return _v[^1];
+        double x = off * _perFrame;
+        int k = (int)x;
+        float a = _v[k];
+        return a + (_v[k + 1] - a) * (float)(x - k);
+    }
+
+    /// <summary>The values for <c>dst.Length</c> frames from mixer frame <paramref name="frame"/>. Alloc-free.</summary>
+    public void Fill(Span<float> dst, long frame)
+    {
+        if (_v.Length == 1) { dst.Fill(_v[0]); return; }
+        long off = frame - _start;
+        int n = dst.Length, i = 0;
+        float first = _v[0], last = _v[^1];
+        for (; i < n && off + i <= 0; i++) dst[i] = first;
+        for (; i < n && off + i < _frames; i++)
+        {
+            double x = (off + i) * _perFrame;
+            int k = (int)x;
+            float a = _v[k];
+            dst[i] = a + (_v[k + 1] - a) * (float)(x - k);
+        }
+        for (; i < n; i++) dst[i] = last;
+    }
+
+    /// <summary>The lane is 0 over the <paramref name="count"/> frames from <paramref name="frame"/>.</summary>
+    public bool ZeroOver(long frame, int count)
+    {
+        long a = frame - _start, b = a + Math.Max(1, count) - 1;
+        if (b <= 0 || _v.Length == 1) return _v[0] == 0f;
+        if (a >= _frames) return _v[^1] == 0f;
+        int k0 = a <= 0 ? 0 : (int)(a * _perFrame);
+        int k1 = b >= _frames ? _v.Length - 1 : Math.Min(_v.Length - 1, (int)(b * _perFrame) + 1);
+        for (int k = k0; k <= k1; k++) if (_v[k] != 0f) return false;
+        return true;
+    }
+}
+
+/// <summary>
+/// The last stage of every voice chain (#48 E2, E5-E7): runs a <see cref="VoiceAutomation"/>'s lanes (low shelf, 3-band EQ, the
+/// sweep filter, then the noise added on top) in place, and — after the voice's gain envelope, called by the mixer
+/// (<see cref="MixVoice.MixInto"/>) — its effects (echo, delay, reverb, in that order). <see cref="IDspStage.Bypassed"/> until
+/// armed — a bypass is a value, so an unarmed voice costs one branch per block (and the mixer one check for effects). Armed from
+/// bypass, the shelf's and the sweep's first values apply at once (arm it before the voice sounds, or with a window whose first
+/// values are neutral, as a mix-out's are); the 3-band EQ ramps in from the dry signal over
+/// <see cref="VoiceAutomation.DeclickFrames"/> unless the voice has not sounded yet (its split changes the phase, so switching it
+/// in at once would click); the noise level and the effects' dry/wet likewise ramp in from neutral. Re-armed while running, or
+/// disarmed (<c>null</c>), the stage cross-ramps from what is audible over <see cref="VoiceAutomation.DeclickFrames"/> and, once
+/// neutral, bypasses again; an effect that is replaced or disarmed closes its send over the same ramp and rings out (a third arm
+/// inside one tail cuts the oldest tail). Render thread only; alloc-free.
 /// </summary>
 public sealed class VoiceAutomationStage : IDspStage
 {
+    /// <summary>Gain lanes are read in chunks of this many frames into the stage's scratch.</summary>
+    internal const int Chunk = 64;
+
     private readonly int _channels;
     private readonly LaneState _shelf;
     private readonly LaneState _sweep;
+    private readonly IsolatorState _eq;
+    private readonly NoiseState _noise;
+    // E7: [0..2] the armed echo, delay, reverb; [3..5] the ones replaced or disarmed, ringing out. Run in this order, so a
+    // retiring tail never feeds the new effects.
+    private readonly VoiceEffect?[] _fx = new VoiceEffect?[6];
+    private readonly float[] _dry = new float[Chunk], _send = new float[Chunk];
     private VoiceAutomation? _armed;
+    private bool _hasRun;                        // the stage has processed a block (the voice may be sounding)
 
     /// <summary>A stage for <paramref name="channels"/> channels (further channels pass through). Allocates its state once.</summary>
     public VoiceAutomationStage(int channels)
@@ -211,6 +460,8 @@ public sealed class VoiceAutomationStage : IDspStage
         _channels = Math.Max(1, channels);
         _shelf = new LaneState(_channels);
         _sweep = new LaneState(_channels);
+        _eq = new IsolatorState(_channels);
+        _noise = new NoiseState(_channels);
     }
 
     /// <inheritdoc/>
@@ -220,6 +471,81 @@ public sealed class VoiceAutomationStage : IDspStage
     /// <summary>The automation currently armed (null while bypassed or ramping back to neutral).</summary>
     public VoiceAutomation? Armed => _armed;
 
+    /// <summary>An effect is armed or still ringing out: the mixer runs <see cref="ProcessPost"/> after the voice's envelope. A
+    /// field read (kept by <see cref="Arm"/> and <see cref="ProcessPost"/>), so an unarmed voice pays one load per block.</summary>
+    public bool HasPost => _hasPost;
+    private bool _hasPost;
+
+    private void UpdateHasPost()
+    {
+        var fx = _fx;
+        bool any = false;
+        for (int i = 0; i < fx.Length; i++) any |= fx[i] is not null;
+        _hasPost = any;
+    }
+
+    /// <summary>An effect's lines hold something above −80 dBFS: the voice must stay in the mixer until it has rung out.</summary>
+    public bool TailRinging
+    {
+        get
+        {
+            var fx = _fx;
+            for (int i = 0; i < fx.Length; i++) if (fx[i] is { Ringing: true }) return true;
+            return false;
+        }
+    }
+
+    /// <summary>RENDER thread, alloc-free: run the effects in place over <paramref name="frames"/> frames of the voice's ENVELOPED
+    /// signal (<paramref name="buf"/>, <paramref name="channels"/> interleaved; frames past the source's end are silence the tails
+    /// play over) starting at mixer frame <paramref name="startFrame"/>, and drop effects that have rung out.</summary>
+    public void ProcessPost(Span<float> buf, int frames, int channels, long startFrame)
+    {
+        int ch = Math.Min(channels, _channels);
+        var fx = _fx;
+        for (int i = 0; i < fx.Length; i++)
+        {
+            if (fx[i] is not { } unit) continue;
+            unit.Process(buf, frames, channels, ch, startFrame, _dry, _send);
+            if (i >= 3 && unit.Finished) { fx[i] = null; UpdateHasPost(); }
+        }
+    }
+
+    /// <summary>RENDER thread: drop every effect tail at once (the voice was parked).</summary>
+    public void SilenceTails()
+    {
+        foreach (var unit in _fx) unit?.Silence();
+    }
+
+    /// <summary>Hand the effects of <paramref name="automation"/> (null = none) to the three slots; what they replace rings out.</summary>
+    private void ArmEffects(VoiceAutomation? automation, bool ramp)
+    {
+        Swap(0, automation?.Echo, ramp);
+        Swap(1, automation?.Delay, ramp);
+        Swap(2, automation?.Reverb, ramp);
+        UpdateHasPost();
+    }
+
+    private void Swap(int k, VoiceEffect? next, bool ramp)
+    {
+        var fx = _fx;
+        var current = fx[k];
+        if (ReferenceEquals(current, next)) return;
+        if (next is not null && next.Owner is { } owner && !ReferenceEquals(owner, this)) next = null;   // another voice's lines: never shared
+        if (next is not null && ReferenceEquals(fx[k + 3], next)) fx[k + 3] = null;                   // re-armed before its tail ended
+        if (current is not null)
+        {
+            fx[k + 3]?.Silence();   // a third arm inside one tail: the oldest tail is cut
+            current.RampOut();
+            fx[k + 3] = current;
+        }
+        if (next is not null)
+        {
+            next.Owner = this;
+            next.RampIn(ramp);
+        }
+        fx[k] = next;
+    }
+
     /// <summary>RENDER thread (a mixer command), alloc-free: arm <paramref name="automation"/>, or ramp back to neutral and bypass
     /// with <c>null</c>.</summary>
     public void Arm(VoiceAutomation? automation)
@@ -227,16 +553,22 @@ public sealed class VoiceAutomationStage : IDspStage
         if (automation is null)
         {
             _armed = null;
+            ArmEffects(null, ramp: true);
             if (Bypassed) return;
             _shelf.Target(VoiceAutomation.Lane.Empty, ramp: true);
             _sweep.Target(VoiceAutomation.Lane.Empty, ramp: true);
+            _eq.Target(null, ramp: true);
+            _noise.Target(null, ramp: true);
             return;
         }
         bool fromBypass = Bypassed;
-        if (fromBypass) { _shelf.Reset(); _sweep.Reset(); }
+        if (fromBypass) { _shelf.Reset(); _sweep.Reset(); _eq.Reset(); _noise.Reset(); }
         _armed = automation;
         _shelf.Target(automation.Shelf, ramp: !fromBypass);
         _sweep.Target(automation.Sweep, ramp: !fromBypass);
+        _eq.Target(automation.Eq, ramp: _hasRun);
+        _noise.Target(automation.Noise, ramp: _hasRun);
+        ArmEffects(automation, ramp: _hasRun);
         Bypassed = false;
     }
 
@@ -245,15 +577,20 @@ public sealed class VoiceAutomationStage : IDspStage
     {
         int n = frames * ctx.Channels;
         if (!src.Overlaps(dst, out int offset) || offset != 0) src[..n].CopyTo(dst);
+        _hasRun = true;
         if (Bypassed) return frames;
         int ch = Math.Min(ctx.Channels, _channels);
         _shelf.Run(dst, frames, ctx.Channels, ch, ctx.StartFrame);
+        _eq.Run(dst, frames, ctx.Channels, ch, ctx.StartFrame);
         _sweep.Run(dst, frames, ctx.Channels, ch, ctx.StartFrame);
-        if (_armed is null && _shelf.Neutral && _sweep.Neutral)
+        _noise.Run(dst, frames, ctx.Channels, ch, ctx.StartFrame);
+        if (_armed is null && _shelf.Neutral && _sweep.Neutral && _eq.Neutral && _noise.Neutral)
         {
             Bypassed = true;   // the disarm ramp has settled
             _shelf.Reset();
             _sweep.Reset();
+            _eq.Reset();
+            _noise.Reset();
         }
         return frames;
     }
@@ -364,6 +701,228 @@ public sealed class VoiceAutomationStage : IDspStage
                 {
                     for (int c = 0; c < ch; c++) buf[b + c] = _stActive[c].Process(buf[b + c], in _active);
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// E6's render-thread state: one xorshift32 generator per channel, the colour filter (a <see cref="LaneState"/> over the noise
+    /// alone), and the level, ramped from the level audible at a re-arm or a disarm. Noise is generated a chunk at a time into the
+    /// state's scratch, filtered, scaled and added; a chunk whose level is 0 generates nothing.
+    /// </summary>
+    private sealed class NoiseState
+    {
+        private readonly LaneState _colour;
+        private readonly uint[] _rng;
+        private readonly float[] _buf;
+        private readonly float[] _level = new float[Chunk];
+        private ScalarLane? _lane;
+        private float _from, _last;              // the ramp's starting level; the last level applied
+        private int _ramp;
+
+        public NoiseState(int channels)
+        {
+            _colour = new LaneState(channels);
+            _rng = new uint[channels];
+            _buf = new float[Chunk * channels];
+        }
+
+        /// <summary>No noise and no ramp.</summary>
+        public bool Neutral => _lane is null && _ramp == 0;
+
+        public void Reset()
+        {
+            _colour.Reset();
+            _lane = null;
+            _ramp = 0;
+            _from = _last = 0f;
+        }
+
+        /// <summary>Follow <paramref name="noise"/> (null = silence), its level ramped from the audible one when
+        /// <paramref name="ramp"/>.</summary>
+        public void Target(VoiceAutomation.NoiseLane? noise, bool ramp)
+        {
+            if (noise is null && _lane is null && _ramp == 0) return;
+            _colour.Target(noise?.Colour ?? VoiceAutomation.Lane.Empty, ramp);
+            if (noise is not null)
+                for (int c = 0; c < _rng.Length; c++) _rng[c] = Seed(noise.Seed, c);
+            _lane = noise?.Level;
+            _from = _last;
+            _ramp = ramp ? VoiceAutomation.DeclickFrames : 0;
+        }
+
+        /// <summary>A channel's non-zero xorshift state from the lane's seed (a splitmix-style hash, so neighbouring channels
+        /// are decorrelated).</summary>
+        private static uint Seed(uint seed, int channel)
+        {
+            uint z = seed + (uint)(channel + 1) * 0x9E3779B9u;
+            z = (z ^ (z >> 16)) * 0x85EBCA6Bu;
+            z = (z ^ (z >> 13)) * 0xC2B2AE35u;
+            z ^= z >> 16;
+            return z == 0 ? 1u : z;
+        }
+
+        public void Run(Span<float> buf, int frames, int stride, int ch, long startFrame)
+        {
+            var lane = _lane;
+            if (_ramp == 0 && (lane is null || lane.ZeroOver(startFrame, frames))) { _last = 0f; return; }
+            for (int off = 0; off < frames; off += Chunk)
+            {
+                int n = Math.Min(Chunk, frames - off);
+                long frame = startFrame + off;
+                var level = _level.AsSpan(0, n);
+                if (lane is not null) lane.Fill(level, frame);
+                else level.Clear();
+                float peak = 0f;
+                for (int f = 0; f < n; f++)
+                {
+                    if (_ramp > 0)
+                    {
+                        float t = 1f - (_ramp - 1) / (float)VoiceAutomation.DeclickFrames;   // 0 -> 1 across the ramp
+                        level[f] = _from + (level[f] - _from) * t;
+                        _ramp--;
+                    }
+                    if (level[f] > peak) peak = level[f];
+                }
+                _last = level[n - 1];
+                if (peak <= 0f) continue;   // silent chunk: nothing to add (the colour lane catches up on the next audible one)
+                var noise = _buf.AsSpan(0, n * ch);
+                for (int f = 0; f < n; f++)
+                    for (int c = 0; c < ch; c++)
+                    {
+                        uint x = _rng[c];
+                        x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+                        _rng[c] = x;
+                        noise[f * ch + c] = (int)x * (1f / 2147483648f);   // uniform in [-1, 1)
+                    }
+                _colour.Run(noise, n, ch, ch, frame);
+                for (int f = 0; f < n; f++)
+                {
+                    int b = (off + f) * stride, o = f * ch;
+                    float g = level[f];
+                    for (int c = 0; c < ch; c++) buf[b + c] += noise[o + c] * g;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// E5's render-thread state: the 3-band split of the audible (active) EQ lane and of the one being ramped in (pending), each
+    /// with its own filter state; a null lane is the dry signal. Per channel, in order: the low-pass and the high-pass at the
+    /// low / mid crossover, the low-pass and the high-pass at the mid / high crossover over the upper band, and the upper crossover's
+    /// all-pass on the low band (so the three bands sum flat). Gains are read per chunk into the state's scratch.
+    /// </summary>
+    private sealed class IsolatorState
+    {
+        private const int Sections = VoiceAutomation.MaxEqSections;   // state slots per channel (an LR4 lane uses the first 9)
+        private readonly BiquadState[] _sa, _sp;
+        private readonly float[] _ga = new float[3 * Chunk], _gp = new float[3 * Chunk];
+        private VoiceAutomation.EqLane? _a, _p;
+        private int _ramp, _rampLength;
+
+        public IsolatorState(int channels)
+        {
+            _sa = new BiquadState[channels * Sections];
+            _sp = new BiquadState[channels * Sections];
+        }
+
+        /// <summary>Passing audio through and not ramping.</summary>
+        public bool Neutral => _a is null && _ramp == 0;
+
+        public void Reset()
+        {
+            Array.Clear(_sa);
+            Array.Clear(_sp);
+            _a = _p = null;
+            _ramp = 0;
+        }
+
+        /// <summary>Follow <paramref name="lane"/> (null = the dry signal), cross-ramped from what is audible when
+        /// <paramref name="ramp"/>, else at once.</summary>
+        public void Target(VoiceAutomation.EqLane? lane, bool ramp)
+        {
+            if (!ramp)
+            {
+                Array.Clear(_sa);
+                _a = lane; _p = null; _ramp = 0;
+                return;
+            }
+            if (_ramp > 0) Commit();
+            if (ReferenceEquals(lane, _a)) return;
+            bool carry = lane is not null && _a is not null && lane.SameSplit(_a);
+            if (carry) Array.Copy(_sa, _sp, _sa.Length);
+            else Array.Clear(_sp);
+            _p = lane;
+            _ramp = _rampLength = VoiceAutomation.DeclickFrames;
+        }
+
+        private void Commit()
+        {
+            _a = _p; _p = null;
+            Array.Copy(_sp, _sa, _sa.Length);
+            _ramp = 0;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float Split(BiquadState[] st, int o, VoiceAutomation.EqLane l, float x, float gl, float gm, float gh)
+        {
+            BiquadCoeffs[] lp1 = l.Lp1, hp1 = l.Hp1, lp2 = l.Lp2, hp2 = l.Hp2, ap2 = l.Ap2;
+            float lo = x, rest = x;
+            for (int i = 0; i < lp1.Length; i++) lo = st[o++].Process(lo, in lp1[i]);
+            for (int i = 0; i < hp1.Length; i++) rest = st[o++].Process(rest, in hp1[i]);
+            float mid = rest, hi = rest;
+            for (int i = 0; i < lp2.Length; i++) mid = st[o++].Process(mid, in lp2[i]);
+            for (int i = 0; i < hp2.Length; i++) hi = st[o++].Process(hi, in hp2[i]);
+            for (int i = 0; i < ap2.Length; i++) lo = st[o++].Process(lo, in ap2[i]);
+            return gl * lo + gm * mid + gh * hi;
+        }
+
+        private static void Gains(VoiceAutomation.EqLane l, float[] g, int n, long frame)
+        {
+            l.Low.Fill(g.AsSpan(0, n), frame);
+            l.Mid.Fill(g.AsSpan(Chunk, n), frame);
+            l.High.Fill(g.AsSpan(2 * Chunk, n), frame);
+        }
+
+        public void Run(Span<float> buf, int frames, int stride, int ch, long startFrame)
+        {
+            for (int off = 0; off < frames;)
+            {
+                if (_a is null && _ramp == 0) return;
+                int n = Math.Min(Chunk, frames - off);
+                if (_ramp > 0) n = Math.Min(n, _ramp);   // a ramp ends on a chunk edge, so a chunk reads one lane set
+                long frame = startFrame + off;
+                var a = _a;
+                var p = _p;
+                if (a is not null) Gains(a, _ga, n, frame);
+                if (_ramp == 0)
+                {
+                    for (int f = 0; f < n; f++)
+                    {
+                        int b = (off + f) * stride;
+                        float gl = _ga[f], gm = _ga[Chunk + f], gh = _ga[2 * Chunk + f];
+                        for (int c = 0; c < ch; c++) buf[b + c] = Split(_sa, c * Sections, a!, buf[b + c], gl, gm, gh);
+                    }
+                }
+                else
+                {
+                    if (p is not null) Gains(p, _gp, n, frame);
+                    for (int f = 0; f < n; f++)
+                    {
+                        int b = (off + f) * stride;
+                        float t = 1f - (_ramp - 1) / (float)_rampLength;   // 0 → 1 across the ramp
+                        for (int c = 0; c < ch; c++)
+                        {
+                            float x = buf[b + c];
+                            float ya = a is null ? x : Split(_sa, c * Sections, a, x, _ga[f], _ga[Chunk + f], _ga[2 * Chunk + f]);
+                            float yp = p is null ? x : Split(_sp, c * Sections, p, x, _gp[f], _gp[Chunk + f], _gp[2 * Chunk + f]);
+                            buf[b + c] = ya + (yp - ya) * t;
+                        }
+                        _ramp--;
+                    }
+                    if (_ramp == 0) Commit();
+                }
+                off += n;
             }
         }
     }
